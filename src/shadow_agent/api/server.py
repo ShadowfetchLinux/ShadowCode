@@ -31,8 +31,9 @@ from shadow_agent.config import (
 from shadow_agent.errors import friendly_error, friendly_http
 from shadow_agent.events import EventBus
 from shadow_agent.export import export_session
-from shadow_agent.health import collect_health
-from shadow_agent.models.registry import ModelRegistry
+from shadow_agent.health import collect_health, doctor_report
+from shadow_agent.models.discovery import detect_providers
+from shadow_agent.models.registry import ModelRegistry, probe_provider
 from shadow_agent.runtime import JobManager
 from shadow_agent.secrets import has_secret, load_secrets, set_secret
 from shadow_agent.store import Store
@@ -91,6 +92,38 @@ class RunBody(BaseModel):
     task: str
     workspace: str | None = None
     session_id: str | None = None
+    model: str | None = None
+    purpose: str = "coder"
+
+
+class ModelTestBody(BaseModel):
+    provider: str = "mock"
+    name: str = ""
+    endpoint: str = ""
+    api_key_env: str = ""
+    context_limit: int = 128000
+
+
+class ModelSelectBody(BaseModel):
+    id: str
+    name: str = ""
+    provider: str = ""
+    endpoint: str = ""
+
+
+class TrustBody(BaseModel):
+    path: str
+
+
+class ExecBody(BaseModel):
+    command: str
+    timeout: int = 60
+
+
+class HunkBody(BaseModel):
+    path: str
+    hunk: dict[str, Any]
+    action: str = "reject"  # "reject" (revert in worktree) | "accept" (stage hunk)
 
 
 class SessionBody(BaseModel):
@@ -141,7 +174,7 @@ class ProjectBody(BaseModel):
     path: str
 
 
-def create_app(store: Store | None = None, default_workspace: Path | None = None) -> FastAPI:
+def create_app(store: Store | None = None, default_workspace: Path | None = None, detect: bool = True) -> FastAPI:
     load_secrets()
     store = store or Store()
     bus = EventBus()
@@ -150,6 +183,18 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     registry = ModelRegistry()
     for info in registry.list_models():
         store.upsert_model(info.id, info.name, info.provider, info.endpoint, info.context_limit, info.metadata)
+    detect_cache: dict[str, Any] = {"at": 0.0, "providers": []}
+
+    def detected(force: bool = False) -> list:
+        if force or time.time() - detect_cache["at"] > 10:
+            detect_cache["providers"] = detect_providers()
+            detect_cache["at"] = time.time()
+            for entry in registry.refresh_detected():
+                store.upsert_model(entry.id, entry.name, entry.provider, entry.endpoint, entry.context_limit, entry.metadata)
+        return detect_cache["providers"]
+
+    if detect:
+        detected(force=True)
 
     app = FastAPI(title="Shadow Agent", version=__version__)
     app.add_middleware(
@@ -183,6 +228,9 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     def get_onboarding() -> dict[str, Any]:
         cfg = ensure_user_config()
         suggested = runtime.get("workspace") or last_workspace() or Path.home()
+        found = detected()
+        running = {item.provider: item for item in found if item.running}
+        default_provider = cfg.model.provider if cfg.model.provider != "mock" else ("ollama" if "ollama" in running else "mock")
         return {
             "completed": cfg.onboarding.completed,
             "suggested_workspace": str(suggested),
@@ -190,9 +238,10 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
                 {"id": key, **value, "needs_key": key not in {"mock", "ollama", "local", "llamacpp", "vllm"}}
                 for key, value in PROVIDER_PRESETS.items()
             ],
+            "detected": [item.model_dump() for item in found],
             "levels": ["read_only", "workspace", "elevated"],
             "defaults": {
-                "provider": "mock",
+                "provider": default_provider,
                 "permission_level": "workspace",
                 "theme": "dark",
             },
@@ -219,12 +268,21 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         cfg.model.default = body.model or preset["default"]
         cfg.model.name = body.name or preset["name"]
         cfg.model.endpoint = body.endpoint or preset["endpoint"]
+        # When a local server is detected and no explicit model was chosen, prefer a real installed model.
+        if not body.name and cfg.model.provider in {"ollama", "local", "llamacpp", "vllm"}:
+            for item in detected():
+                if item.provider == cfg.model.provider and item.running and item.models:
+                    cfg.model.name = item.models[0].id
+                    cfg.model.default = item.models[0].id
+                    break
         cfg.model.api_key_env = key_env
         cfg.permissions.level = level
         cfg.permissions.network = body.network
         cfg.ui.theme = body.theme or "dark"
         cfg.onboarding.completed = True
         cfg.onboarding.workspace = str(workspace)
+        if str(workspace) not in cfg.trusted_workspaces:
+            cfg.trusted_workspaces.append(str(workspace))
         save_config(cfg)
         runtime["workspace"] = workspace
         remember_workspace(workspace)
@@ -256,8 +314,61 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         return _public_config(set_config_value(key, value))
 
     @app.get("/api/models")
-    def models() -> dict[str, Any]:
-        return {"models": [m.model_dump() for m in registry.list_models()]}
+    def models(refresh: bool = False) -> dict[str, Any]:
+        found = detected(force=refresh)
+        running = {item.provider for item in found if item.running}
+        out = []
+        for m in registry.list_models():
+            data = m.model_dump()
+            data["detected"] = bool(m.metadata.get("detected")) or m.provider in running
+            out.append(data)
+        return {"models": out}
+
+    @app.get("/api/providers/detect")
+    def providers_detect(refresh: bool = False) -> dict[str, Any]:
+        found = detected(force=refresh)
+        return {"providers": [item.model_dump() for item in found]}
+
+    @app.post("/api/models/test")
+    def models_test(body: ModelTestBody) -> dict[str, Any]:
+        preset = PROVIDER_PRESETS.get(body.provider, {})
+        provider = body.provider or preset.get("provider", "mock")
+        name = body.name or preset.get("name", "")
+        endpoint = body.endpoint or preset.get("endpoint", "")
+        api_key_env = body.api_key_env or preset.get("api_key_env", "OPENAI_API_KEY")
+        if provider in {"ollama", "local", "llamacpp", "vllm"} and not name:
+            for item in detected():
+                if item.provider == provider and item.running and item.models:
+                    name = item.models[0].id
+                    break
+        result = probe_provider(
+            provider,
+            name=name,
+            endpoint=endpoint,
+            api_key_env=api_key_env,
+            context_limit=body.context_limit,
+        )
+        return result
+
+    @app.post("/api/models/select")
+    def models_select(body: ModelSelectBody) -> dict[str, Any]:
+        info = registry.get(body.id)
+        if info is None:
+            detected(force=True)
+            info = registry.get(body.id)
+        if info is None and not body.provider:
+            raise HTTPException(404, friendly_http(404, f"unknown model: {body.id}"))
+        cfg = ensure_user_config()
+        cfg.model.default = body.id
+        cfg.model.provider = (info.provider if info else body.provider) or cfg.model.provider
+        cfg.model.endpoint = body.endpoint or (info.endpoint if info else "") or cfg.model.endpoint
+        cfg.model.name = body.name or (str(info.metadata.get("model") or info.id) if info else body.id)
+        if info and info.metadata.get("api_key_env"):
+            cfg.model.api_key_env = str(info.metadata["api_key_env"])
+        if info and info.context_limit:
+            cfg.model.context_limit = info.context_limit
+        save_config(cfg)
+        return _public_config(cfg)
 
     @app.get("/api/projects")
     def projects() -> dict[str, Any]:
@@ -268,11 +379,37 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         workspace = Path(body.path).expanduser().resolve()
         if not workspace.is_dir():
             raise HTTPException(400, friendly_error("workspace not found"))
+        cfg = ensure_user_config()
+        current = runtime.get("workspace")
+        already = str(workspace) in cfg.trusted_workspaces or (current is not None and Path(current) == workspace)
+        if not already:
+            # First open of a new folder: the UI must show the trust dialog.
+            return {
+                "needs_trust": True,
+                "path": str(workspace),
+                "name": workspace.name,
+                "permissions": cfg.permissions.model_dump(mode="json"),
+            }
         runtime["workspace"] = workspace
         remember_workspace(workspace)
         pid = store.touch_project(workspace)
         sid = store.create_session(str(workspace), load_config(workspace).model.default, title=workspace.name)
-        return {"id": pid, "path": str(workspace), "session_id": sid}
+        return {"id": pid, "path": str(workspace), "session_id": sid, "needs_trust": False}
+
+    @app.post("/api/projects/trust")
+    def trust_project(body: TrustBody) -> dict[str, Any]:
+        workspace = Path(body.path).expanduser().resolve()
+        if not workspace.is_dir():
+            raise HTTPException(400, friendly_error("workspace not found"))
+        cfg = ensure_user_config()
+        if str(workspace) not in cfg.trusted_workspaces:
+            cfg.trusted_workspaces.append(str(workspace))
+            save_config(cfg)
+        runtime["workspace"] = workspace
+        remember_workspace(workspace)
+        pid = store.touch_project(workspace)
+        sid = store.create_session(str(workspace), load_config(workspace).model.default, title=workspace.name)
+        return {"ok": True, "id": pid, "path": str(workspace), "session_id": sid, "trusted": cfg.trusted_workspaces}
 
     @app.post("/api/sessions")
     def create_session(body: SessionBody) -> dict[str, Any]:
@@ -314,7 +451,15 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             raise HTTPException(404, friendly_http(404, "session not found"))
         workspace = Path(body.workspace or row["workspace"])
         runtime["workspace"] = workspace
-        runner = AgentRunner(workspace, store=store, events=bus, session_id=session_id, approval_hub=approvals)
+        runner = AgentRunner(
+            workspace,
+            store=store,
+            events=bus,
+            session_id=session_id,
+            approval_hub=approvals,
+            model_override=body.model,
+            purpose=body.purpose,
+        )
         result = runner.run(body.task)
         return result.model_dump(mode="json")
 
@@ -324,7 +469,15 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         if not workspace.is_dir():
             raise HTTPException(400, friendly_error("workspace not found"))
         runtime["workspace"] = workspace
-        runner = AgentRunner(workspace, store=store, events=bus, session_id=body.session_id, approval_hub=approvals)
+        runner = AgentRunner(
+            workspace,
+            store=store,
+            events=bus,
+            session_id=body.session_id,
+            approval_hub=approvals,
+            model_override=body.model,
+            purpose=body.purpose,
+        )
         result = runner.run(body.task)
         return result.model_dump(mode="json")
 
@@ -336,7 +489,7 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         runtime["workspace"] = workspace
         remember_workspace(workspace)
         store.touch_project(workspace)
-        job = jobs.start(workspace, body.task, session_id=body.session_id)
+        job = jobs.start(workspace, body.task, session_id=body.session_id, model=body.model, purpose=body.purpose)
         return job.to_dict()
 
     @app.get("/api/jobs")
@@ -596,6 +749,75 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         target.write_text(body.text, encoding="utf-8")
         return {"ok": True, "path": sandbox.relative(target)}
 
+    @app.post("/api/workspace/exec")
+    def workspace_exec(body: ExecBody) -> dict[str, Any]:
+        """Run one shell command in the workspace (used by click-to-rerun in the UI)."""
+        workspace = _ws(runtime)
+        cfg = load_config(workspace)
+        if cfg.permissions.level == PermissionLevel.READ_ONLY:
+            raise HTTPException(403, friendly_error("exec is disabled in read-only mode"))
+        from shadow_agent.models.types import ToolCall
+        from shadow_agent.permissions import PermissionGate
+        from shadow_agent.tools.terminal import exec_command
+
+        gate = PermissionGate(
+            cfg.permissions.level,
+            require_approval_for_dangerous=cfg.permissions.require_approval_for_dangerous,
+            network=cfg.permissions.network,
+            allow_root=cfg.permissions.allow_root,
+        )
+        sandbox = WorkspaceSandbox(workspace)
+        call = ToolCall(id="ui-exec", tool_name="exec", arguments={"command": body.command, "timeout": body.timeout})
+        result = exec_command(sandbox, gate, call, default_timeout=min(body.timeout, 300))
+        if not result.success and result.metadata.get("needs_approval"):
+            raise HTTPException(403, friendly_error(result.error or "command needs approval; run it as an agent task instead"))
+        try:
+            payload = json.loads(result.output) if result.output else {}
+        except json.JSONDecodeError:
+            payload = {"stdout": result.output}
+        store.add_event("tool.completed", {"tool": "exec", "success": result.success, "output_preview": (result.output or "")[:500], "source": "ui-rerun"})
+        return {
+            "ok": result.success,
+            "command": body.command,
+            "stdout": payload.get("stdout", ""),
+            "stderr": payload.get("stderr", ""),
+            "exit_code": payload.get("exit_code", -1),
+            "error": result.error,
+        }
+
+    @app.post("/api/workspace/diff/hunk")
+    def diff_hunk(body: HunkBody) -> dict[str, Any]:
+        """Accept (stage) or reject (revert) one diff hunk via git apply."""
+        import subprocess
+
+        workspace = _ws(runtime)
+        sandbox = WorkspaceSandbox(workspace)
+        try:
+            target = sandbox.resolve(body.path, must_exist=True)
+        except SandboxError as exc:
+            raise HTTPException(400, friendly_error(exc)) from exc
+        if not target.is_file():
+            raise HTTPException(400, "not a file")
+        patch = _build_hunk_patch(body.path, body.hunk)
+        if not patch:
+            raise HTTPException(400, "could not rebuild hunk patch")
+        args = ["git", "apply", "--recount", "--unidiff-zero", "-"]
+        if body.action == "accept":
+            args.insert(2, "--cached")
+        elif body.action == "reject":
+            args.insert(2, "-R")
+        else:
+            raise HTTPException(400, "action must be accept or reject")
+        proc = subprocess.run(args, cwd=workspace, input=patch, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            raise HTTPException(400, friendly_error((proc.stderr or "git apply failed").strip()))
+        return {"ok": True, "action": body.action, "path": body.path}
+
+    @app.get("/api/doctor")
+    def doctor() -> dict[str, Any]:
+        cfg = load_config(runtime.get("workspace"))
+        return doctor_report(cfg, runtime.get("workspace"))
+
     @app.get("/api/checkpoints")
     def checkpoints() -> dict[str, Any]:
         pointer = last_checkpoint(_ws(runtime))
@@ -645,6 +867,21 @@ def _parse_porcelain(text: str) -> list[dict[str, str]]:
             continue
         files.append({"index": line[0], "work": line[1], "path": line[3:], "label": line[:2].strip() or "M"})
     return files
+
+
+def _build_hunk_patch(path: str, hunk: dict[str, Any]) -> str:
+    """Rebuild an apply-able unified diff for a single parsed hunk."""
+    header = str(hunk.get("header") or "")
+    lines = hunk.get("lines") or []
+    if not header.startswith("@@") or not lines:
+        return ""
+    body = []
+    for line in lines:
+        kind = line.get("kind")
+        text = str(line.get("text") or "")
+        prefix = "+" if kind == "add" else "-" if kind == "del" else " "
+        body.append(prefix + text)
+    return f"--- a/{path}\n+++ b/{path}\n{header}\n" + "\n".join(body) + "\n"
 
 
 def _parse_diff_hunks(diff: str) -> list[dict[str, Any]]:

@@ -262,6 +262,87 @@ code { color: var(--info); }
 .health-ok { color: var(--ok); }
 .health-bad { color: var(--danger); }
 
+/* Toasts */
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 40;
+  max-width: 380px;
+}
+.toast {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  animation: toast-in 0.18s ease-out;
+  word-break: break-word;
+}
+.toast.ok { border-color: rgba(61, 220, 132, 0.4); }
+.toast.err { border-color: rgba(255, 107, 122, 0.45); }
+.toast.info { border-color: rgba(107, 214, 240, 0.35); }
+@keyframes toast-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Skeleton loading */
+.skel-rows { display: flex; flex-direction: column; gap: 8px; padding: 6px 0; }
+.skel {
+  display: block;
+  height: 14px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--card) 25%, var(--card2) 50%, var(--card) 75%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s infinite;
+}
+.skel.short { width: 55%; }
+@keyframes skel-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* Model picker */
+.model-item { cursor: pointer; }
+.dot-live {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+  margin-right: 6px;
+}
+.model-actions { display: inline-flex; gap: 6px; margin-top: 4px; }
+button.mini {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 2px 8px;
+  font-size: 11px;
+}
+button.mini:hover { border-color: var(--accent-2); color: var(--text); }
+button.mini.danger-text { color: var(--danger); }
+.detect-banner { color: var(--ok); }
+.event { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.model-select {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  color: var(--muted);
+  max-width: 260px;
+}
+.composer-foot { align-items: center; }
+
 @media (max-width: 1100px) {
   .app { grid-template-columns: 210px 1fr 260px; }
 }

@@ -47,6 +47,8 @@ class UIConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 7430
     theme: str = "dark"
+    notify: bool = True
+    notify_after_sec: float = 4.0
 
 
 class AgentConfig(BaseModel):
@@ -54,6 +56,8 @@ class AgentConfig(BaseModel):
     tool_timeout_sec: int = 60
     parallel_reads: bool = True
     compact_ratio: float = 0.7
+    model_retries: int = 3
+    retry_backoff_sec: float = 1.0
 
 
 class OnboardingConfig(BaseModel):
@@ -89,6 +93,7 @@ class AppConfig(BaseModel):
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
+    trusted_workspaces: list[str] = Field(default_factory=list)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

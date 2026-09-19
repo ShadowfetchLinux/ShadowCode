@@ -13,6 +13,7 @@ from shadow_agent.approvals import ApprovalHub
 from shadow_agent.config import AppConfig, load_config
 from shadow_agent.errors import friendly_error
 from shadow_agent.events import EventBus
+from shadow_agent.notify import notify_done
 from shadow_agent.store import Store
 
 
@@ -29,6 +30,8 @@ class Job:
         self.usage: dict[str, int] = {}
         self.result: AgentResult | None = None
         self.runner: AgentRunner | None = None
+        self.model_override: str | None = None
+        self.purpose: str = "coder"
         self.started_at = time.time()
         self.finished_at: float | None = None
 
@@ -65,11 +68,15 @@ class JobManager:
         task: str,
         session_id: str | None = None,
         config: AppConfig | None = None,
+        model: str | None = None,
+        purpose: str = "coder",
     ) -> Job:
         workspace = Path(workspace).resolve()
         cfg = config or load_config(workspace)
         sid = session_id or self.store.create_session(str(workspace), cfg.model.default, title=task.splitlines()[0][:80])
         job = Job(uuid.uuid4().hex, workspace, task, sid)
+        job.model_override = model
+        job.purpose = purpose
         with self._lock:
             self._jobs[job.id] = job
         thread = threading.Thread(target=self._run, args=(job, cfg), name=f"shadow-job-{job.id[:8]}", daemon=True)
@@ -86,6 +93,8 @@ class JobManager:
                 events=self.bus,
                 session_id=job.session_id,
                 approval_hub=self.approvals,
+                model_override=job.model_override,
+                purpose=job.purpose,
             )
             job.runner = runner
             result = runner.run(job.task)
@@ -104,6 +113,22 @@ class JobManager:
         finally:
             job.finished_at = time.time()
             job.runner = None
+            duration = job.finished_at - job.started_at
+            sent = notify_done(
+                job.task,
+                success=job.status == "completed",
+                duration_sec=duration,
+                summary=job.summary,
+                enabled=config.ui.notify,
+                after_sec=config.ui.notify_after_sec,
+            )
+            if sent:
+                self.store.add_event(
+                    "notify.sent",
+                    {"task": job.task[:120], "status": job.status, "duration_sec": round(duration, 2)},
+                    session_id=job.session_id,
+                    task_id=job.task_id or None,
+                )
 
     def cancel(self, job_id: str) -> Job:
         job = self.get(job_id)

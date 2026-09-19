@@ -40,7 +40,8 @@ class Verifier:
             if not hello.is_file():
                 return VerificationResult(ok=False, reason="hello.py was not created")
             output = _collect_stdout(self.last_execs)
-            if "Hello, World!" not in output:
+            # Real models print "Hello, world!" as often as "Hello, World!" — match loosely.
+            if not re.search(r"hello,\s*world!", output, re.IGNORECASE):
                 return VerificationResult(ok=False, reason="hello.py was not run or output did not match", evidence=output[-2000:])
             return VerificationResult(ok=True, reason="hello-world verified", evidence=output[-500:])
         if re.search(r"test|pytest|failing", lowered):

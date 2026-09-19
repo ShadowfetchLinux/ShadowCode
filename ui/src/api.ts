@@ -3,7 +3,27 @@ export type ModelInfo = {
   name: string;
   provider: string;
   endpoint: string;
-  metadata?: Record<string, unknown>;
+  detected?: boolean;
+  metadata?: Record<string, unknown> & { capabilities?: Record<string, boolean>; detail?: string; detected?: boolean };
+};
+
+export type DetectedModel = {
+  id: string;
+  name: string;
+  size_bytes: number;
+  context_limit: number;
+  capabilities: Record<string, boolean>;
+  detail: string;
+};
+
+export type DetectedProvider = {
+  provider: string;
+  label: string;
+  endpoint: string;
+  running: boolean;
+  latency_ms: number;
+  models: DetectedModel[];
+  detail: string;
 };
 
 export type Project = { id: string; path: string; name: string; last_opened: number };
@@ -44,6 +64,16 @@ export type Health = {
   onboarding?: { completed: boolean };
 };
 export type DiffHunk = { header: string; lines: { kind: string; text: string }[] };
+export type ModelTestResult = {
+  ok: boolean;
+  latency_ms?: number;
+  reply?: string;
+  error?: string;
+  model?: string;
+  usage?: Record<string, number>;
+  capabilities?: Record<string, unknown>;
+};
+export type ExecResult = { ok: boolean; command: string; stdout: string; stderr: string; exit_code: number; error?: string };
 
 async function parseError(res: Response, path: string): Promise<string> {
   try {
@@ -76,7 +106,8 @@ export const api = {
     get<{
       completed: boolean;
       suggested_workspace: string;
-      providers: { id: string; provider: string; needs_key?: boolean; endpoint?: string; api_key_env?: string }[];
+      providers: { id: string; provider: string; needs_key?: boolean; endpoint?: string; api_key_env?: string; name?: string }[];
+      detected: DetectedProvider[];
       levels: string[];
       defaults: { provider: string; permission_level: string; theme: string };
     }>("/api/onboarding"),
@@ -84,9 +115,20 @@ export const api = {
   config: () => get<Record<string, unknown>>("/api/config"),
   saveConfig: (values: Record<string, unknown>, api_key = "", api_key_env = "") =>
     send<Record<string, unknown>>("/api/config", "PUT", { values, api_key, api_key_env }),
-  models: () => get<{ models: ModelInfo[] }>("/api/models"),
+  models: (refresh = false) => get<{ models: ModelInfo[] }>(`/api/models${refresh ? "?refresh=1" : ""}`),
+  detectProviders: (refresh = false) => get<{ providers: DetectedProvider[] }>(`/api/providers/detect${refresh ? "?refresh=1" : ""}`),
+  testModel: (body: { provider: string; name?: string; endpoint?: string; api_key_env?: string }) =>
+    send<ModelTestResult>("/api/models/test", "POST", body),
+  selectModel: (id: string, extra: { name?: string; provider?: string; endpoint?: string } = {}) =>
+    send<Record<string, unknown>>("/api/models/select", "POST", { id, ...extra }),
   projects: () => get<{ projects: Project[] }>("/api/projects"),
-  openProject: (path: string) => send<{ path: string; session_id: string }>("/api/projects", "POST", { path }),
+  openProject: (path: string) =>
+    send<{ path: string; session_id: string; needs_trust?: boolean; name?: string; permissions?: Record<string, unknown> }>(
+      "/api/projects",
+      "POST",
+      { path },
+    ),
+  trustProject: (path: string) => send<{ ok: boolean; path: string; session_id: string }>("/api/projects/trust", "POST", { path }),
   sessions: () => get<{ sessions: Session[] }>("/api/sessions"),
   session: (id: string) => get<Session & { tasks: { id: string; prompt: string; summary?: string; status: string }[]; events: EventRow[] }>(`/api/sessions/${id}`),
   createSession: (workspace: string, title = "") => send<{ id: string; workspace: string }>("/api/sessions", "POST", { workspace, title }),
@@ -97,6 +139,9 @@ export const api = {
   gitDiff: (path = "") => get<{ diff: string; staged: string; hunks: DiffHunk[] }>("/api/workspace/diff?path=" + encodeURIComponent(path)),
   gitAdd: (paths: string[]) => send<{ ok: boolean }>("/api/workspace/git/add", "POST", { message: "", paths }),
   gitCommit: (message: string, paths: string[] = []) => send<{ ok: boolean }>("/api/workspace/git/commit", "POST", { message, paths }),
+  hunkAction: (path: string, hunk: DiffHunk, action: "accept" | "reject") =>
+    send<{ ok: boolean; action: string; path: string }>("/api/workspace/diff/hunk", "POST", { path, hunk, action }),
+  exec: (command: string, timeout = 60) => send<ExecResult>("/api/workspace/exec", "POST", { command, timeout }),
   status: () =>
     get<{
       workspace: string;
@@ -104,7 +149,8 @@ export const api = {
       permissions: { level: string; network?: boolean };
       onboarding?: { completed: boolean };
     }>("/api/workspace/status"),
-  startJob: (task: string, workspace?: string, session_id?: string) => send<Job>("/api/jobs", "POST", { task, workspace, session_id }),
+  startJob: (task: string, workspace?: string, session_id?: string, model?: string) =>
+    send<Job>("/api/jobs", "POST", { task, workspace, session_id, model: model || undefined }),
   job: (id: string) => get<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string) => send<Job>(`/api/jobs/${id}/cancel`, "POST", {}),
   cancelCurrent: (session_id?: string) => send<{ ok: boolean }>(`/api/run/cancel${session_id ? `?session_id=${session_id}` : ""}`, "POST", {}),

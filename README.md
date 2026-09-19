@@ -8,6 +8,27 @@ verification, history, subagent hooks, and the UI.
 AGENT HARNESS → MODEL INTERFACE → LLM PROVIDER
 ```
 
+## What's new in 0.3.0
+
+- **First-class Ollama**: native `/api/chat` adapter with `think: false`
+  (≈15× faster than the /v1 shim on thinking models like qwen3), real
+  tool-calling, and token usage from `prompt_eval_count`/`eval_count`.
+- **Auto-detect local servers**: Ollama, LM Studio, llama.cpp, and vLLM are
+  probed on startup; installed models appear in the UI model picker with
+  capabilities (tools/thinking), size, and context length.
+- **One-click test-and-save**: every provider preset in onboarding and
+  Settings has a live "Test connection" button; clicking a model makes it
+  the default.
+- **Per-task model override** in the composer, plus routing hints
+  (`routing.planner/coder/...`) for purpose-based model selection.
+- **Retry with backoff** on transient provider errors (429/5xx/connection),
+  visible as `model.retry` events and UI toasts.
+- **Workspace trust dialog** on first open of a new folder.
+- **Desktop notification** (`notify-send`) when a long task finishes.
+- **Diff hunk accept/reject** (stage or revert one hunk via `git apply`).
+- **Click-to-rerun** any `exec` command from the tools panel.
+- **`shadow doctor`**: deep install/config checks with auto-fix suggestions.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the control-flow and module map.
 
 ## Install (Pop!_OS / Ubuntu / Debian)

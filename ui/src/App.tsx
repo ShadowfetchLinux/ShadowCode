@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type Approval, type DiffHunk, type EventRow, type FileEntry, type Health, type ModelInfo, type Project, type Session } from "./api";
+import {
+  api,
+  type Approval,
+  type DetectedProvider,
+  type DiffHunk,
+  type EventRow,
+  type ExecResult,
+  type FileEntry,
+  type Health,
+  type ModelInfo,
+  type Project,
+  type Session,
+} from "./api";
 
 type CenterTab = "conversation" | "plan" | "tools";
 type RightTab = "files" | "diff" | "git" | "skills" | "health";
 type Overlay = "" | "settings" | "help" | "palette" | "project";
+type Toast = { id: number; text: string; kind: "ok" | "err" | "info" };
 
 type ChatItem =
   | { kind: "user"; text: string }
@@ -23,11 +36,14 @@ const SHORTCUTS = [
   ["Esc", "Close overlay"],
 ];
 
+let toastSeq = 1;
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [needsOnboard, setNeedsOnboard] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [detected, setDetected] = useState<DetectedProvider[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
@@ -39,7 +55,7 @@ export default function App() {
   const [git, setGit] = useState({ status: "", log: "", diff: "", files: [] as { path: string; label: string }[], repo: false });
   const [hunks, setHunks] = useState<DiffHunk[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
-  const [status, setStatus] = useState({ workspace: "", model: { default: "mock", provider: "mock" }, permissions: { level: "workspace" } });
+  const [status, setStatus] = useState({ workspace: "", model: { default: "mock", provider: "mock", name: "" }, permissions: { level: "workspace" } });
   const [center, setCenter] = useState<CenterTab>("conversation");
   const [right, setRight] = useState<RightTab>("files");
   const [task, setTask] = useState("");
@@ -62,12 +78,23 @@ export default function App() {
   const [commitMsg, setCommitMsg] = useState("");
   const [cfg, setCfg] = useState<Record<string, unknown>>({});
   const [settingsKey, setSettingsKey] = useState("");
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [modelChoice, setModelChoice] = useState("");
+  const [trustReq, setTrustReq] = useState<{ path: string; name?: string; permissions?: Record<string, unknown> } | null>(null);
+  const [testing, setTesting] = useState<Record<string, boolean>>({});
+  const [execResult, setExecResult] = useState<ExecResult | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const sourceRef = useRef<EventSource | null>(null);
 
+  const pushToast = useCallback((text: string, kind: Toast["kind"] = "info") => {
+    const id = toastSeq++;
+    setToasts((prev) => [...prev.slice(-3), { id, text, kind }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 6000);
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
-      const [healthData, onboard, modelData, projectData, sessionData, statusData, cfgData] = await Promise.all([
+      const [healthData, onboard, modelData, projectData, sessionData, statusData, cfgData, detectData] = await Promise.all([
         api.health(),
         api.onboarding(),
         api.models(),
@@ -75,11 +102,13 @@ export default function App() {
         api.sessions(),
         api.status(),
         api.config(),
+        api.detectProviders(),
       ]);
       setHealth(healthData);
       setNeedsOnboard(!onboard.completed);
       setWorkspace(healthData.workspace || statusData.workspace);
       setModels(modelData.models);
+      setDetected(detectData.providers);
       setProjects(projectData.projects);
       setSessions(sessionData.sessions);
       setStatus(statusData);
@@ -117,6 +146,16 @@ export default function App() {
     }
   }, [dir]);
 
+  const refreshDiff = useCallback(async () => {
+    if (!filePath) return;
+    try {
+      const diff = await api.gitDiff(filePath);
+      setHunks(diff.hunks);
+    } catch {
+      /* not a repo */
+    }
+  }, [filePath]);
+
   useEffect(() => {
     refresh();
   }, [refresh]);
@@ -137,6 +176,7 @@ export default function App() {
       const key = ev.key.toLowerCase();
       if (ev.key === "Escape") {
         setOverlay("");
+        setTrustReq(null);
         return;
       }
       if ((ev.ctrlKey || ev.metaKey) && key === "k") {
@@ -218,6 +258,9 @@ export default function App() {
         return [...items, { kind: "agent", text: String(payload.text) }];
       });
     }
+    if (row.type === "model.retry") {
+      pushToast(`Model busy — retry ${payload.attempt}/${payload.max_attempts} in ${payload.wait_sec}s`, "info");
+    }
     if (row.type === "tool.started") {
       setChat((items) => [...items, { kind: "tool", tool: String(payload.tool || "tool"), text: JSON.stringify(payload.arguments || {}), live: true }]);
     }
@@ -256,7 +299,7 @@ export default function App() {
     setSummary("");
     setChat((items) => [...items, { kind: "user", text }]);
     try {
-      const job = await api.startJob(text, workspace || undefined, sessionId || undefined);
+      const job = await api.startJob(text, workspace || undefined, sessionId || undefined, modelChoice || undefined);
       setJobId(job.id);
       setSessionId(job.session_id);
       sourceRef.current?.close();
@@ -266,7 +309,7 @@ export default function App() {
         try {
           const row = JSON.parse(ev.data) as EventRow & { type: string };
           if (row.type === "job.done") {
-            const payload = row.payload as { summary?: string; usage?: Record<string, number>; result?: { summary: string; plan?: { steps: { status: string; id: string; title: string }[] } } };
+            const payload = row.payload as { summary?: string; usage?: Record<string, number>; status?: string; result?: { summary: string; plan?: { steps: { status: string; id: string; title: string }[] } } };
             setSummary(payload.result?.summary || payload.summary || "");
             if (payload.usage) setUsage(payload.usage);
             if (payload.result?.plan?.steps) {
@@ -274,6 +317,7 @@ export default function App() {
             }
             setBusy(false);
             source.close();
+            pushToast(payload.status === "completed" ? "Task complete" : `Task ended: ${payload.status || "failed"}`, payload.status === "completed" ? "ok" : "err");
             void refresh();
             void refreshInspect();
             return;
@@ -292,6 +336,7 @@ export default function App() {
       };
     } catch (err) {
       setError(String(err));
+      pushToast(String(err), "err");
       setChat((items) => [...items, { kind: "agent", text: String(err) }]);
       setBusy(false);
     }
@@ -368,12 +413,86 @@ export default function App() {
 
   async function pickProject(path: string) {
     const opened = await api.openProject(path);
+    if (opened.needs_trust) {
+      setTrustReq({ path: opened.path, name: opened.name, permissions: opened.permissions });
+      setOverlay("");
+      return;
+    }
     setWorkspace(opened.path);
     setSessionId(opened.session_id);
     setOverlay("");
     setDir(".");
     await refresh();
     await refreshInspect();
+  }
+
+  async function confirmTrust() {
+    if (!trustReq) return;
+    try {
+      const opened = await api.trustProject(trustReq.path);
+      setTrustReq(null);
+      setWorkspace(opened.path);
+      setSessionId(opened.session_id);
+      setDir(".");
+      pushToast(`Trusted ${opened.path}`, "ok");
+      await refresh();
+      await refreshInspect();
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
+  }
+
+  async function useModel(m: ModelInfo) {
+    try {
+      await api.selectModel(m.id);
+      pushToast(`Default model → ${m.id}`, "ok");
+      await refresh();
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
+  }
+
+  async function testModel(m: ModelInfo) {
+    setTesting((prev) => ({ ...prev, [m.id]: true }));
+    try {
+      const result = await api.testModel({
+        provider: m.provider,
+        name: String(m.metadata?.model || m.id),
+        endpoint: m.endpoint,
+        api_key_env: String(m.metadata?.api_key_env || ""),
+      });
+      if (result.ok) pushToast(`${m.id}: OK in ${result.latency_ms}ms — “${(result.reply || "").slice(0, 60)}”`, "ok");
+      else pushToast(`${m.id}: ${result.error || "test failed"}`, "err");
+    } catch (err) {
+      pushToast(String(err), "err");
+    } finally {
+      setTesting((prev) => ({ ...prev, [m.id]: false }));
+    }
+  }
+
+  async function rerunCommand(command: string) {
+    pushToast(`Running: ${command}`, "info");
+    try {
+      const result = await api.exec(command);
+      setExecResult(result);
+      setRight("files");
+      setCenter("tools");
+      pushToast(result.ok ? `exit ${result.exit_code}: ${command}` : `failed (${result.exit_code}): ${command}`, result.ok ? "ok" : "err");
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
+  }
+
+  async function hunkAction(hunk: DiffHunk, action: "accept" | "reject") {
+    if (!filePath) return;
+    try {
+      await api.hunkAction(filePath, hunk, action);
+      pushToast(action === "accept" ? `Staged hunk in ${filePath}` : `Reverted hunk in ${filePath}`, "ok");
+      await refreshDiff();
+      await refreshInspect();
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
   }
 
   function exportTranscript() {
@@ -389,6 +508,7 @@ export default function App() {
       await refreshInspect();
     } catch (err) {
       setError(String(err));
+      pushToast(String(err), "err");
     }
   }
 
@@ -411,8 +531,17 @@ export default function App() {
 
   const filteredCommands = commands.filter((c) => c.label.toLowerCase().includes(paletteQ.toLowerCase()));
   const tokens = usage.total_tokens || 0;
+  const localProvider = ["mock", "ollama", "local", "llamacpp", "vllm"].includes(status.model.provider);
+  const runningProviders = new Set(detected.filter((d) => d.running).map((d) => d.provider));
 
-  if (!ready) return <div className="boot">SHADOW AGENT</div>;
+  if (!ready) {
+    return (
+      <div className="boot">
+        <div>SHADOW AGENT</div>
+        <div className="skel-rows"><span className="skel" /><span className="skel" /><span className="skel" /></div>
+      </div>
+    );
+  }
 
   if (needsOnboard) {
     return <Onboarding onDone={() => { setNeedsOnboard(false); void refresh(); }} />;
@@ -432,9 +561,9 @@ export default function App() {
           <button className="chip" onClick={() => setOverlay("project")} title="Switch project">
             {workspace || "Pick a project"}
           </button>
-          <span className="chip">{status.model.provider}/{status.model.default}</span>
+          <span className="chip ok" title="Active model">{status.model.provider}/{status.model.name || status.model.default}</span>
           <span className="chip">{status.permissions.level}</span>
-          {tokens > 0 && <span className="chip ok">{tokens} tok</span>}
+          {tokens > 0 && <span className="chip ok" title="Tokens used this task">{tokens} tok{localProvider ? " · $0 local" : ""}</span>}
         </div>
         <div className="top-actions">
           <div className={`live ${busy ? "on" : ""}`}><i />{busy ? "RUNNING" : "IDLE"}</div>
@@ -468,14 +597,41 @@ export default function App() {
             </div>
           ))}
         </div>
-        <div className="panel-h">MODELS</div>
+        <div className="panel-h">
+          <span>MODELS</span>
+          <button className="icon-btn" title="Re-detect local servers" onClick={() => void api.models(true).then((d) => setModels(d.models)).then(() => api.detectProviders(true)).then((d) => setDetected(d.providers))}>↻</button>
+        </div>
         <div className="scroll">
-          {models.map((m) => (
-            <div key={m.id} className={`item ${m.id === status.model.default ? "active" : ""}`}>
-              <strong>{m.name}</strong>
-              <span>{m.provider}</span>
-            </div>
-          ))}
+          {models.length === 0 && <div className="skel-rows"><span className="skel" /><span className="skel" /></div>}
+          {models.map((m) => {
+            const caps = (m.metadata?.capabilities || {}) as Record<string, boolean>;
+            const isActive = m.id === status.model.default || m.id === status.model.name;
+            const live = Boolean(m.detected) && (m.metadata?.detected === true || runningProviders.has(m.provider));
+            return (
+              <div key={m.id} className={`item model-item ${isActive ? "active" : ""}`} onClick={() => void useModel(m)} title="Click to make default">
+                <strong>
+                  {live && <span className="dot-live" />}
+                  {m.name}
+                </strong>
+                <span>
+                  {m.provider}
+                  {caps.tools ? " · tools" : ""}
+                  {caps.thinking ? " · thinking" : ""}
+                  {m.metadata?.detail ? ` · ${m.metadata.detail}` : ""}
+                </span>
+                <span className="model-actions">
+                  <button
+                    className="mini"
+                    disabled={Boolean(testing[m.id])}
+                    onClick={(e) => { e.stopPropagation(); void testModel(m); }}
+                  >
+                    {testing[m.id] ? "…" : "Test"}
+                  </button>
+                  {!isActive && <button className="mini" onClick={(e) => { e.stopPropagation(); void useModel(m); }}>Use</button>}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </aside>
 
@@ -522,6 +678,12 @@ export default function App() {
                   </div>
                 ),
               )}
+              {busy && (
+                <div className="msg">
+                  <div className="who">AGENT</div>
+                  <div className="skel-rows"><span className="skel" /><span className="skel short" /></div>
+                </div>
+              )}
               {summary && (
                 <div className="msg">
                   <div className="who">RESULT</div>
@@ -541,16 +703,29 @@ export default function App() {
               <div className="plan">{planMd || "No plan yet. Run a task and the harness will publish steps here."}</div>
             </>
           )}
-          {center === "tools" &&
-            (events.filter((e) => e.type.startsWith("tool.") || e.type.startsWith("test.")).length === 0 ? (
-              <Empty title="No tool calls yet" body="When the agent reads, edits, or runs commands, live cards appear here." />
-            ) : (
-              events.filter((e) => e.type.startsWith("tool.") || e.type.startsWith("test.")).slice(-50).map((e, i) => (
-                <div key={i} className={`event ${String(e.payload.success) === "false" || e.type.includes("fail") ? "bad" : "ok"}`}>
-                  {e.type} · {JSON.stringify(e.payload).slice(0, 200)}
+          {center === "tools" && (
+            <>
+              {execResult && (
+                <div className={`tool-card ${execResult.ok ? "" : "bad"}`}>
+                  <header><span>rerun · {execResult.command}</span><span>exit {execResult.exit_code}</span></header>
+                  <pre>{(execResult.stdout + (execResult.stderr ? "\n" + execResult.stderr : "")).slice(0, 2000) || "(no output)"}</pre>
                 </div>
-              ))
-            ))}
+              )}
+              {events.filter((e) => e.type.startsWith("tool.") || e.type.startsWith("test.")).length === 0 ? (
+                <Empty title="No tool calls yet" body="When the agent reads, edits, or runs commands, live cards appear here." />
+              ) : (
+                events.filter((e) => e.type.startsWith("tool.") || e.type.startsWith("test.")).slice(-50).map((e, i) => {
+                  const cmd = e.type === "tool.completed" && e.payload.tool === "exec" ? String((e.payload as { command?: string }).command || "") : "";
+                  return (
+                    <div key={i} className={`event ${String(e.payload.success) === "false" || e.type.includes("fail") ? "bad" : "ok"}`}>
+                      <span>{e.type} · {JSON.stringify(e.payload).slice(0, 200)}</span>
+                      {cmd && <button className="mini" onClick={() => void rerunCommand(cmd)}>Rerun</button>}
+                    </div>
+                  );
+                })
+              )}
+            </>
+          )}
         </div>
         <form className="composer" onSubmit={(ev) => { ev.preventDefault(); void runTask(); }}>
           {chips.length > 0 && (
@@ -579,7 +754,18 @@ export default function App() {
               <button type="submit" className="primary">Run</button>
             )}
           </div>
-          <div className="row">
+          <div className="row composer-foot">
+            <select
+              className="model-select"
+              value={modelChoice}
+              onChange={(e) => setModelChoice(e.target.value)}
+              title="Model for this task only"
+            >
+              <option value="">model: default ({status.model.name || status.model.default})</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>{m.id}</option>
+              ))}
+            </select>
             <button type="button" className="ghost" onClick={() => void resumeLast()}>Resume last</button>
             <button type="button" className="ghost" onClick={() => void undoChanges()}>Undo files</button>
             <button type="button" className="ghost" onClick={exportTranscript}>Export</button>
@@ -619,7 +805,13 @@ export default function App() {
             ) : (
               hunks.map((h, i) => (
                 <div key={i} className="tool-card">
-                  <header>{h.header}</header>
+                  <header>
+                    <span>{h.header}</span>
+                    <span className="model-actions">
+                      <button className="mini" title="Stage just this hunk" onClick={() => void hunkAction(h, "accept")}>Accept</button>
+                      <button className="mini danger-text" title="Revert this hunk in the worktree" onClick={() => void hunkAction(h, "reject")}>Reject</button>
+                    </span>
+                  </header>
                   {h.lines.map((line, j) => (
                     <div key={j} className={`diff-line ${line.kind === "add" ? "diff-add" : line.kind === "del" ? "diff-del" : "diff-ctx"}`}>
                       {(line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ") + line.text}
@@ -678,6 +870,12 @@ export default function App() {
               <div className="status-row"><span>version</span><code>{health.version}</code></div>
               <div className="status-row"><span>workspace</span><code>{health.workspace}</code></div>
               <div className="status-row"><span>provider</span><code className={health.provider?.ok ? "health-ok" : "health-bad"}>{health.provider?.name} — {health.provider?.detail}</code></div>
+              {detected.filter((d) => d.running).map((d) => (
+                <div className="status-row" key={d.provider}>
+                  <span>{d.label}</span>
+                  <code className="health-ok">{d.models.length} models · {d.latency_ms}ms</code>
+                </div>
+              ))}
               {Object.entries(health.tools || {}).map(([name, info]) => (
                 <div className="status-row" key={name}>
                   <span>{name}</span>
@@ -689,15 +887,43 @@ export default function App() {
         </div>
       </aside>
 
+      <div className="toasts">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast ${t.kind}`} onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}>
+            {t.text}
+          </div>
+        ))}
+      </div>
+
+      {trustReq && (
+        <div className="modal-back" onClick={() => setTrustReq(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Trust this folder?</h2>
+            <p className="hint">
+              <code>{trustReq.path}</code> becomes the agent sandbox. The agent can read, edit, and run commands inside it
+              at permission level <code>{String(trustReq.permissions?.level || "workspace")}</code>
+              {trustReq.permissions?.network ? " with network access" : " with network access disabled"}.
+              Dangerous commands still need your approval.
+            </p>
+            <div className="row">
+              <button className="primary" onClick={() => void confirmTrust()}>Trust and open</button>
+              <button className="ghost" onClick={() => setTrustReq(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {overlay === "settings" && (
         <Settings
           cfg={cfg}
           apiKey={settingsKey}
           onKey={setSettingsKey}
           onClose={() => setOverlay("")}
+          onToast={pushToast}
           onSave={async (values, key) => {
             await api.saveConfig(values, key, String((values.model as { api_key_env?: string } | undefined)?.api_key_env || ""));
             setOverlay("");
+            pushToast("Settings saved", "ok");
             await refresh();
           }}
         />
@@ -726,28 +952,55 @@ function Onboarding({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0);
   const [workspace, setWorkspace] = useState("");
   const [provider, setProvider] = useState("mock");
+  const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [level, setLevel] = useState("workspace");
   const [error, setError] = useState("");
-  const [providers, setProviders] = useState<{ id: string; needs_key?: boolean; api_key_env?: string }[]>([]);
+  const [providers, setProviders] = useState<{ id: string; needs_key?: boolean; api_key_env?: string; endpoint?: string }[]>([]);
+  const [detected, setDetected] = useState<DetectedProvider[]>([]);
+  const [testState, setTestState] = useState<{ busy: boolean; text: string; ok?: boolean }>({ busy: false, text: "" });
 
   useEffect(() => {
     api.onboarding().then((data) => {
       setWorkspace(data.suggested_workspace);
       setProviders(data.providers);
+      setDetected(data.detected || []);
+      const preferred = data.defaults?.provider || "mock";
+      setProvider(preferred);
+      const hit = (data.detected || []).find((d) => d.provider === preferred && d.running && d.models.length);
+      if (hit) setModel(hit.models[0].id);
     });
   }, []);
 
+  const detectedFor = detected.find((d) => d.provider === provider && d.running);
+  const needsKey = providers.find((p) => p.id === provider)?.needs_key;
+
+  async function testConnection() {
+    setTestState({ busy: true, text: "" });
+    try {
+      const preset = providers.find((p) => p.id === provider);
+      const result = await api.testModel({
+        provider,
+        name: model || String(preset?.id || ""),
+        endpoint: String(preset?.endpoint || ""),
+        api_key_env: String(preset?.api_key_env || ""),
+      });
+      if (result.ok) setTestState({ busy: false, ok: true, text: `Connected in ${result.latency_ms}ms — “${(result.reply || "").slice(0, 80)}”` });
+      else setTestState({ busy: false, ok: false, text: result.error || "test failed" });
+    } catch (err) {
+      setTestState({ busy: false, ok: false, text: String(err) });
+    }
+  }
+
   async function finish() {
     try {
-      await api.completeOnboarding({ workspace, provider, api_key: apiKey, permission_level: level, theme: "dark" });
+      await api.completeOnboarding({ workspace, provider, model: model || provider, name: model, api_key: apiKey, permission_level: level, theme: "dark" });
       onDone();
     } catch (err) {
       setError(String(err));
     }
   }
 
-  const needsKey = providers.find((p) => p.id === provider)?.needs_key;
   return (
     <div className="modal-back">
       <div className="wizard">
@@ -764,17 +1017,45 @@ function Onboarding({ onDone }: { onDone: () => void }) {
         {step === 1 && (
           <div className="field">
             <label>Model provider</label>
-            <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-              {providers.map((p) => <option key={p.id} value={p.id}>{p.id}</option>)}
+            {detected.some((d) => d.running) && (
+              <p className="hint detect-banner">
+                Detected: {detected.filter((d) => d.running).map((d) => `${d.label} (${d.models.length} model${d.models.length === 1 ? "" : "s"})`).join(" · ")}
+              </p>
+            )}
+            <select value={provider} onChange={(e) => {
+              const next = e.target.value;
+              setProvider(next);
+              const hit = detected.find((d) => d.provider === next && d.running && d.models.length);
+              setModel(hit ? hit.models[0].id : "");
+            }}>
+              {providers.map((p) => <option key={p.id} value={p.id}>{p.id}{detected.find((d) => d.provider === p.id && d.running) ? " — detected" : ""}</option>)}
             </select>
-            <p className="hint">Mock works offline with no API key. Switch later in Settings.</p>
+            {detectedFor && detectedFor.models.length > 0 && (
+              <>
+                <label>Installed model</label>
+                <select value={model} onChange={(e) => setModel(e.target.value)}>
+                  {detectedFor.models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.id}{m.detail ? ` (${m.detail})` : ""}{m.capabilities?.tools ? " · tools" : ""}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+            <p className="hint">Mock works offline with no API key. Local servers are auto-detected. Switch later in Settings.</p>
           </div>
         )}
         {step === 2 && (
           <div className="field">
             <label>API key {needsKey ? "" : "(optional)"}</label>
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={needsKey ? "Paste key, or leave blank if already in the environment" : "Not needed for Mock"} />
+            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={needsKey ? "Paste key, or leave blank if already in the environment" : "Not needed for Mock/local"} />
             <p className="hint">Saved only in ~/.config/shadow-agent/secrets.env (mode 600). Never written into YAML or git.</p>
+            <div className="row">
+              <button type="button" className="ghost" disabled={testState.busy} onClick={() => void testConnection()}>
+                {testState.busy ? "Testing…" : "Test connection"}
+              </button>
+            </div>
+            {testState.text && <p className={testState.ok ? "health-ok" : "health-bad"}>{testState.text}</p>}
           </div>
         )}
         {step === 3 && (
@@ -804,16 +1085,18 @@ function Settings({
   onKey,
   onClose,
   onSave,
+  onToast,
 }: {
   cfg: Record<string, unknown>;
   apiKey: string;
   onKey: (v: string) => void;
   onClose: () => void;
   onSave: (values: Record<string, unknown>, key: string) => Promise<void>;
+  onToast: (text: string, kind: "ok" | "err" | "info") => void;
 }) {
   const model = (cfg.model || {}) as Record<string, string>;
   const permissions = (cfg.permissions || {}) as Record<string, string | boolean>;
-  const ui = (cfg.ui || {}) as Record<string, string | number>;
+  const ui = (cfg.ui || {}) as Record<string, string | number | boolean>;
   const [defaultModel, setDefaultModel] = useState(model.default || "mock");
   const [provider, setProvider] = useState(model.provider || "mock");
   const [endpoint, setEndpoint] = useState(model.endpoint || "");
@@ -821,11 +1104,81 @@ function Settings({
   const [keyEnv, setKeyEnv] = useState(model.api_key_env || "OPENAI_API_KEY");
   const [level, setLevel] = useState(String(permissions.level || "workspace"));
   const [theme, setTheme] = useState(String(ui.theme || "dark"));
+  const [notify, setNotify] = useState(ui.notify !== false);
+  const [presets, setPresets] = useState<{ id: string; provider: string; endpoint?: string; api_key_env?: string; name?: string }[]>([]);
+  const [detected, setDetected] = useState<DetectedProvider[]>([]);
+  const [testState, setTestState] = useState<{ busy: boolean; text: string; ok?: boolean }>({ busy: false, text: "" });
+
+  useEffect(() => {
+    void api.onboarding().then((data) => setPresets(data.providers as { id: string; provider: string; endpoint?: string; api_key_env?: string; name?: string }[]));
+    void api.detectProviders().then((data) => setDetected(data.providers));
+  }, []);
+
+  const detectedFor = detected.find((d) => d.provider === provider && d.running);
+
+  function applyPreset(id: string) {
+    const preset = presets.find((p) => p.id === id);
+    if (!preset) return;
+    setProvider(preset.provider || id);
+    setDefaultModel(id);
+    setEndpoint(preset.endpoint || "");
+    setName(preset.name || "");
+    setKeyEnv(preset.api_key_env || "OPENAI_API_KEY");
+    const hit = detected.find((d) => d.provider === (preset.provider || id) && d.running && d.models.length);
+    if (hit) {
+      setName(hit.models[0].id);
+      setDefaultModel(hit.models[0].id);
+    }
+  }
+
+  async function testConnection() {
+    setTestState({ busy: true, text: "" });
+    try {
+      const result = await api.testModel({ provider, name, endpoint, api_key_env: keyEnv });
+      if (result.ok) setTestState({ busy: false, ok: true, text: `OK in ${result.latency_ms}ms — “${(result.reply || "").slice(0, 80)}”` });
+      else setTestState({ busy: false, ok: false, text: result.error || "test failed" });
+    } catch (err) {
+      setTestState({ busy: false, ok: false, text: String(err) });
+    }
+  }
+
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>Settings</h2>
         <p className="hint">These write ~/.config/shadow-agent/config.yaml. Keys stay in secrets.env.</p>
+        <div className="field">
+          <label>Provider preset</label>
+          <select value="" onChange={(e) => e.target.value && applyPreset(e.target.value)}>
+            <option value="">Pick to auto-fill…</option>
+            {presets.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.id}{detected.find((d) => d.provider === p.id && d.running) ? " — detected" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        {detectedFor && detectedFor.models.length > 0 && (
+          <div className="field">
+            <label>Detected models on this machine</label>
+            <select
+              value={detectedFor.models.some((m) => m.id === name) ? name : ""}
+              onChange={(e) => {
+                if (!e.target.value) return;
+                setName(e.target.value);
+                setDefaultModel(e.target.value);
+                setEndpoint(detectedFor.endpoint);
+              }}
+            >
+              <option value="">Pick an installed model…</option>
+              {detectedFor.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id}{m.detail ? ` (${m.detail})` : ""}{m.capabilities?.tools ? " · tools" : ""}{m.capabilities?.thinking ? " · thinking" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="field"><label>Default model</label><input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} /></div>
         <div className="field"><label>Provider</label>
           <select value={provider} onChange={(e) => setProvider(e.target.value)}>
@@ -849,12 +1202,27 @@ function Settings({
             <option value="dim">dim</option>
           </select>
         </div>
+        <div className="field">
+          <label className="row" style={{ alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} style={{ width: "auto" }} />
+            Desktop notification when a long task finishes
+          </label>
+        </div>
         <div className="row">
-          <button className="primary" onClick={() => void onSave({
-            model: { default: defaultModel, provider, endpoint, name, api_key_env: keyEnv },
-            permissions: { level },
-            ui: { theme },
-          }, apiKey)}>Save</button>
+          <button className="ghost" disabled={testState.busy} onClick={() => void testConnection()}>
+            {testState.busy ? "Testing…" : "Test connection"}
+          </button>
+          {testState.text && <span className={testState.ok ? "health-ok" : "health-bad"}>{testState.text}</span>}
+        </div>
+        <div className="row">
+          <button className="primary" onClick={() => {
+            if (testState.text && !testState.ok) onToast("Saving anyway — last test failed", "info");
+            void onSave({
+              model: { default: defaultModel, provider, endpoint, name, api_key_env: keyEnv },
+              permissions: { level },
+              ui: { theme, notify },
+            }, apiKey);
+          }}>Save</button>
           <button className="ghost" onClick={onClose}>Close</button>
         </div>
       </div>

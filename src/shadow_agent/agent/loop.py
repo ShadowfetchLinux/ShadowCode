@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,8 @@ class AgentRunner:
         gate: PermissionGate | None = None,
         session_id: str | None = None,
         approval_hub: ApprovalHub | None = None,
+        model_override: str | None = None,
+        purpose: str = "coder",
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self.config = config or load_config(self.workspace)
@@ -84,7 +87,7 @@ class AgentRunner:
             auto_approve=False,
         )
         self.tools = tools or default_tools(self.sandbox, self.gate, self.config.agent.tool_timeout_sec)
-        self.model = model or ModelRegistry().create(self.config)
+        self.model = model or self._resolve_model(model_override, purpose)
         self.session_id = session_id or self.store.create_session(str(self.workspace), self.config.model.default)
         self.store.touch_project(self.workspace)
         remember_workspace(self.workspace)
@@ -93,6 +96,19 @@ class AgentRunner:
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self.todos: list[dict[str, Any]] = []
         self.checkpoints: CheckpointStore | None = None
+
+    def _resolve_model(self, model_override: str | None, purpose: str) -> ModelProvider:
+        """Pick the provider: explicit override > routing hint for this purpose > default."""
+        registry = ModelRegistry()
+        chosen = model_override
+        if not chosen and self.config.routing.enabled:
+            hint = getattr(self.config.routing, purpose, "") or ""
+            if hint and hint != "mock":
+                chosen = hint
+        if chosen and registry.get(chosen) is None:
+            # Allow detected-but-unregistered ids (e.g. an Ollama tag) by probing once.
+            registry.refresh_detected()
+        return registry.create(self.config, model_id=chosen)
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -144,7 +160,7 @@ class AgentRunner:
                 )
             self._emit("model.request", {"step": step, "model": getattr(self.model, "name", "")}, task_id)
             try:
-                response = self.model.chat(request)
+                response = self._chat_with_retry(request, task_id, step)
             except Exception as exc:
                 summary = friendly_error(exc)
                 self._emit("model.error", {"step": step, "error": summary, "raw": str(exc)}, task_id)
@@ -328,6 +344,37 @@ class AgentRunner:
         finally:
             self.gate.auto_approve = previous
 
+    def _chat_with_retry(self, request: ChatRequest, task_id: str, step: int):
+        """Retry transient provider failures (429/5xx/connection) with exponential backoff."""
+        attempts = max(1, int(self.config.agent.model_retries))
+        backoff = max(0.0, float(self.config.agent.retry_backoff_sec))
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            if self.cancelled():
+                raise RuntimeError("Stopped by the user.")
+            try:
+                return self.model.chat(request)
+            except Exception as exc:  # noqa: BLE001 - classified below
+                last_exc = exc
+                if not _provider_retryable(exc) or attempt >= attempts:
+                    raise
+                wait = backoff * (2 ** (attempt - 1))
+                self._emit(
+                    "model.retry",
+                    {
+                        "step": step,
+                        "attempt": attempt,
+                        "max_attempts": attempts,
+                        "wait_sec": wait,
+                        "error": friendly_error(exc),
+                    },
+                    task_id,
+                )
+                if wait > 0:
+                    time.sleep(wait)
+        assert last_exc is not None
+        raise last_exc
+
     def _add_usage(self, usage: dict[str, int]) -> None:
         for key, value in (usage or {}).items():
             self.usage[key] = int(self.usage.get(key, 0)) + int(value)
@@ -341,6 +388,22 @@ class AgentRunner:
             task_id=task_id,
             ts=event.get("ts"),
         )
+
+
+def _provider_retryable(exc: Exception) -> bool:
+    """Classify transient provider/transport failures worth retrying."""
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover - httpx is a hard dependency
+        httpx = None  # type: ignore[assignment]
+    if httpx is not None:
+        if isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            return status == 429 or status >= 500
+    text = str(exc).lower()
+    return any(token in text for token in ("connection reset", "temporarily unavailable", "service unavailable", "too many requests"))
 
 
 def _looks_finished(text: str) -> bool:

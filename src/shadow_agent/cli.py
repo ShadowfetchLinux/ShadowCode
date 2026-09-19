@@ -79,7 +79,9 @@ def run(
 
 
 @app.command()
-def models() -> None:
+def models(
+    detect: bool = typer.Option(False, "--detect", help="Probe local servers and list installed models"),
+) -> None:
     """List registered models and the active default."""
     cfg = ensure_user_config()
     registry = ModelRegistry()
@@ -89,6 +91,19 @@ def models() -> None:
     for info in registry.list_models():
         mark = "*" if info.id == cfg.model.default else " "
         console.print(f"{mark} {info.id:10} {info.provider:20} {info.endpoint}")
+    if detect:
+        from shadow_agent.models.discovery import detect_providers
+
+        console.print("\n[bold]Local servers[/bold]")
+        for found in detect_providers():
+            if not found.running:
+                console.print(f"  [dim]· {found.label}: {found.detail}[/dim]")
+                continue
+            console.print(f"  [green]●[/green] {found.label} ({found.endpoint}) — {found.detail}")
+            for model in found.models:
+                caps = ",".join(k for k, v in model.capabilities.items() if v and k != "completion")
+                suffix = f"  [{caps}]" if caps else ""
+                console.print(f"      {model.id}  {model.detail}{suffix}")
 
 
 @app.command("config")
@@ -145,9 +160,29 @@ def health(
 @app.command()
 def doctor(
     project: Optional[Path] = typer.Option(None, "--project", "-p"),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw report as JSON"),
 ) -> None:
-    """Alias for health."""
-    health(project)
+    """Deep install/config checks with auto-fix suggestions."""
+    from shadow_agent.health import doctor_report
+
+    workspace = _ui_workspace(project)
+    cfg = load_config(workspace)
+    report = doctor_report(cfg, workspace)
+    if json_out:
+        console.print(json.dumps(report, indent=2))
+    else:
+        console.print(f"[bold]shadow doctor[/bold]  v{report['version']}")
+        for check in report["checks"]:
+            mark = "[green]✓[/green]" if check["ok"] else "[red]✗[/red]"
+            detail = f"  [dim]{check['detail']}[/dim]" if check.get("detail") else ""
+            console.print(f"{mark} {check['label']}{detail}")
+            if not check["ok"] and check.get("fix"):
+                console.print(f"    [yellow]fix:[/yellow] {check['fix']}")
+        if report["ok"]:
+            console.print("[green]All checks passed.[/green]")
+        else:
+            console.print(f"[red]{len(report['suggestions'])} issue(s) need attention.[/red]")
+    raise typer.Exit(0 if report["ok"] else 1)
 
 
 @app.command()
