@@ -57,6 +57,35 @@ def test_config_endpoint_round_trips_ability(isolated, workspace) -> None:
     assert again["ui"]["ability"] == "computer_use"
 
 
+def test_config_endpoint_round_trips_theme_toggle(isolated, workspace) -> None:
+    """Regression for 0.5.0 bug: the Settings theme toggle must actually
+    write ui.theme to config.yaml and round-trip through /api/config so the
+    React app can switch data-theme live without a restart."""
+    app = create_app(store=Store(), default_workspace=workspace)
+    client = TestClient(app)
+    # Default for a fresh install is light.
+    assert client.get("/api/config").json()["ui"]["theme"] == "light"
+    # User toggles to dark in Settings.
+    saved = client.put("/api/config", json={"values": {"ui": {"theme": "dark"}}, "api_key": "", "api_key_env": ""}).json()
+    assert saved["ui"]["theme"] == "dark"
+    # Persists across a fresh load.
+    assert client.get("/api/config").json()["ui"]["theme"] == "dark"
+    # Toggle back to light.
+    saved = client.put("/api/config", json={"values": {"ui": {"theme": "light"}}, "api_key": "", "api_key_env": ""}).json()
+    assert saved["ui"]["theme"] == "light"
+    assert client.get("/api/config").json()["ui"]["theme"] == "light"
+
+
+def test_existing_dark_theme_is_respected(isolated, workspace) -> None:
+    """Per the 0.5.1 policy: an explicit theme:dark in config is respected,
+    not auto-migrated. Only unset/empty themes default to light."""
+    from shadow_agent.config import load_config
+    cfg = apply_config_patch({"ui": {"theme": "dark"}})
+    assert cfg.ui.theme == "dark"
+    reloaded = load_config()
+    assert reloaded.ui.theme == "dark"
+
+
 def test_app_tsx_enter_submits_unless_shift() -> None:
     src = APP_TSX.read_text(encoding="utf-8")
     # The composer textarea must submit on Enter and keep Shift+Enter as a newline.
@@ -66,6 +95,40 @@ def test_app_tsx_enter_submits_unless_shift() -> None:
     assert "Computer Use" not in src.split("function Settings(")[0], "abilities must live in Settings, not the composer"
     # Placeholder matches the Codex feel.
     assert "Ask for follow-up" in src
+
+
+def test_app_tsx_composer_clears_after_submit() -> None:
+    """Regression: 0.5.0 left the submitted prompt in the composer after Enter.
+
+    runTask must capture the text, push the user bubble, then clear the
+    composer state (task + chips) immediately — before awaiting the job.
+    """
+    src = APP_TSX.read_text(encoding="utf-8")
+    run_block = src.split("async function runTask(")[1].split("async function stopAgent")[0]
+    # The user bubble is pushed from the captured `text`, not from `task`.
+    assert "const text = composeTask()" in run_block
+    assert "{ kind: \"user\", text }" in run_block
+    # The composer is cleared inside runTask (not only on success).
+    assert "setTask(\"\")" in run_block
+    assert "setChips([])" in run_block
+    # The clear must come before the awaited api.startJob so a failed dispatch
+    # still leaves the composer empty.
+    assert run_block.index("setTask(\"\")") < run_block.index("api.startJob")
+
+
+def test_app_tsx_theme_defaults_light_when_unset() -> None:
+    """The React app must treat a missing/empty theme as light, not dark."""
+    src = APP_TSX.read_text(encoding="utf-8")
+    # The theme effect: cfg.ui?.theme || "light" — dark only when explicit.
+    assert '?.theme || "light"' in src
+    assert 'dataset.theme' in src
+
+
+def test_index_html_defaults_light() -> None:
+    """index.html must ship data-theme="light" so first paint is light even
+    before the config fetch resolves (no dark flash for new installs)."""
+    html = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    assert 'data-theme="light"' in html
 
 
 def test_app_tsx_abilities_live_in_settings() -> None:
@@ -96,3 +159,26 @@ def test_built_bundle_has_light_composer_tokens() -> None:
     assert "#ffffff" in css
     assert "data-theme=dark]" in css or '[data-theme="dark"]' in css
     assert "Work locally" in js
+
+
+@pytest.mark.skipif(not UI_DIST_JS.exists() or not UI_DIST_CSS.exists(), reason="UI not built")
+def test_built_bundle_has_composer_clear_and_light_default() -> None:
+    """The rebuilt bundle must ship the 0.5.1 fixes: composer clears on
+    submit, and index.html defaults to data-theme='light'."""
+    js = next(UI_DIST_JS.glob("index-*.js")).read_text(encoding="utf-8")
+    # The composer clear compiles to two empty setters right before the
+    # awaited startJob call: `Fl(""),Na([])` (setTask(""), setChips([])).
+    # Minified names vary per build, but the pattern `("")]` + `([])`
+    # immediately preceding the call site is stable. The api.ts definition
+    # (`startJob:(b,O,...)=>`) appears first; the call site is `.startJob(`.
+    call_idx = js.index(".startJob(")
+    window = js[max(0, call_idx - 120):call_idx]
+    assert '("")' in window, "runTask must clear the task text before dispatching"
+    assert "([])" in window, "runTask must clear the chips before dispatching"
+    # index.html ships the explicit light default.
+    html = (ROOT / "ui" / "dist" / "index.html").read_text(encoding="utf-8")
+    assert 'data-theme="light"' in html
+    # Bundle must be newer than the source so the server ships the fix.
+    src_mtime = (ROOT / "ui" / "src" / "App.tsx").stat().st_mtime
+    bundle_mtime = next(UI_DIST_JS.glob("index-*.js")).stat().st_mtime
+    assert bundle_mtime >= src_mtime, "ui/dist is stale — rebuild before shipping"

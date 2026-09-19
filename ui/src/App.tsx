@@ -300,6 +300,12 @@ export default function App() {
     setBusy(true);
     setSummary("");
     setChat((items) => [...items, { kind: "user", text }]);
+    // Clear the composer immediately so Enter does not leave the submitted
+    // prompt behind. The captured `text` is already in flight; clearing here
+    // does not affect the running job. Shift+Enter newlines are unaffected
+    // because they never enter this branch.
+    setTask("");
+    setChips([]);
     try {
       const job = await api.startJob(text, workspace || undefined, sessionId || undefined, modelChoice || undefined, mode);
       setJobId(job.id);

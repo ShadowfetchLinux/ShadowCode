@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shadow-agent"
-version = "0.5.0"
+version = "0.5.1"
 description = "Linux-native autonomous coding-agent harness with a Codex light-mode desktop UI"
 readme = "README.md"
 requires-python = ">=3.12"
