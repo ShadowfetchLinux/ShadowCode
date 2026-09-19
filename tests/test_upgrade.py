@@ -432,6 +432,7 @@ def test_notify_sends_for_long_jobs(monkeypatch):
     class FakeProc:
         pass
 
+    monkeypatch.delenv("SHADOW_AGENT_NO_NOTIFY", raising=False)  # Popen is mocked; exercise the real path
     monkeypatch.setattr("shadow_agent.notify.shutil.which", lambda name: "/usr/bin/notify-send")
     monkeypatch.setattr("shadow_agent.notify.subprocess.Popen", lambda *a, **k: called.append(a) or FakeProc())
     assert notify_done("build the thing", success=True, duration_sec=30.0, summary="All done", enabled=True, after_sec=4.0) is True

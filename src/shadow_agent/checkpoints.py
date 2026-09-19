@@ -127,6 +127,35 @@ def restore_last(workspace: Path) -> dict[str, Any]:
     return {"ok": True, "restored": restored, "task_id": store.task_id}
 
 
+def task_checkpoint(workspace: Path, task_id: str) -> dict[str, Any] | None:
+    """Summary of the per-task checkpoint (what a rewind from that card would undo)."""
+    if not task_id:
+        return None
+    manifest = paths.state_dir() / "tasks" / task_id / "checkpoint" / "manifest.json"
+    if not manifest.is_file():
+        return None
+    store = CheckpointStore(workspace, task_id)
+    return store.summary()
+
+
+def restore_task(workspace: Path, task_id: str) -> dict[str, Any]:
+    """Rewind the workspace to the state before ``task_id`` touched it.
+
+    Used by the desktop op-card "Rewind" action: every mutating tool call in
+    that task recorded the pre-image, so restoring is exact and idempotent.
+    """
+    if not task_id:
+        return {"ok": False, "restored": [], "error": "no task id on this card"}
+    manifest = paths.state_dir() / "tasks" / task_id / "checkpoint" / "manifest.json"
+    if not manifest.is_file():
+        return {"ok": False, "restored": [], "error": "This task did not change any files."}
+    store = CheckpointStore(workspace, task_id)
+    if not store.entries:
+        return {"ok": False, "restored": [], "error": "This task did not change any files."}
+    restored = store.restore()
+    return {"ok": True, "restored": restored, "task_id": task_id}
+
+
 def _read_json(path: Path, default: list) -> list:
     if not path.is_file():
         return list(default)

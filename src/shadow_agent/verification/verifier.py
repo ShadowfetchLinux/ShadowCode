@@ -22,8 +22,14 @@ class Verifier:
         self.workspace = Path(workspace)
         self.last_test: ToolResult | None = None
         self.last_execs: list[ToolResult] = []
+        # 0.18.0: count successful file mutations so VERIFY can refuse a
+        # "done" that changed nothing when the task clearly asked for a change.
+        self.mutations = 0
 
     def observe(self, call: ToolCall, result: ToolResult) -> str | None:
+        if call.tool_name in _MUTATING_TOOLS and result.success:
+            self.mutations += 1
+            return None
         if call.tool_name != "exec":
             return None
         self.last_execs.append(result)
@@ -70,6 +76,13 @@ class Verifier:
                     evidence=self.last_test.output[-2000:],
                 )
             return VerificationResult(ok=True, reason="tests passed", evidence=self.last_test.output[-500:])
+        # Generic: a task that asks for a change must have changed or run something.
+        # Otherwise the model "finished" by narrating — send it back through FIX.
+        if _wants_change(lowered) and self.mutations == 0 and not self.last_execs:
+            return VerificationResult(
+                ok=False,
+                reason="the task asked for a change but no files were written and no command was run",
+            )
         # Generic: if tests exist, they must have been run successfully at least once.
         if _has_tests(self.workspace):
             if self.last_test is None:
@@ -77,6 +90,19 @@ class Verifier:
             if not self.last_test.success:
                 return VerificationResult(ok=False, reason="project tests failed", evidence=self.last_test.output[-2000:])
         return VerificationResult(ok=True, reason="no automated verification failed")
+
+
+_MUTATING_TOOLS = {"write_file", "edit_file", "delete_file", "move_file", "apply_patch"}
+_CHANGE_VERBS = re.compile(r"\b(create|write|add|implement|build|make|fix|edit|update|refactor|rename|delete|remove|generate|install|scaffold|run|execute)\b")
+_READ_ONLY_VERBS = re.compile(r"\b(explain|summari[sz]e|review|describe|analy[sz]e|understand|inspect|audit|what|why|how|list|show|tell|find|read)\b")
+
+
+def _wants_change(lowered_task: str) -> bool:
+    """True when the task text is an instruction to change or run something,
+    and is not primarily a read-only question."""
+    if not _CHANGE_VERBS.search(lowered_task):
+        return False
+    return not _READ_ONLY_VERBS.search(lowered_task)
 
 
 def _is_test_command(command: str) -> bool:

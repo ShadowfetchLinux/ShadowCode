@@ -11,7 +11,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-_COMMANDS = {"run", "models", "config", "ui", "tui", "health", "doctor", "export", "sessions", "mcp", "background", "plugin", "rewind", "skill", "goal", "goals", "status", "jobs", "tools", "profile", "understand", "why", "vision", "docs", "rollback", "checkpoints", "team"}
+_COMMANDS = {"run", "models", "config", "ui", "tui", "health", "doctor", "export", "sessions", "mcp", "background", "plugin", "rewind", "skill", "goal", "goals", "status", "jobs", "tools", "profile", "understand", "why", "vision", "docs", "rollback", "checkpoints", "team", "update"}
 
 from shadow_agent import __version__, paths
 from shadow_agent.agent.loop import AgentRunner
@@ -58,7 +58,7 @@ def main(
 ) -> None:
     load_secrets()
     if version:
-        console.print(f"shadow-agent {__version__}")
+        console.print(f"ShadowCode {__version__}")
         raise typer.Exit()
     if ctx.invoked_subcommand is not None:
         return
@@ -243,10 +243,58 @@ def doctor(
 
 
 @app.command()
-def sessions() -> None:
-    """List recent sessions (with branch marker and token totals)."""
+def update(
+    check: bool = typer.Option(False, "--check", help="Only report whether a newer release exists"),
+    tag: Optional[str] = typer.Option(None, "--tag", help="Check out this release tag instead of fast-forwarding main"),
+    no_install: bool = typer.Option(False, "--no-install", help="Update the source tree but skip scripts/install-linux.sh"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Self-update from the GitHub repository (release tag or main), then reinstall."""
+    from shadow_agent.updater import apply_update, check_for_update, render_check, to_json
+
+    info = check_for_update()
+    if check:
+        console.print(to_json(info) if json_out else render_check(info))
+        raise typer.Exit(0)
+    if not tag and not info.get("update_available"):
+        console.print(to_json(info) if json_out else render_check(info))
+        raise typer.Exit(0)
+    result = apply_update(tag=tag or info.get("tag", ""), reinstall=not no_install)
+    if json_out:
+        console.print(to_json(result))
+    elif result["ok"]:
+        console.print(f"[green]Updated[/green] {result['before']} → {result['after']} ({result['tag'] or 'main'})")
+        for step in result["steps"]:
+            console.print(f"  • {step}")
+        console.print("Restart `shadow ui` to load the new version.")
+    else:
+        console.print(f"[red]Update failed:[/red] {result['error']}")
+    raise typer.Exit(0 if result["ok"] else 1)
+
+
+@app.command()
+def sessions(
+    query: Optional[str] = typer.Argument(None, help="Filter sessions by title, prompt, or workspace"),
+    rename: Optional[str] = typer.Option(None, "--rename", help="New title for the session matching QUERY (id prefix)"),
+    delete: bool = typer.Option(False, "--delete", help="Delete the session matching QUERY (id prefix)"),
+) -> None:
+    """List, search, rename, or delete sessions."""
     store = Store()
-    rows = store.list_sessions()
+    if rename is not None or delete:
+        if not query:
+            raise typer.BadParameter("pass a session id prefix as QUERY")
+        match = next((r for r in store.list_sessions(limit=500) if r["id"].startswith(query)), None)
+        if match is None:
+            console.print(f"[red]no session starting with {query}[/red]")
+            raise typer.Exit(1)
+        if delete:
+            store.delete_session(match["id"])
+            console.print(f"deleted {match['id'][:8]}")
+        else:
+            store.set_session_title(match["id"], rename or "")
+            console.print(f"renamed {match['id'][:8]} → {rename}")
+        raise typer.Exit(0)
+    rows = store.search_sessions(query) if query else store.list_sessions()
     if not rows:
         console.print("No sessions yet. Run a task or open the UI.")
         return
@@ -638,12 +686,21 @@ def goal(
 @app.command()
 def goals(
     project: Optional[Path] = typer.Option(None, "--project", "-p"),
+    resume: Optional[str] = typer.Option(None, "--resume", help="Resume the goal with this id prefix (runs remaining milestones)"),
 ) -> None:
-    """List goals for this workspace."""
+    """List goals for this workspace, or resume one."""
     from shadow_agent.goal import GoalStore, render_goal
 
     workspace = _workspace(project)
     store = GoalStore()
+    if resume:
+        match = next((g for g in store.list_goals(workspace) if g["id"].startswith(resume)), None)
+        if match is None:
+            console.print(f"[red]no goal starting with {resume}[/red]")
+            raise typer.Exit(1)
+        store.reopen(match["id"])
+        _run_goal(workspace, match["id"])
+        raise typer.Exit(0)
     rows = store.list_goals(workspace)
     if not rows:
         console.print("No goals yet. Create one with `shadow goal <task>`.")
@@ -850,23 +907,20 @@ def _run_goal(workspace: Path, goal_id: str) -> None:
     """Run an agent through each milestone of a goal, marking them done as VERIFY passes."""
     from shadow_agent.goal import GoalStore, render_goal
 
+    from shadow_agent.goal import run_goal
+
     store = GoalStore()
-    goal = store.get_goal(goal_id)
-    if not goal:
+    if not store.get_goal(goal_id):
         console.print(f"[red]goal {goal_id} not found[/red]")
         return
-    for milestone in goal.get("milestones", []):
-        if milestone["status"] == "done":
-            continue
-        store.update_milestone(goal_id, milestone["id"], "in_progress")
-        task_text = f"{goal['instruction']}\nMilestone: {milestone['title']}"
+
+    def _runner(task_text: str, _milestone_id: str) -> dict:
         result = _run_task(workspace, task_text)
-        new_status = "done" if result.success else "failed"
-        store.update_milestone(goal_id, milestone["id"], new_status, task_id=result.task_id, detail=result.summary[:200])
         if not result.success:
-            console.print(f"[red]Milestone failed: {milestone['title']}[/red]")
-            break
-    g = store.get_goal(goal_id)
+            console.print(f"[red]Milestone failed:[/red] {task_text.splitlines()[-1]}")
+        return {"success": result.success, "task_id": result.task_id, "summary": result.summary}
+
+    g = run_goal(store, goal_id, _runner)
     if g:
         console.print("\n[bold]Goal progress:[/bold]")
         console.print(render_goal(g))

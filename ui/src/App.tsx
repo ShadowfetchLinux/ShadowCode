@@ -3,117 +3,88 @@ import {
   api,
   type Approval,
   type CommandResult,
-  type DetectedProvider,
-  type DiffHunk,
   type EventRow,
-  type ExecResult,
-  type FileEntry,
   type Health,
   type ModelInfo,
   type Project,
+  type ProviderInfo,
   type Session,
+  type UpdateInfo,
 } from "./api";
+import { ApprovalCard, CommandCardView, Empty, OpCard, type ChatItem } from "./components/cards";
+import { Drawer, type DrawerTab } from "./components/Drawer";
+import { Onboarding } from "./components/Onboarding";
+import { CustomModelDialog, Help, Palette, ProjectPicker, TrustDialog, type PaletteItem } from "./components/overlays";
+import { Settings } from "./components/Settings";
 
-type CenterTab = "conversation" | "plan" | "tools";
-type RightTab = "files" | "diff" | "git" | "skills" | "health";
-type Overlay = "" | "settings" | "help" | "palette" | "project";
+type Overlay = "" | "settings" | "help" | "palette" | "project" | "custom-model";
 type Toast = { id: number; text: string; kind: "ok" | "err" | "info" };
 
-type ChatItem =
-  | { kind: "user"; text: string }
-  | { kind: "agent"; text: string }
-  | {
-      kind: "tool";
-      tool: string;
-      ok?: boolean;
-      text: string;
-      live?: boolean;
-      icon?: string;
-      headline?: string;
-      fullOutput?: string;
-      collapsed?: boolean;
-    };
-
-const SHORTCUTS = [
-  ["Ctrl+Enter", "Run task"],
-  ["Ctrl+.", "Stop agent"],
-  ["Ctrl+K", "Command palette"],
-  [", or Ctrl+,", "Settings"],
-  ["Ctrl+P", "Open project"],
-  ["Ctrl+L", "Focus prompt"],
-  ["Ctrl+N", "New session"],
-  ["Ctrl+Shift+E", "Export transcript"],
-  ["?", "Keyboard cheat sheet"],
-  ["Esc", "Close overlay"],
-];
-
 let toastSeq = 1;
+const MODES = ["coder", "researcher", "reviewer", "tester"];
+
+function fmtTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
 
 export default function App() {
+  // --- data ---------------------------------------------------------------
   const [ready, setReady] = useState(false);
   const [needsOnboard, setNeedsOnboard] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [detected, setDetected] = useState<DetectedProvider[]>([]);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
-  const [events, setEvents] = useState<EventRow[]>([]);
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [dir, setDir] = useState(".");
-  const [fileView, setFileView] = useState("");
-  const [filePath, setFilePath] = useState("");
-  const [git, setGit] = useState({ status: "", log: "", diff: "", files: [] as { path: string; label: string }[], repo: false });
-  const [hunks, setHunks] = useState<DiffHunk[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
-  const [status, setStatus] = useState({ workspace: "", model: { default: "mock", provider: "mock", name: "" }, permissions: { level: "workspace" } });
-  const [center, setCenter] = useState<CenterTab>("conversation");
-  const [right, setRight] = useState<RightTab>("files");
+  const [status, setStatus] = useState<{ workspace: string; model: { default: string; provider: string; name?: string; context_limit?: number }; permissions: { level: string } }>({ workspace: "", model: { default: "mock", provider: "mock", name: "", context_limit: 128000 }, permissions: { level: "workspace" } });
+  const [cfg, setCfg] = useState<Record<string, unknown>>({});
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [commandList, setCommandList] = useState<{ name: string; description: string; arg_spec: string }[]>([]);
+
+  // --- conversation --------------------------------------------------------
   const [task, setTask] = useState("");
+  const [chips, setChips] = useState<string[]>([]);
   const [chat, setChat] = useState<ChatItem[]>([]);
+  const [commandCards, setCommandCards] = useState<CommandResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState("");
   const [summary, setSummary] = useState("");
-  const [planMd, setPlanMd] = useState("");
-  const [todos, setTodos] = useState<{ id?: string; title: string; status?: string }[]>([]);
   const [usage, setUsage] = useState<Record<string, number>>({});
   const [stage, setStage] = useState("IDLE");
   const [fixRetries, setFixRetries] = useState(0);
   const [maxFixRetries, setMaxFixRetries] = useState(3);
   const [approvals, setApprovals] = useState<Approval[]>([]);
-  const [overlay, setOverlay] = useState<Overlay>("");
-  const [paletteQ, setPaletteQ] = useState("");
-  const [error, setError] = useState("");
-  const [chips, setChips] = useState<string[]>([]);
-  const [instructions, setInstructions] = useState("");
-  const [skills, setSkills] = useState<{ name: string; content: string }[]>([]);
-  const [skillName, setSkillName] = useState("workflow");
-  const [skillBody, setSkillBody] = useState("");
-  const [commitMsg, setCommitMsg] = useState("");
-  const [cfg, setCfg] = useState<Record<string, unknown>>({});
-  const [settingsKey, setSettingsKey] = useState("");
-  const [toasts, setToasts] = useState<Toast[]>([]);
   const [modelChoice, setModelChoice] = useState("");
   const [mode, setMode] = useState("coder");
-  const [workLocal, setWorkLocal] = useState(false);
-  const [trustReq, setTrustReq] = useState<{ path: string; name?: string; permissions?: Record<string, unknown> } | null>(null);
-  const [testing, setTesting] = useState<Record<string, boolean>>({});
-  const [execResult, setExecResult] = useState<ExecResult | null>(null);
   const [slashMenu, setSlashMenu] = useState<{ open: boolean; q: string; index: number }>({ open: false, q: "", index: 0 });
-  const [commandList, setCommandList] = useState<{ name: string; description: string; arg_spec: string }[]>([]);
-  const [commandCards, setCommandCards] = useState<CommandResult[]>([]);
+
+  // --- chrome --------------------------------------------------------------
+  // The drawer is closed by default: the default view is top bar, transcript,
+  // composer, and the thin status line. Everything else lives behind Ctrl+B / ⌘K.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>("sessions");
+  const [diffPath, setDiffPath] = useState("");
+  const [overlay, setOverlay] = useState<Overlay>("");
+  const [trustReq, setTrustReq] = useState<{ path: string; name?: string; permissions?: Record<string, unknown> } | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [error, setError] = useState("");
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const streamRef = useRef<HTMLDivElement>(null);
   const sourceRef = useRef<EventSource | null>(null);
 
   const pushToast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = toastSeq++;
     setToasts((prev) => [...prev.slice(-3), { id, text, kind }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 6000);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000);
   }, []);
 
   const refresh = useCallback(async () => {
     try {
-      const [healthData, onboard, modelData, projectData, sessionData, statusData, cfgData, detectData] = await Promise.all([
+      const [healthData, onboard, modelData, projectData, sessionData, statusData, cfgData, providerData] = await Promise.all([
         api.health(),
         api.onboarding(),
         api.models(),
@@ -121,13 +92,13 @@ export default function App() {
         api.sessions(),
         api.status(),
         api.config(),
-        api.detectProviders(),
+        api.providers(),
       ]);
       setHealth(healthData);
       setNeedsOnboard(!onboard.completed);
       setWorkspace(healthData.workspace || statusData.workspace);
       setModels(modelData.models);
-      setDetected(detectData.providers);
+      setProviders(providerData.providers);
       setProjects(projectData.projects);
       setSessions(sessionData.sessions);
       setStatus(statusData);
@@ -140,267 +111,139 @@ export default function App() {
     }
   }, [sessionId]);
 
-  const refreshInspect = useCallback(async () => {
+  const refreshApprovals = useCallback(async () => {
     try {
-      const [fileData, gitData, approvalData, inst, skillData] = await Promise.all([
-        api.files(dir),
-        api.git(),
-        api.approvals(),
-        api.instructions(),
-        api.skills(),
-      ]);
-      setFiles(fileData.entries);
-      setGit({
-        status: gitData.status,
-        log: gitData.log,
-        diff: gitData.diff,
-        files: gitData.files || [],
-        repo: Boolean(gitData.repo),
-      });
-      setApprovals(approvalData.approvals);
-      setInstructions(inst.content);
-      setSkills(skillData.skills);
-    } catch {
-      /* empty folders are fine */
-    }
-  }, [dir]);
-
-  const refreshDiff = useCallback(async () => {
-    if (!filePath) return;
-    try {
-      const diff = await api.gitDiff(filePath);
-      setHunks(diff.hunks);
-    } catch {
-      /* not a repo */
-    }
-  }, [filePath]);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    api.commands()
-      .then((data) => setCommandList(data.commands))
-      .catch(() => setCommandList([]));
+      setApprovals((await api.approvals()).approvals);
+    } catch { /* offline */ }
   }, []);
 
-  async function runSlashCommand(name: string, args: string) {
-    try {
-      const result = await api.runCommand(name, args, sessionId || undefined);
-      setCommandCards((prev) => [...prev.slice(-8), result]);
-      if (result.kind === "overlay") {
-        setOverlay((result.overlay as Overlay) || "");
-      }
-      if (result.kind === "quit") {
-        pushToast("Session quit requested", "info");
-      }
-      pushToast(`${result.icon || "◆"} ${result.headline || name}`, result.kind === "error" ? "err" : "ok");
-      await refresh();
-    } catch (err) {
-      pushToast(String(err), "err");
-    }
-  }
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    api.commands().then((d) => setCommandList(d.commands)).catch(() => setCommandList([]));
+    api.updateCheck().then(setUpdate).catch(() => setUpdate(null));
+  }, []);
+  useEffect(() => {
+    void refreshApprovals();
+    const id = setInterval(() => void refreshApprovals(), busy ? 1500 : 6000);
+    return () => clearInterval(id);
+  }, [refreshApprovals, busy]);
 
-  function handleSlashInput(text: string) {
-    // Open the slash menu when the composer starts with "/".
-    if (text.startsWith("/")) {
-      const rest = text.slice(1);
-      const space = rest.indexOf(" ");
-      const q = space >= 0 ? rest.slice(0, space) : rest;
-      setSlashMenu({ open: true, q, index: 0 });
-    } else {
-      setSlashMenu({ open: false, q: "", index: 0 });
-    }
-  }
-
-  function submitSlash(line: string) {
-    // Parse "/name args" and run via the API.
-    const rest = line.slice(1);
-    const space = rest.indexOf(" ");
-    const name = space >= 0 ? rest.slice(0, space) : rest;
-    const args = space >= 0 ? rest.slice(space + 1) : "";
-    setSlashMenu({ open: false, q: "", index: 0 });
-    void runSlashCommand(name, args);
-  }
-
+  // Theme: light unless config says dark.
   useEffect(() => {
     const theme = String((cfg.ui as { theme?: string } | undefined)?.theme || "light");
     document.documentElement.dataset.theme = theme;
   }, [cfg]);
 
+  // Title badge while working / when a task finishes in the background.
   useEffect(() => {
-    refreshInspect();
-    const id = setInterval(refreshInspect, 4000);
-    return () => clearInterval(id);
-  }, [refreshInspect]);
+    document.title = busy ? "● ShadowCode" : "ShadowCode";
+  }, [busy]);
 
+  // Auto-scroll the transcript.
+  useEffect(() => {
+    const el = streamRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat, summary, busy]);
+
+  // --- keyboard ------------------------------------------------------------
   useEffect(() => {
     function onKey(ev: KeyboardEvent) {
       const key = ev.key.toLowerCase();
+      const inField = ["INPUT", "TEXTAREA", "SELECT"].includes((ev.target as HTMLElement)?.tagName || "");
       if (ev.key === "Escape") {
-        setOverlay("");
-        setTrustReq(null);
+        if (overlay) { setOverlay(""); return; }
+        if (trustReq) { setTrustReq(null); return; }
+        if (approvals[0]) { void decide(approvals[0].id, "deny"); return; }
+        if (drawerOpen) { setDrawerOpen(false); return; }
         return;
       }
-      if ((ev.ctrlKey || ev.metaKey) && key === "k") {
+      if (ev.key === "Enter" && !inField && approvals[0] && !overlay) {
         ev.preventDefault();
-        setOverlay("palette");
-        setPaletteQ("");
+        void decide(approvals[0].id, "approve");
         return;
       }
-      if ((ev.ctrlKey || ev.metaKey) && key === "enter") {
-        ev.preventDefault();
-        void runTask();
-        return;
-      }
-      if ((ev.ctrlKey || ev.metaKey) && key === ".") {
-        ev.preventDefault();
-        void stopAgent();
-        return;
-      }
-      if ((ev.ctrlKey || ev.metaKey) && key === ",") {
-        ev.preventDefault();
-        setOverlay("settings");
-        return;
-      }
-      if ((ev.ctrlKey || ev.metaKey) && key === "p") {
-        ev.preventDefault();
-        setOverlay("project");
-        return;
-      }
-      if ((ev.ctrlKey || ev.metaKey) && key === "l") {
-        ev.preventDefault();
-        promptRef.current?.focus();
-        return;
-      }
-      if ((ev.ctrlKey || ev.metaKey) && key === "n") {
-        ev.preventDefault();
-        void newSession();
-        return;
-      }
-      if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && key === "e") {
-        ev.preventDefault();
-        exportTranscript();
-        return;
-      }
-      if (key === "?" && !["INPUT", "TEXTAREA"].includes((ev.target as HTMLElement)?.tagName || "")) {
-        ev.preventDefault();
-        setOverlay("help");
-      }
+      const mod = ev.ctrlKey || ev.metaKey;
+      if (mod && key === "k") { ev.preventDefault(); setOverlay("palette"); return; }
+      if (mod && key === "b") { ev.preventDefault(); setDrawerOpen((v) => !v); return; }
+      if (mod && key === ",") { ev.preventDefault(); setOverlay("settings"); return; }
+      if (mod && key === "p") { ev.preventDefault(); setOverlay("project"); return; }
+      if (mod && key === "l") { ev.preventDefault(); promptRef.current?.focus(); return; }
+      if (mod && key === "n") { ev.preventDefault(); void newSession(); return; }
+      if (mod && key === ".") { ev.preventDefault(); void stopAgent(); return; }
+      if (mod && ev.shiftKey && key === "e") { ev.preventDefault(); exportSession(); return; }
+      if (key === "?" && !inField) { ev.preventDefault(); setOverlay("help"); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const commands = useMemo(
-    () => [
-      { id: "run", label: "Run current task", run: () => void runTask() },
-      { id: "stop", label: "Stop agent", run: () => void stopAgent() },
-      { id: "settings", label: "Open settings", run: () => setOverlay("settings") },
-      { id: "help", label: "Keyboard cheat sheet", run: () => setOverlay("help") },
-      { id: "project", label: "Open project…", run: () => setOverlay("project") },
-      { id: "session", label: "New session", run: () => void newSession() },
-      { id: "resume", label: "Resume last task", run: () => void resumeLast() },
-      { id: "export", label: "Export transcript", run: () => exportTranscript() },
-      { id: "undo", label: "Undo last agent file changes", run: () => void undoChanges() },
-      { id: "files", label: "Show file tree", run: () => setRight("files") },
-      { id: "git", label: "Show git panel", run: () => setRight("git") },
-      { id: "health", label: "Show health check", run: () => setRight("health") },
-      { id: "skills", label: "Edit project skills", run: () => setRight("skills") },
-    ],
-    [task, workspace, sessionId, jobId, sessions],
-  );
-
+  // --- events → transcript ---------------------------------------------------
   function ingestEvent(row: EventRow) {
-    setEvents((prev) => [...prev.slice(-300), row]);
     const payload = row.payload || {};
+    const taskId = String(row.task_id || "");
     if (row.type === "model.delta" && payload.text) {
       setChat((items) => {
         const last = items[items.length - 1];
-        if (last && last.kind === "agent") return [...items.slice(0, -1), { kind: "agent", text: String(payload.text) }];
+        if (last && last.kind === "agent" && !last.who) return [...items.slice(0, -1), { kind: "agent", text: String(payload.text) }];
         return [...items, { kind: "agent", text: String(payload.text) }];
       });
     }
-    if (row.type === "model.retry") {
-      pushToast(`Model busy — retry ${payload.attempt}/${payload.max_attempts} in ${payload.wait_sec}s`, "info");
-    }
+    if (row.type === "model.retry") pushToast(`Model busy — retry ${payload.attempt}/${payload.max_attempts} in ${payload.wait_sec}s`, "info");
     if (row.type === "tool.started") {
       setChat((items) => [
         ...items,
-        {
-          kind: "tool",
-          tool: String(payload.tool || "tool"),
-          text: JSON.stringify(payload.arguments || {}),
-          live: true,
-          icon: "●",
-          headline: `${payload.tool || "tool"} · running`,
-          fullOutput: "",
-          collapsed: true,
-        },
+        { kind: "tool", tool: String(payload.tool || "tool"), text: "", live: true, icon: "●", headline: String(payload.tool || "tool"), fullOutput: "", collapsed: true, taskId },
       ]);
     }
     if (row.type === "tool.completed") {
       setChat((items) => {
         const next = [...items];
-        const idx = [...next].reverse().findIndex((item) => item.kind === "tool" && item.tool === payload.tool && item.live);
-        const real = idx >= 0 ? next.length - 1 - idx : -1;
-        // Codex-style compact card: one summary line + icon, expandable.
-        const icon = String(payload.icon || (payload.success ? "✓" : "✗"));
-        const headline = String(payload.headline || payload.tool || "");
-        const fullOutput = String(payload.output_full || payload.output_preview || payload.error || "");
-        if (real >= 0 && next[real].kind === "tool") {
-          const prev = next[real] as Extract<ChatItem, { kind: "tool" }>;
-          next[real] = {
-            kind: "tool",
-            tool: String(payload.tool),
-            ok: Boolean(payload.success),
-            text: String(payload.output_preview || payload.error || ""),
-            live: false,
-            icon,
-            headline,
-            fullOutput,
-            collapsed: prev.collapsed ?? true,
-          };
-        } else {
-          next.push({
-            kind: "tool",
-            tool: String(payload.tool || "tool"),
-            ok: Boolean(payload.success),
-            text: String(payload.output_preview || payload.error || ""),
-            live: false,
-            icon,
-            headline,
-            fullOutput,
-            collapsed: true,
-          });
-        }
+        const rev = [...next].reverse().findIndex((item) => item.kind === "tool" && item.tool === payload.tool && item.live);
+        const real = rev >= 0 ? next.length - 1 - rev : -1;
+        const args = (payload.arguments || {}) as Record<string, unknown>;
+        const card: ChatItem = {
+          kind: "tool",
+          tool: String(payload.tool || "tool"),
+          ok: Boolean(payload.success),
+          text: String(payload.output_preview || payload.error || ""),
+          live: false,
+          icon: String(payload.icon || (payload.success ? "✓" : "✗")),
+          headline: String(payload.headline || payload.tool || ""),
+          fullOutput: String(payload.output_full || payload.output_preview || payload.error || ""),
+          collapsed: real >= 0 && next[real].kind === "tool" ? (next[real] as Extract<ChatItem, { kind: "tool" }>).collapsed ?? true : true,
+          taskId,
+          path: String(args.path || args.dest || ""),
+        };
+        if (real >= 0) next[real] = card;
+        else next.push(card);
         return next;
       });
     }
-    if (row.type === "plan.updated" || row.type === "agent.planning") {
-      const plan = payload.plan as { steps?: { status: string; id: string; title: string }[] } | undefined;
-      if (plan?.steps) {
-        setPlanMd(plan.steps.map((s) => `${s.status === "done" ? "[x]" : s.status === "failed" ? "[!]" : "[ ]"} ${s.id} ${s.title}`).join("\n"));
-      }
-      if (Array.isArray(payload.todos)) setTodos(payload.todos as { title: string; status?: string }[]);
-    }
-    if (row.type === "todos.updated" && Array.isArray(payload.todos)) setTodos(payload.todos as { title: string }[]);
-    if (row.type === "agent.understand" || row.type === "agent.plan" || row.type === "agent.inspect"
-        || row.type === "agent.act" || row.type === "agent.observe" || row.type === "agent.verify"
-        || row.type === "agent.fix" || row.type === "agent.done" || row.type === "agent.failed") {
-      setStage(String(payload.stage || row.type.split(".")[1].toUpperCase()));
+    if (row.type.startsWith("agent.") && payload.stage) {
+      setStage(String(payload.stage));
       if (typeof payload.fix_retries === "number") setFixRetries(payload.fix_retries);
       if (typeof payload.max_fix_retries === "number") setMaxFixRetries(payload.max_fix_retries);
     }
-    if (row.type === "approval.requested") void api.approvals().then((data) => setApprovals(data.approvals));
+    if (row.type === "approval.requested") void refreshApprovals();
     if (row.type === "agent.completed") {
       setSummary(String(payload.summary || ""));
       setUsage((payload.usage as Record<string, number>) || {});
       setStage(String(payload.stage || (payload.success ? "DONE" : "IDLE")));
-      if (typeof payload.fix_retries === "number") setFixRetries(payload.fix_retries);
       setBusy(false);
     }
+  }
+
+  function notifyDesktop(ok: boolean, text: string) {
+    if (!document.hidden || typeof Notification === "undefined") return;
+    if (Notification.permission === "granted") {
+      try { new Notification(ok ? "ShadowCode — task complete" : "ShadowCode — task stopped", { body: text.slice(0, 140), icon: "/icon.svg" }); } catch { /* ignore */ }
+    }
+  }
+
+  // --- actions -------------------------------------------------------------
+  function composeTask() {
+    const extra = chips.length ? `\n\nAttached paths: ${chips.join(", ")}` : "";
+    return (task.trim() + extra).trim();
   }
 
   async function runTask() {
@@ -412,12 +255,10 @@ export default function App() {
     setStage("UNDERSTAND");
     setFixRetries(0);
     setChat((items) => [...items, { kind: "user", text }]);
-    // Clear the composer immediately so Enter does not leave the submitted
-    // prompt behind. The captured `text` is already in flight; clearing here
-    // does not affect the running job. Shift+Enter newlines are unaffected
-    // because they never enter this branch.
+    // Clear the composer immediately: Enter must never leave the prompt behind.
     setTask("");
     setChips([]);
+    if (typeof Notification !== "undefined" && Notification.permission === "default") void Notification.requestPermission().catch(() => undefined);
     try {
       const job = await api.startJob(text, workspace || undefined, sessionId || undefined, modelChoice || undefined, mode);
       setJobId(job.id);
@@ -429,35 +270,28 @@ export default function App() {
         try {
           const row = JSON.parse(ev.data) as EventRow & { type: string };
           if (row.type === "job.done") {
-            const payload = row.payload as { summary?: string; usage?: Record<string, number>; status?: string; result?: { summary: string; plan?: { steps: { status: string; id: string; title: string }[] } } };
-            setSummary(payload.result?.summary || payload.summary || "");
+            const payload = row.payload as { summary?: string; usage?: Record<string, number>; status?: string; result?: { summary: string } };
+            const finalSummary = payload.result?.summary || payload.summary || "";
+            setSummary(finalSummary);
             if (payload.usage) setUsage(payload.usage);
-            if (payload.result?.plan?.steps) {
-              setPlanMd(payload.result.plan.steps.map((s) => `${s.status === "done" ? "[x]" : "[ ]"} ${s.id} ${s.title}`).join("\n"));
-            }
             setBusy(false);
             source.close();
-            pushToast(payload.status === "completed" ? "Task complete" : `Task ended: ${payload.status || "failed"}`, payload.status === "completed" ? "ok" : "err");
+            const ok = payload.status === "completed";
+            pushToast(ok ? "Task complete" : `Task ${payload.status || "failed"}`, ok ? "ok" : "err");
+            notifyDesktop(ok, finalSummary || text);
             void refresh();
-            void refreshInspect();
             return;
           }
           ingestEvent(row);
-        } catch {
-          /* keepalive */
-        }
+        } catch { /* keepalive */ }
       };
       source.onerror = () => {
         source.close();
-        void api.job(job.id).then((done) => {
-          setSummary(done.summary || done.result?.summary || "");
-          setBusy(false);
-        });
+        void api.job(job.id).then((done) => { setSummary(done.summary || done.result?.summary || ""); setBusy(false); });
       };
     } catch (err) {
       setError(String(err));
       pushToast(String(err), "err");
-      setChat((items) => [...items, { kind: "agent", text: String(err) }]);
       setBusy(false);
     }
   }
@@ -472,9 +306,13 @@ export default function App() {
     }
   }
 
-  function composeTask() {
-    const extra = chips.length ? `\n\nAttached paths: ${chips.join(", ")}` : "";
-    return (task.trim() + extra).trim();
+  async function decide(id: string, decision: "approve" | "deny") {
+    try {
+      await api.decide(id, decision);
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
+    await refreshApprovals();
   }
 
   async function newSession() {
@@ -482,30 +320,18 @@ export default function App() {
     const created = await api.createSession(workspace, "New session");
     setSessionId(created.id);
     setChat([]);
-    setEvents([]);
+    setCommandCards([]);
     setSummary("");
-    setTask("");
-  }
-
-  async function resumeLast() {
-    const last = sessions.find((s) => s.id === sessionId) || sessions[0];
-    if (!last) return;
-    const detail = await api.session(last.id);
-    const prompt = detail.tasks[0]?.prompt || "";
-    setSessionId(last.id);
-    setEvents(detail.events);
-    setTask(prompt);
-    if (prompt) {
-      setTask(prompt);
-      setTimeout(() => void runTask(), 0);
-    }
+    setUsage({});
+    setStage("IDLE");
+    await refresh();
+    promptRef.current?.focus();
   }
 
   async function openSession(id: string) {
     const detail = await api.session(id);
     setSessionId(id);
     setWorkspace(detail.workspace);
-    setEvents(detail.events);
     setChat(
       detail.events
         .filter((e) => e.type === "agent.started" || e.type === "agent.completed" || e.type === "tool.completed")
@@ -513,6 +339,7 @@ export default function App() {
           if (e.type === "agent.started") return { kind: "user" as const, text: String(e.payload.task || "") };
           if (e.type === "tool.completed") {
             const p = e.payload;
+            const args = (p.arguments || {}) as Record<string, unknown>;
             return {
               kind: "tool" as const,
               tool: String(p.tool || "tool"),
@@ -522,40 +349,33 @@ export default function App() {
               headline: String(p.headline || p.tool || ""),
               fullOutput: String(p.output_full || p.output_preview || p.error || ""),
               collapsed: true,
+              taskId: String(e.task_id || ""),
+              path: String(args.path || ""),
             };
           }
-          return { kind: "agent" as const, text: String(e.payload.summary || "") };
+          return { kind: "agent" as const, text: String(e.payload.summary || ""), who: "Result" };
         }),
     );
-    setSummary(detail.tasks[0]?.summary || "");
-  }
-
-  async function openFile(path: string, type: string) {
-    if (type === "dir") {
-      setDir(path);
-      return;
-    }
-    const file = await api.file(path);
-    setFileView(file.content);
-    setFilePath(path);
-    const diff = await api.gitDiff(path);
-    setHunks(diff.hunks);
-    setRight(diff.hunks.length ? "diff" : "files");
+    setSummary("");
+    setDrawerOpen(false);
   }
 
   async function pickProject(path: string) {
-    const opened = await api.openProject(path);
-    if (opened.needs_trust) {
-      setTrustReq({ path: opened.path, name: opened.name, permissions: opened.permissions });
+    try {
+      const opened = await api.openProject(path);
+      if (opened.needs_trust) {
+        setTrustReq({ path: opened.path, name: opened.name, permissions: opened.permissions });
+        setOverlay("");
+        return;
+      }
+      setWorkspace(opened.path);
+      setSessionId(opened.session_id);
+      setChat([]);
       setOverlay("");
-      return;
+      await refresh();
+    } catch (err) {
+      pushToast(String(err), "err");
     }
-    setWorkspace(opened.path);
-    setSessionId(opened.session_id);
-    setOverlay("");
-    setDir(".");
-    await refresh();
-    await refreshInspect();
   }
 
   async function confirmTrust() {
@@ -565,1045 +385,353 @@ export default function App() {
       setTrustReq(null);
       setWorkspace(opened.path);
       setSessionId(opened.session_id);
-      setDir(".");
+      setChat([]);
       pushToast(`Trusted ${opened.path}`, "ok");
       await refresh();
-      await refreshInspect();
     } catch (err) {
       pushToast(String(err), "err");
     }
   }
 
-  async function useModel(m: ModelInfo) {
-    try {
-      await api.selectModel(m.id);
-      pushToast(`Default model → ${m.id}`, "ok");
-      await refresh();
-    } catch (err) {
-      pushToast(String(err), "err");
-    }
-  }
-
-  async function testModel(m: ModelInfo) {
-    setTesting((prev) => ({ ...prev, [m.id]: true }));
-    try {
-      const result = await api.testModel({
-        provider: m.provider,
-        name: String(m.metadata?.model || m.id),
-        endpoint: m.endpoint,
-        api_key_env: String(m.metadata?.api_key_env || ""),
-      });
-      if (result.ok) pushToast(`${m.id}: OK in ${result.latency_ms}ms — “${(result.reply || "").slice(0, 60)}”`, "ok");
-      else pushToast(`${m.id}: ${result.error || "test failed"}`, "err");
-    } catch (err) {
-      pushToast(String(err), "err");
-    } finally {
-      setTesting((prev) => ({ ...prev, [m.id]: false }));
-    }
-  }
-
-  async function rerunCommand(command: string) {
-    pushToast(`Running: ${command}`, "info");
-    try {
-      const result = await api.exec(command);
-      setExecResult(result);
-      setRight("files");
-      setCenter("tools");
-      pushToast(result.ok ? `exit ${result.exit_code}: ${command}` : `failed (${result.exit_code}): ${command}`, result.ok ? "ok" : "err");
-    } catch (err) {
-      pushToast(String(err), "err");
-    }
-  }
-
-  async function hunkAction(hunk: DiffHunk, action: "accept" | "reject") {
-    if (!filePath) return;
-    try {
-      await api.hunkAction(filePath, hunk, action);
-      pushToast(action === "accept" ? `Staged hunk in ${filePath}` : `Reverted hunk in ${filePath}`, "ok");
-      await refreshDiff();
-      await refreshInspect();
-    } catch (err) {
-      pushToast(String(err), "err");
-    }
-  }
-
-  function exportTranscript() {
+  function exportSession() {
     if (!sessionId) return;
     window.open(api.exportUrl(sessionId, "md"), "_blank");
   }
 
-  async function undoChanges() {
+  async function undoLast() {
     try {
       const result = await api.undo();
-      setError("");
-      setChat((items) => [...items, { kind: "agent", text: `Restored ${result.restored.length} file(s).` }]);
-      await refreshInspect();
+      pushToast(`Restored ${result.restored.length} file(s)`, "ok");
+      setChat((items) => [...items, { kind: "agent", text: `Restored ${result.restored.length} file(s): ${result.restored.join(", ") || "—"}`, who: "Undo" }]);
     } catch (err) {
-      setError(String(err));
       pushToast(String(err), "err");
     }
   }
 
-  async function onDrop(ev: React.DragEvent) {
-    ev.preventDefault();
+  async function rewindTask(taskId: string) {
+    try {
+      const result = await api.rewindTask(taskId);
+      pushToast(`Rewound ${result.restored.length} file(s)`, "ok");
+      setChat((items) => [...items, { kind: "agent", text: `Rewound ${result.restored.length} file(s): ${result.restored.join(", ") || "—"}`, who: "Rewind" }]);
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
+  }
+
+  function reviewDiff(path: string) {
+    setDiffPath(path);
+    setDrawerTab("changes");
+    setDrawerOpen(true);
+  }
+
+  function openDrawer(tab: DrawerTab) {
+    setDrawerTab(tab);
+    setDrawerOpen(true);
+  }
+
+  async function runSlashCommand(name: string, args: string) {
+    try {
+      const result = await api.runCommand(name, args, sessionId || undefined);
+      if (result.kind === "overlay") setOverlay((result.overlay as Overlay) || "settings");
+      else setCommandCards((prev) => [...prev.slice(-5), result]);
+      if (result.kind === "error") pushToast(result.headline || name, "err");
+      await refresh();
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
+  }
+
+  function submitSlash(line: string) {
+    const rest = line.slice(1);
+    const space = rest.indexOf(" ");
+    const name = space >= 0 ? rest.slice(0, space) : rest;
+    const args = space >= 0 ? rest.slice(space + 1) : "";
+    setSlashMenu({ open: false, q: "", index: 0 });
+    void runSlashCommand(name, args);
+  }
+
+  async function applyCustomModel(id: string, provider: string, endpoint: string) {
+    try {
+      await api.selectModel(id, { provider, endpoint, name: id });
+      pushToast(`Default model → ${id}`, "ok");
+      setOverlay("");
+      setModelChoice("");
+      await refresh();
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
+  }
+
+  async function onFiles(files: FileList | File[]) {
     const next: string[] = [];
-    for (const file of Array.from(ev.dataTransfer.files)) {
+    for (const file of Array.from(files)) {
       const text = await file.text().catch(() => "");
       if (text) {
         const saved = await api.attach(file.name, text);
         next.push(saved.path);
-      } else {
-        next.push(file.name);
       }
     }
-    const text = ev.dataTransfer.getData("text/plain").trim();
-    if (text && !text.includes("\n") && (text.startsWith("/") || text.startsWith("."))) next.push(text);
-    setChips((prev) => [...prev, ...next]);
+    if (next.length) setChips((prev) => [...prev, ...next]);
   }
 
-  const filteredCommands = commands.filter((c) => c.label.toLowerCase().includes(paletteQ.toLowerCase()));
+  async function onDrop(ev: React.DragEvent) {
+    ev.preventDefault();
+    await onFiles(ev.dataTransfer.files);
+    const text = ev.dataTransfer.getData("text/plain").trim();
+    if (text && !text.includes("\n") && (text.startsWith("/") || text.startsWith("."))) setChips((prev) => [...prev, text]);
+  }
+
+  // --- derived -------------------------------------------------------------
+  const palette: PaletteItem[] = useMemo(
+    () => [
+      { id: "stop", label: "Stop the agent", hint: "Ctrl+.", run: () => void stopAgent() },
+      { id: "new", label: "New session", hint: "Ctrl+N", run: () => void newSession() },
+      { id: "project", label: "Open project…", hint: "Ctrl+P", run: () => setOverlay("project") },
+      { id: "sessions", label: "Sessions", run: () => openDrawer("sessions") },
+      { id: "files", label: "Files", run: () => openDrawer("files") },
+      { id: "changes", label: "Changes (git · diff)", run: () => openDrawer("changes") },
+      { id: "skills", label: "Skills and instructions", run: () => openDrawer("skills") },
+      { id: "goals", label: "Goals", run: () => openDrawer("goals") },
+      { id: "health", label: "Health · doctor · router", run: () => openDrawer("health") },
+      { id: "background", label: "Background processes", run: () => openDrawer("background") },
+      { id: "undo", label: "Undo last task's file changes", run: () => void undoLast() },
+      { id: "export", label: "Export session as Markdown", hint: "Ctrl+Shift+E", run: () => exportSession() },
+      { id: "custom-model", label: "Use a custom model…", run: () => setOverlay("custom-model") },
+      { id: "settings", label: "Settings", hint: "Ctrl+,", run: () => setOverlay("settings") },
+      { id: "theme", label: "Toggle dark mode", run: () => void api.saveConfig({ ui: { theme: String((cfg.ui as { theme?: string })?.theme) === "dark" ? "light" : "dark" } }).then(refresh) },
+      { id: "help", label: "Keyboard cheat sheet", hint: "?", run: () => setOverlay("help") },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workspace, sessionId, jobId, cfg],
+  );
+
+  const modelGroups = useMemo(() => {
+    const groups = new Map<string, ModelInfo[]>();
+    for (const m of models) {
+      const list = groups.get(m.provider) || [];
+      list.push(m);
+      groups.set(m.provider, list);
+    }
+    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [models]);
+
+  const currentModel = status.model.name || status.model.default;
   const tokens = usage.total_tokens || 0;
-  const localProvider = ["mock", "ollama", "local", "llamacpp", "vllm"].includes(status.model.provider);
-  const runningProviders = new Set(detected.filter((d) => d.running).map((d) => d.provider));
+  const ctxPct = status.model.context_limit ? Math.min(100, Math.round(((usage.prompt_tokens || 0) / status.model.context_limit) * 100)) : 0;
+  const currentSession = sessions.find((s) => s.id === sessionId);
+  const title = currentSession?.title || (chat.find((c) => c.kind === "user") as { text: string } | undefined)?.text?.split("\n")[0] || "ShadowCode";
+  const slashMatches = slashMenu.open ? commandList.filter((c) => c.name.startsWith(slashMenu.q)).slice(0, 10) : [];
+  // The streamed agent text usually *is* the result; only show a separate
+  // Result block when the final summary adds something new.
+  const lastItem = chat[chat.length - 1];
+  const showSummary = Boolean(summary) && !(lastItem && lastItem.kind === "agent" && lastItem.text.trim() === summary.trim());
+  const versionLabel = health?.version || "";
 
   if (!ready) {
-    return (
-      <div className="boot">
-        <div>SHADOW AGENT</div>
-        <div className="skel-rows"><span className="skel" /><span className="skel" /><span className="skel" /></div>
-      </div>
-    );
+    return <div className="boot"><span className="skel" /><span className="skel short" /></div>;
   }
-
   if (needsOnboard) {
     return <Onboarding onDone={() => { setNeedsOnboard(false); void refresh(); }} />;
   }
 
   return (
-    <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div className={`app ${drawerOpen ? "drawer-open" : "drawer-closed"}`} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <header className="top">
-        <div className="top-nav">
-          <button className="icon-btn" title="Back" onClick={() => void resumeLast()}>‹</button>
-          <button className="icon-btn" title="Forward" onClick={() => void newSession()}>›</button>
-          <button className="icon-btn" title="New message" onClick={() => { setTask(""); promptRef.current?.focus(); }}>＋</button>
+        <div className="top-left">
+          <button type="button" className={`icon-btn ${drawerOpen ? "on" : ""}`} title="Drawer (Ctrl+B)" onClick={() => setDrawerOpen((v) => !v)}>☰</button>
+          <button type="button" className="icon-btn" title="New session (Ctrl+N)" onClick={() => void newSession()}>＋</button>
         </div>
-        <div className="top-title">{task.trim() || summary || "Shadow Agent"}</div>
-        <div className="top-actions">
-          <button className="icon-btn" onClick={() => setOverlay("palette")} title="Command palette (Ctrl+K)">⌘K</button>
-          <button className="icon-btn" onClick={() => setOverlay("settings")} title="Settings (Ctrl+,)">⚙</button>
-          <button className="icon-btn" onClick={() => setOverlay("help")} title="Keyboard cheat sheet (?)">?</button>
+        <div className="top-title" title={workspace}>{title}</div>
+        <div className="top-right">
+          {update?.update_available && <button type="button" className="pill update" title={`Run: shadow update`} onClick={() => openDrawer("health")}>v{update.latest}</button>}
+          <button type="button" className="icon-btn" title="Command palette (Ctrl+K)" onClick={() => setOverlay("palette")}>⌘K</button>
+          <button type="button" className="icon-btn" title="Settings (Ctrl+,)" onClick={() => setOverlay("settings")}>⚙</button>
         </div>
       </header>
 
-      <div className="statusline">
-        <span className={`stage-chip stage-${stage.toLowerCase()}`} title={`Loop stage: ${stage}`}>
-          {stage === "FIX" ? `FIX · retry ${fixRetries}/${maxFixRetries}` : stage}
-        </span>
-        <span className="sep">·</span>
-        <span>{status.model.provider}/{status.model.name || status.model.default}</span>
-        <span className="sep">·</span>
-        <span title="Workspace">{workspace ? workspace.split("/").pop() : "no workspace"}</span>
-        <span className="sep">·</span>
-        <span title="Permission level">{status.permissions.level}</span>
-        {tokens > 0 && (<><span className="sep">·</span><span title="Tokens this task">{tokens} tok{localProvider ? " · $0 local" : ""}</span></>)}
-        <span className="sep">·</span>
-        <span className={`live ${busy ? "on" : ""}`}><i />{busy ? "working" : "idle"}</span>
-        <span style={{ marginLeft: "auto" }} className="hint">Enter to run · Shift+Enter for a new line · ? for shortcuts</span>
-      </div>
-
-      <aside className="left">
-        <div className="panel-h">
-          <span>SESSIONS</span>
-          <button className="icon-btn" onClick={() => void newSession()}>New</button>
-        </div>
-        <div className="scroll">
-          {sessions.length === 0 && <Empty title="No sessions yet" body="Run a task. It will show up here so you can resume it." />}
-          {sessions.map((s) => (
-            <div key={s.id} className={`item ${s.id === sessionId ? "active" : ""}`} onClick={() => void openSession(s.id)}>
-              <strong>{s.title || "Untitled"}{s.parent_id ? " ↳" : ""}</strong>
-              <span>
-                {s.status} · {s.workspace.split("/").pop()}
-                <button className="mini" title="Fork this session to try a path" onClick={(e) => { e.stopPropagation(); void api.branchSession(s.id).then((b) => { pushToast(`Branched → ${b.id.slice(0,8)}`, "ok"); void refresh(); }); }}>Branch</button>
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="panel-h">RECENT FOLDERS</div>
-        <div className="scroll">
-          {projects.length === 0 && <div className="item">Open a folder to pin it here.</div>}
-          {projects.map((p) => (
-            <div key={p.id} className={`item ${p.path === workspace ? "active" : ""}`} onClick={() => void pickProject(p.path)}>
-              <strong>{p.name}</strong>
-              <span>{p.path}</span>
-            </div>
-          ))}
-        </div>
-        <div className="panel-h">
-          <span>MODELS</span>
-          <button className="icon-btn" title="Re-detect local servers" onClick={() => void api.models(true).then((d) => setModels(d.models)).then(() => api.detectProviders(true)).then((d) => setDetected(d.providers))}>↻</button>
-        </div>
-        <div className="scroll">
-          {models.length === 0 && <div className="skel-rows"><span className="skel" /><span className="skel" /></div>}
-          {models.map((m) => {
-            const caps = (m.metadata?.capabilities || {}) as Record<string, boolean>;
-            const isActive = m.id === status.model.default || m.id === status.model.name;
-            const live = Boolean(m.detected) && (m.metadata?.detected === true || runningProviders.has(m.provider));
-            return (
-              <div key={m.id} className={`item model-item ${isActive ? "active" : ""}`} onClick={() => void useModel(m)} title="Click to make default">
-                <strong>
-                  {live && <span className="dot-live" />}
-                  {m.name}
-                </strong>
-                <span>
-                  {m.provider}
-                  {caps.tools ? " · tools" : ""}
-                  {caps.thinking ? " · thinking" : ""}
-                  {m.metadata?.detail ? ` · ${m.metadata.detail}` : ""}
-                </span>
-                <span className="model-actions">
-                  <button
-                    className="mini"
-                    disabled={Boolean(testing[m.id])}
-                    onClick={(e) => { e.stopPropagation(); void testModel(m); }}
-                  >
-                    {testing[m.id] ? "…" : "Test"}
-                  </button>
-                  {!isActive && <button className="mini" onClick={(e) => { e.stopPropagation(); void useModel(m); }}>Use</button>}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </aside>
-
-      <main className="center">
-        <div className="panel-h">
-          <span>WORKSPACE</span>
-          <div className="tabs">
-            {(["conversation", "plan", "tools"] as CenterTab[]).map((tab) => (
-              <button key={tab} className={center === tab ? "on" : ""} onClick={() => setCenter(tab)}>{tab}</button>
-            ))}
-          </div>
-        </div>
-        {approvals.map((a) => (
-          <div className="approval" key={a.id}>
-            <div className="cat"><i />{a.tool || "Permission"}</div>
-            <h3>Allow Shadow to run this command?</h3>
-            <pre className="code">{a.command || a.reason}</pre>
-            <p className="hint">{a.reason}</p>
-            <div className="row">
-              <button className="ghost" onClick={() => void api.decide(a.id, "deny").then(() => refreshInspect())}>Cancel <span className="kbd">Esc</span></button>
-              <button className="primary" onClick={() => void api.decide(a.id, "approve").then(() => refreshInspect())}>Allow <span className="kbd-hint">↵</span></button>
-            </div>
-          </div>
-        ))}
-        {error && <div className="approval"><strong>Could not do that.</strong><p>{error}</p></div>}
-        <div className="chat-stream">
+      <main className="stage">
+        <div className="chat-stream" ref={streamRef}>
           <div className="chat-inner">
-          {center === "conversation" && (
-            <>
-              {chat.length === 0 && !summary && (
-                <Empty
-                  title="Describe a coding task"
-                  body="The harness will inspect, plan, edit, and verify. Try “Create a Python hello-world project” — it works offline with Mock."
+            {error && <div className="notice bad">{error}</div>}
+            {chat.length === 0 && commandCards.length === 0 && !showSummary && (
+              <Empty title="What should we build?" body="Describe a change. ShadowCode inspects, plans, edits, and verifies. Type / for commands, ? for keys." />
+            )}
+            {chat.map((item, i) =>
+              item.kind === "tool" ? (
+                <OpCard
+                  key={i}
+                  item={item}
+                  onToggle={() => setChat((items) => { const next = [...items]; const it = next[i]; if (it && it.kind === "tool") next[i] = { ...it, collapsed: it.collapsed === false }; return next; })}
+                  onRewind={(tid) => void rewindTask(tid)}
+                  onReviewDiff={reviewDiff}
                 />
-              )}
-              {chat.map((item, i) =>
-                item.kind === "tool" ? (
-                  <div
-                    key={i}
-                    className={`op-card ${item.ok === false ? "bad" : ""} ${item.collapsed === false ? "open" : ""}`}
-                    onClick={() =>
-                      setChat((items) => {
-                        const next = [...items];
-                        const it = next[i];
-                        if (it && it.kind === "tool") next[i] = { ...it, collapsed: it.collapsed === false };
-                        return next;
-                      })
-                    }
-                  >
-                    <header>
-                      <span className="op-icon">{item.icon || (item.ok === false ? "✗" : item.ok ? "✓" : "●")}</span>
-                      <span className="op-headline">{item.headline || item.tool}{item.live ? " · running" : ""}</span>
-                      <span className="op-chev">{item.collapsed === false ? "▾" : "▸"}</span>
-                    </header>
-                    {item.collapsed === false && item.fullOutput && (
-                      <pre className="op-full">{item.fullOutput.slice(0, 4000)}{(item.fullOutput.length > 4000) ? "\n… (truncated; show full for the rest)" : ""}</pre>
-                    )}
-                  </div>
-                ) : item.kind === "user" ? (
-                  <div key={i} className="msg-user">
-                    <div className="user-pill">
-                      <div className="tag"><i />Task</div>
-                      <div className="bubble">{item.text}</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div key={i} className="msg-agent">
-                    <div className="who">Agent</div>
-                    {item.text}
-                  </div>
-                ),
-              )}
-              {busy && (
-                <div className="msg-agent">
-                  <div className="who">Agent</div>
-                  <div className="skel-rows"><span className="skel" /><span className="skel short" /></div>
-                </div>
-              )}
-              {summary && (
-                <div className="msg-agent">
-                  <div className="who">Result</div>
-                  {summary}
-                </div>
-              )}
-            </>
-          )}
-          {center === "plan" && (
-            <>
-              {todos.length > 0 && (
-                <div className="msg">
-                  <div className="who">TODOS</div>
-                  <pre>{todos.map((t) => `${t.status === "done" ? "[x]" : "[ ]"} ${t.title}`).join("\n")}</pre>
-                </div>
-              )}
-              <div className="plan">{planMd || "No plan yet. Run a task and the harness will publish steps here."}</div>
-            </>
-          )}
-          {center === "tools" && (
-            <>
-              {execResult && (
-                <div className={`tool-card ${execResult.ok ? "" : "bad"}`}>
-                  <header><span>rerun · {execResult.command}</span><span>exit {execResult.exit_code}</span></header>
-                  <pre>{(execResult.stdout + (execResult.stderr ? "\n" + execResult.stderr : "")).slice(0, 2000) || "(no output)"}</pre>
-                </div>
-              )}
-              {events.filter((e) => e.type.startsWith("tool.") || e.type.startsWith("test.")).length === 0 ? (
-                <Empty title="No tool calls yet" body="When the agent reads, edits, or runs commands, live cards appear here." />
+              ) : item.kind === "user" ? (
+                <div key={i} className="msg-user"><div className="user-pill"><div className="bubble">{item.text}</div></div></div>
               ) : (
-                events.filter((e) => e.type.startsWith("tool.") || e.type.startsWith("test.")).slice(-50).map((e, i) => {
-                  const cmd = e.type === "tool.completed" && e.payload.tool === "exec" ? String((e.payload as { command?: string }).command || "") : "";
-                  return (
-                    <div key={i} className={`event ${String(e.payload.success) === "false" || e.type.includes("fail") ? "bad" : "ok"}`}>
-                      <span>{e.type} · {JSON.stringify(e.payload).slice(0, 200)}</span>
-                      {cmd && <button className="mini" onClick={() => void rerunCommand(cmd)}>Rerun</button>}
-                    </div>
-                  );
-                })
-              )}
-            </>
-          )}
+                <div key={i} className="msg-agent">{item.who && <div className="who">{item.who}</div>}{item.text}</div>
+              ),
+            )}
+            {commandCards.map((card, i) => <CommandCardView key={`c${i}`} card={card} />)}
+            {approvals.map((a) => <ApprovalCard key={a.id} approval={a} onDecide={(id, d) => void decide(id, d)} />)}
+            {busy && <div className="msg-agent"><div className="skel-rows"><span className="skel" /><span className="skel short" /></div></div>}
+            {showSummary && <div className="msg-agent"><div className="who">Result</div>{summary}</div>}
           </div>
         </div>
+
         <div className="composer-wrap">
-        {slashMenu.open && commandList.length > 0 && (
-          <div className="slash-menu">
-            {commandList
-              .filter((c) => c.name.startsWith(slashMenu.q))
-              .slice(0, 12)
-              .map((c, i) => (
-                <button
-                  key={c.name}
-                  className={`slash-hit ${i === slashMenu.index ? "on" : ""}`}
-                  onClick={() => {
-                    setTask(`/${c.name}${c.arg_spec ? " " : ""}`);
-                    setSlashMenu({ open: false, q: "", index: 0 });
-                    promptRef.current?.focus();
-                  }}
-                >
+          {slashMenu.open && (
+            <div className="slash-menu">
+              {slashMatches.map((c, i) => (
+                <button type="button" key={c.name} className={`slash-hit ${i === slashMenu.index ? "on" : ""}`} onClick={() => { setTask(`/${c.name}${c.arg_spec ? " " : ""}`); setSlashMenu({ open: false, q: "", index: 0 }); promptRef.current?.focus(); }}>
                   <strong>/{c.name}</strong>
-                  {c.arg_spec && <span className="slash-arg"> {c.arg_spec}</span>}
+                  {c.arg_spec && <span className="slash-arg">{c.arg_spec}</span>}
                   <span className="slash-desc">{c.description}</span>
                 </button>
               ))}
-            {commandList.filter((c) => c.name.startsWith(slashMenu.q)).length === 0 && (
-              <div className="slash-empty">No matching commands.</div>
-            )}
-          </div>
-        )}
-        {commandCards.length > 0 && (
-          <div className="command-cards">
-            {commandCards.map((card, i) => (
-              <CommandCardView key={i} card={card} />
-            ))}
-          </div>
-        )}
-        <form className="composer" onSubmit={(ev) => { ev.preventDefault(); void runTask(); }}>
-          {chips.length > 0 && (
-            <div className="chips">
-              {chips.map((c) => (
-                <button type="button" className="path-chip" key={c} onClick={() => setChips(chips.filter((x) => x !== c))}>{c} ×</button>
-              ))}
+              {slashMatches.length === 0 && <div className="slash-empty">No matching commands.</div>}
             </div>
           )}
-          <button type="button" className="plus-btn" title="Attach file or path (drop files here)" onClick={() => promptRef.current?.focus()}>＋</button>
-          <textarea
-            ref={promptRef}
-            value={task}
-            onChange={(ev) => {
-              setTask(ev.target.value);
-              handleSlashInput(ev.target.value);
-            }}
-            onKeyDown={(ev) => {
-              if (slashMenu.open && commandList.length) {
-                const matches = commandList.filter((c) => c.name.startsWith(slashMenu.q));
-                if (ev.key === "ArrowDown") {
-                  ev.preventDefault();
-                  setSlashMenu((s) => ({ ...s, index: Math.min(s.index + 1, matches.length - 1) }));
-                  return;
-                }
-                if (ev.key === "ArrowUp") {
-                  ev.preventDefault();
-                  setSlashMenu((s) => ({ ...s, index: Math.max(s.index - 1, 0) }));
-                  return;
-                }
-                if (ev.key === "Enter" || ev.key === "Tab") {
-                  if (matches[slashMenu.index]) {
-                    ev.preventDefault();
-                    const picked = matches[slashMenu.index];
-                    setTask(`/${picked.name}${picked.arg_spec ? " " : ""}`);
-                    setSlashMenu({ open: false, q: "", index: 0 });
-                    return;
-                  }
-                }
-                if (ev.key === "Escape") {
-                  ev.preventDefault();
-                  setSlashMenu({ open: false, q: "", index: 0 });
-                  return;
-                }
-              }
-              if (ev.key === "Enter" && !ev.shiftKey && !ev.nativeEvent.isComposing) {
-                ev.preventDefault();
-                if (task.startsWith("/")) {
-                  submitSlash(task);
-                  setTask("");
-                } else {
-                  void runTask();
-                }
-              }
-            }}
-            placeholder="Ask for follow-up changes…  (type / for commands)"
-          />
-          <div className="composer-controls">
-            <select
-              className="model-select"
-              value={modelChoice}
-              onChange={(e) => setModelChoice(e.target.value)}
-              title="Model for this task only"
-            >
-              <option value="">model: {status.model.name || status.model.default}</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.id}</option>
-              ))}
-            </select>
-            <select
-              className="mode-select"
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
-              title="Agent mode (purpose)"
-            >
-              <option value="coder">coder</option>
-              <option value="researcher">researcher</option>
-              <option value="reviewer">reviewer</option>
-              <option value="tester">tester</option>
-            </select>
-            <button type="button" className="mic-btn" title="Voice input (not wired)">🎙</button>
-            {busy ? (
-              <button type="button" className="submit-btn stop" title="Stop (Ctrl+.)" onClick={() => void stopAgent()}>■</button>
-            ) : (
-              <button type="submit" className="submit-btn" title="Run (Enter)">↑</button>
+          <form className="composer" onSubmit={(ev) => { ev.preventDefault(); void runTask(); }}>
+            {chips.length > 0 && (
+              <div className="chips">
+                {chips.map((c) => <button type="button" className="path-chip" key={c} onClick={() => setChips(chips.filter((x) => x !== c))}>{c} ×</button>)}
+              </div>
             )}
-          </div>
-        </form>
-        <div className="composer-foot">
-          <label title="Prefer the local model / keep work on this machine">
-            <input type="checkbox" checked={workLocal} onChange={(e) => setWorkLocal(e.target.checked)} />
-            Work locally
-          </label>
-          <button type="button" className="more-btn" onClick={() => void resumeLast()} title="Resume last task">↻ Resume</button>
-          <button type="button" className="more-btn" onClick={() => void undoChanges()} title="Undo last agent file changes">↶ Undo files</button>
-          <button type="button" className="more-btn" onClick={exportTranscript} title="Export transcript">⤓ Export</button>
-          <span style={{ marginLeft: "auto" }}>Enter to run · Shift+Enter for a new line</span>
+            <div className="composer-row">
+              <button type="button" className="plus-btn" title="Attach a file or path" onClick={() => fileRef.current?.click()}>＋</button>
+              <input ref={fileRef} type="file" multiple hidden onChange={(e) => { if (e.target.files) void onFiles(e.target.files); e.target.value = ""; }} />
+              <textarea
+                ref={promptRef}
+                value={task}
+                rows={1}
+                onChange={(ev) => {
+                  const text = ev.target.value;
+                  setTask(text);
+                  if (text.startsWith("/")) {
+                    const rest = text.slice(1);
+                    const space = rest.indexOf(" ");
+                    setSlashMenu({ open: space < 0, q: space >= 0 ? rest.slice(0, space) : rest, index: 0 });
+                  } else if (slashMenu.open) {
+                    setSlashMenu({ open: false, q: "", index: 0 });
+                  }
+                  ev.target.style.height = "auto";
+                  ev.target.style.height = `${Math.min(ev.target.scrollHeight, 220)}px`;
+                }}
+                onKeyDown={(ev) => {
+                  if (slashMenu.open && slashMatches.length) {
+                    if (ev.key === "ArrowDown") { ev.preventDefault(); setSlashMenu((s) => ({ ...s, index: Math.min(s.index + 1, slashMatches.length - 1) })); return; }
+                    if (ev.key === "ArrowUp") { ev.preventDefault(); setSlashMenu((s) => ({ ...s, index: Math.max(s.index - 1, 0) })); return; }
+                    if (ev.key === "Tab" || (ev.key === "Enter" && slashMatches[slashMenu.index] && `/${slashMatches[slashMenu.index].name}` !== task.trim())) {
+                      ev.preventDefault();
+                      const picked = slashMatches[slashMenu.index];
+                      setTask(`/${picked.name}${picked.arg_spec ? " " : ""}`);
+                      setSlashMenu({ open: false, q: "", index: 0 });
+                      return;
+                    }
+                    if (ev.key === "Escape") { ev.preventDefault(); setSlashMenu({ open: false, q: "", index: 0 }); return; }
+                  }
+                  if (ev.key === "Enter" && !ev.shiftKey && !ev.nativeEvent.isComposing) {
+                    ev.preventDefault();
+                    if (task.startsWith("/")) {
+                      submitSlash(task);
+                      setTask("");
+                    } else {
+                      void runTask();
+                    }
+                    if (ev.currentTarget) ev.currentTarget.style.height = "auto";
+                  }
+                }}
+                placeholder="Ask for follow-up changes…  (/ for commands)"
+              />
+              <div className="composer-controls">
+                <select
+                  className="model-select"
+                  value={modelChoice}
+                  title="Model for this task (blank = default). Pick “Custom…” to use any model id."
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__") { setOverlay("custom-model"); return; }
+                    setModelChoice(e.target.value);
+                  }}
+                >
+                  <option value="">{currentModel}</option>
+                  {modelGroups.map(([provider, list]) => (
+                    <optgroup key={provider} label={provider}>
+                      {list.map((m) => <option key={m.id} value={m.id}>{m.id}{m.detected ? " ●" : ""}</option>)}
+                    </optgroup>
+                  ))}
+                  <option value="__custom__">Custom model…</option>
+                </select>
+                <select className="mode-select" value={mode} onChange={(e) => setMode(e.target.value)} title="Agent mode">
+                  {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <button type="button" className="mic-btn" title="Voice input (coming soon)" disabled>🎙</button>
+                {busy ? (
+                  <button type="button" className="submit-btn stop" title="Stop (Ctrl+.)" onClick={() => void stopAgent()}>■</button>
+                ) : (
+                  <button type="submit" className="submit-btn" title="Send (Enter)" disabled={!task.trim() && chips.length === 0}>↑</button>
+                )}
+              </div>
+            </div>
+          </form>
         </div>
+
+        <div className="statusline">
+          <span title="Model">{status.model.provider}/{currentModel}</span>
+          <span className="sep">·</span>
+          <span title="Context used">ctx {ctxPct}%</span>
+          <span className="sep">·</span>
+          <span title="Tokens this task">{fmtTokens(tokens)} tok</span>
+          <span className="sep">·</span>
+          <span className={`stage stage-${stage.toLowerCase()}`}>{stage === "FIX" ? `FIX ${fixRetries}/${maxFixRetries}` : stage}{busy ? " ●" : ""}</span>
+          <span className="grow" />
+          <span title={workspace}>{workspace ? workspace.split("/").pop() : "no workspace"}</span>
+          <span className="sep">·</span>
+          <span title="Permission level">{status.permissions.level}</span>
+          {versionLabel && <><span className="sep">·</span><span className="dim">v{versionLabel}</span></>}
         </div>
       </main>
 
-      <aside className="right">
-        <div className="panel-h">
-          <span>INSPECT</span>
-          <div className="tabs">
-            {(["files", "diff", "git", "skills", "health"] as RightTab[]).map((tab) => (
-              <button key={tab} className={right === tab ? "on" : ""} onClick={() => setRight(tab)}>{tab}</button>
-            ))}
-          </div>
-        </div>
-        <div className="scroll">
-          {right === "files" && (
-            <>
-              <div className="item" onClick={() => setDir(dir === "." ? "." : dir.split("/").slice(0, -1).join("/") || ".")}>
-                <strong>{dir}</strong>
-                <span>click to go up</span>
-              </div>
-              {files.length === 0 && <Empty title="Empty folder" body="This directory has no visible files." />}
-              {files.map((f) => (
-                <div key={f.path} className="file" onClick={() => void openFile(f.path, f.type)}>
-                  <strong>{f.type === "dir" ? "▸" : "·"} {f.name}</strong>
-                </div>
-              ))}
-              {fileView && <pre className="plan">{fileView.slice(0, 8000)}</pre>}
-            </>
-          )}
-          {right === "diff" && (
-            hunks.length === 0 ? (
-              <Empty title="No diff" body="Open a changed file or run the agent. Git hunks will land here." />
-            ) : (
-              hunks.map((h, i) => (
-                <div key={i} className="tool-card">
-                  <header>
-                    <span>{h.header}</span>
-                    <span className="model-actions">
-                      <button className="mini" title="Stage just this hunk" onClick={() => void hunkAction(h, "accept")}>Accept</button>
-                      <button className="mini danger-text" title="Revert this hunk in the worktree" onClick={() => void hunkAction(h, "reject")}>Reject</button>
-                    </span>
-                  </header>
-                  {h.lines.map((line, j) => (
-                    <div key={j} className={`diff-line ${line.kind === "add" ? "diff-add" : line.kind === "del" ? "diff-del" : "diff-ctx"}`}>
-                      {(line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ") + line.text}
-                    </div>
-                  ))}
-                </div>
-              ))
-            )
-          )}
-          {right === "git" && (
-            git.repo ? (
-              <>
-                <pre className="plan">{git.status || "clean"}</pre>
-                {git.files.map((f) => (
-                  <div key={f.path} className="file" onClick={() => void openFile(f.path, "file")}>
-                    <strong>{f.label} {f.path}</strong>
-                  </div>
-                ))}
-                <pre className="plan">{git.log}</pre>
-                <div className="field">
-                  <label>Commit message</label>
-                  <input value={commitMsg} onChange={(e) => setCommitMsg(e.target.value)} placeholder="Describe the change" />
-                </div>
-                <div className="row">
-                  <button className="ghost" onClick={() => void api.gitAdd(["."]).then(refreshInspect)}>Stage all</button>
-                  <button className="primary" onClick={() => commitMsg && void api.gitCommit(commitMsg).then(() => { setCommitMsg(""); void refreshInspect(); })}>Commit</button>
-                </div>
-              </>
-            ) : (
-              <Empty title="Not a git repo" body="Initialize git in this folder to use status, diff, and commit." />
-            )
-          )}
-          {right === "skills" && (
-            <>
-              <p className="hint">Project instructions and skills live in .shadow/ and are injected into every run.</p>
-              <div className="field">
-                <label>.shadow/instructions.md</label>
-                <textarea rows={8} value={instructions} onChange={(e) => setInstructions(e.target.value)} />
-                <button className="ghost" onClick={() => void api.saveInstructions(instructions)}>Save instructions</button>
-              </div>
-              <div className="field">
-                <label>Skill name</label>
-                <input value={skillName} onChange={(e) => setSkillName(e.target.value)} />
-                <textarea rows={6} value={skillBody} onChange={(e) => setSkillBody(e.target.value)} placeholder="# How to run tests…" />
-                <button className="ghost" onClick={() => void api.saveSkill(skillName, skillBody).then(() => refreshInspect())}>Save skill</button>
-              </div>
-              {skills.map((s) => (
-                <div key={s.name} className="item" onClick={() => { setSkillName(s.name); setSkillBody(s.content); }}>
-                  <strong>{s.name}</strong>
-                </div>
-              ))}
-            </>
-          )}
-          {right === "health" && health && (
-            <>
-              <div className="status-row"><span>version</span><code>{health.version}</code></div>
-              <div className="status-row"><span>workspace</span><code>{health.workspace}</code></div>
-              <div className="status-row"><span>provider</span><code className={health.provider?.ok ? "health-ok" : "health-bad"}>{health.provider?.name} — {health.provider?.detail}</code></div>
-              {detected.filter((d) => d.running).map((d) => (
-                <div className="status-row" key={d.provider}>
-                  <span>{d.label}</span>
-                  <code className="health-ok">{d.models.length} models · {d.latency_ms}ms</code>
-                </div>
-              ))}
-              {Object.entries(health.tools || {}).map(([name, info]) => (
-                <div className="status-row" key={name}>
-                  <span>{name}</span>
-                  <code className={info.ok ? "health-ok" : "health-bad"}>{info.ok ? info.detail || "yes" : "not found"}</code>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      </aside>
-
-      <div className="toasts">
-        {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.kind}`} onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}>
-            {t.text}
-          </div>
-        ))}
-      </div>
-
-      {trustReq && (
-        <div className="modal-back" onClick={() => setTrustReq(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Trust this folder?</h2>
-            <p className="hint">
-              <code>{trustReq.path}</code> becomes the agent sandbox. The agent can read, edit, and run commands inside it
-              at permission level <code>{String(trustReq.permissions?.level || "workspace")}</code>
-              {trustReq.permissions?.network ? " with network access" : " with network access disabled"}.
-              Dangerous commands still need your approval.
-            </p>
-            <div className="row">
-              <button className="primary" onClick={() => void confirmTrust()}>Trust and open</button>
-              <button className="ghost" onClick={() => setTrustReq(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
+      {drawerOpen && (
+        <Drawer
+          tab={drawerTab}
+          onTab={setDrawerTab}
+          onClose={() => setDrawerOpen(false)}
+          workspace={workspace}
+          sessions={sessions}
+          sessionId={sessionId}
+          onOpenSession={(id) => void openSession(id)}
+          onNewSession={() => void newSession()}
+          onRefreshSessions={refresh}
+          diffPath={diffPath}
+          onDiffPath={setDiffPath}
+          health={health}
+          busy={busy}
+          toast={pushToast}
+        />
       )}
 
+      <div className="toasts">
+        {toasts.map((t) => <div key={t.id} className={`toast ${t.kind}`} onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}>{t.text}</div>)}
+      </div>
+
+      {trustReq && <TrustDialog req={trustReq} onCancel={() => setTrustReq(null)} onConfirm={() => void confirmTrust()} />}
       {overlay === "settings" && (
         <Settings
           cfg={cfg}
-          apiKey={settingsKey}
-          onKey={setSettingsKey}
           onClose={() => setOverlay("")}
           onToast={pushToast}
-          onSave={async (values, key) => {
-            await api.saveConfig(values, key, String((values.model as { api_key_env?: string } | undefined)?.api_key_env || ""));
+          onSave={async (values, key, keyEnv) => {
+            await api.saveConfig(values, key, keyEnv);
             setOverlay("");
             pushToast("Settings saved", "ok");
             await refresh();
           }}
         />
       )}
-      {overlay === "help" && <Help onClose={() => setOverlay("")} />}
-      {overlay === "palette" && (
-        <Palette query={paletteQ} onQuery={setPaletteQ} items={filteredCommands} onClose={() => setOverlay("")} />
-      )}
-      {overlay === "project" && (
-        <ProjectPicker projects={projects} current={workspace} onClose={() => setOverlay("")} onPick={(path) => void pickProject(path)} />
-      )}
-    </div>
-  );
-}
-
-function Empty({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="empty">
-      <h3>{title}</h3>
-      <p>{body}</p>
-    </div>
-  );
-}
-
-function Onboarding({ onDone }: { onDone: () => void }) {
-  const [step, setStep] = useState(0);
-  const [workspace, setWorkspace] = useState("");
-  const [provider, setProvider] = useState("mock");
-  const [model, setModel] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [level, setLevel] = useState("workspace");
-  const [error, setError] = useState("");
-  const [providers, setProviders] = useState<{ id: string; needs_key?: boolean; api_key_env?: string; endpoint?: string }[]>([]);
-  const [detected, setDetected] = useState<DetectedProvider[]>([]);
-  const [testState, setTestState] = useState<{ busy: boolean; text: string; ok?: boolean }>({ busy: false, text: "" });
-
-  useEffect(() => {
-    api.onboarding().then((data) => {
-      setWorkspace(data.suggested_workspace);
-      setProviders(data.providers);
-      setDetected(data.detected || []);
-      const preferred = data.defaults?.provider || "mock";
-      setProvider(preferred);
-      const hit = (data.detected || []).find((d) => d.provider === preferred && d.running && d.models.length);
-      if (hit) setModel(hit.models[0].id);
-    });
-  }, []);
-
-  const detectedFor = detected.find((d) => d.provider === provider && d.running);
-  const needsKey = providers.find((p) => p.id === provider)?.needs_key;
-
-  async function testConnection() {
-    setTestState({ busy: true, text: "" });
-    try {
-      const preset = providers.find((p) => p.id === provider);
-      const result = await api.testModel({
-        provider,
-        name: model || String(preset?.id || ""),
-        endpoint: String(preset?.endpoint || ""),
-        api_key_env: String(preset?.api_key_env || ""),
-      });
-      if (result.ok) setTestState({ busy: false, ok: true, text: `Connected in ${result.latency_ms}ms — “${(result.reply || "").slice(0, 80)}”` });
-      else setTestState({ busy: false, ok: false, text: result.error || "test failed" });
-    } catch (err) {
-      setTestState({ busy: false, ok: false, text: String(err) });
-    }
-  }
-
-  async function finish() {
-    try {
-      await api.completeOnboarding({ workspace, provider, model: model || provider, name: model, api_key: apiKey, permission_level: level, theme: "light" });
-      onDone();
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  return (
-    <div className="modal-back">
-      <div className="wizard">
-        <p className="kicker">SHADOW AGENT</p>
-        <h2>Get running in under a minute</h2>
-        <div className="steps">{[0, 1, 2, 3].map((n) => <span key={n} className={n <= step ? "on" : ""} />)}</div>
-        {step === 0 && (
-          <div className="field">
-            <label>Project folder</label>
-            <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="/home/you/src/my-app" />
-            <p className="hint">This is the sandbox. The agent cannot write outside it.</p>
-          </div>
-        )}
-        {step === 1 && (
-          <div className="field">
-            <label>Model provider</label>
-            {detected.some((d) => d.running) && (
-              <p className="hint detect-banner">
-                Detected: {detected.filter((d) => d.running).map((d) => `${d.label} (${d.models.length} model${d.models.length === 1 ? "" : "s"})`).join(" · ")}
-              </p>
-            )}
-            <select value={provider} onChange={(e) => {
-              const next = e.target.value;
-              setProvider(next);
-              const hit = detected.find((d) => d.provider === next && d.running && d.models.length);
-              setModel(hit ? hit.models[0].id : "");
-            }}>
-              {providers.map((p) => <option key={p.id} value={p.id}>{p.id}{detected.find((d) => d.provider === p.id && d.running) ? " — detected" : ""}</option>)}
-            </select>
-            {detectedFor && detectedFor.models.length > 0 && (
-              <>
-                <label>Installed model</label>
-                <select value={model} onChange={(e) => setModel(e.target.value)}>
-                  {detectedFor.models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.id}{m.detail ? ` (${m.detail})` : ""}{m.capabilities?.tools ? " · tools" : ""}
-                    </option>
-                  ))}
-                </select>
-              </>
-            )}
-            <p className="hint">Mock works offline with no API key. Local servers are auto-detected. Switch later in Settings.</p>
-          </div>
-        )}
-        {step === 2 && (
-          <div className="field">
-            <label>API key {needsKey ? "" : "(optional)"}</label>
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={needsKey ? "Paste key, or leave blank if already in the environment" : "Not needed for Mock/local"} />
-            <p className="hint">Saved only in ~/.config/shadow-agent/secrets.env (mode 600). Never written into YAML or git.</p>
-            <div className="row">
-              <button type="button" className="ghost" disabled={testState.busy} onClick={() => void testConnection()}>
-                {testState.busy ? "Testing…" : "Test connection"}
-              </button>
-            </div>
-            {testState.text && <p className={testState.ok ? "health-ok" : "health-bad"}>{testState.text}</p>}
-          </div>
-        )}
-        {step === 3 && (
-          <div className="field">
-            <label>Permission level</label>
-            <select value={level} onChange={(e) => setLevel(e.target.value)}>
-              <option value="read_only">Read only — inspect only</option>
-              <option value="workspace">Workspace — edit and run (recommended)</option>
-              <option value="elevated">Elevated — dangerous commands after you approve</option>
-            </select>
-          </div>
-        )}
-        {error && <p className="health-bad">{error}</p>}
-        <div className="row">
-          {step > 0 && <button className="ghost" onClick={() => setStep(step - 1)}>Back</button>}
-          {step < 3 && <button className="primary" onClick={() => setStep(step + 1)}>Next</button>}
-          {step === 3 && <button className="primary" onClick={() => void finish()}>Start Shadow Agent</button>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Settings({
-  cfg,
-  apiKey,
-  onKey,
-  onClose,
-  onSave,
-  onToast,
-}: {
-  cfg: Record<string, unknown>;
-  apiKey: string;
-  onKey: (v: string) => void;
-  onClose: () => void;
-  onSave: (values: Record<string, unknown>, key: string) => Promise<void>;
-  onToast: (text: string, kind: "ok" | "err" | "info") => void;
-}) {
-  const model = (cfg.model || {}) as Record<string, string>;
-  const permissions = (cfg.permissions || {}) as Record<string, string | boolean>;
-  const ui = (cfg.ui || {}) as Record<string, string | number | boolean>;
-  const [defaultModel, setDefaultModel] = useState(model.default || "mock");
-  const [provider, setProvider] = useState(model.provider || "mock");
-  const [endpoint, setEndpoint] = useState(model.endpoint || "");
-  const [name, setName] = useState(model.name || "");
-  const [keyEnv, setKeyEnv] = useState(model.api_key_env || "OPENAI_API_KEY");
-  const [level, setLevel] = useState(String(permissions.level || "workspace"));
-  const [theme, setTheme] = useState(String(ui.theme || "light"));
-  const [ability, setAbility] = useState(String(ui.ability || "none"));
-  const [notify, setNotify] = useState(ui.notify !== false);
-  const [presets, setPresets] = useState<{ id: string; provider: string; endpoint?: string; api_key_env?: string; name?: string }[]>([]);
-  const [detected, setDetected] = useState<DetectedProvider[]>([]);
-  const [testState, setTestState] = useState<{ busy: boolean; text: string; ok?: boolean }>({ busy: false, text: "" });
-
-  useEffect(() => {
-    void api.onboarding().then((data) => setPresets(data.providers as { id: string; provider: string; endpoint?: string; api_key_env?: string; name?: string }[]));
-    void api.detectProviders().then((data) => setDetected(data.providers));
-  }, []);
-
-  const detectedFor = detected.find((d) => d.provider === provider && d.running);
-
-  function applyPreset(id: string) {
-    const preset = presets.find((p) => p.id === id);
-    if (!preset) return;
-    setProvider(preset.provider || id);
-    setDefaultModel(id);
-    setEndpoint(preset.endpoint || "");
-    setName(preset.name || "");
-    setKeyEnv(preset.api_key_env || "OPENAI_API_KEY");
-    const hit = detected.find((d) => d.provider === (preset.provider || id) && d.running && d.models.length);
-    if (hit) {
-      setName(hit.models[0].id);
-      setDefaultModel(hit.models[0].id);
-    }
-  }
-
-  async function testConnection() {
-    setTestState({ busy: true, text: "" });
-    try {
-      const result = await api.testModel({ provider, name, endpoint, api_key_env: keyEnv });
-      if (result.ok) setTestState({ busy: false, ok: true, text: `OK in ${result.latency_ms}ms — “${(result.reply || "").slice(0, 80)}”` });
-      else setTestState({ busy: false, ok: false, text: result.error || "test failed" });
-    } catch (err) {
-      setTestState({ busy: false, ok: false, text: String(err) });
-    }
-  }
-
-  return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Settings</h2>
-        <p className="hint">These write ~/.config/shadow-agent/config.yaml. Keys stay in secrets.env.</p>
-        <div className="field">
-          <label>Provider preset</label>
-          <select value="" onChange={(e) => e.target.value && applyPreset(e.target.value)}>
-            <option value="">Pick to auto-fill…</option>
-            {presets.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.id}{detected.find((d) => d.provider === p.id && d.running) ? " — detected" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        {detectedFor && detectedFor.models.length > 0 && (
-          <div className="field">
-            <label>Detected models on this machine</label>
-            <select
-              value={detectedFor.models.some((m) => m.id === name) ? name : ""}
-              onChange={(e) => {
-                if (!e.target.value) return;
-                setName(e.target.value);
-                setDefaultModel(e.target.value);
-                setEndpoint(detectedFor.endpoint);
-              }}
-            >
-              <option value="">Pick an installed model…</option>
-              {detectedFor.models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.id}{m.detail ? ` (${m.detail})` : ""}{m.capabilities?.tools ? " · tools" : ""}{m.capabilities?.thinking ? " · thinking" : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-        <div className="field"><label>Default model</label><input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} /></div>
-        <div className="field"><label>Provider</label>
-          <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-            {["mock", "openai_compatible", "ollama", "local", "llamacpp", "vllm"].map((p) => <option key={p}>{p}</option>)}
-          </select>
-        </div>
-        <div className="field"><label>Endpoint</label><input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://api.x.ai/v1" /></div>
-        <div className="field"><label>Model name</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. gpt-4.1, qwen3:14b, llama3.2 — any id your provider accepts" /></div>
-        <div className="field"><label>API key env var</label><input value={keyEnv} onChange={(e) => setKeyEnv(e.target.value)} /></div>
-        <div className="field"><label>Paste API key</label><input type="password" value={apiKey} onChange={(e) => onKey(e.target.value)} placeholder="leave blank to keep the current secret" /></div>
-        <div className="field">
-          <label>Register this model so it appears in the per-task dropdown</label>
-          <button className="ghost" onClick={() => {
-            if (!defaultModel) { onToast("Enter a default model id first", "err"); return; }
-            void api.registerModel(defaultModel, provider, name, endpoint).then(() => {
-              onToast(`Registered ${defaultModel} for ${provider || "openai_compatible"}`, "ok");
-            }).catch((err) => onToast(String(err), "err"));
-          }}>Register custom model</button>
-        </div>
-        <div className="field"><label>Permissions</label>
-          <select value={level} onChange={(e) => setLevel(e.target.value)}>
-            <option value="read_only">read_only</option>
-            <option value="workspace">workspace</option>
-            <option value="elevated">elevated</option>
-          </select>
-        </div>
-        <div className="field"><label>Theme</label>
-          <select value={theme} onChange={(e) => setTheme(e.target.value)}>
-            <option value="light">light (Codex default)</option>
-            <option value="dark">dark (Codex)</option>
-            <option value="dim">dim</option>
-          </select>
-        </div>
-        <div className="field"><label>Abilities</label>
-          <select value={ability} onChange={(e) => setAbility(e.target.value)} title="Computer Use / Custom live in Settings, not the composer">
-            <option value="none">none</option>
-            <option value="computer_use">Computer Use</option>
-            <option value="custom">Custom</option>
-          </select>
-          <p className="hint">Abilities are configured here so the composer stays clean: + icon, input, model, mode, mic, submit.</p>
-        </div>
-        <div className="field">
-          <label className="row" style={{ alignItems: "center", gap: 8 }}>
-            <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} style={{ width: "auto" }} />
-            Desktop notification when a long task finishes
-          </label>
-        </div>
-        <div className="row">
-          <button className="ghost" disabled={testState.busy} onClick={() => void testConnection()}>
-            {testState.busy ? "Testing…" : "Test connection"}
-          </button>
-          {testState.text && <span className={testState.ok ? "health-ok" : "health-bad"}>{testState.text}</span>}
-        </div>
-        <div className="row">
-          <button className="primary" onClick={() => {
-            if (testState.text && !testState.ok) onToast("Saving anyway — last test failed", "info");
-            void onSave({
-              model: { default: defaultModel, provider, endpoint, name, api_key_env: keyEnv },
-              permissions: { level },
-              ui: { theme, ability, notify },
-            }, apiKey);
-          }}>Save</button>
-          <button className="ghost" onClick={onClose}>Close</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Help({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Keyboard cheat sheet</h2>
-        <div className="help-grid">
-          {SHORTCUTS.map(([k, label]) => (
-            <><span key={k}>{label}</span><span className="kbd">{k}</span></>
-          ))}
-        </div>
-        <p className="hint">Shadow Agent is a harness: the model is replaceable. Mock works with no credits.</p>
-        <button className="ghost" onClick={onClose}>Close</button>
-      </div>
-    </div>
-  );
-}
-
-function Palette({ query, onQuery, items, onClose }: { query: string; onQuery: (v: string) => void; items: { id: string; label: string; run: () => void }[]; onClose: () => void }) {
-  return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="palette" onClick={(e) => e.stopPropagation()}>
-        <input autoFocus value={query} onChange={(e) => onQuery(e.target.value)} placeholder="Type a command…" />
-        {items.map((item, i) => (
-          <button key={item.id} className={`hit ${i === 0 ? "on" : ""}`} onClick={() => { item.run(); onClose(); }}>{item.label}</button>
-        ))}
-        {items.length === 0 && <div className="item">No matching commands.</div>}
-      </div>
-    </div>
-  );
-}
-
-function ProjectPicker({ projects, current, onClose, onPick }: { projects: Project[]; current: string; onClose: () => void; onPick: (path: string) => void }) {
-  const [path, setPath] = useState(current);
-  return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Open a project</h2>
-        <div className="field">
-          <label>Folder path</label>
-          <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/home/you/src/app" />
-        </div>
-        <div className="row">
-          <button className="primary" onClick={() => onPick(path)}>Open</button>
-          <button className="ghost" onClick={onClose}>Cancel</button>
-        </div>
-        <div className="panel-h">RECENT</div>
-        {projects.map((p) => (
-          <div key={p.id} className="item" onClick={() => onPick(p.path)}>
-            <strong>{p.name}</strong>
-            <span>{p.path}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function CommandCardView({ card }: { card: CommandResult }) {
-  // Render a Codex-style command result card.
-  if (card.kind === "text" && card.text) {
-    return <div className="msg-agent"><div className="who">Command</div>{card.text}</div>;
-  }
-  if (card.kind === "error") {
-    return (
-      <div className="tool-card bad">
-        <header><span>{card.icon || "✗"} {card.headline}</span><span>error</span></header>
-        <pre>{card.body}</pre>
-      </div>
-    );
-  }
-  if (card.kind === "diff") {
-    return (
-      <div className="tool-card">
-        <header><span>diff · {card.path}</span></header>
-        {card.diff.splitlines().slice(0, 200).map((line, i) => (
-          <div key={i} className={`diff-line ${line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-del" : "diff-ctx"}`}>
-            {line}
-          </div>
-        ))}
-      </div>
-    );
-  }
-  if (card.kind === "list") {
-    return (
-      <div className="tool-card">
-        <header><span>{card.icon || "◆"} {card.headline}</span></header>
-        {card.body && <pre className="plan">{card.body}</pre>}
-        {card.items.map((item, i) => (
-          <div key={i} className="status-row">
-            <span>{item.label}</span>
-            <code>{item.value}</code>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  // card (default)
-  return (
-    <div className="tool-card">
-      <header><span>{card.icon || "◆"} {card.headline}</span></header>
-      <pre>{card.body}</pre>
+      {overlay === "help" && <Help onClose={() => setOverlay("")} version={versionLabel} />}
+      {overlay === "palette" && <Palette items={palette} onClose={() => setOverlay("")} />}
+      {overlay === "project" && <ProjectPicker projects={projects} current={workspace} onClose={() => setOverlay("")} onPick={(path) => void pickProject(path)} />}
+      {overlay === "custom-model" && <CustomModelDialog providers={providers} onClose={() => setOverlay("")} onSubmit={applyCustomModel} />}
     </div>
   );
 }

@@ -34,6 +34,7 @@ from typing import Any
 
 import yaml
 
+from shadow_agent import __version__
 from shadow_agent.models.types import ToolResult, ToolSpec
 
 
@@ -345,7 +346,7 @@ class _SubprocessSession:
             text=True,
             bufsize=1,
         )
-        self._rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "shadow-agent", "version": "0.8.0"}})
+        self._rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "shadow-agent", "version": __version__}})
 
     def list_tools(self) -> list[ToolSpec]:
         result = self._rpc("tools/list", {})

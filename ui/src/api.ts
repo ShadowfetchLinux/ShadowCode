@@ -75,6 +75,41 @@ export type ModelTestResult = {
   capabilities?: Record<string, unknown>;
 };
 export type ExecResult = { ok: boolean; command: string; stdout: string; stderr: string; exit_code: number; error?: string };
+export type ProviderInfo = {
+  id: string;
+  label: string;
+  endpoint: string;
+  api_key_env: string;
+  needs_key: boolean;
+  local: boolean;
+  running: boolean;
+};
+export type Milestone = { id: string; title: string; status: string; detail?: string; task_id?: string };
+export type Goal = {
+  id: string;
+  workspace: string;
+  instruction: string;
+  title?: string;
+  status: string;
+  progress: number;
+  progress_pct: number;
+  running: boolean;
+  milestones: Milestone[];
+  updated_at: number;
+};
+export type BackgroundTask = {
+  id: string;
+  name: string;
+  command: string;
+  status: string;
+  pid: number;
+  exit_code: number | null;
+  output: string;
+};
+export type RoutingView = { enabled: boolean; default: string; table: Record<string, string>; config: Record<string, string | boolean> };
+export type DoctorReport = { ok: boolean; version: string; checks: { id: string; ok: boolean; label: string; detail?: string; fix?: string }[]; suggestions: string[] };
+export type McpServer = { name: string; command?: string[] | null; url?: string | null };
+export type UpdateInfo = { current: string; latest: string; tag: string; update_available: boolean; url: string; source: string; error: string };
 
 async function parseError(res: Response, path: string): Promise<string> {
   try {
@@ -132,7 +167,35 @@ export const api = {
       { path },
     ),
   trustProject: (path: string) => send<{ ok: boolean; path: string; session_id: string }>("/api/projects/trust", "POST", { path }),
-  sessions: () => get<{ sessions: Session[] }>("/api/sessions"),
+  sessions: (q = "") => get<{ sessions: Session[] }>(`/api/sessions${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  renameSession: (id: string, title: string) => send<{ ok: boolean }>(`/api/sessions/${id}`, "PATCH", { workspace: "", title }),
+  deleteSession: (id: string) => send<{ ok: boolean }>(`/api/sessions/${id}`, "DELETE"),
+  version: () => get<{ name: string; version: string }>("/api/version"),
+  updateCheck: () => get<UpdateInfo>("/api/update/check"),
+  providers: () => get<{ providers: ProviderInfo[] }>("/api/providers"),
+  routing: () => get<RoutingView>("/api/routing"),
+  saveRouting: (values: Record<string, string | boolean>) => send<RoutingView>("/api/routing", "PUT", { values, api_key: "", api_key_env: "" }),
+  doctor: () => get<DoctorReport>("/api/doctor"),
+  doctorFix: () => send<{ applied: string[]; report: DoctorReport }>("/api/doctor/fix", "POST", {}),
+  goals: () => get<{ goals: Goal[] }>("/api/goals"),
+  createGoal: (instruction: string, run: boolean, session_id?: string) =>
+    send<Goal>("/api/goals", "POST", { instruction, run, session_id: session_id || null }),
+  runGoal: (id: string, session_id?: string) => send<Goal>(`/api/goals/${id}/run`, "POST", { session_id: session_id || null }),
+  abandonGoal: (id: string) => send<Goal>(`/api/goals/${id}/abandon`, "POST", {}),
+  deleteGoal: (id: string) => send<{ ok: boolean }>(`/api/goals/${id}`, "DELETE"),
+  setMilestone: (goalId: string, milestoneId: string, status: string) =>
+    send<Goal>(`/api/goals/${goalId}/milestones/${milestoneId}`, "POST", { status, detail: "" }),
+  background: () => get<{ tasks: BackgroundTask[] }>("/api/background"),
+  startBackground: (name: string, command: string) => send<BackgroundTask>("/api/background", "POST", { name, command }),
+  stopBackground: (id: string) => send<BackgroundTask>(`/api/background/${id}/stop`, "POST", {}),
+  hooks: () => get<{ hooks: { name: string; events: string[]; builtin: boolean }[]; dirs: string[] }>("/api/hooks"),
+  mcpServers: () => get<{ servers: McpServer[] }>("/api/mcp/servers"),
+  saveMcpServers: (servers: McpServer[]) => send<{ servers: McpServer[] }>("/api/mcp/servers", "PUT", { values: { servers }, api_key: "", api_key_env: "" }),
+  plugins: () => get<{ installed: { name: string; version: string; description: string }[]; available: { name: string; installed: boolean }[] }>("/api/plugins"),
+  installPlugin: (name: string) => send<{ name: string }>(`/api/plugins/${name}/install`, "POST", {}),
+  removePlugin: (name: string) => send<{ ok: boolean }>(`/api/plugins/${name}/remove`, "POST", {}),
+  taskCheckpoint: (taskId: string) => get<{ rewindable: boolean; checkpoint: { changes: number; paths: string[] } | null }>(`/api/checkpoints/tasks/${taskId}`),
+  rewindTask: (taskId: string) => send<{ ok: boolean; restored: string[] }>(`/api/checkpoints/tasks/${taskId}/restore`, "POST", {}),
   session: (id: string) => get<Session & { tasks: { id: string; prompt: string; summary?: string; status: string }[]; events: EventRow[] }>(`/api/sessions/${id}`),
   createSession: (workspace: string, title = "") => send<{ id: string; workspace: string }>("/api/sessions", "POST", { workspace, title }),
   events: (sessionId?: string) => get<{ events: EventRow[] }>(`/api/events?limit=240${sessionId ? `&session_id=${sessionId}` : ""}`),
@@ -148,7 +211,7 @@ export const api = {
   status: () =>
     get<{
       workspace: string;
-      model: { default: string; provider: string; endpoint?: string; name?: string; api_key_env?: string };
+      model: { default: string; provider: string; endpoint?: string; name?: string; api_key_env?: string; context_limit?: number };
       permissions: { level: string; network?: boolean };
       onboarding?: { completed: boolean };
     }>("/api/workspace/status"),

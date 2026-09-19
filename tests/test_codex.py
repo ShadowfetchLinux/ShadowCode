@@ -96,18 +96,23 @@ def test_transcript_renders_diff_card_with_accept_reject(workspace: Path):
     assert "+new" in text and "-old" in text
 
 
-def test_transcript_status_line_shows_model_tokens_step(workspace: Path):
+def test_transcript_status_line_is_trimmed_to_model_ctx_tokens_stage(workspace: Path):
+    """0.18.0: the TUI status line is exactly model · ctx% · tokens · stage."""
     cfg = AppConfig()
     store = Store()
     sid = store.create_session(str(workspace), "mock", title="t")
     model = TranscriptModel(workspace, DARK, cfg, store, sid)
-    model.set_status(model="ollama/qwen3:14b", context_pct=42, tokens=1234, step=7, busy=True)
+    model.set_status(model="ollama/gpt-oss:20b", context_pct=42, tokens=1234, step=7, busy=True)
     status = model.status_text()
-    assert "ollama/qwen3:14b" in status
-    assert "42%" in status
+    assert "ollama/gpt-oss:20b" in status
+    assert "ctx 42%" in status
     assert "1234 tok" in status
-    assert "step 7" in status
-    assert "working" in status
+    assert "[ IDLE ] ●" in status  # busy marker rides on the stage chip
+    # Trimmed: no step counter, no keybinding hints, no "working" word.
+    assert "step" not in status
+    assert "Enter send" not in status
+    assert "working" not in status
+    assert status.count("·") == 3
 
 
 # --- themes -----------------------------------------------------------------

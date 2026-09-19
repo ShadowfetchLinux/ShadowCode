@@ -147,6 +147,16 @@ def doctor_report(config: AppConfig, workspace: Path | None = None) -> dict[str,
     icon_dir = Path.home() / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps" / "shadow-agent.svg"
     add("icon", icon_dir.is_file(), "App icon installed", str(icon_dir), "Run scripts/install-linux.sh to reinstall icons.")
 
+    # Desktop UI bundle present and not stale relative to ui/src
+    ui_state = ui_build_state()
+    add(
+        "ui-dist",
+        ui_state["ok"],
+        "Desktop UI built (ui/dist)",
+        ui_state["detail"],
+        "Run `shadow doctor --fix` (or `cd ui && npm install && npm run build`).",
+    )
+
     # UI port
     port = int(config.ui.port)
     if port_open(config.ui.host, port):
@@ -214,6 +224,24 @@ def doctor_report(config: AppConfig, workspace: Path | None = None) -> dict[str,
     return {"ok": ok, "version": __version__, "checks": checks, "suggestions": suggestions}
 
 
+def _has_top_level_package(workspace: Path) -> bool:
+    """Any top-level dir with __init__.py — tolerant of unreadable siblings
+    (e.g. running `shadow doctor` from /tmp next to systemd private dirs)."""
+    try:
+        children = list(workspace.iterdir())
+    except OSError:
+        return False
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        try:
+            if child.is_dir() and (child / "__init__.py").is_file():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _project_checks(workspace: Path) -> list[dict[str, Any]]:
     """Project-level health checks: build, tests, deps, dead code, docs, git, arch."""
     from shadow_agent.understand import detect_stack, flag_debt
@@ -223,7 +251,11 @@ def _project_checks(workspace: Path) -> list[dict[str, Any]]:
     def add(check_id: str, ok: bool, label: str, detail: str = "", fix: str = "") -> None:
         out.append({"id": check_id, "ok": bool(ok), "label": label, "detail": detail, "fix": fix if not ok else ""})
 
-    stack = detect_stack(workspace)
+    try:
+        stack = detect_stack(workspace)
+    except OSError as exc:
+        add("proj-scan", False, "Project scan", str(exc), "Run doctor from a readable project folder.")
+        return out
     # Build system detected
     add("proj-build", bool(stack["build"]), "Project build system detected", ", ".join(stack["build"]) or "none", "Add a build manifest (pyproject.toml, package.json, Cargo.toml, Makefile).")
     # Tests present
@@ -237,12 +269,58 @@ def _project_checks(workspace: Path) -> list[dict[str, Any]]:
     # Git repo
     add("proj-git", (workspace / ".git").is_dir(), "Git repository initialized", str(workspace / ".git"), "Run `git init`.")
     # Dead code / debt flags
-    debt = flag_debt(workspace)
+    try:
+        debt = flag_debt(workspace)
+    except OSError:
+        debt = []
     add("proj-debt", len(debt) <= 2, "Technical debt is low", f"{len(debt)} flag(s)", "; ".join(debt[:3]))
     # Architecture: src/ layout or top-level modules
-    has_arch = (workspace / "src").is_dir() or any(p.is_dir() and not p.name.startswith(".") for p in workspace.iterdir() if (p / "__init__.py").is_file())
+    has_arch = (workspace / "src").is_dir() or _has_top_level_package(workspace)
     add("proj-arch", has_arch, "Project has a clear architecture", "src/ or top-level packages", "Adopt a src/ layout or organize code into packages.")
     return out
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def ui_build_state(root: Path | None = None) -> dict[str, Any]:
+    """Is ui/dist present, and is it at least as new as every file in ui/src?"""
+    root = root or repo_root()
+    ui = root / "ui"
+    index = ui / "dist" / "index.html"
+    if not (ui / "package.json").is_file():
+        return {"ok": True, "detail": "no ui/ directory (headless install)", "stale": False, "built": False}
+    if not index.is_file():
+        return {"ok": False, "detail": "ui/dist/index.html missing", "stale": False, "built": False}
+    assets = list((ui / "dist" / "assets").glob("index-*.js")) if (ui / "dist" / "assets").is_dir() else []
+    if not assets:
+        return {"ok": False, "detail": "ui/dist/assets has no bundle", "stale": False, "built": False}
+    bundle_mtime = max(p.stat().st_mtime for p in assets)
+    src_files = [p for p in (ui / "src").rglob("*") if p.is_file()] if (ui / "src").is_dir() else []
+    newest_src = max((p.stat().st_mtime for p in src_files), default=0.0)
+    if newest_src > bundle_mtime + 1.0:
+        return {"ok": False, "detail": "ui/dist is older than ui/src (rebuild needed)", "stale": True, "built": True}
+    return {"ok": True, "detail": str(index), "stale": False, "built": True}
+
+
+def build_ui(root: Path | None = None) -> dict[str, Any]:
+    """Run `npm install && npm run build` in ui/. Returns {ok, detail}."""
+    import subprocess
+
+    root = root or repo_root()
+    ui = root / "ui"
+    if not (ui / "package.json").is_file():
+        return {"ok": False, "detail": "no ui/package.json"}
+    if not shutil.which("npm"):
+        return {"ok": False, "detail": "npm not on PATH — install Node.js to build the desktop UI"}
+    install = subprocess.run(["npm", "install", "--no-fund", "--no-audit"], cwd=ui, capture_output=True, text=True, check=False)
+    if install.returncode != 0:
+        return {"ok": False, "detail": (install.stderr or install.stdout).strip()[-300:]}
+    build = subprocess.run(["npm", "run", "build"], cwd=ui, capture_output=True, text=True, check=False)
+    if build.returncode != 0:
+        return {"ok": False, "detail": (build.stderr or build.stdout).strip()[-300:]}
+    return {"ok": True, "detail": "built ui/dist"}
 
 
 def doctor_fix(report: dict[str, Any], workspace: Path | None = None) -> list[str]:
@@ -253,6 +331,18 @@ def doctor_fix(report: dict[str, Any], workspace: Path | None = None) -> list[st
 
     applied: list[str] = []
     checks = {c["id"]: c for c in report.get("checks", [])}
+    # Test suites set this so doctor --fix never runs npm or the installer.
+    no_install = bool(os.environ.get("SHADOW_AGENT_DOCTOR_NO_INSTALL"))
+
+    # Desktop UI bundle missing or stale → rebuild it (the install script also
+    # does this, but a standalone rebuild is faster and does not need the wrapper).
+    ui_check = checks.get("ui-dist")
+    if ui_check and not ui_check["ok"]:
+        if no_install:
+            applied.append("skipped UI rebuild (SHADOW_AGENT_DOCTOR_NO_INSTALL)")
+        else:
+            outcome = build_ui()
+            applied.append(("rebuilt desktop UI: " if outcome["ok"] else "UI build failed: ") + outcome["detail"])
 
     # secrets.env permissions
     sec = checks.get("secrets-perms")
@@ -266,9 +356,11 @@ def doctor_fix(report: dict[str, Any], workspace: Path | None = None) -> list[st
     # Reinstall wrapper / desktop entry / icons by re-running the install script
     install_bits = [checks.get(k) for k in ("wrapper", "desktop-entry", "icon")]
     if any(bit and not bit["ok"] for bit in install_bits if bit):
-        root = Path(__file__).resolve().parents[2]
+        root = repo_root()
         script = root / "scripts" / "install-linux.sh"
-        if script.is_file():
+        if no_install:
+            applied.append("skipped reinstall (SHADOW_AGENT_DOCTOR_NO_INSTALL)")
+        elif script.is_file():
             proc = subprocess.run(["bash", str(script)], capture_output=True, text=True, check=False)
             if proc.returncode == 0:
                 applied.append("reinstalled ~/.local/bin/shadow, desktop entry, and hicolor icons via scripts/install-linux.sh")
@@ -295,7 +387,7 @@ def doctor_fix(report: dict[str, Any], workspace: Path | None = None) -> list[st
 def _provider_fix(config: AppConfig) -> str:
     provider = (config.model.provider or "").lower()
     if provider == "ollama":
-        return "Start Ollama (`ollama serve` or the systemd user service) and pull a model, e.g. `ollama pull qwen3:14b`."
+        return "Start Ollama (`ollama serve` or the systemd user service) and pull a model, e.g. `ollama pull gpt-oss:20b`."
     if provider == "local":
         return "Start LM Studio (or any local /v1 server) on port 1234, or switch provider in Settings."
     if provider == "llamacpp":

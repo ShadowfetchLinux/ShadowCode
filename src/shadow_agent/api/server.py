@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 from shadow_agent import __version__, paths
 from shadow_agent.agent.loop import AgentRunner
 from shadow_agent.approvals import ApprovalHub
-from shadow_agent.checkpoints import last_checkpoint, restore_last
+from shadow_agent.checkpoints import last_checkpoint, restore_last, restore_task, task_checkpoint
 from shadow_agent.commands import CommandContext, CommandRegistry, dispatch as dispatch_command
 from shadow_agent.config import (
     AppConfig,
@@ -32,6 +33,7 @@ from shadow_agent.config import (
 from shadow_agent.errors import friendly_error, friendly_http
 from shadow_agent.events import EventBus
 from shadow_agent.export import export_session
+from shadow_agent.goal import GoalStore, plan_milestones, run_goal
 from shadow_agent.health import collect_health, doctor_report
 from shadow_agent.models.discovery import detect_providers
 from shadow_agent.models.registry import ModelRegistry, probe_provider
@@ -87,6 +89,35 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
         "api_key_env": "OPENAI_API_KEY",
     },
 }
+
+# Every provider the picker can target. `openai_compatible` is the free-text
+# catch-all (any /v1 host); the named presets above just pre-fill it.
+PROVIDER_IDS: list[str] = ["ollama", "openai_compatible", "local", "llamacpp", "vllm", "mock"]
+PROVIDER_LABELS: dict[str, str] = {
+    "ollama": "Ollama",
+    "openai_compatible": "OpenAI-compatible (OpenAI, xAI/Grok, any /v1)",
+    "local": "LM Studio / local /v1",
+    "llamacpp": "llama.cpp server",
+    "vllm": "vLLM",
+    "mock": "Mock (offline)",
+}
+
+
+class GoalBody(BaseModel):
+    instruction: str = ""
+    workspace: str = ""
+    session_id: str | None = None
+    run: bool = False
+
+
+class MilestoneBody(BaseModel):
+    status: str
+    detail: str = ""
+
+
+class BackgroundBody(BaseModel):
+    name: str = ""
+    command: str
 
 
 class RunBody(BaseModel):
@@ -273,7 +304,7 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         except ValueError as exc:
             raise HTTPException(400, "permission_level must be read_only, workspace, or elevated") from exc
         cfg = ensure_user_config()
-        cfg.model.provider = body.provider if body.provider in PROVIDER_PRESETS else preset["provider"]
+        cfg.model.provider = body.provider if (body.provider in PROVIDER_PRESETS or body.provider in PROVIDER_IDS) else preset["provider"]
         cfg.model.default = body.model or preset["default"]
         cfg.model.name = body.name or preset["name"]
         cfg.model.endpoint = body.endpoint or preset["endpoint"]
@@ -372,14 +403,16 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             # explicitly supplied (the UI/CLI always sends one for free-text).
             if not body.provider:
                 raise HTTPException(404, friendly_http(404, f"unknown model: {body.id}"))
+            preset = PROVIDER_PRESETS.get(body.provider.lower(), {})
             info = registry.register_custom(
                 body.id,
                 body.provider.lower(),
                 name=body.name or body.id,
-                endpoint=body.endpoint or "",
-                api_key_env="",
+                endpoint=body.endpoint or preset.get("endpoint", ""),
+                api_key_env=preset.get("api_key_env", ""),
                 context_limit=0,
             )
+            store.upsert_model(info.id, info.name, info.provider, info.endpoint, info.context_limit, info.metadata)
         cfg = ensure_user_config()
         cfg.model.default = body.id
         cfg.model.provider = (info.provider if info else body.provider) or cfg.model.provider
@@ -466,8 +499,24 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         return {"id": sid, "workspace": str(workspace)}
 
     @app.get("/api/sessions")
-    def sessions() -> dict[str, Any]:
-        return {"sessions": store.list_sessions()}
+    def sessions(q: str = "", limit: int = 50) -> dict[str, Any]:
+        rows = store.search_sessions(q, limit=limit) if q else store.list_sessions(limit=limit)
+        return {"sessions": rows, "query": q}
+
+    @app.patch("/api/sessions/{session_id}")
+    def rename_session(session_id: str, body: SessionBody) -> dict[str, Any]:
+        if not store.get_session(session_id):
+            raise HTTPException(404, friendly_http(404, "session not found"))
+        store.set_session_title(session_id, body.title.strip()[:120])
+        return {"ok": True, "id": session_id, "title": body.title.strip()[:120]}
+
+    @app.delete("/api/sessions/{session_id}")
+    def delete_session(session_id: str) -> dict[str, Any]:
+        if jobs.current(session_id) is not None:
+            raise HTTPException(409, friendly_error("stop the running task before deleting this session"))
+        if not store.delete_session(session_id):
+            raise HTTPException(404, friendly_http(404, "session not found"))
+        return {"ok": True, "id": session_id}
 
     @app.get("/api/sessions/{session_id}")
     def session(session_id: str) -> dict[str, Any]:
@@ -951,6 +1000,269 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         if not result.get("ok"):
             raise HTTPException(400, result.get("error") or "undo failed")
         return result
+
+    @app.get("/api/checkpoints/tasks/{task_id}")
+    def task_checkpoint_summary(task_id: str) -> dict[str, Any]:
+        summary = task_checkpoint(_ws(runtime), task_id)
+        return {"task_id": task_id, "checkpoint": summary, "rewindable": bool(summary and summary.get("changes"))}
+
+    @app.post("/api/checkpoints/tasks/{task_id}/restore")
+    def task_checkpoint_restore(task_id: str) -> dict[str, Any]:
+        """Rewind from an op card: undo every file change made by that task."""
+        result = restore_task(_ws(runtime), task_id)
+        if not result.get("ok"):
+            raise HTTPException(400, result.get("error") or "rewind failed")
+        store.add_event("checkpoint.rewound", {"task_id": task_id, "restored": result.get("restored", [])}, task_id=task_id)
+        return result
+
+    # --- 0.18.0: version + self-update ------------------------------------
+
+    @app.get("/api/version")
+    def version() -> dict[str, Any]:
+        return {"name": "ShadowCode", "version": __version__, "binary": "shadow", "desktop_id": "shadow-agent"}
+
+    @app.get("/api/update/check")
+    def update_check() -> dict[str, Any]:
+        from shadow_agent.updater import check_for_update
+
+        return check_for_update()
+
+    @app.post("/api/doctor/fix")
+    def doctor_fix_endpoint() -> dict[str, Any]:
+        from shadow_agent.health import doctor_fix
+
+        cfg = load_config(runtime.get("workspace"))
+        report = doctor_report(cfg, runtime.get("workspace"))
+        applied = doctor_fix(report, runtime.get("workspace"))
+        return {"applied": applied, "report": doctor_report(cfg, runtime.get("workspace"))}
+
+    # --- 0.18.0: providers + visible router ---------------------------------
+
+    @app.get("/api/providers")
+    def providers_list() -> dict[str, Any]:
+        """Every provider id the model picker can target (free-text models allowed)."""
+        found = detected()
+        running = {item.provider for item in found if item.running}
+        out = []
+        for pid in PROVIDER_IDS:
+            preset = PROVIDER_PRESETS.get(pid, {})
+            out.append(
+                {
+                    "id": pid,
+                    "label": PROVIDER_LABELS.get(pid, pid),
+                    "endpoint": preset.get("endpoint", ""),
+                    "api_key_env": preset.get("api_key_env", ""),
+                    "needs_key": pid in {"openai_compatible", "openai", "grok"},
+                    "local": pid in {"mock", "ollama", "local", "llamacpp", "vllm"},
+                    "running": pid in running,
+                }
+            )
+        return {"providers": out}
+
+    @app.get("/api/routing")
+    def routing_table() -> dict[str, Any]:
+        from shadow_agent.models.routing import ModelRouter
+
+        cfg = load_config(runtime.get("workspace"))
+        router = ModelRouter(cfg, registry)
+        return {"enabled": cfg.routing.enabled, "default": cfg.model.default, "table": router.table_view(), "config": cfg.routing.model_dump()}
+
+    @app.put("/api/routing")
+    def routing_update(body: ConfigPatch) -> dict[str, Any]:
+        values = body.values or {}
+        cfg = apply_config_patch({"routing": values})
+        from shadow_agent.models.routing import ModelRouter
+
+        return {"enabled": cfg.routing.enabled, "default": cfg.model.default, "table": ModelRouter(cfg, registry).table_view(), "config": cfg.routing.model_dump()}
+
+    # --- 0.18.0: goals (milestone checklist, resume, progress) --------------
+
+    goal_threads: dict[str, threading.Thread] = {}
+
+    def _goal_store() -> GoalStore:
+        return GoalStore()
+
+    def _run_goal_async(goal_id: str, workspace: Path, session_id: str | None) -> None:
+        def _task(task_text: str, milestone_id: str) -> dict[str, Any]:
+            job = jobs.start(workspace, task_text, session_id=session_id)
+            store.add_event("goal.milestone.started", {"goal_id": goal_id, "milestone_id": milestone_id, "job_id": job.id}, session_id=job.session_id)
+            while job.status in {"queued", "running"}:
+                time.sleep(0.2)
+            return {"success": job.status == "completed", "task_id": job.task_id, "summary": job.summary}
+
+        def _worker() -> None:
+            try:
+                gs = _goal_store()
+                final = run_goal(gs, goal_id, _task)
+                store.add_event("goal.updated", {"goal_id": goal_id, "status": (final or {}).get("status"), "progress": (final or {}).get("progress")}, session_id=session_id)
+            finally:
+                goal_threads.pop(goal_id, None)
+
+        thread = threading.Thread(target=_worker, name=f"shadow-goal-{goal_id[:8]}", daemon=True)
+        goal_threads[goal_id] = thread
+        thread.start()
+
+    def _goal_view(goal: dict[str, Any]) -> dict[str, Any]:
+        goal = dict(goal)
+        goal["running"] = goal["id"] in goal_threads
+        goal["progress_pct"] = int(round(float(goal.get("progress") or 0.0) * 100))
+        return goal
+
+    @app.get("/api/goals")
+    def goals_list(all: bool = False) -> dict[str, Any]:
+        gs = _goal_store()
+        rows = gs.list_goals(None if all else _ws(runtime))
+        return {"goals": [_goal_view(g) for g in rows]}
+
+    @app.post("/api/goals")
+    def goals_create(body: GoalBody) -> dict[str, Any]:
+        if not body.instruction.strip():
+            raise HTTPException(400, "instruction is required")
+        workspace = Path(body.workspace or _ws(runtime)).expanduser().resolve()
+        if not workspace.is_dir():
+            raise HTTPException(400, friendly_error("workspace not found"))
+        gs = _goal_store()
+        goal = gs.create_goal(workspace, body.instruction.strip(), plan_milestones(body.instruction))
+        store.add_event("goal.created", {"goal_id": goal["id"], "title": goal.get("title")}, session_id=body.session_id)
+        if body.run:
+            _run_goal_async(goal["id"], workspace, body.session_id)
+            goal = gs.get_goal(goal["id"]) or goal
+        return _goal_view(goal)
+
+    @app.get("/api/goals/{goal_id}")
+    def goals_get(goal_id: str) -> dict[str, Any]:
+        goal = _goal_store().get_goal(goal_id)
+        if not goal:
+            raise HTTPException(404, friendly_http(404, "goal not found"))
+        return _goal_view(goal)
+
+    @app.post("/api/goals/{goal_id}/run")
+    def goals_run(goal_id: str, body: GoalBody | None = None) -> dict[str, Any]:
+        """Run or resume: skips done milestones, re-opens failed ones."""
+        gs = _goal_store()
+        goal = gs.get_goal(goal_id)
+        if not goal:
+            raise HTTPException(404, friendly_http(404, "goal not found"))
+        if goal_id in goal_threads:
+            raise HTTPException(409, friendly_error("this goal is already running"))
+        gs.reopen(goal_id)
+        workspace = Path(goal["workspace"])
+        if not workspace.is_dir():
+            raise HTTPException(400, friendly_error("workspace not found"))
+        _run_goal_async(goal_id, workspace, body.session_id if body else None)
+        return _goal_view(gs.get_goal(goal_id) or goal)
+
+    @app.post("/api/goals/{goal_id}/abandon")
+    def goals_abandon(goal_id: str) -> dict[str, Any]:
+        gs = _goal_store()
+        if not gs.get_goal(goal_id):
+            raise HTTPException(404, friendly_http(404, "goal not found"))
+        gs.abandon(goal_id)
+        return _goal_view(gs.get_goal(goal_id) or {"id": goal_id, "milestones": []})
+
+    @app.delete("/api/goals/{goal_id}")
+    def goals_delete(goal_id: str) -> dict[str, Any]:
+        if goal_id in goal_threads:
+            raise HTTPException(409, friendly_error("stop the goal before deleting it"))
+        if not _goal_store().delete(goal_id):
+            raise HTTPException(404, friendly_http(404, "goal not found"))
+        return {"ok": True, "id": goal_id}
+
+    @app.post("/api/goals/{goal_id}/milestones/{milestone_id}")
+    def goals_milestone(goal_id: str, milestone_id: str, body: MilestoneBody) -> dict[str, Any]:
+        if body.status not in {"pending", "in_progress", "done", "failed"}:
+            raise HTTPException(400, "status must be pending, in_progress, done, or failed")
+        gs = _goal_store()
+        if not gs.get_goal(goal_id):
+            raise HTTPException(404, friendly_http(404, "goal not found"))
+        goal = gs.update_milestone(goal_id, milestone_id, body.status, detail=body.detail)
+        return _goal_view(goal or {"id": goal_id, "milestones": []})
+
+    # --- 0.18.0: settings sections — hooks / MCP / plugins ------------------
+
+    @app.get("/api/hooks")
+    def hooks_list() -> dict[str, Any]:
+        from shadow_agent.hooks import builtin_hooks, default_registry, project_hook_dirs
+
+        workspace = _ws(runtime)
+        reg = default_registry(workspace)
+        builtin_names = {h.name for h in builtin_hooks()}
+        hooks = [
+            {"name": h.name, "events": [e.value for e in h.events], "builtin": h.name in builtin_names}
+            for h in reg._hooks  # noqa: SLF001 - read-only introspection for the UI
+        ]
+        return {"hooks": hooks, "dirs": [str(d) for d in project_hook_dirs(workspace)]}
+
+    @app.get("/api/mcp/servers")
+    def mcp_servers() -> dict[str, Any]:
+        cfg = load_config(runtime.get("workspace"))
+        return {"servers": [s.model_dump() for s in cfg.mcp.servers]}
+
+    @app.put("/api/mcp/servers")
+    def mcp_servers_put(body: ConfigPatch) -> dict[str, Any]:
+        servers = body.values.get("servers")
+        if not isinstance(servers, list):
+            raise HTTPException(400, "values.servers must be a list")
+        cfg = apply_config_patch({"mcp": {"servers": servers}})
+        return {"servers": [s.model_dump() for s in cfg.mcp.servers]}
+
+    @app.get("/api/plugins")
+    def plugins_list() -> dict[str, Any]:
+        from shadow_agent.plugin_registry import PluginRegistry
+
+        reg = PluginRegistry()
+        installed = {m.name: m.to_dict() for m in reg.list_installed()}
+        return {
+            "installed": list(installed.values()),
+            "available": [{"name": n, "installed": n in installed} for n in reg.list_registry()],
+        }
+
+    @app.post("/api/plugins/{name}/install")
+    def plugins_install(name: str) -> dict[str, Any]:
+        from shadow_agent.plugin_registry import PluginRegistry
+
+        try:
+            manifest = PluginRegistry().install(name)
+        except KeyError as exc:
+            raise HTTPException(404, friendly_http(404, f"unknown plugin: {name}")) from exc
+        return manifest.to_dict()
+
+    @app.post("/api/plugins/{name}/remove")
+    def plugins_remove(name: str) -> dict[str, Any]:
+        from shadow_agent.plugin_registry import PluginRegistry
+
+        if not PluginRegistry().remove(name):
+            raise HTTPException(404, friendly_http(404, f"plugin not installed: {name}"))
+        return {"ok": True, "name": name}
+
+    # --- 0.18.0: background processes (dev servers, watchers) --------------
+
+    @app.get("/api/background")
+    def background_list() -> dict[str, Any]:
+        from shadow_agent.background import BackgroundManager
+
+        return {"tasks": [t.to_dict() for t in BackgroundManager().list()]}
+
+    @app.post("/api/background")
+    def background_start(body: BackgroundBody) -> dict[str, Any]:
+        from shadow_agent.background import BackgroundManager
+
+        cfg = load_config(_ws(runtime))
+        if cfg.permissions.level == PermissionLevel.READ_ONLY:
+            raise HTTPException(403, friendly_error("background tasks are disabled in read-only mode"))
+        if not body.command.strip():
+            raise HTTPException(400, "command is required")
+        task = BackgroundManager().start(body.name or "background", body.command, cwd=_ws(runtime))
+        return task.to_dict()
+
+    @app.post("/api/background/{task_id}/stop")
+    def background_stop(task_id: str) -> dict[str, Any]:
+        from shadow_agent.background import BackgroundManager
+
+        stopped = BackgroundManager().stop(task_id)
+        if stopped is None:
+            raise HTTPException(404, friendly_http(404, "background task not found"))
+        return stopped.to_dict()
 
     if UI_DIST.is_dir():
         app.mount("/assets", StaticFiles(directory=UI_DIST / "assets"), name="assets")

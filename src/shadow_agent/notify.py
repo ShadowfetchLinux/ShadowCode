@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -21,6 +22,8 @@ def notify_done(
     notification failure must not affect the job result.
     """
     if not enabled or duration_sec < after_sec:
+        return False
+    if os.environ.get("SHADOW_AGENT_NO_NOTIFY"):
         return False
     binary = shutil.which("notify-send")
     if not binary:

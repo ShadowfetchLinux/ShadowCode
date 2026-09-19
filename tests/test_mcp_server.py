@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -347,29 +346,37 @@ def test_protocol_list_prompts(workspace: Path, isolated: Path):
 # --------------------------------------------------------------------------- HTTP/SSE smoke
 
 
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+def _serve_ephemeral(app):
+    """Start uvicorn on port 0 (kernel-assigned) and return (instance, thread, port).
+
+    Binding port 0 removes the pick-then-bind race that made these tests flaky
+    when another process grabbed the "free" port in between.
+    """
+    import threading
+    import uvicorn
+
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
+    instance = uvicorn.Server(config)
+    thread = threading.Thread(target=instance.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        servers = getattr(instance, "servers", None) or []
+        sockets = [sock for srv in servers for sock in getattr(srv, "sockets", [])]
+        if instance.started and sockets:
+            return instance, thread, sockets[0].getsockname()[1]
+        time.sleep(0.05)
+    instance.should_exit = True
+    pytest.fail("server did not start")
 
 
 def test_http_health_and_tools_endpoints(workspace: Path, isolated: Path):
     """Spin up the HTTP/SSE app via uvicorn in a thread and curl /health + /tools."""
-    import threading
-    import uvicorn
-
-    port = _free_port()
     server = ShadowMCPServer(workspace=workspace)
     from shadow_agent.mcp_server.http_transport import build_http_app
 
-    app = build_http_app(server.server, token=None, host="127.0.0.1", port=port)
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    instance = uvicorn.Server(config)
-
-    thread = threading.Thread(target=instance.run, daemon=True)
-    thread.start()
+    app = build_http_app(server.server, token=None, host="127.0.0.1", port=0)
+    instance, thread, port = _serve_ephemeral(app)
     try:
         # Wait for the server to come up.
         deadline = time.time() + 10
@@ -397,18 +404,11 @@ def test_http_health_and_tools_endpoints(workspace: Path, isolated: Path):
 
 
 def test_http_rejects_unauthorized_when_token_set(workspace: Path, isolated: Path):
-    import threading
-    import uvicorn
-
-    port = _free_port()
     server = ShadowMCPServer(workspace=workspace)
     from shadow_agent.mcp_server.http_transport import build_http_app
 
-    app = build_http_app(server.server, token="secret-tok", host="127.0.0.1", port=port)
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    instance = uvicorn.Server(config)
-    thread = threading.Thread(target=instance.run, daemon=True)
-    thread.start()
+    app = build_http_app(server.server, token="secret-tok", host="127.0.0.1", port=0)
+    instance, thread, port = _serve_ephemeral(app)
     try:
         deadline = time.time() + 10
         while time.time() < deadline:

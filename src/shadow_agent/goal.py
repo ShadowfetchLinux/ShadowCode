@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from shadow_agent import paths
 from shadow_agent.store import Store
@@ -200,6 +200,69 @@ class GoalStore:
         with self._lock:
             self._conn.execute("UPDATE goals SET status = 'abandoned', updated_at = ? WHERE id = ?", (time.time(), goal_id))
             self._conn.commit()
+
+    def reopen(self, goal_id: str) -> dict[str, Any] | None:
+        """Make an abandoned/failed goal active again and reset failed milestones to pending."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE milestones SET status = 'pending', updated_at = ? WHERE goal_id = ? AND status IN ('failed', 'in_progress')",
+                (time.time(), goal_id),
+            )
+            self._conn.execute("UPDATE goals SET status = 'active', updated_at = ? WHERE id = ?", (time.time(), goal_id))
+            self._conn.commit()
+        return self.get_goal(goal_id)
+
+    def delete(self, goal_id: str) -> bool:
+        with self._lock:
+            exists = self._conn.execute("SELECT 1 FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            if not exists:
+                return False
+            self._conn.execute("DELETE FROM milestones WHERE goal_id = ?", (goal_id,))
+            self._conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+            self._conn.commit()
+        return True
+
+
+def run_goal(
+    store: GoalStore,
+    goal_id: str,
+    run_task: Callable[[str, str], dict[str, Any]],
+    stop: Callable[[], bool] | None = None,
+) -> dict[str, Any] | None:
+    """Drive a goal to completion: run every non-done milestone as a task.
+
+    ``run_task(task_text, milestone_id)`` must block and return a dict with at
+    least ``success`` (bool); ``task_id`` and ``summary`` are recorded when
+    present. Milestones flip pending → in_progress → done/failed as the
+    agent's VERIFY stage reports. The run stops at the first failed milestone
+    (or when ``stop()`` returns True) so the user can inspect and resume later
+    — resuming simply calls ``run_goal`` again and skips ``done`` milestones.
+    """
+    goal = store.get_goal(goal_id)
+    if not goal:
+        return None
+    for milestone in goal.get("milestones", []):
+        if milestone["status"] == "done":
+            continue
+        if stop is not None and stop():
+            break
+        store.update_milestone(goal_id, milestone["id"], "in_progress")
+        task_text = f"{goal['instruction']}\nMilestone: {milestone['title']}"
+        try:
+            outcome = run_task(task_text, milestone["id"]) or {}
+        except Exception as exc:  # noqa: BLE001 - record and stop, never raise into the caller thread
+            outcome = {"success": False, "summary": f"{exc.__class__.__name__}: {exc}"}
+        new_status = "done" if outcome.get("success") else "failed"
+        store.update_milestone(
+            goal_id,
+            milestone["id"],
+            new_status,
+            task_id=str(outcome.get("task_id") or ""),
+            detail=str(outcome.get("summary") or "")[:200],
+        )
+        if new_status != "done":
+            break
+    return store.get_goal(goal_id)
 
 
 def render_goal(goal: dict[str, Any]) -> str:

@@ -254,6 +254,37 @@ class Store:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def search_sessions(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Case-insensitive search over session title, workspace, and task prompts."""
+        needle = f"%{query.strip()}%"
+        if not query.strip():
+            return self.list_sessions(limit)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT s.* FROM sessions s "
+                "LEFT JOIN tasks t ON t.session_id = s.id "
+                "WHERE s.title LIKE ? COLLATE NOCASE OR s.workspace LIKE ? COLLATE NOCASE "
+                "OR t.prompt LIKE ? COLLATE NOCASE OR s.id LIKE ? "
+                "ORDER BY s.updated_at DESC LIMIT ?",
+                (needle, needle, needle, needle, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_session(self, session_id: str) -> bool:
+        """Remove a session with its tasks, events, pins, and metadata."""
+        with self._lock:
+            exists = self._conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if not exists:
+                return False
+            self._conn.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
+            self._conn.execute("DELETE FROM pins WHERE session_id = ?", (session_id,))
+            self._conn.execute("DELETE FROM session_meta WHERE session_id = ?", (session_id,))
+            self._conn.execute("DELETE FROM tasks WHERE session_id = ?", (session_id,))
+            self._conn.execute("UPDATE sessions SET parent_id = NULL WHERE parent_id = ?", (session_id,))
+            self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            self._conn.commit()
+        return True
+
     def create_task(self, session_id: str, prompt: str) -> str:
         tid = uuid.uuid4().hex
         with self._lock:

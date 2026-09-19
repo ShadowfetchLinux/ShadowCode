@@ -12,4 +12,5 @@ Categories=Development;IDE;
 Keywords=agent;llm;coding;shadowfetch;
 StartupNotify=true
 StartupWMClass=shadow-agent
-X-GNOME-UsesNotifications=false
+X-GNOME-UsesNotifications=true
+X-ShadowCode-Version=0.18.0

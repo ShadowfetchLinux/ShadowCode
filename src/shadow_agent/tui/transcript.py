@@ -76,12 +76,13 @@ class TranscriptModel:
 
     def status_text(self) -> str:
         t = self.theme
-        busy = " ● working" if self.status["busy"] else " ○ idle"
+        # 0.18.0: trimmed Codex-style status line — model · ctx% · tokens · stage.
         ctx = self.status["context_pct"]
         tok = self.status["tokens"] or self._usage_total
-        step = self.status["step"]
         chip = self._stage_chip()
-        return f"  {self.status['model']}  ·  {chip}{busy}  ·  ctx {ctx}%  ·  {tok} tok  ·  step {step}  ·  Enter send · Ctrl+J newline · ? help"
+        if self.status["busy"]:
+            chip = f"{chip} ●"
+        return f"  {self.status['model']}  ·  ctx {ctx}%  ·  {tok} tok  ·  {chip}"
 
     def _stage_chip(self) -> str:
         """Codex-style stage chip for the status line."""
