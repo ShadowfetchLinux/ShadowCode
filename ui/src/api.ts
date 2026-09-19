@@ -152,8 +152,8 @@ export const api = {
       permissions: { level: string; network?: boolean };
       onboarding?: { completed: boolean };
     }>("/api/workspace/status"),
-  startJob: (task: string, workspace?: string, session_id?: string, model?: string) =>
-    send<Job>("/api/jobs", "POST", { task, workspace, session_id, model: model || undefined }),
+  startJob: (task: string, workspace?: string, session_id?: string, model?: string, purpose: string = "coder") =>
+    send<Job>("/api/jobs", "POST", { task, workspace, session_id, model: model || undefined, purpose }),
   job: (id: string) => get<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string) => send<Job>(`/api/jobs/${id}/cancel`, "POST", {}),
   cancelCurrent: (session_id?: string) => send<{ ok: boolean }>(`/api/run/cancel${session_id ? `?session_id=${session_id}` : ""}`, "POST", {}),

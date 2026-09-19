@@ -46,7 +46,10 @@ class LoggingConfig(BaseModel):
 class UIConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 7430
-    theme: str = "dark"
+    theme: str = "light"
+    # Abilities (Computer Use / Custom) live in Settings, not the composer.
+    # "none" | "computer_use" | "custom"
+    ability: str = "none"
     notify: bool = True
     notify_after_sec: float = 4.0
 

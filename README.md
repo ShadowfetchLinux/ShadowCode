@@ -9,6 +9,24 @@ the desktop UI, and the terminal UI.
 AGENT HARNESS → MODEL INTERFACE → LLM PROVIDER
 ```
 
+## What's new in 0.5.0
+
+- **Codex light-mode desktop UI** (now the default): white canvas, very light
+  gray borders, lots of whitespace, rounded floating composer, user prompts as
+  small pill bubbles top-right with a category tag, agent output as plain text
+  blocks (no heavy bubbles), permission/action cards with `Allow ↵` /
+  `Cancel Esc` buttons. Dark mode is still available as a toggle in Settings.
+- **Enter submits the prompt** in the composer; Shift+Enter inserts a newline.
+  Multiline is still supported. The placeholder reads "Ask for follow-up
+  changes…".
+- **Abilities (Computer Use / Custom) live in Settings**, not the composer.
+  The composer stays clean: `+` attach icon, input, model dropdown, mode
+  dropdown (coder/researcher/reviewer/tester), mic, solid black submit square.
+  Below it: a "Work locally" checkbox line and a slim status line
+  (model · workspace · level · tokens · working indicator).
+- **Per-task mode** (purpose) wired through `/api/jobs` so the harness can
+  route coder/researcher/reviewer/tester.
+
 ## What's new in 0.4.0
 
 - **Codex-style terminal UI** (default landing experience when a tty is

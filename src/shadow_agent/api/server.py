@@ -146,7 +146,8 @@ class OnboardBody(BaseModel):
     api_key: str = ""
     api_key_env: str = ""
     permission_level: str = "workspace"
-    theme: str = "dark"
+    theme: str = "light"
+    ability: str = "none"
     network: bool = False
 
 
@@ -243,7 +244,8 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             "defaults": {
                 "provider": default_provider,
                 "permission_level": "workspace",
-                "theme": "dark",
+                "theme": "light",
+                "ability": "none",
             },
         }
 
@@ -278,7 +280,8 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         cfg.model.api_key_env = key_env
         cfg.permissions.level = level
         cfg.permissions.network = body.network
-        cfg.ui.theme = body.theme or "dark"
+        cfg.ui.theme = body.theme or "light"
+        cfg.ui.ability = body.ability or "none"
         cfg.onboarding.completed = True
         cfg.onboarding.workspace = str(workspace)
         if str(workspace) not in cfg.trusted_workspaces:

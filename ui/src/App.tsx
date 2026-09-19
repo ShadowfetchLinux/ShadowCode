@@ -80,6 +80,8 @@ export default function App() {
   const [settingsKey, setSettingsKey] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [modelChoice, setModelChoice] = useState("");
+  const [mode, setMode] = useState("coder");
+  const [workLocal, setWorkLocal] = useState(false);
   const [trustReq, setTrustReq] = useState<{ path: string; name?: string; permissions?: Record<string, unknown> } | null>(null);
   const [testing, setTesting] = useState<Record<string, boolean>>({});
   const [execResult, setExecResult] = useState<ExecResult | null>(null);
@@ -161,7 +163,7 @@ export default function App() {
   }, [refresh]);
 
   useEffect(() => {
-    const theme = String((cfg.ui as { theme?: string } | undefined)?.theme || "dark");
+    const theme = String((cfg.ui as { theme?: string } | undefined)?.theme || "light");
     document.documentElement.dataset.theme = theme;
   }, [cfg]);
 
@@ -299,7 +301,7 @@ export default function App() {
     setSummary("");
     setChat((items) => [...items, { kind: "user", text }]);
     try {
-      const job = await api.startJob(text, workspace || undefined, sessionId || undefined, modelChoice || undefined);
+      const job = await api.startJob(text, workspace || undefined, sessionId || undefined, modelChoice || undefined, mode);
       setJobId(job.id);
       setSessionId(job.session_id);
       sourceRef.current?.close();
@@ -550,28 +552,30 @@ export default function App() {
   return (
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <header className="top">
-        <div className="brand">
-          <img className="mark" src="/icon.svg" alt="" width={30} height={30} />
-          <div>
-            <p className="kicker">SHADOWFETCH SUITE</p>
-            <h1>Shadow Agent</h1>
-          </div>
+        <div className="top-nav">
+          <button className="icon-btn" title="Back" onClick={() => void resumeLast()}>‹</button>
+          <button className="icon-btn" title="Forward" onClick={() => void newSession()}>›</button>
+          <button className="icon-btn" title="New message" onClick={() => { setTask(""); promptRef.current?.focus(); }}>＋</button>
         </div>
-        <div className="meta">
-          <button className="chip" onClick={() => setOverlay("project")} title="Switch project">
-            {workspace || "Pick a project"}
-          </button>
-          <span className="chip ok" title="Active model">{status.model.provider}/{status.model.name || status.model.default}</span>
-          <span className="chip">{status.permissions.level}</span>
-          {tokens > 0 && <span className="chip ok" title="Tokens used this task">{tokens} tok{localProvider ? " · $0 local" : ""}</span>}
-        </div>
+        <div className="top-title">{task.trim() || summary || "Shadow Agent"}</div>
         <div className="top-actions">
-          <div className={`live ${busy ? "on" : ""}`}><i />{busy ? "RUNNING" : "IDLE"}</div>
-          <button className="icon-btn" onClick={() => setOverlay("palette")}>⌘K</button>
-          <button className="icon-btn" onClick={() => setOverlay("settings")}>Settings</button>
-          <button className="icon-btn" onClick={() => setOverlay("help")}>?</button>
+          <button className="icon-btn" onClick={() => setOverlay("palette")} title="Command palette (Ctrl+K)">⌘K</button>
+          <button className="icon-btn" onClick={() => setOverlay("settings")} title="Settings (Ctrl+,)">⚙</button>
+          <button className="icon-btn" onClick={() => setOverlay("help")} title="Keyboard cheat sheet (?)">?</button>
         </div>
       </header>
+
+      <div className="statusline">
+        <span>{status.model.provider}/{status.model.name || status.model.default}</span>
+        <span className="sep">·</span>
+        <span title="Workspace">{workspace ? workspace.split("/").pop() : "no workspace"}</span>
+        <span className="sep">·</span>
+        <span title="Permission level">{status.permissions.level}</span>
+        {tokens > 0 && (<><span className="sep">·</span><span title="Tokens this task">{tokens} tok{localProvider ? " · $0 local" : ""}</span></>)}
+        <span className="sep">·</span>
+        <span className={`live ${busy ? "on" : ""}`}><i />{busy ? "working" : "idle"}</span>
+        <span style={{ marginLeft: "auto" }} className="hint">Enter to run · Shift+Enter for a new line · ? for shortcuts</span>
+      </div>
 
       <aside className="left">
         <div className="panel-h">
@@ -649,17 +653,19 @@ export default function App() {
         </div>
         {approvals.map((a) => (
           <div className="approval" key={a.id}>
-            <h3>Approve a dangerous command</h3>
+            <div className="cat"><i />{a.tool || "Permission"}</div>
+            <h3>Allow Shadow to run this command?</h3>
             <pre className="code">{a.command || a.reason}</pre>
             <p className="hint">{a.reason}</p>
             <div className="row">
-              <button className="primary" onClick={() => void api.decide(a.id, "approve").then(() => refreshInspect())}>Approve</button>
-              <button className="danger" onClick={() => void api.decide(a.id, "deny").then(() => refreshInspect())}>Deny</button>
+              <button className="ghost" onClick={() => void api.decide(a.id, "deny").then(() => refreshInspect())}>Cancel <span className="kbd">Esc</span></button>
+              <button className="primary" onClick={() => void api.decide(a.id, "approve").then(() => refreshInspect())}>Allow <span className="kbd-hint">↵</span></button>
             </div>
           </div>
         ))}
         {error && <div className="approval"><strong>Could not do that.</strong><p>{error}</p></div>}
-        <div className="scroll">
+        <div className="chat-stream">
+          <div className="chat-inner">
           {center === "conversation" && (
             <>
               {chat.length === 0 && !summary && (
@@ -674,23 +680,30 @@ export default function App() {
                     <header><span>{item.tool}{item.live ? " · running" : ""}</span><span>{item.ok === false ? "failed" : item.ok ? "ok" : ""}</span></header>
                     <pre>{item.text.slice(0, 1200)}</pre>
                   </div>
+                ) : item.kind === "user" ? (
+                  <div key={i} className="msg-user">
+                    <div className="user-pill">
+                      <div className="tag"><i />Task</div>
+                      <div className="bubble">{item.text}</div>
+                    </div>
+                  </div>
                 ) : (
-                  <div key={i} className={`msg ${item.kind === "user" ? "user" : ""}`}>
-                    <div className="who">{item.kind === "user" ? "YOU" : "AGENT"}</div>
-                    <pre>{item.text}</pre>
+                  <div key={i} className="msg-agent">
+                    <div className="who">Agent</div>
+                    {item.text}
                   </div>
                 ),
               )}
               {busy && (
-                <div className="msg">
-                  <div className="who">AGENT</div>
+                <div className="msg-agent">
+                  <div className="who">Agent</div>
                   <div className="skel-rows"><span className="skel" /><span className="skel short" /></div>
                 </div>
               )}
               {summary && (
-                <div className="msg">
-                  <div className="who">RESULT</div>
-                  <pre>{summary}</pre>
+                <div className="msg-agent">
+                  <div className="who">Result</div>
+                  {summary}
                 </div>
               )}
             </>
@@ -729,7 +742,9 @@ export default function App() {
               )}
             </>
           )}
+          </div>
         </div>
+        <div className="composer-wrap">
         <form className="composer" onSubmit={(ev) => { ev.preventDefault(); void runTask(); }}>
           {chips.length > 0 && (
             <div className="chips">
@@ -738,43 +753,61 @@ export default function App() {
               ))}
             </div>
           )}
-          <div className="composer-row">
-            <textarea
-              ref={promptRef}
-              value={task}
-              onChange={(ev) => setTask(ev.target.value)}
-              onKeyDown={(ev) => {
-                if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
-                  ev.preventDefault();
-                  void runTask();
-                }
-              }}
-              placeholder="Task for the agent loop… Drop files or paths here. Ctrl+Enter to run."
-            />
-            {busy ? (
-              <button type="button" className="danger" onClick={() => void stopAgent()}>Stop</button>
-            ) : (
-              <button type="submit" className="primary">Run</button>
-            )}
-          </div>
-          <div className="row composer-foot">
+          <button type="button" className="plus-btn" title="Attach file or path (drop files here)" onClick={() => promptRef.current?.focus()}>＋</button>
+          <textarea
+            ref={promptRef}
+            value={task}
+            onChange={(ev) => setTask(ev.target.value)}
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter" && !ev.shiftKey && !ev.nativeEvent.isComposing) {
+                ev.preventDefault();
+                void runTask();
+              }
+            }}
+            placeholder="Ask for follow-up changes…"
+          />
+          <div className="composer-controls">
             <select
               className="model-select"
               value={modelChoice}
               onChange={(e) => setModelChoice(e.target.value)}
               title="Model for this task only"
             >
-              <option value="">model: default ({status.model.name || status.model.default})</option>
+              <option value="">model: {status.model.name || status.model.default}</option>
               {models.map((m) => (
                 <option key={m.id} value={m.id}>{m.id}</option>
               ))}
             </select>
-            <button type="button" className="ghost" onClick={() => void resumeLast()}>Resume last</button>
-            <button type="button" className="ghost" onClick={() => void undoChanges()}>Undo files</button>
-            <button type="button" className="ghost" onClick={exportTranscript}>Export</button>
-            <span className="hint">Shift+Enter for a new line · ? for shortcuts</span>
+            <select
+              className="mode-select"
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              title="Agent mode (purpose)"
+            >
+              <option value="coder">coder</option>
+              <option value="researcher">researcher</option>
+              <option value="reviewer">reviewer</option>
+              <option value="tester">tester</option>
+            </select>
+            <button type="button" className="mic-btn" title="Voice input (not wired)">🎙</button>
+            {busy ? (
+              <button type="button" className="submit-btn stop" title="Stop (Ctrl+.)" onClick={() => void stopAgent()}>■</button>
+            ) : (
+              <button type="submit" className="submit-btn" title="Run (Enter)">↑</button>
+            )}
           </div>
         </form>
+        <div className="composer-foot">
+          <label title="Prefer the local model / keep work on this machine">
+            <input type="checkbox" checked={workLocal} onChange={(e) => setWorkLocal(e.target.checked)} />
+            Work locally
+          </label>
+          <button type="button" className="more-btn" onClick={() => void resumeLast()} title="Resume last task">↻ Resume</button>
+          <button type="button" className="more-btn" onClick={() => void undoChanges()} title="Undo last agent file changes">↶ Undo files</button>
+          <button type="button" className="more-btn" onClick={exportTranscript} title="Export transcript">⤓ Export</button>
+          <span style={{ marginLeft: "auto" }}>Enter to run · Shift+Enter for a new line</span>
+        </div>
+        </div>
       </main>
 
       <aside className="right">
@@ -997,7 +1030,7 @@ function Onboarding({ onDone }: { onDone: () => void }) {
 
   async function finish() {
     try {
-      await api.completeOnboarding({ workspace, provider, model: model || provider, name: model, api_key: apiKey, permission_level: level, theme: "dark" });
+      await api.completeOnboarding({ workspace, provider, model: model || provider, name: model, api_key: apiKey, permission_level: level, theme: "light" });
       onDone();
     } catch (err) {
       setError(String(err));
@@ -1106,7 +1139,8 @@ function Settings({
   const [name, setName] = useState(model.name || "");
   const [keyEnv, setKeyEnv] = useState(model.api_key_env || "OPENAI_API_KEY");
   const [level, setLevel] = useState(String(permissions.level || "workspace"));
-  const [theme, setTheme] = useState(String(ui.theme || "dark"));
+  const [theme, setTheme] = useState(String(ui.theme || "light"));
+  const [ability, setAbility] = useState(String(ui.ability || "none"));
   const [notify, setNotify] = useState(ui.notify !== false);
   const [presets, setPresets] = useState<{ id: string; provider: string; endpoint?: string; api_key_env?: string; name?: string }[]>([]);
   const [detected, setDetected] = useState<DetectedProvider[]>([]);
@@ -1210,10 +1244,18 @@ function Settings({
         </div>
         <div className="field"><label>Theme</label>
           <select value={theme} onChange={(e) => setTheme(e.target.value)}>
+            <option value="light">light (Codex default)</option>
             <option value="dark">dark (Codex)</option>
-            <option value="light">light (Codex)</option>
             <option value="dim">dim</option>
           </select>
+        </div>
+        <div className="field"><label>Abilities</label>
+          <select value={ability} onChange={(e) => setAbility(e.target.value)} title="Computer Use / Custom live in Settings, not the composer">
+            <option value="none">none</option>
+            <option value="computer_use">Computer Use</option>
+            <option value="custom">Custom</option>
+          </select>
+          <p className="hint">Abilities are configured here so the composer stays clean: + icon, input, model, mode, mic, submit.</p>
         </div>
         <div className="field">
           <label className="row" style={{ alignItems: "center", gap: 8 }}>
@@ -1233,7 +1275,7 @@ function Settings({
             void onSave({
               model: { default: defaultModel, provider, endpoint, name, api_key_env: keyEnv },
               permissions: { level },
-              ui: { theme, notify },
+              ui: { theme, ability, notify },
             }, apiKey);
           }}>Save</button>
           <button className="ghost" onClick={onClose}>Close</button>

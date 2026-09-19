@@ -31,9 +31,10 @@ logging:
 ui:
   host: 127.0.0.1
   port: 7430
-  theme: dark
-  notify: true              # desktop notify-send when a long task finishes
-  notify_after_sec: 4.0     # only notify for jobs longer than this
+  theme: light            # light (Codex default) | dark | dim
+  ability: none           # none | computer_use | custom  (lives in Settings, not the composer)
+  notify: true            # desktop notify-send when a long task finishes
+  notify_after_sec: 4.0   # only notify for jobs longer than this
 
 agent:
   max_steps: 32
