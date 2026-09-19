@@ -249,3 +249,68 @@ class _AlwaysDoneFailingProvider(ModelProvider):
             finish=True,
             usage={"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
         )
+
+
+class _CaseMismatchHelloProvider(ModelProvider):
+    """A mock that ships the wrong output first, then corrects it on FIX.
+
+    First pass: writes hello.py printing "Goodbye, World!", runs it, claims
+    done → VERIFY fails (output does not match "hello, world").
+    After the FIX note: rewrites hello.py with "Hello, World!", re-runs it,
+    claims done → VERIFY succeeds → DONE.
+
+    This proves the VERIFY → FIX → OBSERVE → VERIFY → DONE path fires.
+    """
+
+    name = "mock"
+
+    def __init__(self, context_limit: int = 32000) -> None:
+        self._context_limit = context_limit
+
+    def get_capabilities(self):
+        from shadow_agent.models.types import Capabilities
+        return Capabilities(chat=True, stream=True, tools=True, vision=False, provider="mock")
+
+    def get_context_limit(self) -> int:
+        return self._context_limit
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        return self.chat(ChatRequest(messages=[Message(role="user", content=prompt)])).text
+
+    def stream(self, request: ChatRequest):
+        yield self.chat(request).text
+
+    def chat(self, request: ChatRequest) -> ChatResponse:
+        from shadow_agent.models.adapters.mock import _call, _resp, _tool_named, _unwrap
+        msgs = request.messages
+        written = _tool_named(msgs, "write_file")
+        executed = _tool_named(msgs, "exec")
+        fix_pending = any(m.role == "user" and "VERIFICATION FAILED" in m.content for m in msgs)
+        # Inspect the last exec stdout to decide whether the wrong output is still live.
+        last_stdout = ""
+        if executed:
+            payload = _unwrap(executed[-1].content)
+            last_stdout = str(payload.get("stdout") or payload.get("output") or "")
+        wrong_output_live = "Goodbye" in last_stdout
+        if not written:
+            content = 'print("Goodbye, World!")\n' if not fix_pending else 'print("Hello, World!")\n'
+            return _resp(
+                "Creating hello.py and running it.",
+                [_call("write_file", path="hello.py", content=content), _call("exec", command="python3 hello.py")],
+            )
+        if not executed:
+            return _resp("Running hello.py.", [_call("exec", command="python3 hello.py")])
+        if fix_pending and wrong_output_live:
+            # Rewrite the correct version and re-run before claiming done.
+            return _resp(
+                "Rewriting hello.py with the correct case and re-running.",
+                [
+                    _call("write_file", path="hello.py", content='print("Hello, World!")\n'),
+                    _call("exec", command="python3 hello.py"),
+                ],
+            )
+        if not fix_pending:
+            # First pass: claim done with the wrong output → VERIFY will fail.
+            return _resp("Done.", finish=True)
+        # After FIX: re-run already happened with the correct output, claim done.
+        return _resp("Fixed and verified: Hello, World!", finish=True)

@@ -40,6 +40,22 @@ class Verifier:
             if not hello.is_file():
                 return VerificationResult(ok=False, reason="hello.py was not created")
             output = _collect_stdout(self.last_execs)
+            # Default: case-insensitive match (real models print "Hello, world!"
+            # as often as "Hello, World!"). But when the task explicitly demands
+            # the exact casing "Hello, World" AND mentions a case mismatch / fix,
+            # require the exact string so the FIX→OBSERVE→VERIFY path can fire.
+            exact_required = (
+                "Hello, World" in task
+                and re.search(r"case\s*mismatch|exact\s*case|fix\s+the\s+case|correct\s+the\s+case", lowered)
+            )
+            if exact_required:
+                if "Hello, World!" not in output:
+                    return VerificationResult(
+                        ok=False,
+                        reason='output did not match exact "Hello, World!" (case-sensitive)',
+                        evidence=output[-2000:],
+                    )
+                return VerificationResult(ok=True, reason="hello-world verified (exact case)", evidence=output[-500:])
             # Real models print "Hello, world!" as often as "Hello, World!" — match loosely.
             if not re.search(r"hello,\s*world!", output, re.IGNORECASE):
                 return VerificationResult(ok=False, reason="hello.py was not run or output did not match", evidence=output[-2000:])

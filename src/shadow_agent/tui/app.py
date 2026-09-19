@@ -49,8 +49,9 @@ from prompt_toolkit.filters import Condition
 from shadow_agent import __version__
 from shadow_agent.agent.loop import AgentRunner
 from shadow_agent.approvals import ApprovalHub
-from shadow_agent.commands import CommandRegistry
+from shadow_agent.commands import CommandContext, CommandRegistry, dispatch as dispatch_command
 from shadow_agent.config import ensure_user_config, load_config, remember_workspace
+from shadow_agent.desktop import launch_desktop
 from shadow_agent.events import EventBus
 from shadow_agent.models.registry import ModelRegistry
 from shadow_agent.secrets import load_secrets
@@ -148,109 +149,75 @@ def run_tui(workspace: Path, resume_session: str | None = None) -> None:
             # Custom command: expand to a prompt and run as a task.
             _run_task(cmd.render(args))
             return True
-        # Built-in dispatch.
-        if name in {"quit", "exit"}:
-            if state.get("app") is not None:
-                state["app"].exit()
-            return True
-        if name == "help":
-            state["overlay"] = "help"
-            return True
-        if name == "clear":
-            model.clear()
-            return True
-        if name == "new":
-            sid2 = store.create_session(str(workspace), cfg.model.default, title="TUI")
-            state["session_id"] = sid2
-            model.reset(sid2)
-            return True
-        if name in {"model", "models"}:
-            state["overlay"] = "models"
-            return True
-        if name == "config":
-            model.add_agent(_config_text(load_config(workspace)))
-            return True
-        if name == "compact":
-            model.add_agent("Compacting transcript…")
-            model.compact()
-            return True
-        if name == "expand":
-            indices = model.tool_turn_indices()
-            if indices:
-                model.toggle_card(indices[-1])
-            else:
-                model.add_agent("No tool cards to expand yet.")
-            return True
-        if name == "undo":
-            from shadow_agent.checkpoints import restore_last
-
-            res = restore_last(workspace)
-            model.add_agent(f"Undo: {res.get('restored') or res.get('error')}")
-            return True
-        if name == "diff":
-            model.add_agent(_git_text(workspace, "diff"))
-            return True
-        if name == "git":
-            model.add_agent(_git_text(workspace, "status"))
-            return True
-        if name == "branch":
-            try:
-                new_id = store.branch_session(state["session_id"], "branch")
-                state["session_id"] = new_id
-                model.reset(new_id)
-                model.add_agent(f"Branched session → {new_id[:8]}")
-            except KeyError:
-                model.add_agent("No session to branch.")
-            return True
-        if name == "sessions":
-            state["overlay"] = "sessions"
-            return True
-        if name == "resume":
-            target = _resolve_session(store, args or "")
-            if target:
-                state["session_id"] = target
-                model.reset(target)
-                model.add_agent(f"Resumed session {target[:8]}")
-            else:
-                model.add_agent(f"No session matching “{args}”.")
-            return True
-        if name == "pin":
-            last = model.last_agent_text()
-            if last:
-                store.add_pin(state["session_id"], "pin", last)
-                model.add_agent("Pinned the last agent message.")
-            else:
-                model.add_agent("Nothing to pin yet.")
-            return True
-        if name == "cost":
-            cost = store.session_cost(state["session_id"])
-            model.add_agent(_cost_text(cost))
-            return True
-        if name == "doctor":
-            from shadow_agent.health import doctor_report, doctor_fix
-
-            report = doctor_report(load_config(workspace), workspace)
-            doctor_fix(report, workspace)
-            report = doctor_report(load_config(workspace), workspace)
-            model.add_agent(_doctor_text(report))
-            return True
-        if name == "health":
-            from shadow_agent.health import collect_health
-
-            payload = collect_health(load_config(workspace), workspace)
-            model.add_agent(json.dumps(payload, indent=2))
-            return True
-        if name == "ui":
-            from shadow_agent.desktop import launch_desktop
-
-            model.add_agent("Launching desktop UI in the background…")
-            threading.Thread(
+        # Built-in dispatch through the shared handler module.
+        ctx = CommandContext(
+            workspace=workspace,
+            config=load_config(workspace),
+            store=store,
+            registry=registry,
+            commands=commands,
+            approvals=approvals,
+            session_id=state["session_id"],
+            overlay_opener=lambda overlay: state.__setitem__("overlay", overlay),
+            compactor=model.compact,
+            clearer=model.clear,
+            new_session=lambda: store.create_session(str(workspace), cfg.model.default, title="TUI"),
+            branch_session=lambda: store.branch_session(state["session_id"], "branch"),
+            resume_session=lambda prefix: _resolve_session(store, prefix or ""),
+            pin_last=lambda label: store.add_pin(state["session_id"], label, model.last_agent_text() or ""),
+            ui_launcher=lambda: threading.Thread(
                 target=launch_desktop,
                 args=(workspace, cfg.ui.host, cfg.ui.port),
                 daemon=True,
-            ).start()
+            ).start(),
+            quitter=lambda: state["app"].exit() if state.get("app") is not None else None,
+            extra={
+                "plan": "",
+                "todos": [],
+                "expand_last_card": lambda: (
+                    model.toggle_card(model.tool_turn_indices()[-1])
+                    if model.tool_turn_indices()
+                    else model.add_agent("No tool cards to expand yet.")
+                ),
+            },
+        )
+        result = dispatch_command(args, ctx, name)
+        if not result.handled:
+            model.add_agent(result.text or f"Unknown command: /{name}")
             return True
-        model.add_agent(f"Unknown command: /{name}")
+        if result.kind == "quit":
+            if state.get("app") is not None:
+                state["app"].exit()
+            return True
+        if result.kind == "overlay":
+            state["overlay"] = result.overlay or None
+            return True
+        if result.kind == "text" and result.text:
+            model.add_agent(result.text)
+            return True
+        if result.kind == "error":
+            model.add_agent(f"{result.icon or '✗'} {result.headline}\n{result.body}".strip())
+            return True
+        if result.kind == "diff":
+            model.add_diff_card(result.path, result.diff)
+            return True
+        if result.kind == "list":
+            lines = [result.headline]
+            if result.body:
+                lines += ["", result.body]
+            for item in result.items:
+                lines.append(f"  {item.get('label', ''):24} {item.get('value', '')}")
+            model.add_agent("\n".join(lines))
+            return True
+        # card (default)
+        body = result.body
+        if result.metadata:
+            meta_lines = "\n".join(
+                f"  {k}: {v}" for k, v in result.metadata.items() if k not in {"fails"}
+            )
+            if meta_lines:
+                body = (body + "\n\n" + meta_lines).strip() if body else meta_lines
+        model.add_agent(f"{result.icon or '◆'} {result.headline}\n{body}".strip())
         return True
 
     # --- prompt_toolkit wiring ------------------------------------------------

@@ -108,6 +108,11 @@ class AgentRunner:
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self.todos: list[dict[str, Any]] = []
         self.checkpoints: CheckpointStore | None = None
+        # Hooks: deterministic lifecycle events. Built-ins + project .shadowcode/hooks/.
+        from shadow_agent.hooks import HookContext, default_registry, outcomes_blocked
+
+        self.hooks = default_registry(self.workspace)
+        self._hook_outcomes_blocked = outcomes_blocked  # for tests / clarity
 
     def _resolve_model(self, model_override: str | None, purpose: str) -> ModelProvider:
         """Pick the provider: explicit override > routing hint for this purpose > default."""
@@ -138,6 +143,13 @@ class AgentRunner:
             emit=self._emit,
         )
         self._emit("agent.started", {"task": task, "workspace": str(self.workspace)}, task_id)
+        # Self-skilling: observe the task so the workflow detector can flag repeats.
+        try:
+            from shadow_agent.self_skill import WorkflowDetector
+
+            WorkflowDetector(paths.state_dir()).observe(task)
+        except Exception:  # noqa: BLE001 — detector is best-effort
+            pass
         memory = MemoryStore(self.workspace, task_id)
         memory.append_task(f"Goal: {task}")
         skills = ProjectSkills(self.workspace)
@@ -189,6 +201,22 @@ class AgentRunner:
                     {"notes": len(context.compressed_notes), "tokens": estimate_tokens("".join(m.content for m in request.messages))},
                     task_id,
                 )
+                # Hook: on_compaction — fires when the context engine compacts turns.
+                try:
+                    from shadow_agent.hooks import HookContext
+
+                    ctx = HookContext(
+                        workspace=self.workspace,
+                        event="on_compaction",
+                        task_id=task_id,
+                        session_id=self.session_id,
+                        extra={"notes": len(context.compressed_notes)},
+                    )
+                    outcomes = self.hooks.fire("on_compaction", ctx)
+                    if outcomes:
+                        self._emit("hook.fired", {"event": "on_compaction", "outcomes": [o.to_dict() for o in outcomes]}, task_id)
+                except Exception:  # noqa: BLE001
+                    pass
             self._emit("model.request", {"step": step, "model": getattr(self.model, "name", "")}, task_id)
             try:
                 response = self._chat_with_retry(request, task_id, step)
@@ -346,6 +374,22 @@ class AgentRunner:
             task_id,
         )
         event_names.append("agent.completed")
+        # Hook: on_complete — fires when the loop finishes (success or not).
+        try:
+            from shadow_agent.hooks import HookContext
+
+            ctx = HookContext(
+                workspace=self.workspace,
+                event="on_complete",
+                task_id=task_id,
+                session_id=self.session_id,
+                extra={"success": success, "summary": summary, "steps": step},
+            )
+            outcomes = self.hooks.fire("on_complete", ctx)
+            if outcomes:
+                self._emit("hook.fired", {"event": "on_complete", "outcomes": [o.to_dict() for o in outcomes]}, task_id)
+        except Exception:  # noqa: BLE001 — hooks must not crash the loop
+            pass
         return AgentResult(
             success=success,
             summary=summary,
@@ -411,11 +455,98 @@ class AgentRunner:
         if self.checkpoints is not None:
             self.checkpoints.record_call(call.tool_name, call.arguments)
         self._emit("tool.started", {"tool": call.tool_name, "arguments": _safe_args(call)}, task_id)
+        # Hook: before_command — fires for exec/terminal tools; can block dangerous commands.
+        if call.tool_name in {"exec", "kill"}:
+            from shadow_agent.hooks import HookContext
+
+            ctx = HookContext(
+                workspace=self.workspace,
+                event="before_command",
+                tool=call.tool_name,
+                arguments=call.arguments,
+                command=str(call.arguments.get("command") or ""),
+                task_id=task_id,
+                session_id=self.session_id,
+            )
+            outcomes = self.hooks.fire("before_command", ctx)
+            if self._hook_outcomes_blocked(outcomes):
+                msg = "; ".join(o.message for o in outcomes if o.block)
+                self._emit("hook.blocked", {"tool": call.tool_name, "message": msg, "outcomes": [o.to_dict() for o in outcomes]}, task_id)
+                return ToolResult(id=call.id, success=False, error=f"blocked by hook: {msg}", metadata={"blocked_by_hook": True})
+            if outcomes:
+                self._emit("hook.fired", {"event": "before_command", "outcomes": [o.to_dict() for o in outcomes]}, task_id)
         result = self.tools.execute(call, self.gate)
         result = self._maybe_approve(call, result, task_id)
         if not result.success and _retryable(result) and not self.cancelled():
             self._emit("tool.retry", {"tool": call.tool_name, "error": result.error}, task_id)
             result = self.tools.execute(call, self.gate)
+        # Hook: after_edit — fires after write_file / edit_file / apply_patch.
+        if call.tool_name in {"write_file", "edit_file", "apply_patch"} and result.success:
+            from shadow_agent.hooks import HookContext
+
+            ctx = HookContext(
+                workspace=self.workspace,
+                event="after_edit",
+                tool=call.tool_name,
+                arguments=call.arguments,
+                result=result,
+                task_id=task_id,
+                session_id=self.session_id,
+            )
+            outcomes = self.hooks.fire("after_edit", ctx)
+            if outcomes:
+                self._emit("hook.fired", {"event": "after_edit", "outcomes": [o.to_dict() for o in outcomes]}, task_id)
+        # Hook: after_test — fires after a test command finishes.
+        if call.tool_name == "exec":
+            command = str(call.arguments.get("command") or "")
+            if _is_test_command(command):
+                from shadow_agent.hooks import HookContext
+
+                ctx = HookContext(
+                    workspace=self.workspace,
+                    event="after_test",
+                    tool=call.tool_name,
+                    arguments=call.arguments,
+                    result=result,
+                    command=command,
+                    task_id=task_id,
+                    session_id=self.session_id,
+                )
+                outcomes = self.hooks.fire("after_test", ctx)
+                if outcomes:
+                    self._emit("hook.fired", {"event": "after_test", "outcomes": [o.to_dict() for o in outcomes]}, task_id)
+        # Hook: before_commit — fires before git_commit.
+        if call.tool_name == "git_commit":
+            from shadow_agent.hooks import HookContext
+
+            ctx = HookContext(
+                workspace=self.workspace,
+                event="before_commit",
+                tool=call.tool_name,
+                arguments=call.arguments,
+                task_id=task_id,
+                session_id=self.session_id,
+            )
+            outcomes = self.hooks.fire("before_commit", ctx)
+            if outcomes:
+                self._emit("hook.fired", {"event": "before_commit", "outcomes": [o.to_dict() for o in outcomes]}, task_id)
+        # Hook: on_error — fires when a tool call errors.
+        if not result.success and result.error:
+            from shadow_agent.hooks import HookContext
+
+            ctx = HookContext(
+                workspace=self.workspace,
+                event="on_error",
+                tool=call.tool_name,
+                arguments=call.arguments,
+                result=result,
+                error=result.error,
+                task_id=task_id,
+                session_id=self.session_id,
+            )
+            outcomes = self.hooks.fire("on_error", ctx)
+            if outcomes:
+                self._emit("hook.fired", {"event": "on_error", "outcomes": [o.to_dict() for o in outcomes]}, task_id)
         # Codex-style compact operation card: one-line headline + expandable full output.
         from shadow_agent.op_card import summarize as _op_summarize
 
@@ -585,3 +716,9 @@ def _safe_args(call: ToolCall) -> dict:
 def _retryable(result: ToolResult) -> bool:
     text = (result.error or "").lower()
     return any(token in text for token in ("timed out", "timeout", "temporarily", "connection reset"))
+
+
+def _is_test_command(command: str) -> bool:
+    import re
+
+    return bool(re.search(r"\bpytest\b|\bpython3?\s+-m\s+pytest\b|\bpython3?\s+-m\s+unittest\b", command))

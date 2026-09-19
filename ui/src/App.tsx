@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   type Approval,
+  type CommandResult,
   type DetectedProvider,
   type DiffHunk,
   type EventRow,
@@ -98,6 +99,9 @@ export default function App() {
   const [trustReq, setTrustReq] = useState<{ path: string; name?: string; permissions?: Record<string, unknown> } | null>(null);
   const [testing, setTesting] = useState<Record<string, boolean>>({});
   const [execResult, setExecResult] = useState<ExecResult | null>(null);
+  const [slashMenu, setSlashMenu] = useState<{ open: boolean; q: string; index: number }>({ open: false, q: "", index: 0 });
+  const [commandList, setCommandList] = useState<{ name: string; description: string; arg_spec: string }[]>([]);
+  const [commandCards, setCommandCards] = useState<CommandResult[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const sourceRef = useRef<EventSource | null>(null);
 
@@ -174,6 +178,51 @@ export default function App() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    api.commands()
+      .then((data) => setCommandList(data.commands))
+      .catch(() => setCommandList([]));
+  }, []);
+
+  async function runSlashCommand(name: string, args: string) {
+    try {
+      const result = await api.runCommand(name, args, sessionId || undefined);
+      setCommandCards((prev) => [...prev.slice(-8), result]);
+      if (result.kind === "overlay") {
+        setOverlay((result.overlay as Overlay) || "");
+      }
+      if (result.kind === "quit") {
+        pushToast("Session quit requested", "info");
+      }
+      pushToast(`${result.icon || "◆"} ${result.headline || name}`, result.kind === "error" ? "err" : "ok");
+      await refresh();
+    } catch (err) {
+      pushToast(String(err), "err");
+    }
+  }
+
+  function handleSlashInput(text: string) {
+    // Open the slash menu when the composer starts with "/".
+    if (text.startsWith("/")) {
+      const rest = text.slice(1);
+      const space = rest.indexOf(" ");
+      const q = space >= 0 ? rest.slice(0, space) : rest;
+      setSlashMenu({ open: true, q, index: 0 });
+    } else {
+      setSlashMenu({ open: false, q: "", index: 0 });
+    }
+  }
+
+  function submitSlash(line: string) {
+    // Parse "/name args" and run via the API.
+    const rest = line.slice(1);
+    const space = rest.indexOf(" ");
+    const name = space >= 0 ? rest.slice(0, space) : rest;
+    const args = space >= 0 ? rest.slice(space + 1) : "";
+    setSlashMenu({ open: false, q: "", index: 0 });
+    void runSlashCommand(name, args);
+  }
 
   useEffect(() => {
     const theme = String((cfg.ui as { theme?: string } | undefined)?.theme || "light");
@@ -847,6 +896,38 @@ export default function App() {
           </div>
         </div>
         <div className="composer-wrap">
+        {slashMenu.open && commandList.length > 0 && (
+          <div className="slash-menu">
+            {commandList
+              .filter((c) => c.name.startsWith(slashMenu.q))
+              .slice(0, 12)
+              .map((c, i) => (
+                <button
+                  key={c.name}
+                  className={`slash-hit ${i === slashMenu.index ? "on" : ""}`}
+                  onClick={() => {
+                    setTask(`/${c.name}${c.arg_spec ? " " : ""}`);
+                    setSlashMenu({ open: false, q: "", index: 0 });
+                    promptRef.current?.focus();
+                  }}
+                >
+                  <strong>/{c.name}</strong>
+                  {c.arg_spec && <span className="slash-arg"> {c.arg_spec}</span>}
+                  <span className="slash-desc">{c.description}</span>
+                </button>
+              ))}
+            {commandList.filter((c) => c.name.startsWith(slashMenu.q)).length === 0 && (
+              <div className="slash-empty">No matching commands.</div>
+            )}
+          </div>
+        )}
+        {commandCards.length > 0 && (
+          <div className="command-cards">
+            {commandCards.map((card, i) => (
+              <CommandCardView key={i} card={card} />
+            ))}
+          </div>
+        )}
         <form className="composer" onSubmit={(ev) => { ev.preventDefault(); void runTask(); }}>
           {chips.length > 0 && (
             <div className="chips">
@@ -859,14 +940,49 @@ export default function App() {
           <textarea
             ref={promptRef}
             value={task}
-            onChange={(ev) => setTask(ev.target.value)}
+            onChange={(ev) => {
+              setTask(ev.target.value);
+              handleSlashInput(ev.target.value);
+            }}
             onKeyDown={(ev) => {
+              if (slashMenu.open && commandList.length) {
+                const matches = commandList.filter((c) => c.name.startsWith(slashMenu.q));
+                if (ev.key === "ArrowDown") {
+                  ev.preventDefault();
+                  setSlashMenu((s) => ({ ...s, index: Math.min(s.index + 1, matches.length - 1) }));
+                  return;
+                }
+                if (ev.key === "ArrowUp") {
+                  ev.preventDefault();
+                  setSlashMenu((s) => ({ ...s, index: Math.max(s.index - 1, 0) }));
+                  return;
+                }
+                if (ev.key === "Enter" || ev.key === "Tab") {
+                  if (matches[slashMenu.index]) {
+                    ev.preventDefault();
+                    const picked = matches[slashMenu.index];
+                    setTask(`/${picked.name}${picked.arg_spec ? " " : ""}`);
+                    setSlashMenu({ open: false, q: "", index: 0 });
+                    return;
+                  }
+                }
+                if (ev.key === "Escape") {
+                  ev.preventDefault();
+                  setSlashMenu({ open: false, q: "", index: 0 });
+                  return;
+                }
+              }
               if (ev.key === "Enter" && !ev.shiftKey && !ev.nativeEvent.isComposing) {
                 ev.preventDefault();
-                void runTask();
+                if (task.startsWith("/")) {
+                  submitSlash(task);
+                  setTask("");
+                } else {
+                  void runTask();
+                }
               }
             }}
-            placeholder="Ask for follow-up changes…"
+            placeholder="Ask for follow-up changes…  (type / for commands)"
           />
           <div className="composer-controls">
             <select
@@ -1440,6 +1556,54 @@ function ProjectPicker({ projects, current, onClose, onPick }: { projects: Proje
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function CommandCardView({ card }: { card: CommandResult }) {
+  // Render a Codex-style command result card.
+  if (card.kind === "text" && card.text) {
+    return <div className="msg-agent"><div className="who">Command</div>{card.text}</div>;
+  }
+  if (card.kind === "error") {
+    return (
+      <div className="tool-card bad">
+        <header><span>{card.icon || "✗"} {card.headline}</span><span>error</span></header>
+        <pre>{card.body}</pre>
+      </div>
+    );
+  }
+  if (card.kind === "diff") {
+    return (
+      <div className="tool-card">
+        <header><span>diff · {card.path}</span></header>
+        {card.diff.splitlines().slice(0, 200).map((line, i) => (
+          <div key={i} className={`diff-line ${line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-del" : "diff-ctx"}`}>
+            {line}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (card.kind === "list") {
+    return (
+      <div className="tool-card">
+        <header><span>{card.icon || "◆"} {card.headline}</span></header>
+        {card.body && <pre className="plan">{card.body}</pre>}
+        {card.items.map((item, i) => (
+          <div key={i} className="status-row">
+            <span>{item.label}</span>
+            <code>{item.value}</code>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  // card (default)
+  return (
+    <div className="tool-card">
+      <header><span>{card.icon || "◆"} {card.headline}</span></header>
+      <pre>{card.body}</pre>
     </div>
   );
 }

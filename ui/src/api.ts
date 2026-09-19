@@ -177,4 +177,25 @@ export const api = {
     send<{ ok: boolean; id: number }>(`/api/sessions/${sessionId}/pins`, "POST", { name: label, content: body }),
   deletePin: (sessionId: string, pinId: number) =>
     send<{ ok: boolean }>(`/api/sessions/${sessionId}/pins/${pinId}`, "DELETE", {}),
+  commands: () => get<{ commands: { name: string; description: string; arg_spec: string; alias: string; source: string }[] }>("/api/commands"),
+  runCommand: (name: string, args = "", sessionId?: string) =>
+    send<CommandResult>("/api/commands/run", "POST", { name, args, session_id: sessionId }),
+};
+
+export type CommandResult = {
+  handled: boolean;
+  text: string;
+  kind: "text" | "card" | "list" | "diff" | "approval" | "error" | "overlay" | "quit";
+  icon: string;
+  headline: string;
+  body: string;
+  items: { label: string; value: string }[];
+  diff: string;
+  path: string;
+  approval_action: string;
+  approval_reason: string;
+  overlay: string;
+  quit: boolean;
+  passthrough: boolean;
+  metadata: Record<string, unknown>;
 };

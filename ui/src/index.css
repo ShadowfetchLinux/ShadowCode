@@ -391,3 +391,39 @@ h1 { margin: 0; font-size: 16px; font-weight: 700; color: var(--text); }
 .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .live.on { color: var(--ok); }
+
+/* --- 0.6.0 slash command menu + command cards --- */
+.slash-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 -6px 18px rgba(0,0,0,.12);
+  z-index: 20;
+  margin-bottom: 6px;
+}
+.slash-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text);
+}
+.slash-hit:hover, .slash-hit.on { background: var(--surface-2); }
+.slash-hit strong { color: var(--accent); min-width: 140px; }
+.slash-hit .slash-arg { color: var(--muted); font-size: 11px; }
+.slash-hit .slash-desc { color: var(--text-2); font-size: 12px; flex: 1; }
+.slash-empty { padding: 10px 12px; color: var(--muted); font-size: 12px; }
+.command-cards { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.command-cards .tool-card { margin: 0; }

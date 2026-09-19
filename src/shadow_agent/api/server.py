@@ -17,6 +17,7 @@ from shadow_agent import __version__, paths
 from shadow_agent.agent.loop import AgentRunner
 from shadow_agent.approvals import ApprovalHub
 from shadow_agent.checkpoints import last_checkpoint, restore_last
+from shadow_agent.commands import CommandContext, CommandRegistry, dispatch as dispatch_command
 from shadow_agent.config import (
     AppConfig,
     PermissionLevel,
@@ -169,6 +170,12 @@ class AttachBody(BaseModel):
 class GitCommitBody(BaseModel):
     message: str
     paths: list[str] = Field(default_factory=list)
+
+
+class CommandRunBody(BaseModel):
+    name: str
+    args: str = ""
+    session_id: str | None = None
 
 
 class ProjectBody(BaseModel):
@@ -886,6 +893,52 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     def doctor() -> dict[str, Any]:
         cfg = load_config(runtime.get("workspace"))
         return doctor_report(cfg, runtime.get("workspace"))
+
+    @app.get("/api/commands")
+    def list_commands() -> dict[str, Any]:
+        """List all slash commands (builtins + project .shadow/commands/*.md)."""
+        workspace = _ws(runtime)
+        reg = CommandRegistry(workspace)
+        cmds = [
+            {
+                "name": c.name,
+                "description": c.description,
+                "arg_spec": c.arg_spec,
+                "alias": c.alias,
+                "source": c.source,
+            }
+            for c in reg.list()
+        ]
+        return {"commands": cmds}
+
+    @app.post("/api/commands/run")
+    def run_command(body: CommandRunBody) -> dict[str, Any]:
+        """Run a builtin slash command and return its structured result.
+
+        Custom (project) commands are NOT run here — they expand to a prompt
+        and should be sent to /api/jobs as a task. This endpoint only handles
+        builtins, returning a Codex-style card the UI can render.
+        """
+        workspace = _ws(runtime)
+        reg = CommandRegistry(workspace)
+        cmd = reg.get(body.name)
+        if cmd is None:
+            raise HTTPException(404, friendly_http(404, f"unknown command: /{body.name}"))
+        if not reg.is_builtin(body.name):
+            raise HTTPException(400, "custom commands must be run as tasks via /api/jobs")
+        cfg = load_config(workspace)
+        ctx = CommandContext(
+            workspace=workspace,
+            config=cfg,
+            store=store,
+            registry=registry,
+            commands=reg,
+            approvals=approvals,
+            session_id=body.session_id or "",
+            extra={"plan": "", "todos": []},
+        )
+        result = dispatch_command(body.args, ctx, body.name)
+        return result.to_dict()
 
     @app.get("/api/checkpoints")
     def checkpoints() -> dict[str, Any]:

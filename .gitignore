@@ -18,3 +18,5 @@ ui/dist/
 .coverage
 htmlcov/
 .DS_Store
+.shadow/
+scripts/smoke_qwen_opcard.py

@@ -11,7 +11,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-_COMMANDS = {"run", "models", "config", "ui", "tui", "health", "doctor", "export", "sessions"}
+_COMMANDS = {"run", "models", "config", "ui", "tui", "health", "doctor", "export", "sessions", "mcp", "background", "plugin", "rewind", "skill", "goal", "goals", "status", "jobs", "tools", "profile", "understand", "why", "vision", "docs", "rollback", "checkpoints", "team"}
 
 from shadow_agent import __version__, paths
 from shadow_agent.agent.loop import AgentRunner
@@ -78,10 +78,23 @@ def main(
 def run(
     task: str = typer.Argument(..., help="Task for the agent loop"),
     project: Optional[Path] = typer.Option(None, "--project", "-p", help="Workspace path"),
+    agent: Optional[str] = typer.Option(None, "--agent", help="Dispatch through a subagent role (architect, coder, security, tester, researcher, linux-expert, reviewer)"),
+    json_out: bool = typer.Option(False, "--json", help="Print structured JSON result and exit non-zero on failure"),
+    interactive: bool = typer.Option(False, "--interactive", help="Force interactive prompts even when stdin is not a tty"),
 ) -> None:
-    """Run one task through the agent loop and print the result."""
+    """Run one task through the agent loop (non-interactive by default).
+
+    CI mode: ``shadow run --json "review this pull request"`` exits 0 on
+    success and 1 on failure with structured JSON on stdout. ``--agent security``
+    dispatches through the named subagent role.
+    """
     workspace = _workspace(project)
-    result = _run_task(workspace, task)
+    if agent:
+        result = _run_task_with_agent(workspace, task, agent, json_out=json_out)
+    else:
+        result = _run_task(workspace, task, json_out=json_out)
+    if json_out:
+        console.print(json.dumps(result.model_dump(mode="json"), indent=2, default=str))
     raise typer.Exit(0 if result.success else 1)
 
 
@@ -289,13 +302,53 @@ def export_cmd(
     console.print(body)
 
 
-def _run_task(workspace: Path, task: str):
+# --- mcp --------------------------------------------------------------------
+
+mcp_app = typer.Typer(help="Expose ShadowCode as an MCP (Model Context Protocol) server.", no_args_is_help=True)
+
+
+@mcp_app.command("serve")
+def mcp_serve(
+    http: Optional[str] = typer.Option(None, "--http", help="Bind an HTTP/SSE server on host:port (e.g. 127.0.0.1:7431). Omit for stdio."),
+    project: Optional[Path] = typer.Option(None, "--project", "-p", help="Workspace path the server defaults to."),
+) -> None:
+    """Run the ShadowCode MCP server (stdio by default, or HTTP/SSE with --http)."""
+    from shadow_agent.mcp_server.server import serve_http, serve_stdio
+
+    workspace = _ui_workspace(project)
+    if http:
+        host, _, port_str = http.partition(":")
+        host = host or "127.0.0.1"
+        port = int(port_str) if port_str else 7431
+        serve_http(host=host, port=port, workspace=workspace)
+    else:
+        serve_stdio(workspace=workspace)
+
+
+@mcp_app.command("register")
+def mcp_register(
+    host: str = typer.Option("127.0.0.1", "--host", help="Host for the HTTP/SSE block."),
+    port: int = typer.Option(7431, "--port", help="Port for the HTTP/SSE block."),
+    no_token: bool = typer.Option(False, "--no-token", help="Do not create a token if none exists."),
+) -> None:
+    """Print JSON config blocks to paste into Claude Code / Cursor / Codex."""
+    from shadow_agent.mcp_server.register import print_register_blocks
+
+    print_register_blocks(host=host, port=port, ensure=not no_token)
+
+
+app.add_typer(mcp_app, name="mcp")
+
+
+def _run_task(workspace: Path, task: str, json_out: bool = False):
     ensure_user_config()
     cfg = load_config(workspace)
     store = Store()
     bus = EventBus()
 
     def printer(_etype: str, event: dict) -> None:
+        if json_out:
+            return  # suppress all event printing in JSON mode
         payload = event.get("payload") or {}
         etype = event["type"]
         if etype == "agent.started":
@@ -323,9 +376,52 @@ def _run_task(workspace: Path, task: str):
     bus.subscribe(None, printer)
     runner = AgentRunner(workspace, config=cfg, store=store, events=bus)
     result = runner.run(task)
-    console.print("")
-    console.print(result.summary)
+    if not json_out:
+        console.print("")
+        console.print(result.summary)
     return result
+
+
+def _run_task_with_agent(workspace: Path, task: str, agent: str, json_out: bool = False):
+    """Dispatch a task through a single subagent role (CI mode)."""
+    from shadow_agent.agent.loop import AgentRunner
+    from shadow_agent.agents_dir import SubagentRole
+
+    ensure_user_config()
+    cfg = load_config(workspace)
+    store = Store()
+    bus = EventBus()
+    try:
+        role = SubagentRole(agent)
+    except ValueError:
+        valid = ", ".join(r.value for r in SubagentRole)
+        raise typer.BadParameter(f"unknown agent role: {agent!r}. Choose one of: {valid}")
+    from shadow_agent.models.adapters.mock import MockProvider
+
+    runner = AgentRunner(workspace, config=cfg, store=store, events=bus, model=MockProvider())
+    from shadow_agent.agent.subagents import SubagentHost
+
+    host = SubagentHost(runner)
+    sub = host.spawn(role, task)
+    # Wrap as an AgentResult-shaped dict for the CLI.
+    from shadow_agent.agent.loop import AgentResult
+
+    child = sub.result
+    return AgentResult(
+        success=child.get("success", True),
+        summary=sub.notes or child.get("summary", ""),
+        session_id=child.get("session_id", runner.session_id),
+        task_id=child.get("task_id", ""),
+        steps=child.get("steps", 0),
+        plan=child.get("plan", {"steps": []}),
+        events=child.get("events", []),
+        todos=child.get("todos", []),
+        usage=child.get("usage", {}),
+        cancelled=child.get("cancelled", False),
+        stage=child.get("stage", "DONE"),
+        fix_retries=child.get("fix_retries", 0),
+        stage_history=child.get("stage_history", []),
+    )
 
 
 def _interactive(workspace: Path) -> None:
@@ -362,6 +458,418 @@ def _interactive(workspace: Path) -> None:
             ui(workspace, None, None, False)
             return
         _run_task(workspace, line)
+
+
+# --- ShadowCode 0.8.0 second-wave commands -----------------------------------
+
+
+@app.command()
+def background(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+    action: str = typer.Argument("list", help="list | start | stop"),
+    name: Optional[str] = typer.Option(None, "--name", help="Task name (for start)"),
+    command: Optional[str] = typer.Option(None, "--command", help="Shell command (for start)"),
+    task_id: Optional[str] = typer.Argument(None, help="Task id (for stop)"),
+) -> None:
+    """Manage background tasks: `shadow background start --name dev --command 'npm run dev'`."""
+    from shadow_agent.background import BackgroundManager
+
+    workspace = _workspace(project) if project else Path.cwd()
+    mgr = BackgroundManager()
+    if action == "list":
+        console.print(mgr.render_panel())
+        return
+    if action == "start":
+        if not command:
+            raise typer.BadParameter("--command is required for start")
+        task = mgr.start(name or "background", command, cwd=workspace)
+        console.print(f"#{task.id} {task.name} {task.status.value} pid {task.pid}")
+        return
+    if action == "stop":
+        if not task_id:
+            rows = mgr.list()
+            if not rows:
+                console.print("No background tasks.")
+                return
+            task_id = rows[0].id
+        stopped = mgr.stop(task_id)
+        if stopped is None:
+            console.print(f"[red]no task {task_id}[/red]")
+            raise typer.Exit(1)
+        console.print(f"#{stopped.id} {stopped.name} {stopped.status.value}")
+        return
+    raise typer.BadParameter(f"unknown action: {action}. Use list | start | stop")
+
+
+@app.command()
+def plugin(
+    action: str = typer.Argument("list", help="list | install | remove | registry"),
+    name: Optional[str] = typer.Argument(None, help="Plugin name (for install/remove)"),
+) -> None:
+    """Manage plugins: `shadow plugin install python-expert`."""
+    from shadow_agent.plugin_registry import PluginRegistry
+
+    reg = PluginRegistry()
+    if action == "list":
+        installed = reg.list_installed()
+        if not installed:
+            console.print("No plugins installed. Try `shadow plugin registry`.")
+            return
+        for m in installed:
+            console.print(f"  {m.name:20} {m.version:10} {m.description}")
+        return
+    if action == "registry":
+        for name_ in reg.list_registry():
+            mark = "✓" if reg.is_installed(name_) else " "
+            console.print(f"  {mark} {name_}")
+        return
+    if action == "install":
+        if not name:
+            raise typer.BadParameter("plugin name is required")
+        try:
+            manifest = reg.install(name)
+        except KeyError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        console.print(f"[green]installed[/green] {manifest.name} {manifest.version}")
+        console.print(f"  {manifest.description}")
+        return
+    if action == "remove":
+        if not name:
+            raise typer.BadParameter("plugin name is required")
+        if reg.remove(name):
+            console.print(f"[green]removed[/green] {name}")
+        else:
+            console.print(f"[red]{name} not installed[/red]")
+            raise typer.Exit(1)
+        return
+    raise typer.BadParameter(f"unknown action: {action}. Use list | install | remove | registry")
+
+
+@app.command()
+def rewind(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+    checkpoint_id: Optional[str] = typer.Argument(None, help="Checkpoint id (e.g. 001)"),
+    dimensions: str = typer.Option("files", "--dimensions", "-d", help="Comma-separated: files,conversation,agent_state,memory,git"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Rewind to a named checkpoint. `shadow rewind 001 -d files,memory`."""
+    from shadow_agent.rewind import RewindStore
+
+    workspace = _workspace(project)
+    store = RewindStore(workspace)
+    if checkpoint_id is None:
+        rows = store.list()
+        if not rows:
+            console.print("No checkpoints yet. Create one with /checkpoint <label>.")
+            return
+        for r in rows:
+            console.print(f"  {r['id']}  {r['label']:30}  files={r.get('file_count', 0)}  ts={r.get('ts', 0):.0f}")
+        return
+    dims = [d.strip() for d in dimensions.split(",") if d.strip()]
+    from shadow_agent.store import Store as _Store
+
+    result = store.restore(checkpoint_id, dimensions=dims, store=_Store())
+    if json_out:
+        console.print(json.dumps(result, indent=2, default=str))
+    else:
+        if result.get("ok"):
+            for dim, rest in result.get("restored", {}).items():
+                ok = rest.get("ok") if isinstance(rest, dict) else rest
+                console.print(f"  {dim}: {'✓' if ok else '✗'}")
+        else:
+            console.print(f"[red]{result.get('error')}[/red]")
+            raise typer.Exit(1)
+
+
+@app.command()
+def skill(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+    name: Optional[str] = typer.Argument(None, help="Skill name to run or list"),
+    list_only: bool = typer.Option(False, "--list", help="List saved skills"),
+) -> None:
+    """Run or list saved ShadowCode skills."""
+    from shadow_agent.self_skill import list_skills, load_skill
+
+    workspace = _workspace(project)
+    if list_only or name is None:
+        skills = list_skills(workspace)
+        if not skills:
+            console.print("No skills saved. Create one with /skill-create <name>.")
+            return
+        for s in skills:
+            console.print(f"  {s['name']:20}  {s['path']}")
+        return
+    body = load_skill(workspace, name)
+    if body is None:
+        console.print(f"[red]no skill named {name}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]running skill[/green] {name}")
+    result = _run_task(workspace, body)
+    raise typer.Exit(0 if result.success else 1)
+
+
+# --- ShadowCode 0.14.0 flagship 15-pillar commands ---------------------------------
+# These complement the parallel agents' commands (background/plugin/rewind/skill)
+# with the rest of the 15-pillar vision: goal, understand, why, vision, team,
+# profile, tools, status, jobs, docs, rollback, checkpoints. Additive only.
+
+
+@app.command()
+def goal(
+    task: str = typer.Argument(..., help="One-line instruction to turn into a goal"),
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+    run: bool = typer.Option(False, "--run", help="Run the agent through the milestones now"),
+) -> None:
+    """Turn a one-line instruction into a project with milestones + progress."""
+    from shadow_agent.goal import GoalStore, plan_milestones, render_goal
+
+    workspace = _workspace(project)
+    store = GoalStore()
+    milestones = plan_milestones(task)
+    g = store.create_goal(workspace, task, milestones)
+    console.print(render_goal(g))
+    if run:
+        console.print("\n[bold]Running goal through the agent…[/bold]")
+        _run_goal(workspace, g["id"])
+    raise typer.Exit(0)
+
+
+@app.command()
+def goals(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """List goals for this workspace."""
+    from shadow_agent.goal import GoalStore, render_goal
+
+    workspace = _workspace(project)
+    store = GoalStore()
+    rows = store.list_goals(workspace)
+    if not rows:
+        console.print("No goals yet. Create one with `shadow goal <task>`.")
+        raise typer.Exit()
+    for g in rows:
+        console.print(render_goal(g))
+        console.print("")
+    raise typer.Exit(0)
+
+
+@app.command()
+def status(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Show project, agent active, runtime, and milestone checklist."""
+    from shadow_agent.jobs import JobManager, render_status
+
+    workspace = _workspace(project)
+    mgr = JobManager()
+    snap = mgr.snapshot(workspace)
+    console.print(render_status(snap))
+    raise typer.Exit(0)
+
+
+@app.command()
+def jobs(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """List long-running jobs (survive the UI closing)."""
+    from shadow_agent.jobs import JobStore, render_status
+
+    workspace = _workspace(project) if project else None
+    store = JobStore()
+    rows = store.list(workspace=workspace)
+    snap = {"workspace": str(workspace) if workspace else "", "active_jobs": sum(1 for r in rows if r["status"] == "running"), "jobs": rows}
+    console.print(render_status(snap))
+    raise typer.Exit(0)
+
+
+@app.command()
+def tools(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+    install: Optional[str] = typer.Option(None, "--install", help="Install a tool pack by name"),
+) -> None:
+    """List installed + available tools (the marketplace)."""
+    from shadow_agent.tools.marketplace import install_pack, marketplace_view, render_marketplace
+    from shadow_agent.tools.registry import default_tools
+    from shadow_agent.tools.sandbox import WorkspaceSandbox
+    from shadow_agent.permissions import PermissionGate
+    from shadow_agent.config import PermissionLevel
+
+    workspace = _workspace(project)
+    sandbox = WorkspaceSandbox(workspace)
+    gate = PermissionGate(PermissionLevel.WORKSPACE)
+    reg = default_tools(sandbox, gate, 60)
+    if install:
+        added = install_pack(reg, install)
+        console.print(f"Installed {added} tool(s) from pack '{install}'.")
+        return
+    view = marketplace_view(reg)
+    console.print(render_marketplace(view))
+    raise typer.Exit(0)
+
+
+@app.command()
+def profile(
+    name: Optional[str] = typer.Argument(None, help="safe | developer | autonomous | locked"),
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Show or switch the permission profile."""
+    from shadow_agent.profiles import apply_profile, current_profile, render_profiles
+    from shadow_agent.config import save_config
+
+    workspace = _workspace(project) if project else None
+    cfg = load_config(workspace) if workspace else ensure_user_config()
+    if name:
+        try:
+            cfg, prof = apply_profile(cfg, name)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        save_config(cfg)
+        console.print(f"Profile → {prof.name}: {prof.description}")
+        raise typer.Exit(0)
+    cur = current_profile(cfg)
+    console.print(render_profiles(cur))
+    raise typer.Exit(0)
+
+
+@app.command()
+def understand(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Analyze the repo and save a project map to .shadow/memory/project.md."""
+    from shadow_agent.understand import save_project_map, render_map
+
+    workspace = _workspace(project)
+    mp = save_project_map(workspace)
+    console.print(render_map(mp))
+    console.print(f"\n[dim]Saved to {workspace}/.shadow/memory/project.md[/dim]")
+    raise typer.Exit(0)
+
+
+@app.command()
+def why(
+    target: Optional[str] = typer.Argument(None, help="File path or task id to explain"),
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Explain a change: files changed, reason, related commits."""
+    from shadow_agent.why import explain_change, render_explanation
+
+    workspace = _workspace(project)
+    expl = explain_change(workspace, target)
+    console.print(render_explanation(expl))
+    raise typer.Exit(0 if expl.get("ok") else 1)
+
+
+@app.command()
+def vision(
+    image: str = typer.Argument(..., help="Path to the screenshot to analyze"),
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Send a screenshot to a vision model for debugging analysis."""
+    from shadow_agent.vision import analyze_screenshot, render_analysis
+
+    workspace = _workspace(project)
+    cfg = load_config(workspace)
+    result = analyze_screenshot(workspace, image, cfg)
+    console.print(render_analysis(result))
+    raise typer.Exit(0 if result.get("ok") else 1)
+
+
+@app.command()
+def docs(
+    task: str = typer.Argument(..., help="What to implement, e.g. 'implement GTK 4.20 support'"),
+    url: Optional[str] = typer.Option(None, "--url", help="Documentation URL to read"),
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Research docs and plan a migration: SEARCH → READ → COMPARE → PLAN → IMPLEMENT → TEST."""
+    from shadow_agent.docs_research import plan_doc_research, render_plan
+
+    _workspace(project)
+    plan = plan_doc_research(task, url or "")
+    console.print(render_plan(plan))
+    raise typer.Exit(0)
+
+
+@app.command()
+def rollback(
+    name: str = typer.Argument(..., help="Named checkpoint to restore"),
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Restore files from a named checkpoint."""
+    from shadow_agent.checkpoints import rollback_named
+
+    workspace = _workspace(project)
+    result = rollback_named(workspace, name)
+    if result.get("ok"):
+        console.print(f"[green]Restored {result['files']} file(s) from checkpoint '{name}'[/green]")
+        for p in result.get("restored", [])[:12]:
+            console.print(f"  • {p}")
+        if result.get("git_head"):
+            console.print(f"[dim]git HEAD at checkpoint: {result['git_head'][:8]}[/dim]")
+    else:
+        console.print(f"[red]{result.get('error')}[/red]")
+        raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
+@app.command()
+def checkpoints(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """List named checkpoints in this workspace."""
+    from shadow_agent.checkpoints import list_named_checkpoints
+
+    workspace = _workspace(project)
+    rows = list_named_checkpoints(workspace)
+    if not rows:
+        console.print("No named checkpoints. Create one with the agent or `shadow rewind`.")
+        raise typer.Exit(0)
+    for r in rows:
+        console.print(f"  • {r['name']:20}  {r['files']} file(s)  git={r.get('git_head', '')[:8]}")
+    raise typer.Exit(0)
+
+
+@app.command()
+def team(
+    task: str = typer.Argument(..., help="Task for the agent team"),
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Run a multi-agent team (LEAD + ARCHITECT/CODER/TESTER/SECURITY/REVIEWER)."""
+    from shadow_agent.teams import AgentTeam
+
+    workspace = _workspace(project)
+    cfg = load_config(workspace)
+    team = AgentTeam(workspace, config=cfg)
+    report = team.run(task)
+    console.print(report.combined)
+    raise typer.Exit(0 if report.success else 1)
+
+
+def _run_goal(workspace: Path, goal_id: str) -> None:
+    """Run an agent through each milestone of a goal, marking them done as VERIFY passes."""
+    from shadow_agent.goal import GoalStore, render_goal
+
+    store = GoalStore()
+    goal = store.get_goal(goal_id)
+    if not goal:
+        console.print(f"[red]goal {goal_id} not found[/red]")
+        return
+    for milestone in goal.get("milestones", []):
+        if milestone["status"] == "done":
+            continue
+        store.update_milestone(goal_id, milestone["id"], "in_progress")
+        task_text = f"{goal['instruction']}\nMilestone: {milestone['title']}"
+        result = _run_task(workspace, task_text)
+        new_status = "done" if result.success else "failed"
+        store.update_milestone(goal_id, milestone["id"], new_status, task_id=result.task_id, detail=result.summary[:200])
+        if not result.success:
+            console.print(f"[red]Milestone failed: {milestone['title']}[/red]")
+            break
+    g = store.get_goal(goal_id)
+    if g:
+        console.print("\n[bold]Goal progress:[/bold]")
+        console.print(render_goal(g))
 
 
 def entry() -> None:

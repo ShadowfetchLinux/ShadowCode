@@ -32,6 +32,9 @@ class PermissionsConfig(BaseModel):
     require_approval_for_dangerous: bool = True
     network: bool = False
     allow_root: bool = False
+    # ShadowCode 0.8.0: the named permission profile (safe/developer/autonomous/locked).
+    # Stored explicitly so SAFE and LOCKED (which have identical flag maps) stay distinct.
+    profile: str = ""
 
 
 class GitConfig(BaseModel):
@@ -77,6 +80,11 @@ class RoutingConfig(BaseModel):
     coder: str = "mock"
     reviewer: str = "mock"
     tester: str = "mock"
+    # ShadowCode 0.8.0 visible router — per-purpose model ids.
+    architecture: str = ""
+    small_edits: str = ""
+    vision: str = ""
+    local: str = ""
 
 
 class MCPServerConfig(BaseModel):

@@ -204,7 +204,45 @@ def doctor_report(config: AppConfig, workspace: Path | None = None) -> dict[str,
 
     ok = all(item["ok"] for item in checks)
     suggestions = [f"{item['label']}: {item['fix']}" for item in checks if not item["ok"] and item["fix"]]
+    # ShadowCode 0.8.0: project-level checks (build / tests / deps / dead code /
+    # docs / git / architecture health). These run on top of the install checks
+    # and are only added when a workspace is provided.
+    if workspace is not None:
+        checks.extend(_project_checks(Path(workspace)))
+        ok = all(item["ok"] for item in checks)
+        suggestions = [f"{item['label']}: {item['fix']}" for item in checks if not item["ok"] and item["fix"]]
     return {"ok": ok, "version": __version__, "checks": checks, "suggestions": suggestions}
+
+
+def _project_checks(workspace: Path) -> list[dict[str, Any]]:
+    """Project-level health checks: build, tests, deps, dead code, docs, git, arch."""
+    from shadow_agent.understand import detect_stack, flag_debt
+
+    out: list[dict[str, Any]] = []
+
+    def add(check_id: str, ok: bool, label: str, detail: str = "", fix: str = "") -> None:
+        out.append({"id": check_id, "ok": bool(ok), "label": label, "detail": detail, "fix": fix if not ok else ""})
+
+    stack = detect_stack(workspace)
+    # Build system detected
+    add("proj-build", bool(stack["build"]), "Project build system detected", ", ".join(stack["build"]) or "none", "Add a build manifest (pyproject.toml, package.json, Cargo.toml, Makefile).")
+    # Tests present
+    add("proj-tests", bool(stack["test"]), "Project has tests", ", ".join(stack["test"]) or "none", "Add a tests/ directory or test_*.py files.")
+    # Deps declared
+    has_deps = any((workspace / m).is_file() for m in ("pyproject.toml", "package.json", "Cargo.toml", "go.mod", "requirements.txt"))
+    add("proj-deps", has_deps, "Dependencies declared", ", ".join(stack["manifests"]) or "none", "Declare dependencies in a manifest file.")
+    # Docs present
+    has_docs = (workspace / "README.md").is_file() or (workspace / "docs").is_dir()
+    add("proj-docs", has_docs, "Documentation present", "README.md" if (workspace / "README.md").is_file() else "docs/", "Add a README.md or a docs/ directory.")
+    # Git repo
+    add("proj-git", (workspace / ".git").is_dir(), "Git repository initialized", str(workspace / ".git"), "Run `git init`.")
+    # Dead code / debt flags
+    debt = flag_debt(workspace)
+    add("proj-debt", len(debt) <= 2, "Technical debt is low", f"{len(debt)} flag(s)", "; ".join(debt[:3]))
+    # Architecture: src/ layout or top-level modules
+    has_arch = (workspace / "src").is_dir() or any(p.is_dir() and not p.name.startswith(".") for p in workspace.iterdir() if (p / "__init__.py").is_file())
+    add("proj-arch", has_arch, "Project has a clear architecture", "src/ or top-level packages", "Adopt a src/ layout or organize code into packages.")
+    return out
 
 
 def doctor_fix(report: dict[str, Any], workspace: Path | None = None) -> list[str]:
