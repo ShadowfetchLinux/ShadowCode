@@ -1,14 +1,41 @@
 # Shadow Agent
 
-Linux-native autonomous coding-agent **harness**. The LLM is replaceable.
-The harness owns planning, context, tools, sandbox, git, memory, permissions,
-verification, history, subagent hooks, and the UI.
+Linux-native autonomous coding-agent **harness** with a Codex-style terminal
+composer. The LLM is replaceable. The harness owns planning, context, tools,
+sandbox, git, memory, permissions, verification, history, subagent hooks,
+the desktop UI, and the terminal UI.
 
 ```
 AGENT HARNESS → MODEL INTERFACE → LLM PROVIDER
 ```
 
-## What's new in 0.3.0
+## What's new in 0.4.0
+
+- **Codex-style terminal UI** (default landing experience when a tty is
+  attached): centered composer (Enter sends, Ctrl+J newline), scrollback
+  transcript with collapsible tool cards, Codex-style diff/proposal cards
+  with Accept/Reject hints, inline approval cards with risk labels, compact
+  status line (model · ctx% · tokens · step · working indicator), light/dark
+  themes that respect the system scheme, keyboard-first navigation.
+- **Slash command system**: built-ins (`/help /clear /new /model /config
+  /compact /undo /diff /git /branch /sessions /resume /pin /cost /doctor
+  /health /ui /quit`) plus user-defined commands loaded from
+  `.shadow/commands/*.md` (YAML front-matter + alias supported).
+- **Context meter + auto-compact** that summarizes older turns.
+- **Session branching** (fork to try a path), **pin/bookmark** messages,
+  per-session and per-task **cost/tokens**, resume any session into the TUI.
+- **Smarter doctor with auto-fix**: `shadow doctor --fix` repairs
+  secrets.env permissions, reinstalls wrapper/desktop entry/icons, and
+  regenerates a broken config.yaml.
+- **Fully general model picker**: any provider (mock, OpenAI-compatible,
+  Grok/xAI, Ollama, LM Studio, llama.cpp, vLLM, custom) selectable in
+  onboarding, settings, and per-task; free-text model id with presets +
+  detected list; `shadow models --use <id> [--provider ...] [--endpoint ...]`
+  works for any model. Default stays qwen3:14b but the user can switch to
+  gpt-oss:20b, a Grok model, an OpenAI model, etc. with one click.
+- **Codex light theme** added to the desktop UI alongside the dark theme.
+
+## What was new in 0.3.0
 
 - **First-class Ollama**: native `/api/chat` adapter with `think: false`
   (≈15× faster than the /v1 shim on thinking models like qwen3), real
@@ -52,23 +79,29 @@ cd ~/src/ShadowAgent/ui && npm install && npm run build
 ## CLI
 
 ```bash
-shadow                         # attach to cwd, interactive loop
+shadow                         # Codex-style TUI (tty) or desktop UI (headless)
 shadow /path/to/project        # attach to a project
+shadow tui                     # open the Codex-style terminal UI
+shadow tui -s <session-id>     # resume a session into the TUI
 shadow run "Create a Python hello-world project"
 shadow run "analyze, find failing tests, fix, rerun, summarize"
-shadow models
+shadow models                  # list configured + detected models
+shadow models --use qwen3:14b  # set default to any model
+shadow models --use gpt-4.1 --provider openai_compatible --endpoint https://api.openai.com/v1
 shadow config
 shadow config model.default ollama
 shadow health                  # provider ping + git/python/docker
+shadow doctor --fix            # deep checks + apply safe auto-fixes
 shadow sessions
 shadow export --format md
-shadow ui                      # desktop (same Agent API)
+shadow ui                      # desktop 4-panel UI (same Agent API)
 shadow ui --no-browser
 ```
 
-First run needs no API key. The default model is **mock**. The desktop
-opens an onboarding wizard (folder, provider, optional key, permissions)
-so a new user can run a task in under a minute.
+First run needs no API key. The default model is **qwen3:14b on Ollama** when
+Ollama is detected, else mock. The desktop UI opens an onboarding wizard
+(folder, provider, optional key, permissions) so a new user can run a task
+in under a minute.
 
 ## Desktop UI
 
@@ -76,8 +109,21 @@ One-click from the Shadow Agent app icon (`Icon=shadow-agent`).
 
 - URL: http://127.0.0.1:7430
 - Health: `curl -s http://127.0.0.1:7430/api/health`
-- Settings GUI, command palette (`Ctrl+K`), session resume, Stop, diffs,
-  git, skills editor, approvals, token usage, transcript export.
+- Settings GUI with provider presets + detected models + free-text custom
+  model registration, command palette (`Ctrl+K`), session resume + branch,
+  Stop, diffs, git, skills editor, approvals, token usage, transcript
+  export, Codex light/dark themes.
+
+## Terminal UI (Codex-style)
+
+```bash
+shadow            # in a tty, opens the Codex-style composer
+shadow tui        # explicit
+```
+
+Keybindings: `Enter` send · `Ctrl+J` newline · `Esc` cancel/overlay ·
+`Ctrl+R` rerun · `Ctrl+P` sessions · `F2` models · `↑/↓` history · `?` help.
+Slash commands listed above; custom commands live in `.shadow/commands/`.
 
 ## Config (XDG)
 
@@ -88,41 +134,33 @@ Created on first run:
 | `~/.config/shadow-agent/config.yaml` | Model, permissions, git, UI, routing |
 | `~/.config/shadow-agent/secrets.env` | API keys only (chmod 600, never YAML) |
 | `~/.local/share/shadow-agent/` | Shared data |
-| `~/.local/state/shadow-agent/shadow-agent.db` | Sessions, tasks, events, models |
+| `~/.local/state/shadow-agent/shadow-agent.db` | Sessions, tasks, events, models, pins |
 | `~/.local/state/shadow-agent/logs/events.jsonl` | Audit log |
 
 Copy [config.example.yaml](config.example.yaml). **Never put API keys in YAML.**
 Name the environment variable instead (`api_key_env`).
 
 Project overlay: `<workspace>/.shadow/config/config.yaml`  
-Skills / memory: `<workspace>/.shadow/{instructions.md,skills/,memory/}`
+Skills / memory / commands: `<workspace>/.shadow/{instructions.md,skills/,memory/,commands/}`
 
 ## Point at a real model later
 
 ```bash
+# Any installed Ollama model (auto-detected)
+shadow models --use gpt-oss:20b
+
 # Grok (xAI)
 export XAI_API_KEY=...
-shadow config model.default grok
-shadow config model.provider openai_compatible
-shadow config model.endpoint https://api.x.ai/v1
-shadow config model.api_key_env XAI_API_KEY
-shadow config model.name grok-4
+shadow models --use grok-4 --provider openai_compatible --endpoint https://api.x.ai/v1
 
 # Any OpenAI-compatible host
 export OPENAI_API_KEY=...
-shadow config model.default openai
-shadow config model.endpoint https://api.openai.com/v1
-
-# Ollama (this machine already speaks /v1)
-shadow config model.default ollama
-shadow config model.provider ollama
-shadow config model.endpoint http://127.0.0.1:11434/v1
-shadow config model.name gpt-oss:20b
+shadow models --use gpt-4.1 --provider openai_compatible --endpoint https://api.openai.com/v1
 
 # llama.cpp / vLLM / LM Studio
-shadow config model.provider llamacpp   # :8080/v1
-shadow config model.provider vllm       # :8000/v1
-shadow config model.provider local      # :1234/v1
+shadow models --use my-model --provider llamacpp --endpoint http://127.0.0.1:8080/v1
+shadow models --use my-model --provider vllm --endpoint http://127.0.0.1:8000/v1
+shadow models --use my-model --provider local --endpoint http://127.0.0.1:1234/v1
 ```
 
 ## Tests
@@ -132,7 +170,7 @@ cd ~/src/ShadowAgent
 python3 -m pytest
 ```
 
-All default tests use the mock provider (no credits).
+All default tests use the mock provider (no credits). 80 tests green.
 
 ## Security levels
 
