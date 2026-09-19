@@ -5,8 +5,10 @@ PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}"
 BIN="${HOME}/.local/bin"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/shadow-agent"
 
-# Drop a stale pip/site-packages copy so ~/.local/bin/shadow cannot import old code.
-python3 -m pip uninstall -y shadow-agent >/dev/null 2>&1 || true
+# Drop a stale pip/site-packages copy so Python cannot import the old 0.1 package.
+# Do this before writing ~/.local/bin/shadow — pip uninstall also removes that entry point.
+python3 -m pip uninstall -y shadow-agent >/dev/null 2>&1 || \
+  python3 -m pip uninstall -y shadow-agent --break-system-packages >/dev/null 2>&1 || true
 
 mkdir -p "$BIN"
 # Replace any previous wrapper (do not delete user config/sessions/memories).
