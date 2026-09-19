@@ -15,6 +15,12 @@ ui/dist/
 .env
 .env.*
 !.env.example
+secrets.env
+*.db
+*.sqlite
+sessions/
+last-workspace.txt
+mcp-token
 .coverage
 htmlcov/
 .DS_Store

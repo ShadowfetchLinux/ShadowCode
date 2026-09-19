@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "shadow-agent"
 version = "0.17.0"
-description = "Linux-native autonomous coding-agent harness with a Codex light-mode desktop UI"
+description = "Linux-native, model-agnostic coding-agent harness (Claude Code / Codex alternative)"
 readme = "README.md"
 requires-python = ">=3.12"
-authors = [{ name = "Shadowfetch" }]
+authors = [{ name = "ShadowCode", email = "209457103+ShadowfetchLinux@users.noreply.github.com" }]
 license = { text = "MIT" }
 dependencies = [
   "pydantic>=2.0",

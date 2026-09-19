@@ -1,167 +1,142 @@
-# Shadow Agent
+# ShadowCode
 
-Linux-native autonomous coding-agent **harness** with a Codex-style terminal
-composer. The LLM is replaceable. The harness owns planning, context, tools,
-sandbox, git, memory, permissions, verification, history, subagent hooks,
-the desktop UI, and the terminal UI.
+Linux-native, model-agnostic coding-agent **harness** — a Claude Code / Codex
+alternative that you run on your machine. The LLM is replaceable. The harness
+owns tools, permissions, context, memory, checkpoints, hooks, skills, MCP,
+verification, and routing.
+
+**Brand:** ShadowCode · **CLI:** `shadow` · **Desktop id:** `shadow-agent`
 
 ```
 AGENT HARNESS → MODEL INTERFACE → LLM PROVIDER
 ```
 
-## What's new in 0.5.0
+Providers: Ollama, OpenAI-compatible (OpenAI, xAI/Grok, …), LM Studio,
+llama.cpp, vLLM, or mock (tests, no credits).
 
-- **Codex light-mode desktop UI** (now the default): white canvas, very light
-  gray borders, lots of whitespace, rounded floating composer, user prompts as
-  small pill bubbles top-right with a category tag, agent output as plain text
-  blocks (no heavy bubbles), permission/action cards with `Allow ↵` /
-  `Cancel Esc` buttons. Dark mode is still available as a toggle in Settings.
-- **Enter submits the prompt** in the composer; Shift+Enter inserts a newline.
-  Multiline is still supported. The placeholder reads "Ask for follow-up
-  changes…".
-- **Abilities (Computer Use / Custom) live in Settings**, not the composer.
-  The composer stays clean: `+` attach icon, input, model dropdown, mode
-  dropdown (coder/researcher/reviewer/tester), mic, solid black submit square.
-  Below it: a "Work locally" checkbox line and a slim status line
-  (model · workspace · level · tokens · working indicator).
-- **Per-task mode** (purpose) wired through `/api/jobs` so the harness can
-  route coder/researcher/reviewer/tester.
+## Install (Linux)
 
-## What's new in 0.4.0
-
-- **Codex-style terminal UI** (default landing experience when a tty is
-  attached): centered composer (Enter sends, Ctrl+J newline), scrollback
-  transcript with collapsible tool cards, Codex-style diff/proposal cards
-  with Accept/Reject hints, inline approval cards with risk labels, compact
-  status line (model · ctx% · tokens · step · working indicator), light/dark
-  themes that respect the system scheme, keyboard-first navigation.
-- **Slash command system**: built-ins (`/help /clear /new /model /config
-  /compact /undo /diff /git /branch /sessions /resume /pin /cost /doctor
-  /health /ui /quit`) plus user-defined commands loaded from
-  `.shadow/commands/*.md` (YAML front-matter + alias supported).
-- **Context meter + auto-compact** that summarizes older turns.
-- **Session branching** (fork to try a path), **pin/bookmark** messages,
-  per-session and per-task **cost/tokens**, resume any session into the TUI.
-- **Smarter doctor with auto-fix**: `shadow doctor --fix` repairs
-  secrets.env permissions, reinstalls wrapper/desktop entry/icons, and
-  regenerates a broken config.yaml.
-- **Fully general model picker**: any provider (mock, OpenAI-compatible,
-  Grok/xAI, Ollama, LM Studio, llama.cpp, vLLM, custom) selectable in
-  onboarding, settings, and per-task; free-text model id with presets +
-  detected list; `shadow models --use <id> [--provider ...] [--endpoint ...]`
-  works for any model. Default stays qwen3:14b but the user can switch to
-  gpt-oss:20b, a Grok model, an OpenAI model, etc. with one click.
-- **Codex light theme** added to the desktop UI alongside the dark theme.
-
-## What was new in 0.3.0
-
-- **First-class Ollama**: native `/api/chat` adapter with `think: false`
-  (≈15× faster than the /v1 shim on thinking models like qwen3), real
-  tool-calling, and token usage from `prompt_eval_count`/`eval_count`.
-- **Auto-detect local servers**: Ollama, LM Studio, llama.cpp, and vLLM are
-  probed on startup; installed models appear in the UI model picker with
-  capabilities (tools/thinking), size, and context length.
-- **One-click test-and-save**: every provider preset in onboarding and
-  Settings has a live "Test connection" button; clicking a model makes it
-  the default.
-- **Per-task model override** in the composer, plus routing hints
-  (`routing.planner/coder/...`) for purpose-based model selection.
-- **Retry with backoff** on transient provider errors (429/5xx/connection),
-  visible as `model.retry` events and UI toasts.
-- **Workspace trust dialog** on first open of a new folder.
-- **Desktop notification** (`notify-send`) when a long task finishes.
-- **Diff hunk accept/reject** (stage or revert one hunk via `git apply`).
-- **Click-to-rerun** any `exec` command from the tools panel.
-- **`shadow doctor`**: deep install/config checks with auto-fix suggestions.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the control-flow and module map.
-
-## Install (Pop!_OS / Ubuntu / Debian)
+Requires Python 3.12+ and, for the desktop UI, Node.js.
 
 ```bash
-cd ~/src/ShadowAgent
+git clone https://github.com/ShadowfetchLinux/ShadowCode.git
+cd ShadowCode
 ./scripts/install-linux.sh
 ```
 
 That installs the `shadow` CLI to `~/.local/bin`, builds the desktop UI, and
-writes `~/.local/share/applications/shadow-agent.desktop`. It does **not** pin
-the app to the dock.
+writes `~/.local/share/applications/shadow-agent.desktop`.
 
 Manual:
 
 ```bash
-pip3 install -e ~/src/ShadowAgent --user
-cd ~/src/ShadowAgent/ui && npm install && npm run build
+pip3 install -e . --user
+cd ui && npm install && npm run build
 ```
+
+First run needs no API key. The default model is **qwen3:14b on Ollama** when
+Ollama is detected, otherwise mock. The desktop UI opens an onboarding wizard
+(folder, provider, optional key, permissions).
 
 ## CLI
 
 ```bash
 shadow                         # Codex-style TUI (tty) or desktop UI (headless)
 shadow /path/to/project        # attach to a project
-shadow tui                     # open the Codex-style terminal UI
-shadow tui -s <session-id>     # resume a session into the TUI
+shadow tui                     # terminal UI
+shadow tui -s <session-id>     # resume a session
 shadow run "Create a Python hello-world project"
-shadow run "analyze, find failing tests, fix, rerun, summarize"
-shadow models                  # list configured + detected models
-shadow models --use qwen3:14b  # set default to any model
+shadow run --json "review this pull request"
+shadow run --agent security "audit this workspace"
+shadow models                  # configured + detected models
+shadow models --use qwen3:14b
 shadow models --use gpt-4.1 --provider openai_compatible --endpoint https://api.openai.com/v1
 shadow config
 shadow config model.default ollama
-shadow health                  # provider ping + git/python/docker
-shadow doctor --fix            # deep checks + apply safe auto-fixes
+shadow health
+shadow doctor --fix
 shadow sessions
 shadow export --format md
-shadow ui                      # desktop 4-panel UI (same Agent API)
+shadow ui                      # desktop UI
 shadow ui --no-browser
+shadow mcp serve               # MCP over stdio
+shadow mcp serve --http 127.0.0.1:7431
+shadow mcp register            # JSON blocks for Claude Code / Cursor / Codex
 ```
 
-First run needs no API key. The default model is **qwen3:14b on Ollama** when
-Ollama is detected, else mock. The desktop UI opens an onboarding wizard
-(folder, provider, optional key, permissions) so a new user can run a task
-in under a minute.
+Other commands: `background`, `plugin`, `rewind`, `skill`, `goal`, `goals`,
+`status`, `jobs`, `tools`, `profile`, `understand`, `why`, `vision`, `docs`,
+`rollback`, `checkpoints`, `team`.
 
-## Desktop UI
-
-One-click from the Shadow Agent app icon (`Icon=shadow-agent`).
-
-- URL: http://127.0.0.1:7430
-- Health: `curl -s http://127.0.0.1:7430/api/health`
-- Settings GUI with provider presets + detected models + free-text custom
-  model registration, command palette (`Ctrl+K`), session resume + branch,
-  Stop, diffs, git, skills editor, approvals, token usage, transcript
-  export, Codex light/dark themes.
-
-## Terminal UI (Codex-style)
+## Terminal UI
 
 ```bash
-shadow            # in a tty, opens the Codex-style composer
+shadow            # in a tty
 shadow tui        # explicit
 ```
 
 Keybindings: `Enter` send · `Ctrl+J` newline · `Esc` cancel/overlay ·
 `Ctrl+R` rerun · `Ctrl+P` sessions · `F2` models · `↑/↓` history · `?` help.
-Slash commands listed above; custom commands live in `.shadow/commands/`.
+
+## Slash commands
+
+Built-ins (plus user commands from `.shadow/commands/*.md`):
+
+| Command | Purpose |
+| --- | --- |
+| `/help` `/shadowcode` `/status` | Orientation and health |
+| `/model` `/models` `/router` | Model picker and routing table |
+| `/plan` `/compact` `/expand` `/context` | Plan and context meter |
+| `/diff` `/review` `/test` `/run` `/git` `/commit` `/undo` | Workspace and git |
+| `/agents` `/team` `/mcp` `/memory` `/tools` | Subagents, MCP, memory |
+| `/understand` `/goal` `/goals` `/why` | Repo map, goals, explanations |
+| `/vision` `/docs` `/profile` | Screenshots, docs research, permission profile |
+| `/rollback` `/checkpoints` | Named restore points |
+| `/clear` `/new` `/branch` `/sessions` `/resume` `/pin` | Session UX |
+| `/cost` `/doctor` `/health` `/settings` `/ui` `/quit` | Diagnostics and exit |
+
+## Desktop UI
+
+Launch from the ShadowCode app icon (`Icon=shadow-agent`) or `shadow ui`.
+
+- URL: http://127.0.0.1:7430
+- Health: `curl -s http://127.0.0.1:7430/api/health`
+- Settings with provider presets, detected models, command palette (`Ctrl+K`),
+  session resume + branch, Stop, diffs, git, skills editor, approvals,
+  token usage, transcript export, light/dark themes.
+
+## MCP server
+
+Expose the same harness to Claude Code, Cursor, Codex, or any MCP client:
+
+```bash
+shadow mcp serve                          # stdio
+shadow mcp serve --http 127.0.0.1:7431    # HTTP/SSE (loopback)
+shadow mcp register                       # print client config blocks
+```
+
+Optional bearer token lives in `~/.config/shadow-agent/mcp-token` and is
+never stored in this repo.
 
 ## Config (XDG)
 
-Created on first run:
+Created on first run. **Never put API keys in YAML or in git.**
 
 | Path | Role |
 | --- | --- |
 | `~/.config/shadow-agent/config.yaml` | Model, permissions, git, UI, routing |
-| `~/.config/shadow-agent/secrets.env` | API keys only (chmod 600, never YAML) |
+| `~/.config/shadow-agent/secrets.env` | API keys only (chmod 600) |
 | `~/.local/share/shadow-agent/` | Shared data |
-| `~/.local/state/shadow-agent/shadow-agent.db` | Sessions, tasks, events, models, pins |
+| `~/.local/state/shadow-agent/shadow-agent.db` | Sessions, tasks, events |
 | `~/.local/state/shadow-agent/logs/events.jsonl` | Audit log |
 
-Copy [config.example.yaml](config.example.yaml). **Never put API keys in YAML.**
-Name the environment variable instead (`api_key_env`).
+Copy [config.example.yaml](config.example.yaml). Name the environment
+variable instead of embedding a key (`api_key_env`).
 
 Project overlay: `<workspace>/.shadow/config/config.yaml`  
 Skills / memory / commands: `<workspace>/.shadow/{instructions.md,skills/,memory/,commands/}`
 
-## Point at a real model later
+## Point at a real model
 
 ```bash
 # Any installed Ollama model (auto-detected)
@@ -181,21 +156,26 @@ shadow models --use my-model --provider vllm --endpoint http://127.0.0.1:8000/v1
 shadow models --use my-model --provider local --endpoint http://127.0.0.1:1234/v1
 ```
 
+## Architecture
+
+The harness owns control flow. Models reason and select tools; they do not
+own the filesystem, git, permissions, or “we are done.”
+
+- **Loop:** understand → plan → inspect → reason → tool → observe → verify
+- **Success is observed:** tests and command output decide completion
+- **Workspace sandbox:** paths resolve under the project root
+- **Security levels:** `read_only` · `workspace` (default) · `elevated` (opt-in)
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the module map.
+
 ## Tests
 
 ```bash
-cd ~/src/ShadowAgent
 python3 -m pytest
 ```
 
-All default tests use the mock provider (no credits). 80 tests green.
-
-## Security levels
-
-`read_only` · `workspace` (default) · `elevated` (opt-in).  
-Dangerous commands, `sudo`, network, and history-destroying git stay blocked
-unless policy allows them. Paths cannot leave the workspace.
+Default tests use the mock provider (no credits, no network).
 
 ## License
 
-MIT
+[MIT](LICENSE) · Copyright 2026 Shadowfetch
