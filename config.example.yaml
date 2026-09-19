@@ -1,0 +1,47 @@
+# Copy to ~/.config/shadow-agent/config.yaml (or let `shadow config` create it).
+# Never put API keys in this file. Name the environment variable instead.
+
+model:
+  default: mock
+  provider: mock
+  # Examples:
+  #   grok:     provider openai_compatible, endpoint https://api.x.ai/v1, api_key_env XAI_API_KEY
+  #   openai:   provider openai_compatible, endpoint https://api.openai.com/v1, api_key_env OPENAI_API_KEY
+  #   ollama:   provider ollama, endpoint http://127.0.0.1:11434/v1
+  #   llamacpp: provider llamacpp, endpoint http://127.0.0.1:8080/v1
+  #   vllm:     provider vllm, endpoint http://127.0.0.1:8000/v1
+  endpoint: ""
+  api_key_env: OPENAI_API_KEY
+  name: mock-coder
+  context_limit: 128000
+
+permissions:
+  level: workspace          # read_only | workspace | elevated
+  require_approval_for_dangerous: true
+  network: false
+  allow_root: false
+
+git:
+  auto_commit: false
+  allow_destructive: false
+
+logging:
+  level: info
+
+ui:
+  host: 127.0.0.1
+  port: 7430
+
+agent:
+  max_steps: 32
+  tool_timeout_sec: 60
+
+routing:
+  enabled: false
+  planner: mock
+  coder: mock
+  reviewer: mock
+  tester: mock
+
+mcp:
+  servers: []
