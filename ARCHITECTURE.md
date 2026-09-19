@@ -90,7 +90,9 @@ Audit events are always recorded.
 ## UI
 
 The desktop is a client of the Agent API, not a second agent.
-Layout: Projects/Models | Conversation/Plan/Tools | Files/Git | Terminal.
+Layout: Sessions/Projects/Models | Conversation/Plan/Tools | Files/Diff/Git/Skills/Health.
+Jobs run in a background thread. The UI streams events over SSE, can cancel
+the loop, and can approve or deny dangerous commands.
 
 ## Milestones
 

@@ -46,11 +46,19 @@ class LoggingConfig(BaseModel):
 class UIConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 7430
+    theme: str = "dark"
 
 
 class AgentConfig(BaseModel):
     max_steps: int = 32
     tool_timeout_sec: int = 60
+    parallel_reads: bool = True
+    compact_ratio: float = 0.7
+
+
+class OnboardingConfig(BaseModel):
+    completed: bool = False
+    workspace: str = ""
 
 
 class RoutingConfig(BaseModel):
@@ -80,6 +88,7 @@ class AppConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -123,6 +132,30 @@ def ensure_user_config() -> AppConfig:
     if not paths.config_file().is_file():
         save_config(AppConfig())
     return load_config()
+
+
+def apply_config_patch(values: dict[str, Any]) -> AppConfig:
+    cfg = ensure_user_config()
+    raw = _deep_merge(cfg.model_dump(mode="json"), values)
+    cfg = AppConfig.model_validate(raw)
+    save_config(cfg)
+    return cfg
+
+
+def remember_workspace(workspace: Path) -> None:
+    path = paths.last_workspace_file()
+    path.write_text(str(Path(workspace).resolve()) + "\n", encoding="utf-8")
+
+
+def last_workspace() -> Path | None:
+    path = paths.last_workspace_file()
+    if not path.is_file():
+        return None
+    raw = path.read_text(encoding="utf-8").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    return candidate if candidate.is_dir() else None
 
 
 def set_config_value(dotted: str, value: Any) -> AppConfig:

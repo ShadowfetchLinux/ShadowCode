@@ -52,6 +52,19 @@ def register_fs_tools(registry: object, sandbox: WorkspaceSandbox) -> None:
         lambda call: write_file(sandbox, call),
     )
     registry.add(
+        "apply_patch",
+        "Apply a unified diff or *** Begin Patch block to workspace files. Prefer this for multi-hunk edits.",
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Optional path when the patch has no file headers."},
+                "patch": {"type": "string"},
+                "diff": {"type": "string"},
+            },
+        },
+        lambda call: _apply_patch(sandbox, call),
+    )
+    registry.add(
         "edit_file",
         "Structured patch: replace a unique old_string, or apply line hunks. Never a blind full rewrite.",
         {
@@ -186,12 +199,9 @@ def edit_file(sandbox: WorkspaceSandbox, call: ToolCall) -> ToolResult:
     if old is not None:
         if new is None:
             return _fail(call, "new_string is required with old_string")
-        count = text.count(str(old))
-        if count == 0:
-            return _fail(call, "old_string not found")
-        if count > 1:
-            return _fail(call, "old_string is not unique")
-        updated = text.replace(str(old), str(new), 1)
+        updated, err = _replace_unique(text, str(old), str(new))
+        if updated is None:
+            return _fail(call, err)
     elif hunks:
         updated = _apply_hunks(text, hunks)
         if updated is None:
@@ -200,6 +210,49 @@ def edit_file(sandbox: WorkspaceSandbox, call: ToolCall) -> ToolResult:
         return _fail(call, "provide old_string/new_string or hunks")
     path.write_text(updated, encoding="utf-8")
     return ToolResult(id=call.id, success=True, output=json.dumps({"path": sandbox.relative(path), "patched": True}))
+
+
+def _apply_patch(sandbox: WorkspaceSandbox, call: ToolCall) -> ToolResult:
+    from shadow_agent.tools.patch import apply_patch
+
+    return apply_patch(sandbox, call)
+
+
+def _replace_unique(text: str, old: str, new: str) -> tuple[str | None, str]:
+    if old in text:
+        count = text.count(old)
+        if count == 0:
+            return None, "old_string not found"
+        if count > 1:
+            return None, "old_string is not unique"
+        return text.replace(old, new, 1), ""
+    # Whitespace-tolerant unique match (trailing spaces / newline style).
+    old_lines = old.splitlines()
+    hay = text.splitlines(keepends=True)
+    needle = [line.strip() for line in old_lines]
+    if not needle:
+        return None, "old_string not found"
+    hits: list[int] = []
+    for idx in range(0, len(hay) - len(needle) + 1):
+        window = [hay[idx + offset].rstrip("\n").strip() for offset in range(len(needle))]
+        if window == needle:
+            hits.append(idx)
+    if len(hits) == 1:
+        start = hits[0]
+        indent = hay[start][: len(hay[start]) - len(hay[start].lstrip())]
+        replacement = new.splitlines(keepends=True)
+        if not replacement and new == "":
+            replacement = []
+        elif replacement:
+            if not replacement[0].startswith((" ", "\t")) and indent:
+                replacement[0] = indent + replacement[0].lstrip()
+            if new and not new.endswith("\n"):
+                replacement[-1] = replacement[-1] + "\n" if not replacement[-1].endswith("\n") else replacement[-1]
+        updated = hay[:start] + replacement + hay[start + len(needle) :]
+        return "".join(updated), ""
+    if not hits:
+        return None, "old_string not found"
+    return None, "old_string is not unique"
 
 
 def _apply_hunks(text: str, hunks: object) -> str | None:

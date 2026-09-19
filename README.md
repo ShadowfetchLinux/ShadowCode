@@ -38,18 +38,25 @@ shadow run "analyze, find failing tests, fix, rerun, summarize"
 shadow models
 shadow config
 shadow config model.default ollama
+shadow health                  # provider ping + git/python/docker
+shadow sessions
+shadow export --format md
 shadow ui                      # desktop (same Agent API)
 shadow ui --no-browser
 ```
 
-V1 finishes without an API key. The default model is **mock**.
+First run needs no API key. The default model is **mock**. The desktop
+opens an onboarding wizard (folder, provider, optional key, permissions)
+so a new user can run a task in under a minute.
 
 ## Desktop UI
 
-Layout: Projects / Models | Conversation / Plan / Tools / Events | Files / Git / Status | Terminal event stream.
+One-click from the Shadow Agent app icon (`Icon=shadow-agent`).
 
 - URL: http://127.0.0.1:7430
 - Health: `curl -s http://127.0.0.1:7430/api/health`
+- Settings GUI, command palette (`Ctrl+K`), session resume, Stop, diffs,
+  git, skills editor, approvals, token usage, transcript export.
 
 ## Config (XDG)
 
@@ -58,6 +65,7 @@ Created on first run:
 | Path | Role |
 | --- | --- |
 | `~/.config/shadow-agent/config.yaml` | Model, permissions, git, UI, routing |
+| `~/.config/shadow-agent/secrets.env` | API keys only (chmod 600, never YAML) |
 | `~/.local/share/shadow-agent/` | Shared data |
 | `~/.local/state/shadow-agent/shadow-agent.db` | Sessions, tasks, events, models |
 | `~/.local/state/shadow-agent/logs/events.jsonl` | Audit log |

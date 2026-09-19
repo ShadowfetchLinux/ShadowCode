@@ -1,15 +1,115 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="g" x1="20" y1="20" x2="230" y2="230" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#6ad7ef"/>
-      <stop offset="1" stop-color="#7b6cf6"/>
+    <linearGradient id="sa-plate" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1c2834"/>
+      <stop offset="0.45" stop-color="#10161d"/>
+      <stop offset="1" stop-color="#090c10"/>
     </linearGradient>
+    <linearGradient id="sa-rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e4f7fb"/>
+      <stop offset="0.4" stop-color="#6bd6f0"/>
+      <stop offset="1" stop-color="#2b7d91"/>
+    </linearGradient>
+    <radialGradient id="sa-glow" cx="62%" cy="36%" r="52%">
+      <stop offset="0" stop-color="#6bd6f0" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#10161d" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sa-s" x1="0.18" y1="0.12" x2="0.86" y2="0.92">
+      <stop offset="0" stop-color="#e8fbff"/>
+      <stop offset="0.42" stop-color="#6bd6f0"/>
+      <stop offset="1" stop-color="#2a7a8c"/>
+    </linearGradient>
+    <linearGradient id="sa-s-hi" x1="0.2" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#f4feff"/>
+      <stop offset="1" stop-color="#6bd6f0"/>
+    </linearGradient>
+    <radialGradient id="sa-node" cx="35%" cy="30%" r="70%">
+      <stop offset="0" stop-color="#f4feff"/>
+      <stop offset="0.35" stop-color="#8ae6f6"/>
+      <stop offset="1" stop-color="#2b7d91"/>
+    </radialGradient>
+    <linearGradient id="sa-spark" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#8ae6f6"/>
+      <stop offset="1" stop-color="#2b7d91"/>
+    </linearGradient>
+    <filter id="sa-soft" x="-22%" y="-22%" width="144%" height="144%">
+      <feGaussianBlur stdDeviation="1.6" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="sa-plate-clip">
+      <rect x="36" y="36" width="440" height="440" rx="112"/>
+    </clipPath>
   </defs>
-  <rect width="256" height="256" rx="56" fill="#111420"/>
-  <rect x="18" y="18" width="220" height="220" rx="44" fill="none" stroke="url(#g)" stroke-width="10"/>
-  <circle cx="128" cy="118" r="28" fill="none" stroke="#7b6cf6" stroke-width="10"/>
-  <path d="M72 176c18-28 94-28 112 0" fill="none" stroke="#6ad7ef" stroke-width="10" stroke-linecap="round"/>
-  <circle cx="70" cy="78" r="7" fill="#6ad7ef"/>
-  <circle cx="186" cy="78" r="7" fill="#7b6cf6"/>
-  <path d="M77 78h22M157 78h22" stroke="#b9b1ff" stroke-width="6" stroke-linecap="round"/>
+
+  <rect x="36" y="36" width="440" height="440" rx="112" fill="url(#sa-plate)"/>
+  <rect x="36" y="36" width="440" height="440" rx="112" fill="url(#sa-glow)"/>
+  <rect x="44" y="44" width="424" height="424" rx="104" fill="none" stroke="url(#sa-rim)" stroke-width="10"/>
+  <rect x="62" y="62" width="388" height="388" rx="92" fill="none" stroke="#6bd6f0" stroke-opacity="0.15" stroke-width="2"/>
+
+  <!-- faint harness traces -->
+  <g clip-path="url(#sa-plate-clip)" opacity="0.62">
+    <g fill="none" stroke="#6bd6f0" stroke-opacity="0.30" stroke-width="3.2" stroke-linecap="round">
+      <path d="M118 250 H168"/>
+      <path d="M344 262 H394"/>
+      <path d="M256 118 V148"/>
+      <path d="M148 148 L176 176"/>
+      <path d="M364 364 L336 336"/>
+    </g>
+    <circle cx="118" cy="250" r="5" fill="#6bd6f0" opacity="0.7"/>
+    <circle cx="394" cy="262" r="5" fill="#6bd6f0" opacity="0.7"/>
+    <circle cx="256" cy="118" r="4.5" fill="#8ae6f6" opacity="0.65"/>
+    <circle cx="148" cy="148" r="4" fill="#6bd6f0" opacity="0.55"/>
+    <circle cx="364" cy="364" r="4" fill="#6bd6f0" opacity="0.55"/>
+  </g>
+
+  <!-- agent mark: circuit S + nodes + spark -->
+  <g filter="url(#sa-soft)">
+    <path d="M190 160
+             H325
+             A28 28 0 0 1 353 188
+             V222
+             A28 28 0 0 1 325 250
+             H187
+             A28 28 0 0 0 159 278
+             V322
+             A28 28 0 0 0 187 350
+             H338"
+          fill="none"
+          stroke="url(#sa-s)"
+          stroke-width="40"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+    <path d="M190 160
+             H325
+             A28 28 0 0 1 353 188
+             V222
+             A28 28 0 0 1 325 250
+             H187
+             A28 28 0 0 0 159 278
+             V322
+             A28 28 0 0 0 187 350
+             H338"
+          fill="none"
+          stroke="url(#sa-s-hi)"
+          stroke-width="14"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          opacity="0.55"/>
+
+    <circle cx="190" cy="160" r="22" fill="url(#sa-node)"/>
+    <circle cx="184" cy="154" r="7" fill="#ffffff" opacity="0.45"/>
+    <circle cx="256" cy="250" r="24" fill="url(#sa-node)"/>
+    <circle cx="249" cy="243" r="7.5" fill="#ffffff" opacity="0.5"/>
+    <circle cx="338" cy="350" r="22" fill="url(#sa-node)"/>
+    <circle cx="332" cy="344" r="7" fill="#ffffff" opacity="0.45"/>
+
+    <g transform="translate(378 148)">
+      <polygon fill="url(#sa-spark)" points="0,-26 5.2,-5.2 26,0 5.2,5.2 0,26 -5.2,5.2 -26,0 -5.2,-5.2"/>
+      <polygon fill="#e8fbff" opacity="0.85" points="0,-12 2.2,-2.2 12,0 2.2,2.2 0,12 -2.2,2.2 -12,0 -2.2,-2.2"/>
+    </g>
+  </g>
 </svg>

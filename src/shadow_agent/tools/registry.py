@@ -75,5 +75,29 @@ def default_tools(
             },
         },
         lambda call: ToolResult(id=call.id, success=True, output="plan-hook", metadata=dict(call.arguments)),
+        read_only=True,
+    )
+    registry.add(
+        "update_todos",
+        "Replace the visible todo list. Each item is {id, title, status}.",
+        {
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "status": {"type": "string"},
+                        },
+                    },
+                }
+            },
+            "required": ["todos"],
+        },
+        lambda call: ToolResult(id=call.id, success=True, output="todos-hook", metadata=dict(call.arguments)),
+        read_only=True,
     )
     return registry

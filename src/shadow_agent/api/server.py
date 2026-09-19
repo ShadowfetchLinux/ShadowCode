@@ -3,25 +3,88 @@
 from __future__ import annotations
 
 import json
-import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from shadow_agent import paths
+from shadow_agent import __version__, paths
 from shadow_agent.agent.loop import AgentRunner
-from shadow_agent.config import AppConfig, ensure_user_config, load_config, save_config, set_config_value
+from shadow_agent.approvals import ApprovalHub
+from shadow_agent.checkpoints import last_checkpoint, restore_last
+from shadow_agent.config import (
+    AppConfig,
+    PermissionLevel,
+    apply_config_patch,
+    ensure_user_config,
+    last_workspace,
+    load_config,
+    remember_workspace,
+    save_config,
+    set_config_value,
+)
+from shadow_agent.errors import friendly_error, friendly_http
 from shadow_agent.events import EventBus
+from shadow_agent.export import export_session
+from shadow_agent.health import collect_health
 from shadow_agent.models.registry import ModelRegistry
+from shadow_agent.runtime import JobManager
+from shadow_agent.secrets import has_secret, load_secrets, set_secret
 from shadow_agent.store import Store
 from shadow_agent.tools.sandbox import SandboxError, WorkspaceSandbox
 
 UI_DIST = Path(__file__).resolve().parents[3] / "ui" / "dist"
+
+PROVIDER_PRESETS: dict[str, dict[str, str]] = {
+    "mock": {"provider": "mock", "default": "mock", "name": "mock-coder", "endpoint": "", "api_key_env": "OPENAI_API_KEY"},
+    "grok": {
+        "provider": "openai_compatible",
+        "default": "grok",
+        "name": "grok-4",
+        "endpoint": "https://api.x.ai/v1",
+        "api_key_env": "XAI_API_KEY",
+    },
+    "openai": {
+        "provider": "openai_compatible",
+        "default": "openai",
+        "name": "gpt-4.1",
+        "endpoint": "https://api.openai.com/v1",
+        "api_key_env": "OPENAI_API_KEY",
+    },
+    "ollama": {
+        "provider": "ollama",
+        "default": "ollama",
+        "name": "gpt-oss:20b",
+        "endpoint": "http://127.0.0.1:11434/v1",
+        "api_key_env": "OLLAMA_API_KEY",
+    },
+    "local": {
+        "provider": "local",
+        "default": "local",
+        "name": "local-model",
+        "endpoint": "http://127.0.0.1:1234/v1",
+        "api_key_env": "OPENAI_API_KEY",
+    },
+    "llamacpp": {
+        "provider": "llamacpp",
+        "default": "llamacpp",
+        "name": "local-model",
+        "endpoint": "http://127.0.0.1:8080/v1",
+        "api_key_env": "OPENAI_API_KEY",
+    },
+    "vllm": {
+        "provider": "vllm",
+        "default": "vllm",
+        "name": "local-model",
+        "endpoint": "http://127.0.0.1:8000/v1",
+        "api_key_env": "OPENAI_API_KEY",
+    },
+}
 
 
 class RunBody(BaseModel):
@@ -32,49 +95,165 @@ class RunBody(BaseModel):
 
 class SessionBody(BaseModel):
     workspace: str
+    title: str = ""
 
 
 class ConfigPatch(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
+    api_key: str = ""
+    api_key_env: str = ""
+
+
+class OnboardBody(BaseModel):
+    workspace: str
+    provider: str = "mock"
+    model: str = ""
+    name: str = ""
+    endpoint: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    permission_level: str = "workspace"
+    theme: str = "dark"
+    network: bool = False
+
+
+class ApprovalBody(BaseModel):
+    decision: str
+
+
+class SkillsBody(BaseModel):
+    content: str = ""
+    name: str = ""
+
+
+class AttachBody(BaseModel):
+    path: str = ""
+    text: str = ""
+    filename: str = ""
+
+
+class GitCommitBody(BaseModel):
+    message: str
+    paths: list[str] = Field(default_factory=list)
+
+
+class ProjectBody(BaseModel):
+    path: str
 
 
 def create_app(store: Store | None = None, default_workspace: Path | None = None) -> FastAPI:
+    load_secrets()
     store = store or Store()
     bus = EventBus()
+    approvals = ApprovalHub()
+    jobs = JobManager(store, bus, approvals)
     registry = ModelRegistry()
     for info in registry.list_models():
         store.upsert_model(info.id, info.name, info.provider, info.endpoint, info.context_limit, info.metadata)
 
-    app = FastAPI(title="Shadow Agent", version="0.1.0")
+    app = FastAPI(title="Shadow Agent", version=__version__)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    runtime: dict[str, Any] = {"store": store, "bus": bus, "workspace": default_workspace}
+    workspace = default_workspace or last_workspace()
+    runtime: dict[str, Any] = {
+        "store": store,
+        "bus": bus,
+        "workspace": workspace,
+        "jobs": jobs,
+        "approvals": approvals,
+    }
+
+    def emit_approval(item) -> None:
+        store.add_event("approval.requested", item.to_dict(), session_id=item.payload.get("session_id"), task_id=item.payload.get("task_id"))
+
+    approvals.on_request = emit_approval
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "name": "shadow-agent", "workspace": str(runtime.get("workspace") or "")}
+        cfg = load_config(runtime.get("workspace"))
+        payload = collect_health(cfg, runtime.get("workspace"))
+        payload["ok"] = True
+        return payload
+
+    @app.get("/api/onboarding")
+    def get_onboarding() -> dict[str, Any]:
+        cfg = ensure_user_config()
+        suggested = runtime.get("workspace") or last_workspace() or Path.home()
+        return {
+            "completed": cfg.onboarding.completed,
+            "suggested_workspace": str(suggested),
+            "providers": [
+                {"id": key, **value, "needs_key": key not in {"mock", "ollama", "local", "llamacpp", "vllm"}}
+                for key, value in PROVIDER_PRESETS.items()
+            ],
+            "levels": ["read_only", "workspace", "elevated"],
+            "defaults": {
+                "provider": "mock",
+                "permission_level": "workspace",
+                "theme": "dark",
+            },
+        }
+
+    @app.post("/api/onboarding")
+    def post_onboarding(body: OnboardBody) -> dict[str, Any]:
+        workspace = Path(body.workspace).expanduser().resolve()
+        if not workspace.is_dir():
+            raise HTTPException(400, friendly_error("workspace not found"))
+        preset = PROVIDER_PRESETS.get(body.provider, PROVIDER_PRESETS["mock"])
+        key_env = body.api_key_env or preset["api_key_env"]
+        if body.api_key.strip():
+            try:
+                set_secret(key_env, body.api_key.strip())
+            except ValueError as exc:
+                raise HTTPException(400, friendly_error(exc)) from exc
+        try:
+            level = PermissionLevel(body.permission_level)
+        except ValueError as exc:
+            raise HTTPException(400, "permission_level must be read_only, workspace, or elevated") from exc
+        cfg = ensure_user_config()
+        cfg.model.provider = body.provider if body.provider in PROVIDER_PRESETS else preset["provider"]
+        cfg.model.default = body.model or preset["default"]
+        cfg.model.name = body.name or preset["name"]
+        cfg.model.endpoint = body.endpoint or preset["endpoint"]
+        cfg.model.api_key_env = key_env
+        cfg.permissions.level = level
+        cfg.permissions.network = body.network
+        cfg.ui.theme = body.theme or "dark"
+        cfg.onboarding.completed = True
+        cfg.onboarding.workspace = str(workspace)
+        save_config(cfg)
+        runtime["workspace"] = workspace
+        remember_workspace(workspace)
+        store.touch_project(workspace)
+        sid = store.create_session(str(workspace), cfg.model.default, title="Welcome")
+        return {"ok": True, "workspace": str(workspace), "session_id": sid, "config": _public_config(cfg)}
 
     @app.get("/api/config")
     def get_config() -> dict[str, Any]:
         cfg = load_config(runtime.get("workspace"))
-        return cfg.model_dump(mode="json")
+        return _public_config(cfg)
 
     @app.put("/api/config")
     def put_config(body: ConfigPatch) -> dict[str, Any]:
-        cfg = ensure_user_config()
-        raw = cfg.model_dump(mode="json")
-        raw.update(body.values)
-        cfg = AppConfig.model_validate(raw)
-        save_config(cfg)
-        return cfg.model_dump(mode="json")
+        values = dict(body.values)
+        key_env = body.api_key_env or str((values.get("model") or {}).get("api_key_env") or "")
+        if body.api_key.strip():
+            env_name = key_env or load_config().model.api_key_env
+            try:
+                set_secret(env_name, body.api_key.strip())
+            except ValueError as exc:
+                raise HTTPException(400, friendly_error(exc)) from exc
+        values.pop("api_key", None)
+        cfg = apply_config_patch(values)
+        return _public_config(cfg)
 
     @app.post("/api/config/set")
     def config_set(key: str, value: str) -> dict[str, Any]:
-        return set_config_value(key, value).model_dump(mode="json")
+        return _public_config(set_config_value(key, value))
 
     @app.get("/api/models")
     def models() -> dict[str, Any]:
@@ -84,13 +263,25 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     def projects() -> dict[str, Any]:
         return {"projects": store.list_projects()}
 
+    @app.post("/api/projects")
+    def open_project(body: ProjectBody) -> dict[str, Any]:
+        workspace = Path(body.path).expanduser().resolve()
+        if not workspace.is_dir():
+            raise HTTPException(400, friendly_error("workspace not found"))
+        runtime["workspace"] = workspace
+        remember_workspace(workspace)
+        pid = store.touch_project(workspace)
+        sid = store.create_session(str(workspace), load_config(workspace).model.default, title=workspace.name)
+        return {"id": pid, "path": str(workspace), "session_id": sid}
+
     @app.post("/api/sessions")
     def create_session(body: SessionBody) -> dict[str, Any]:
         workspace = Path(body.workspace).expanduser().resolve()
         if not workspace.is_dir():
-            raise HTTPException(400, "workspace not found")
+            raise HTTPException(400, friendly_error("workspace not found"))
         runtime["workspace"] = workspace
-        sid = store.create_session(str(workspace))
+        remember_workspace(workspace)
+        sid = store.create_session(str(workspace), load_config(workspace).model.default, title=body.title)
         store.touch_project(workspace)
         return {"id": sid, "workspace": str(workspace)}
 
@@ -102,19 +293,28 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     def session(session_id: str) -> dict[str, Any]:
         row = store.get_session(session_id)
         if not row:
-            raise HTTPException(404, "session not found")
+            raise HTTPException(404, friendly_http(404, "session not found"))
         row["tasks"] = store.list_tasks(session_id)
-        row["events"] = store.list_events(session_id=session_id, limit=200)
+        row["events"] = store.list_events(session_id=session_id, limit=400)
         return row
+
+    @app.get("/api/sessions/{session_id}/export")
+    def session_export(session_id: str, format: str = "md"):
+        try:
+            body, media = export_session(store, session_id, fmt=format)
+        except KeyError as exc:
+            raise HTTPException(404, friendly_http(404, "session not found")) from exc
+        filename = f"shadow-session-{session_id[:8]}.{ 'json' if format == 'json' else 'md'}"
+        return PlainTextResponse(body, media_type=media, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     @app.post("/api/sessions/{session_id}/run")
     def run_session(session_id: str, body: RunBody) -> dict[str, Any]:
         row = store.get_session(session_id)
         if not row:
-            raise HTTPException(404, "session not found")
+            raise HTTPException(404, friendly_http(404, "session not found"))
         workspace = Path(body.workspace or row["workspace"])
         runtime["workspace"] = workspace
-        runner = AgentRunner(workspace, store=store, events=bus, session_id=session_id)
+        runner = AgentRunner(workspace, store=store, events=bus, session_id=session_id, approval_hub=approvals)
         result = runner.run(body.task)
         return result.model_dump(mode="json")
 
@@ -122,11 +322,75 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     def run_direct(body: RunBody) -> dict[str, Any]:
         workspace = Path(body.workspace or runtime.get("workspace") or Path.cwd()).resolve()
         if not workspace.is_dir():
-            raise HTTPException(400, "workspace not found")
+            raise HTTPException(400, friendly_error("workspace not found"))
         runtime["workspace"] = workspace
-        runner = AgentRunner(workspace, store=store, events=bus, session_id=body.session_id)
+        runner = AgentRunner(workspace, store=store, events=bus, session_id=body.session_id, approval_hub=approvals)
         result = runner.run(body.task)
         return result.model_dump(mode="json")
+
+    @app.post("/api/jobs")
+    def start_job(body: RunBody) -> dict[str, Any]:
+        workspace = Path(body.workspace or runtime.get("workspace") or Path.cwd()).resolve()
+        if not workspace.is_dir():
+            raise HTTPException(400, friendly_error("workspace not found"))
+        runtime["workspace"] = workspace
+        remember_workspace(workspace)
+        store.touch_project(workspace)
+        job = jobs.start(workspace, body.task, session_id=body.session_id)
+        return job.to_dict()
+
+    @app.get("/api/jobs")
+    def list_jobs() -> dict[str, Any]:
+        return {"jobs": [job.to_dict() for job in jobs.list_active()]}
+
+    @app.get("/api/jobs/current")
+    def current_job(session_id: str | None = None) -> dict[str, Any]:
+        job = jobs.current(session_id)
+        return {"job": job.to_dict() if job else None}
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: str) -> dict[str, Any]:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        return job.to_dict()
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str) -> dict[str, Any]:
+        try:
+            return jobs.cancel(job_id).to_dict()
+        except KeyError as exc:
+            raise HTTPException(404, "job not found") from exc
+
+    @app.post("/api/run/cancel")
+    def cancel_current(session_id: str | None = None) -> dict[str, Any]:
+        job = jobs.current(session_id)
+        if not job:
+            return {"ok": True, "stopped": []}
+        jobs.cancel(job.id)
+        return {"ok": True, "stopped": [job.id]}
+
+    @app.get("/api/jobs/{job_id}/events")
+    def job_events(job_id: str) -> StreamingResponse:
+        def gen():
+            seen = 0
+            while True:
+                job = jobs.get(job_id)
+                if job is None:
+                    yield f"data: {json.dumps({'type': 'error', 'payload': {'error': 'unknown job'}})}\n\n"
+                    return
+                rows = store.list_events(session_id=job.session_id, limit=800)
+                if len(rows) > seen:
+                    for row in rows[seen:]:
+                        yield f"data: {json.dumps(row, default=str)}\n\n"
+                    seen = len(rows)
+                if job.status in {"completed", "failed", "cancelled"} and len(rows) <= seen:
+                    yield f"data: {json.dumps({'type': 'job.done', 'payload': job.to_dict()})}\n\n"
+                    return
+                yield ": keepalive\n\n"
+                time.sleep(0.25)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.get("/api/events")
     def events(session_id: str | None = None, limit: int = 200) -> dict[str, Any]:
@@ -136,19 +400,35 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     def session_events(session_id: str) -> StreamingResponse:
         def gen():
             seen = 0
+            idle = 0
             while True:
-                rows = store.list_events(session_id=session_id, limit=500)
+                rows = store.list_events(session_id=session_id, limit=800)
                 if len(rows) > seen:
                     for row in rows[seen:]:
                         yield f"data: {json.dumps(row, default=str)}\n\n"
                     seen = len(rows)
+                    idle = 0
                 else:
                     yield ": keepalive\n\n"
-                import time
-
+                    idle += 1
+                if idle > 80:
+                    return
                 time.sleep(0.4)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.get("/api/approvals")
+    def list_approvals(session_id: str | None = None) -> dict[str, Any]:
+        return {"approvals": approvals.list_pending(session_id)}
+
+    @app.post("/api/approvals/{approval_id}")
+    def decide_approval(approval_id: str, body: ApprovalBody) -> dict[str, Any]:
+        try:
+            return approvals.decide(approval_id, body.decision)
+        except KeyError as exc:
+            raise HTTPException(404, "approval not found") from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/workspace/files")
     def workspace_files(path: str = ".") -> dict[str, Any]:
@@ -157,14 +437,19 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         try:
             root = sandbox.resolve(path)
         except SandboxError as exc:
-            raise HTTPException(400, str(exc)) from exc
+            raise HTTPException(400, friendly_error(exc)) from exc
         entries = []
         if root.is_dir():
-            for child in sorted(root.iterdir()):
-                if child.name in {".git", "__pycache__", "node_modules"}:
+            for child in sorted(root.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+                if child.name in {".git", "__pycache__", "node_modules", ".venv"}:
                     continue
                 entries.append({"name": child.name, "path": sandbox.relative(child), "type": "dir" if child.is_dir() else "file"})
-        return {"path": path, "entries": entries, "workspace": str(workspace)}
+        parent = ""
+        if path not in {"", ".", workspace.name}:
+            parent = str(Path(path).parent)
+            if parent == ".":
+                parent = "."
+        return {"path": path, "parent": parent, "entries": entries, "workspace": str(workspace)}
 
     @app.get("/api/workspace/file")
     def workspace_file(path: str) -> dict[str, Any]:
@@ -173,16 +458,37 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         try:
             target = sandbox.resolve(path, must_exist=True)
         except SandboxError as exc:
-            raise HTTPException(400, str(exc)) from exc
+            raise HTTPException(400, friendly_error(exc)) from exc
         if not target.is_file():
             raise HTTPException(400, "not a file")
         try:
             text = target.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
-            raise HTTPException(400, "binary file") from exc
+            raise HTTPException(400, friendly_error("binary file")) from exc
         if len(text) > 200_000:
             text = text[:200_000] + "\n…[truncated]…"
         return {"path": path, "content": text}
+
+    @app.get("/api/workspace/diff")
+    def workspace_diff(path: str = "") -> dict[str, Any]:
+        workspace = _ws(runtime)
+        import subprocess
+
+        args = ["git", "diff", "--", path] if path else ["git", "diff"]
+        proc = subprocess.run(args, cwd=workspace, capture_output=True, text=True, check=False)
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--", path] if path else ["git", "diff", "--cached"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return {
+            "path": path,
+            "diff": proc.stdout,
+            "staged": staged.stdout,
+            "hunks": _parse_diff_hunks(proc.stdout or staged.stdout),
+        }
 
     @app.get("/api/workspace/git")
     def workspace_git() -> dict[str, Any]:
@@ -193,11 +499,38 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             proc = subprocess.run(["git", *args], cwd=workspace, capture_output=True, text=True, check=False)
             return proc.stdout or proc.stderr
 
+        porcelain = git("status", "--porcelain=v1", "-b")
         return {
             "status": git("status", "-sb"),
-            "log": git("log", "-8", "--oneline"),
+            "porcelain": porcelain,
+            "log": git("log", "-12", "--oneline", "--decorate"),
             "diff": git("diff", "--stat"),
+            "files": _parse_porcelain(porcelain),
+            "repo": (workspace / ".git").exists(),
         }
+
+    @app.post("/api/workspace/git/add")
+    def git_add(body: GitCommitBody) -> dict[str, Any]:
+        workspace = _ws(runtime)
+        import subprocess
+
+        paths_ = body.paths or ["."]
+        proc = subprocess.run(["git", "add", "--", *paths_], cwd=workspace, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            raise HTTPException(400, friendly_error(proc.stderr or "git add failed"))
+        return {"ok": True, "stdout": proc.stdout}
+
+    @app.post("/api/workspace/git/commit")
+    def git_commit(body: GitCommitBody) -> dict[str, Any]:
+        workspace = _ws(runtime)
+        import subprocess
+
+        if body.paths:
+            subprocess.run(["git", "add", "--", *body.paths], cwd=workspace, capture_output=True, text=True, check=False)
+        proc = subprocess.run(["git", "commit", "-m", body.message], cwd=workspace, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            raise HTTPException(400, friendly_error(proc.stderr or "git commit failed"))
+        return {"ok": True, "stdout": proc.stdout}
 
     @app.get("/api/workspace/status")
     def workspace_status() -> dict[str, Any]:
@@ -208,7 +541,72 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             "model": cfg.model.model_dump(),
             "permissions": cfg.permissions.model_dump(),
             "session": store.list_sessions(limit=1),
+            "onboarding": cfg.onboarding.model_dump(),
+            "usage": (store.list_sessions(limit=1) or [{}])[0].get("usage_json"),
         }
+
+    @app.get("/api/workspace/instructions")
+    def get_instructions() -> dict[str, Any]:
+        workspace = _ws(runtime)
+        path = workspace / ".shadow" / "instructions.md"
+        return {"path": ".shadow/instructions.md", "content": path.read_text(encoding="utf-8") if path.is_file() else "", "exists": path.is_file()}
+
+    @app.put("/api/workspace/instructions")
+    def put_instructions(body: SkillsBody) -> dict[str, Any]:
+        workspace = _ws(runtime)
+        path = workspace / ".shadow" / "instructions.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body.content, encoding="utf-8")
+        return {"ok": True, "path": ".shadow/instructions.md"}
+
+    @app.get("/api/workspace/skills")
+    def get_skills() -> dict[str, Any]:
+        workspace = _ws(runtime)
+        skill_dir = workspace / ".shadow" / "skills"
+        items = []
+        if skill_dir.is_dir():
+            for path in sorted(skill_dir.glob("*.md")):
+                items.append({"name": path.stem, "path": f".shadow/skills/{path.name}", "content": path.read_text(encoding="utf-8")})
+        return {"skills": items}
+
+    @app.put("/api/workspace/skills")
+    def put_skill(body: SkillsBody) -> dict[str, Any]:
+        name = (body.name or "skill").strip().replace(" ", "-")
+        if not name or "/" in name or name.startswith("."):
+            raise HTTPException(400, "invalid skill name")
+        workspace = _ws(runtime)
+        path = workspace / ".shadow" / "skills" / f"{name}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body.content, encoding="utf-8")
+        return {"ok": True, "name": name, "path": f".shadow/skills/{name}.md"}
+
+    @app.post("/api/workspace/attach")
+    def attach_file(body: AttachBody) -> dict[str, Any]:
+        workspace = _ws(runtime)
+        sandbox = WorkspaceSandbox(workspace)
+        rel = body.path.strip()
+        if not rel:
+            name = body.filename.strip() or f"note-{int(time.time())}.md"
+            rel = f".shadow/attachments/{name}"
+        try:
+            target = sandbox.resolve(rel)
+        except SandboxError as exc:
+            raise HTTPException(400, friendly_error(exc)) from exc
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body.text, encoding="utf-8")
+        return {"ok": True, "path": sandbox.relative(target)}
+
+    @app.get("/api/checkpoints")
+    def checkpoints() -> dict[str, Any]:
+        pointer = last_checkpoint(_ws(runtime))
+        return {"last": pointer}
+
+    @app.post("/api/checkpoints/undo")
+    def undo_checkpoint() -> dict[str, Any]:
+        result = restore_last(_ws(runtime))
+        if not result.get("ok"):
+            raise HTTPException(400, result.get("error") or "undo failed")
+        return result
 
     if UI_DIST.is_dir():
         app.mount("/assets", StaticFiles(directory=UI_DIST / "assets"), name="assets")
@@ -224,6 +622,15 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     return app
 
 
+def _public_config(cfg: AppConfig) -> dict[str, Any]:
+    data = cfg.model_dump(mode="json")
+    data["secrets"] = {
+        "api_key_env": cfg.model.api_key_env,
+        "key_present": has_secret(cfg.model.api_key_env) if cfg.model.provider != "mock" else True,
+    }
+    return data
+
+
 def _ws(runtime: dict[str, Any]) -> Path:
     workspace = runtime.get("workspace")
     if workspace is None:
@@ -231,8 +638,38 @@ def _ws(runtime: dict[str, Any]) -> Path:
     return Path(workspace)
 
 
+def _parse_porcelain(text: str) -> list[dict[str, str]]:
+    files: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if line.startswith("##") or len(line) < 4:
+            continue
+        files.append({"index": line[0], "work": line[1], "path": line[3:], "label": line[:2].strip() or "M"})
+    return files
+
+
+def _parse_diff_hunks(diff: str) -> list[dict[str, Any]]:
+    hunks: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            if current:
+                hunks.append(current)
+            current = {"header": line, "lines": []}
+        elif current is not None:
+            kind = "ctx"
+            if line.startswith("+") and not line.startswith("+++"):
+                kind = "add"
+            elif line.startswith("-") and not line.startswith("---"):
+                kind = "del"
+            current["lines"].append({"kind": kind, "text": line[1:] if line[:1] in "+- " else line})
+    if current:
+        hunks.append(current)
+    return hunks
+
+
 def serve(host: str = "127.0.0.1", port: int = 7430, workspace: Path | None = None) -> None:
     import uvicorn
 
+    load_secrets()
     app = create_app(default_workspace=workspace)
     uvicorn.run(app, host=host, port=port, log_level="info")

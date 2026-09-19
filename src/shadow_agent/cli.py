@@ -1,4 +1,4 @@
-"""shadow | shadow /path | shadow run \"…\" | shadow models | shadow config | shadow ui"""
+"""shadow | shadow /path | shadow run \"…\" | shadow models | shadow config | shadow ui | shadow health"""
 
 from __future__ import annotations
 
@@ -11,13 +11,16 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-_COMMANDS = {"run", "models", "config", "ui"}
+_COMMANDS = {"run", "models", "config", "ui", "health", "doctor", "export", "sessions"}
 
 from shadow_agent import __version__, paths
 from shadow_agent.agent.loop import AgentRunner
-from shadow_agent.config import ensure_user_config, load_config, set_config_value
+from shadow_agent.config import ensure_user_config, last_workspace, load_config, remember_workspace, set_config_value
 from shadow_agent.events import EventBus
+from shadow_agent.export import export_session
+from shadow_agent.health import collect_health
 from shadow_agent.models.registry import ModelRegistry
+from shadow_agent.secrets import load_secrets
 from shadow_agent.store import Store
 
 app = typer.Typer(
@@ -35,12 +38,25 @@ def _workspace(project: Optional[Path]) -> Path:
     return path
 
 
+def _ui_workspace(project: Optional[Path]) -> Path:
+    if project is not None:
+        return _workspace(project)
+    env_ws = os.environ.get("SHADOW_AGENT_WORKSPACE")
+    if env_ws:
+        return _workspace(Path(env_ws))
+    remembered = last_workspace()
+    if remembered is not None:
+        return remembered
+    return Path.cwd().resolve()
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
     version: bool = typer.Option(False, "--version", help="Show version and exit"),
     project: Optional[Path] = typer.Option(None, "--project", "-p", help="Workspace path"),
 ) -> None:
+    load_secrets()
     if version:
         console.print(f"shadow-agent {__version__}")
         raise typer.Exit()
@@ -98,7 +114,8 @@ def ui(
     no_browser: bool = typer.Option(False, "--no-browser"),
 ) -> None:
     """Start the desktop Agent API + UI on loopback."""
-    workspace = _workspace(project) if project else Path.cwd()
+    workspace = _ui_workspace(project)
+    remember_workspace(workspace)
     cfg = load_config(workspace)
     bind_host = host or cfg.ui.host
     bind_port = port or cfg.ui.port
@@ -110,6 +127,67 @@ def ui(
     from shadow_agent.desktop import launch_desktop
 
     launch_desktop(workspace, bind_host, bind_port)
+
+
+@app.command()
+def health(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Ping the configured provider and detect git / python / docker."""
+    workspace = _ui_workspace(project)
+    cfg = load_config(workspace)
+    payload = collect_health(cfg, workspace)
+    console.print(json.dumps(payload, indent=2))
+    provider_ok = bool(payload.get("provider", {}).get("ok"))
+    raise typer.Exit(0 if payload.get("ok") and provider_ok else 1)
+
+
+@app.command()
+def doctor(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+) -> None:
+    """Alias for health."""
+    health(project)
+
+
+@app.command()
+def sessions() -> None:
+    """List recent sessions."""
+    store = Store()
+    rows = store.list_sessions()
+    if not rows:
+        console.print("No sessions yet. Run a task or open the UI.")
+        return
+    for row in rows:
+        title = row.get("title") or "(untitled)"
+        console.print(f"{row['id'][:8]}  {row['status']:10}  {title}  {row['workspace']}")
+
+
+@app.command("export")
+def export_cmd(
+    session_id: Optional[str] = typer.Option(None, "--session", "-s"),
+    fmt: str = typer.Option("md", "--format"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o"),
+) -> None:
+    """Write a session transcript to Markdown or JSON."""
+    store = Store()
+    sid = session_id
+    if not sid:
+        rows = store.list_sessions(limit=1)
+        if not rows:
+            console.print("No sessions to export.")
+            raise typer.Exit(1)
+        sid = rows[0]["id"]
+    try:
+        body, _media = export_session(store, sid, fmt=fmt)
+    except KeyError:
+        console.print("Session not found.")
+        raise typer.Exit(1)
+    if output:
+        output.write_text(body, encoding="utf-8")
+        console.print(f"wrote {output}")
+        return
+    console.print(body)
 
 
 def _run_task(workspace: Path, task: str):
@@ -130,10 +208,16 @@ def _run_task(workspace: Path, task: str):
         elif etype == "tool.completed":
             ok = "ok" if payload.get("success") else "fail"
             console.print(f"  ← {payload.get('tool')} [{ok}]")
+        elif etype == "tool.parallel":
+            console.print(f"  ∥ {payload.get('count')} read tools")
         elif etype in {"test.failed", "test.passed"}:
             console.print(f"[yellow]{etype}[/yellow]")
+        elif etype == "model.delta":
+            pass
         elif etype == "agent.completed":
-            console.print(f"[bold]{etype}[/bold] success={payload.get('success')}")
+            usage = payload.get("usage") or {}
+            extra = f"  tokens={usage.get('total_tokens', 0)}" if usage else ""
+            console.print(f"[bold]{etype}[/bold] success={payload.get('success')}{extra}")
 
     bus.subscribe(None, printer)
     runner = AgentRunner(workspace, config=cfg, store=store, events=bus)
@@ -148,7 +232,9 @@ def _interactive(workspace: Path) -> None:
     overlay = load_config(workspace)
     console.print(f"Shadow Agent {__version__}  ·  {workspace}")
     console.print(f"model={overlay.model.default}  provider={overlay.model.provider}  level={overlay.permissions.level.value}")
-    console.print("Type a task, or /quit  /models  /config  /ui")
+    if not overlay.onboarding.completed:
+        console.print("First run: type a task, or run [bold]shadow ui[/bold] for the 60-second setup wizard.")
+    console.print("Type a task, or /quit  /models  /config  /ui  /health")
     while True:
         try:
             line = console.input("[bold]>[/bold] ").strip()
@@ -165,6 +251,12 @@ def _interactive(workspace: Path) -> None:
         if line == "/config":
             config_cmd(None, None)
             continue
+        if line in {"/health", "/doctor"}:
+            try:
+                health(workspace)
+            except typer.Exit:
+                pass
+            continue
         if line == "/ui":
             ui(workspace, None, None, False)
             return
@@ -173,6 +265,7 @@ def _interactive(workspace: Path) -> None:
 
 def entry() -> None:
     """Allow `shadow /path/to/project` without stealing subcommands."""
+    load_secrets()
     args = sys.argv[1:]
     if args and not args[0].startswith("-") and args[0] not in _COMMANDS:
         candidate = Path(args[0]).expanduser()

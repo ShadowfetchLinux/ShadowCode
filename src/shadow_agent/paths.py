@@ -73,3 +73,17 @@ def plugins_dir() -> Path:
     path = config_dir() / "plugins"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def secrets_file() -> Path:
+    return config_dir() / "secrets.env"
+
+
+def last_workspace_file() -> Path:
+    return state_dir() / "last-workspace.txt"
+
+
+def checkpoints_root() -> Path:
+    path = state_dir() / "checkpoints"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

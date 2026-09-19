@@ -31,10 +31,16 @@ logging:
 ui:
   host: 127.0.0.1
   port: 7430
+  theme: dark
 
 agent:
   max_steps: 32
   tool_timeout_sec: 60
+  parallel_reads: true
+
+onboarding:
+  completed: false
+  workspace: ""
 
 routing:
   enabled: false

@@ -33,7 +33,14 @@ def _call(name: str, **arguments: object) -> ToolCall:
 
 
 def _resp(text: str = "", calls: list[ToolCall] | None = None, finish: bool = False) -> ChatResponse:
-    return ChatResponse(text=text, tool_calls=calls or [], finish=finish)
+    prompt = max(8, len(text) // 4)
+    completion = max(4, sum(len(str(c.arguments)) for c in (calls or [])) // 4 or 16)
+    return ChatResponse(
+        text=text,
+        tool_calls=calls or [],
+        finish=finish,
+        usage={"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion},
+    )
 
 
 def _last_user(messages: list[Message]) -> str:

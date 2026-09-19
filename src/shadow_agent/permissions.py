@@ -18,6 +18,7 @@ READ_TOOLS = {
     "git_log",
     "git_branch",
     "update_plan",
+    "update_todos",
 }
 
 WRITE_TOOLS = {
@@ -26,6 +27,7 @@ WRITE_TOOLS = {
     "create_directory",
     "move_file",
     "delete_file",
+    "apply_patch",
     "exec",
     "kill",
     "git_add",

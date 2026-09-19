@@ -16,6 +16,16 @@ def test_cli_models_and_config(isolated):
     assert "shadow-agent" in shown.stdout or "mock" in shown.stdout
 
 
+def test_cli_help_and_health(isolated, workspace):
+    shown = runner.invoke(app, ["--help"])
+    assert shown.exit_code == 0
+    assert "health" in shown.stdout
+    assert "ui" in shown.stdout
+    check = runner.invoke(app, ["health", "-p", str(workspace)])
+    assert check.exit_code == 0
+    assert "mock" in check.stdout
+
+
 def test_cli_run_hello(isolated, workspace):
     result = runner.invoke(app, ["run", "Create a Python hello-world project", "-p", str(workspace)])
     assert result.exit_code == 0, result.stdout
