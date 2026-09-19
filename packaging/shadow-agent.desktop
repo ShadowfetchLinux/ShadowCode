@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Shadow Agent
+GenericName=Coding Agent
+Comment=Linux-native autonomous coding-agent harness
+Exec=shadow ui
+TryExec=shadow
+Icon=shadow-agent
+Terminal=false
+Categories=Development;IDE;
+Keywords=agent;llm;coding;shadowfetch;
+StartupNotify=true
+StartupWMClass=shadow-agent
+X-GNOME-UsesNotifications=false
