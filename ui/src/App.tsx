@@ -582,8 +582,11 @@ export default function App() {
           {sessions.length === 0 && <Empty title="No sessions yet" body="Run a task. It will show up here so you can resume it." />}
           {sessions.map((s) => (
             <div key={s.id} className={`item ${s.id === sessionId ? "active" : ""}`} onClick={() => void openSession(s.id)}>
-              <strong>{s.title || "Untitled"}</strong>
-              <span>{s.status} · {s.workspace.split("/").pop()}</span>
+              <strong>{s.title || "Untitled"}{s.parent_id ? " ↳" : ""}</strong>
+              <span>
+                {s.status} · {s.workspace.split("/").pop()}
+                <button className="mini" title="Fork this session to try a path" onClick={(e) => { e.stopPropagation(); void api.branchSession(s.id).then((b) => { pushToast(`Branched → ${b.id.slice(0,8)}`, "ok"); void refresh(); }); }}>Branch</button>
+              </span>
             </div>
           ))}
         </div>
@@ -1186,9 +1189,18 @@ function Settings({
           </select>
         </div>
         <div className="field"><label>Endpoint</label><input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://api.x.ai/v1" /></div>
-        <div className="field"><label>Model name</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div className="field"><label>Model name</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. gpt-4.1, qwen3:14b, llama3.2 — any id your provider accepts" /></div>
         <div className="field"><label>API key env var</label><input value={keyEnv} onChange={(e) => setKeyEnv(e.target.value)} /></div>
         <div className="field"><label>Paste API key</label><input type="password" value={apiKey} onChange={(e) => onKey(e.target.value)} placeholder="leave blank to keep the current secret" /></div>
+        <div className="field">
+          <label>Register this model so it appears in the per-task dropdown</label>
+          <button className="ghost" onClick={() => {
+            if (!defaultModel) { onToast("Enter a default model id first", "err"); return; }
+            void api.registerModel(defaultModel, provider, name, endpoint).then(() => {
+              onToast(`Registered ${defaultModel} for ${provider || "openai_compatible"}`, "ok");
+            }).catch((err) => onToast(String(err), "err"));
+          }}>Register custom model</button>
+        </div>
         <div className="field"><label>Permissions</label>
           <select value={level} onChange={(e) => setLevel(e.target.value)}>
             <option value="read_only">read_only</option>
@@ -1198,7 +1210,8 @@ function Settings({
         </div>
         <div className="field"><label>Theme</label>
           <select value={theme} onChange={(e) => setTheme(e.target.value)}>
-            <option value="dark">dark</option>
+            <option value="dark">dark (Codex)</option>
+            <option value="light">light (Codex)</option>
             <option value="dim">dim</option>
           </select>
         </div>

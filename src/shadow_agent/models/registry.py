@@ -117,6 +117,28 @@ class ModelRegistry:
                 instance.num_ctx = int(info.metadata["num_ctx"])
         return instance
 
+    def register_custom(
+        self,
+        model_id: str,
+        provider: str,
+        *,
+        name: str = "",
+        endpoint: str = "",
+        api_key_env: str = "",
+        context_limit: int = 0,
+    ) -> ModelInfo:
+        """Register a free-text model the user typed (not detected)."""
+        info = ModelInfo(
+            id=model_id,
+            name=name or model_id,
+            provider=provider,
+            endpoint=endpoint,
+            context_limit=context_limit or 128000,
+            metadata={"model": name or model_id, "api_key_env": api_key_env, "custom": True},
+        )
+        self._custom[model_id] = info
+        return info
+
 
 def build_provider(
     provider: str,

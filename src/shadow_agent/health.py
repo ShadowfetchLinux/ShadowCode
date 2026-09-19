@@ -207,6 +207,53 @@ def doctor_report(config: AppConfig, workspace: Path | None = None) -> dict[str,
     return {"ok": ok, "version": __version__, "checks": checks, "suggestions": suggestions}
 
 
+def doctor_fix(report: dict[str, Any], workspace: Path | None = None) -> list[str]:
+    """Apply safe, idempotent auto-fixes. Returns a list of human descriptions."""
+    import subprocess
+
+    from shadow_agent import paths
+
+    applied: list[str] = []
+    checks = {c["id"]: c for c in report.get("checks", [])}
+
+    # secrets.env permissions
+    sec = checks.get("secrets-perms")
+    if sec and not sec["ok"] and paths.secrets_file().is_file():
+        try:
+            paths.secrets_file().chmod(0o600)
+            applied.append(f"chmod 600 {paths.secrets_file()}")
+        except OSError:
+            pass
+
+    # Reinstall wrapper / desktop entry / icons by re-running the install script
+    install_bits = [checks.get(k) for k in ("wrapper", "desktop-entry", "icon")]
+    if any(bit and not bit["ok"] for bit in install_bits if bit):
+        root = Path(__file__).resolve().parents[2]
+        script = root / "scripts" / "install-linux.sh"
+        if script.is_file():
+            proc = subprocess.run(["bash", str(script)], capture_output=True, text=True, check=False)
+            if proc.returncode == 0:
+                applied.append("reinstalled ~/.local/bin/shadow, desktop entry, and hicolor icons via scripts/install-linux.sh")
+            else:
+                applied.append(f"attempted reinstall (exit {proc.returncode}): {(proc.stderr or '').strip()[:200]}")
+
+    # Config file: if it failed to parse, back it up and regenerate a default
+    cfg_check = checks.get("config")
+    if cfg_check and not cfg_check["ok"]:
+        cfg_file = paths.config_file()
+        try:
+            if cfg_file.is_file():
+                cfg_file.rename(cfg_file.with_suffix(".yaml.broken"))
+            from shadow_agent.config import save_config, AppConfig
+
+            save_config(AppConfig())
+            applied.append(f"regenerated {cfg_file} (broken copy saved as .yaml.broken)")
+        except OSError:
+            pass
+
+    return applied
+
+
 def _provider_fix(config: AppConfig) -> str:
     provider = (config.model.provider or "").lower()
     if provider == "ollama":

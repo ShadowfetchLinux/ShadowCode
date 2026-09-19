@@ -53,6 +53,20 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     last_opened REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS session_meta (
+    session_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY(session_id, key)
+);
+CREATE TABLE IF NOT EXISTS pins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    task_id TEXT,
+    ts REAL NOT NULL,
+    label TEXT NOT NULL,
+    body TEXT NOT NULL
+);
 """
 
 
@@ -75,25 +89,117 @@ class Store:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN title TEXT")
         if "usage_json" not in session_cols:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN usage_json TEXT")
+        if "parent_id" not in session_cols:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN parent_id TEXT")
+        if "branched_at" not in session_cols:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN branched_at REAL")
         task_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(tasks)")}
         if "usage_json" not in task_cols:
             self._conn.execute("ALTER TABLE tasks ADD COLUMN usage_json TEXT")
+        # session_meta and pins tables are created by executescript (IF NOT EXISTS).
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
 
-    def create_session(self, workspace: str, model_id: str | None = None, title: str = "") -> str:
+    def create_session(
+        self,
+        workspace: str,
+        model_id: str | None = None,
+        title: str = "",
+        parent_id: str | None = None,
+    ) -> str:
         sid = uuid.uuid4().hex
         now = time.time()
         with self._lock:
             self._conn.execute(
-                "INSERT INTO sessions(id, workspace, created_at, updated_at, model_id, status, title) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (sid, workspace, now, now, model_id, "active", title),
+                "INSERT INTO sessions(id, workspace, created_at, updated_at, model_id, status, title, parent_id, branched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (sid, workspace, now, now, model_id, "active", title, parent_id, now if parent_id else None),
             )
             self._conn.commit()
         return sid
+
+    def branch_session(self, session_id: str, title: str = "") -> str:
+        """Fork a session: copy its event log so the new session starts with the
+        same transcript, but future tasks append only to the new session."""
+        parent = self.get_session(session_id)
+        if not parent:
+            raise KeyError(session_id)
+        new_id = self.create_session(parent["workspace"], parent.get("model_id"), title or f"{parent.get('title') or 'session'} (branch)", parent_id=session_id)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts, type, task_id, payload FROM events WHERE session_id = ? ORDER BY id ASC",
+                (session_id,),
+            ).fetchall()
+            for row in rows:
+                self._conn.execute(
+                    "INSERT INTO events(ts, type, session_id, task_id, payload) VALUES (?, ?, ?, ?, ?)",
+                    (row["ts"], row["type"], new_id, row["task_id"], row["payload"]),
+                )
+            self._conn.commit()
+        return new_id
+
+    def session_cost(self, session_id: str) -> dict[str, Any]:
+        """Aggregate token usage for a session and its tasks."""
+        with self._lock:
+            row = self._conn.execute("SELECT usage_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        usage: dict[str, int] = {}
+        if row and row["usage_json"]:
+            try:
+                usage = json.loads(row["usage_json"])
+            except json.JSONDecodeError:
+                usage = {}
+        tasks = self.list_tasks(session_id)
+        per_task = []
+        for task in tasks:
+            tu: dict[str, int] = {}
+            if task.get("usage_json"):
+                try:
+                    tu = json.loads(task["usage_json"])
+                except json.JSONDecodeError:
+                    tu = {}
+            per_task.append({"task_id": task["id"], "prompt": task["prompt"], "status": task["status"], "usage": tu})
+        return {"session_id": session_id, "usage": usage, "tasks": per_task}
+
+    def set_session_meta(self, session_id: str, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO session_meta(session_id, key, value) VALUES (?, ?, ?) "
+                "ON CONFLICT(session_id, key) DO UPDATE SET value=excluded.value",
+                (session_id, key, value),
+            )
+            self._conn.commit()
+
+    def get_session_meta(self, session_id: str, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM session_meta WHERE session_id = ? AND key = ?",
+                (session_id, key),
+            ).fetchone()
+        return row["value"] if row else None
+
+    def add_pin(self, session_id: str, label: str, body: str, task_id: str | None = None) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO pins(session_id, task_id, ts, label, body) VALUES (?, ?, ?, ?, ?)",
+                (session_id, task_id, time.time(), label, body),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def list_pins(self, session_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM pins WHERE session_id = ? ORDER BY id ASC",
+                (session_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_pin(self, pin_id: int) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM pins WHERE id = ?", (pin_id,))
+            self._conn.commit()
 
     def set_session_title(self, session_id: str, title: str) -> None:
         with self._lock:

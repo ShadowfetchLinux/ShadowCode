@@ -356,8 +356,20 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         if info is None:
             detected(force=True)
             info = registry.get(body.id)
-        if info is None and not body.provider:
-            raise HTTPException(404, friendly_http(404, f"unknown model: {body.id}"))
+        if info is None:
+            # Free-text model: the user typed an id that is neither builtin nor
+            # detected. Accept it as a custom entry only when a provider is
+            # explicitly supplied (the UI/CLI always sends one for free-text).
+            if not body.provider:
+                raise HTTPException(404, friendly_http(404, f"unknown model: {body.id}"))
+            info = registry.register_custom(
+                body.id,
+                body.provider.lower(),
+                name=body.name or body.id,
+                endpoint=body.endpoint or "",
+                api_key_env="",
+                context_limit=0,
+            )
         cfg = ensure_user_config()
         cfg.model.default = body.id
         cfg.model.provider = (info.provider if info else body.provider) or cfg.model.provider
@@ -367,6 +379,27 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             cfg.model.api_key_env = str(info.metadata["api_key_env"])
         if info and info.context_limit:
             cfg.model.context_limit = info.context_limit
+        save_config(cfg)
+        return _public_config(cfg)
+
+    @app.post("/api/models/register")
+    def models_register(body: ModelSelectBody) -> dict[str, Any]:
+        """Register a free-text custom model for any provider and select it."""
+        provider = (body.provider or "openai_compatible").lower()
+        info = registry.register_custom(
+            body.id,
+            provider,
+            name=body.name or body.id,
+            endpoint=body.endpoint or "",
+            api_key_env="",
+            context_limit=0,
+        )
+        store.upsert_model(info.id, info.name, info.provider, info.endpoint, info.context_limit, info.metadata)
+        cfg = ensure_user_config()
+        cfg.model.default = info.id
+        cfg.model.provider = info.provider
+        cfg.model.endpoint = body.endpoint or cfg.model.endpoint
+        cfg.model.name = body.name or info.id
         save_config(cfg)
         return _public_config(cfg)
 
@@ -443,6 +476,39 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             raise HTTPException(404, friendly_http(404, "session not found")) from exc
         filename = f"shadow-session-{session_id[:8]}.{ 'json' if format == 'json' else 'md'}"
         return PlainTextResponse(body, media_type=media, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.post("/api/sessions/{session_id}/branch")
+    def session_branch(session_id: str, body: SessionBody | None = None) -> dict[str, Any]:
+        title = (body.title if body else "") or ""
+        try:
+            new_id = store.branch_session(session_id, title)
+        except KeyError as exc:
+            raise HTTPException(404, friendly_http(404, "session not found")) from exc
+        return {"id": new_id, "parent_id": session_id}
+
+    @app.get("/api/sessions/{session_id}/cost")
+    def session_cost(session_id: str) -> dict[str, Any]:
+        if not store.get_session(session_id):
+            raise HTTPException(404, friendly_http(404, "session not found"))
+        return store.session_cost(session_id)
+
+    @app.get("/api/sessions/{session_id}/pins")
+    def session_pins(session_id: str) -> dict[str, Any]:
+        if not store.get_session(session_id):
+            raise HTTPException(404, friendly_http(404, "session not found"))
+        return {"pins": store.list_pins(session_id)}
+
+    @app.post("/api/sessions/{session_id}/pins")
+    def session_add_pin(session_id: str, body: SkillsBody) -> dict[str, Any]:
+        if not store.get_session(session_id):
+            raise HTTPException(404, friendly_http(404, "session not found"))
+        pid = store.add_pin(session_id, body.name or "pin", body.content)
+        return {"ok": True, "id": pid}
+
+    @app.delete("/api/sessions/{session_id}/pins/{pin_id}")
+    def session_delete_pin(session_id: str, pin_id: int) -> dict[str, Any]:
+        store.delete_pin(int(pin_id))
+        return {"ok": True}
 
     @app.post("/api/sessions/{session_id}/run")
     def run_session(session_id: str, body: RunBody) -> dict[str, Any]:

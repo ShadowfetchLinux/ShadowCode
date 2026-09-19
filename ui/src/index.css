@@ -352,3 +352,29 @@ button.mini.danger-text { color: var(--danger); }
   --sidebar: #141c24;
   --card: #1a2430;
 }
+
+[data-theme="light"] {
+  --bg: #f6f7f9;
+  --sidebar: #ffffff;
+  --card: #ffffff;
+  --card2: #f1f4f7;
+  --border: #d6dde3;
+  --text: #1a232b;
+  --muted: #5a6b76;
+  --dim: #8a9aa3;
+  --accent: #0a7d8c;
+  --accent-2: #0a5a66;
+  --accent-text: #0a5a66;
+  --ok: #1a9f4e;
+  --warning: #a8730a;
+  --danger: #c0334a;
+  --info: #0a7d8c;
+  --add: #1a9f4e;
+  --del: #c0334a;
+  --shadow: 0 12px 30px rgba(20, 30, 40, 0.12);
+}
+[data-theme="light"] body {
+  background:
+    radial-gradient(900px 520px at 8% -10%, rgba(10, 125, 140, 0.08), transparent 55%),
+    linear-gradient(180deg, #ffffff, var(--bg));
+}

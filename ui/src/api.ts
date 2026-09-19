@@ -34,6 +34,7 @@ export type Session = {
   title?: string;
   updated_at: number;
   usage_json?: string;
+  parent_id?: string;
 };
 export type EventRow = { ts: number; type: string; payload: Record<string, unknown>; session_id?: string; task_id?: string };
 export type FileEntry = { name: string; path: string; type: "file" | "dir" };
@@ -121,6 +122,8 @@ export const api = {
     send<ModelTestResult>("/api/models/test", "POST", body),
   selectModel: (id: string, extra: { name?: string; provider?: string; endpoint?: string } = {}) =>
     send<Record<string, unknown>>("/api/models/select", "POST", { id, ...extra }),
+  registerModel: (id: string, provider: string, name = "", endpoint = "") =>
+    send<Record<string, unknown>>("/api/models/register", "POST", { id, provider, name, endpoint }),
   projects: () => get<{ projects: Project[] }>("/api/projects"),
   openProject: (path: string) =>
     send<{ path: string; session_id: string; needs_trust?: boolean; name?: string; permissions?: Record<string, unknown> }>(
@@ -163,4 +166,15 @@ export const api = {
   attach: (filename: string, text: string) => send<{ path: string }>("/api/workspace/attach", "POST", { filename, text }),
   undo: () => send<{ ok: boolean; restored: string[] }>("/api/checkpoints/undo", "POST", {}),
   exportUrl: (sessionId: string, format: "md" | "json" = "md") => `/api/sessions/${sessionId}/export?format=${format}`,
+  branchSession: (sessionId: string, title = "") =>
+    send<{ id: string; parent_id: string }>(`/api/sessions/${sessionId}/branch`, "POST", { workspace: "", title }),
+  sessionCost: (sessionId: string) =>
+    get<{ session_id: string; usage: Record<string, number>; tasks: { task_id: string; prompt: string; status: string; usage: Record<string, number> }[] }>(
+      `/api/sessions/${sessionId}/cost`,
+    ),
+  listPins: (sessionId: string) => get<{ pins: { id: number; session_id: string; label: string; body: string; ts: number }[] }>(`/api/sessions/${sessionId}/pins`),
+  addPin: (sessionId: string, label: string, body: string) =>
+    send<{ ok: boolean; id: number }>(`/api/sessions/${sessionId}/pins`, "POST", { name: label, content: body }),
+  deletePin: (sessionId: string, pinId: number) =>
+    send<{ ok: boolean }>(`/api/sessions/${sessionId}/pins/${pinId}`, "DELETE", {}),
 };

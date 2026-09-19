@@ -11,7 +11,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-_COMMANDS = {"run", "models", "config", "ui", "health", "doctor", "export", "sessions"}
+_COMMANDS = {"run", "models", "config", "ui", "tui", "health", "doctor", "export", "sessions"}
 
 from shadow_agent import __version__, paths
 from shadow_agent.agent.loop import AgentRunner
@@ -64,7 +64,14 @@ def main(
         return
     env_ws = os.environ.get("SHADOW_AGENT_WORKSPACE")
     workspace = _workspace(project or (Path(env_ws) if env_ws else Path.cwd()))
-    _interactive(workspace)
+    # Codex-style terminal UI is the default landing experience when a tty is
+    # attached; headless callers (cron, pipes) fall back to the desktop UI.
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        from shadow_agent.tui.app import run_tui
+
+        run_tui(workspace)
+    else:
+        _interactive(workspace)
 
 
 @app.command()
@@ -80,17 +87,44 @@ def run(
 
 @app.command()
 def models(
-    detect: bool = typer.Option(False, "--detect", help="Probe local servers and list installed models"),
+    detect: bool = typer.Option(True, "--detect/--no-detect", help="Probe local servers and list installed models"),
+    use: Optional[str] = typer.Option(None, "--use", "-u", help="Set the default model to this id (free-text ok)"),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Provider for --use when the id is custom"),
+    endpoint: Optional[str] = typer.Option(None, "--endpoint", help="Endpoint for --use when the id is custom"),
 ) -> None:
-    """List registered models and the active default."""
+    """List registered + detected models across providers, or set the default."""
     cfg = ensure_user_config()
-    registry = ModelRegistry()
+    if use:
+        from shadow_agent.models.registry import ModelRegistry as _Reg
+
+        registry = _Reg()
+        info = registry.get(use)
+        if info is None:
+            prov = (provider or cfg.model.provider).lower()
+            if not prov:
+                raise typer.BadParameter("unknown model; pass --provider to register a custom one")
+            info = registry.register_custom(use, prov, name=use, endpoint=endpoint or "", api_key_env="", context_limit=0)
+        cfg.model.default = info.id
+        cfg.model.provider = info.provider
+        cfg.model.endpoint = endpoint or info.endpoint or cfg.model.endpoint
+        cfg.model.name = str(info.metadata.get("model") or info.id)
+        if info.metadata.get("api_key_env"):
+            cfg.model.api_key_env = str(info.metadata["api_key_env"])
+        if info.context_limit:
+            cfg.model.context_limit = info.context_limit
+        from shadow_agent.config import save_config
+
+        save_config(cfg)
+        console.print(f"default model → {cfg.model.default}  provider={cfg.model.provider}")
+        raise typer.Exit()
+    registry = ModelRegistry(detect=detect)
     console.print(f"default: {cfg.model.default}  provider={cfg.model.provider}")
     if cfg.model.endpoint:
         console.print(f"endpoint: {cfg.model.endpoint}  key_env={cfg.model.api_key_env}")
     for info in registry.list_models():
         mark = "*" if info.id == cfg.model.default else " "
-        console.print(f"{mark} {info.id:10} {info.provider:20} {info.endpoint}")
+        detected_tag = "detected" if info.metadata.get("detected") else ("custom" if info.metadata.get("custom") else "builtin")
+        console.print(f"{mark} {info.id:24} {info.provider:18} {detected_tag:8} {info.endpoint}")
     if detect:
         from shadow_agent.models.discovery import detect_providers
 
@@ -161,13 +195,23 @@ def health(
 def doctor(
     project: Optional[Path] = typer.Option(None, "--project", "-p"),
     json_out: bool = typer.Option(False, "--json", help="Print the raw report as JSON"),
+    fix: bool = typer.Option(False, "--fix", help="Apply safe auto-fixes (chmod secrets, reinstall wrapper/icon/desktop entry)"),
 ) -> None:
     """Deep install/config checks with auto-fix suggestions."""
-    from shadow_agent.health import doctor_report
+    from shadow_agent.health import doctor_report, doctor_fix
 
     workspace = _ui_workspace(project)
     cfg = load_config(workspace)
     report = doctor_report(cfg, workspace)
+    if fix:
+        applied = doctor_fix(report, workspace)
+        if applied:
+            console.print("[green]Applied auto-fixes:[/green]")
+            for item in applied:
+                console.print(f"  • {item}")
+        else:
+            console.print("[dim]No auto-fixable issues found.[/dim]")
+        report = doctor_report(cfg, workspace)
     if json_out:
         console.print(json.dumps(report, indent=2))
     else:
@@ -187,7 +231,7 @@ def doctor(
 
 @app.command()
 def sessions() -> None:
-    """List recent sessions."""
+    """List recent sessions (with branch marker and token totals)."""
     store = Store()
     rows = store.list_sessions()
     if not rows:
@@ -195,7 +239,27 @@ def sessions() -> None:
         return
     for row in rows:
         title = row.get("title") or "(untitled)"
-        console.print(f"{row['id'][:8]}  {row['status']:10}  {title}  {row['workspace']}")
+        branch = " ↳ branch" if row.get("parent_id") else ""
+        usage = row.get("usage_json") or ""
+        tok = ""
+        if usage:
+            try:
+                tok = f"  {json.loads(usage).get('total_tokens', 0)} tok"
+            except json.JSONDecodeError:
+                tok = ""
+        console.print(f"{row['id'][:8]}  {row['status']:10}  {title}{branch}{tok}  {row['workspace']}")
+
+
+@app.command()
+def tui(
+    project: Optional[Path] = typer.Option(None, "--project", "-p"),
+    session: Optional[str] = typer.Option(None, "--session", "-s", help="Resume a session by id (prefix match)"),
+) -> None:
+    """Open the Codex-style terminal UI."""
+    workspace = _ui_workspace(project)
+    from shadow_agent.tui.app import run_tui
+
+    run_tui(workspace, resume_session=session)
 
 
 @app.command("export")
