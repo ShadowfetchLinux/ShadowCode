@@ -204,7 +204,7 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     if detect:
         detected(force=True)
 
-    app = FastAPI(title="Shadow Agent", version=__version__)
+    app = FastAPI(title="ShadowCode", version=__version__)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

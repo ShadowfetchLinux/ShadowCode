@@ -26,7 +26,7 @@ from shadow_agent.store import Store
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=False,
-    help="Shadow Agent — Linux-native autonomous coding harness.",
+    help="ShadowCode — Linux-native autonomous coding-agent harness (brand: ShadowCode; binary: shadow).",
 )
 console = Console()
 
@@ -427,7 +427,7 @@ def _run_task_with_agent(workspace: Path, task: str, agent: str, json_out: bool 
 def _interactive(workspace: Path) -> None:
     cfg = ensure_user_config()
     overlay = load_config(workspace)
-    console.print(f"Shadow Agent {__version__}  ·  {workspace}")
+    console.print(f"ShadowCode {__version__}  ·  {workspace}")
     console.print(f"model={overlay.model.default}  provider={overlay.model.provider}  level={overlay.permissions.level.value}")
     if not overlay.onboarding.completed:
         console.print("First run: type a task, or run [bold]shadow ui[/bold] for the 60-second setup wizard.")

@@ -69,7 +69,7 @@ def make_ctx(workspace: Path, **overrides) -> CommandContext:
 
 def test_shadowcode_card(workspace: Path):
     result = dispatch_command("", make_ctx(workspace), "shadowcode")
-    assert result.kind == "card" and result.headline.startswith("Shadow Agent")
+    assert result.kind == "card" and result.headline.startswith("ShadowCode")
     assert str(workspace) in result.body
     assert "/help" in result.body
 
@@ -369,7 +369,7 @@ def test_api_commands_run_shadowcode(client):
     res = client.post("/api/commands/run", json={"name": "shadowcode", "args": ""})
     assert res.status_code == 200
     body = res.json()
-    assert body["kind"] == "card" and "Shadow Agent" in body["headline"]
+    assert body["kind"] == "card" and "ShadowCode" in body["headline"]
 
 
 def test_api_commands_run_status(client):

@@ -12,9 +12,9 @@ def friendly_error(error: Any) -> str:
     rules: list[tuple[str, str]] = [
         ("workspace not found", "That folder does not exist. Pick a project folder first."),
         ("workspace does not exist", "That folder does not exist. Pick a project folder first."),
-        ("path escapes workspace", "Shadow Agent will not touch files outside the project folder."),
+        ("path escapes workspace", "ShadowCode will not touch files outside the project folder."),
         ("not a directory", "That path is not a folder."),
-        ("binary file", "That file is binary, so Shadow Agent will not open it as text."),
+        ("binary file", "That file is binary, so ShadowCode will not open it as text."),
         ("old_string not found", "The edit missed: that text is no longer in the file. Re-read the file and try again."),
         ("old_string is not unique", "The edit is ambiguous because that text appears more than once. Add nearby lines so it is unique."),
         ("dangerous command requires elevated", "That command is blocked. Raise permissions to Elevated and approve it in the UI."),

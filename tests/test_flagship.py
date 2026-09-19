@@ -132,7 +132,7 @@ def test_api_onboarding_job_export_undo(isolated, workspace):
     assert any(item["name"] == "hello.py" for item in files["entries"])
     exported = client.get(f"/api/sessions/{session_id}/export")
     assert exported.status_code == 200
-    assert "Shadow Agent session" in exported.text
+    assert "ShadowCode session" in exported.text
     undo = client.post("/api/checkpoints/undo")
     assert undo.status_code == 200
     assert not (workspace / "hello.py").exists() or "hello.py" in undo.json()["restored"]

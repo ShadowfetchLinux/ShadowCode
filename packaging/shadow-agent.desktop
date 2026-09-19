@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=Shadow Agent
+Name=ShadowCode
 GenericName=Coding Agent
-Comment=Linux-native autonomous coding-agent harness
+Comment=ShadowCode — Linux-native autonomous coding-agent harness
 Exec=shadow ui
 TryExec=shadow
 Icon=shadow-agent

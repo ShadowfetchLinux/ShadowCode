@@ -18,7 +18,7 @@ def export_session(store: Store, session_id: str, fmt: str = "md") -> tuple[str,
         body = json.dumps({"session": session, "tasks": tasks, "events": events}, indent=2, default=str)
         return body, "application/json"
     lines = [
-        f"# Shadow Agent session",
+        f"# ShadowCode session",
         "",
         f"- id: `{session_id}`",
         f"- workspace: `{session.get('workspace')}`",

@@ -46,7 +46,7 @@ def launch_desktop(workspace: Path, host: str = "127.0.0.1", port: int = 7430) -
             break
         time.sleep(0.15)
     else:
-        raise RuntimeError(f"Shadow Agent UI failed to start. See {log}")
+        raise RuntimeError(f"ShadowCode UI failed to start. See {log}")
     _open_browser(url, profile)
 
 
@@ -62,7 +62,7 @@ def _open_browser(url: str, profile: Path) -> None:
             f"--user-data-dir={profile}",
             "--class=shadow-agent",
             "--window-size=1560,980",
-            "--window-name=Shadow Agent",
+            "--window-name=ShadowCode",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-sync",

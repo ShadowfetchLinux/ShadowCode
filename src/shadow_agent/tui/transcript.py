@@ -72,7 +72,7 @@ class TranscriptModel:
         ws = self.workspace.name
         perm = self.cfg.permissions.level.value
         model = self.status["model"] or f"{self.cfg.model.provider}/{self.cfg.model.name or self.cfg.model.default}"
-        return f"  Shadow Agent {__version__()}  ·  {ws}  ·  {model}  ·  {perm}"
+        return f"  ShadowCode {__version__()}  ·  {ws}  ·  {model}  ·  {perm}"
 
     def status_text(self) -> str:
         t = self.theme
@@ -321,7 +321,7 @@ class TranscriptModel:
 
 def _help_text() -> str:
     return """\
-Shadow Agent — keyboard cheat sheet
+ShadowCode — keyboard cheat sheet
 
   Enter                send task
   Ctrl+J              newline (linefeed)

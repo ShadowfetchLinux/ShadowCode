@@ -180,7 +180,7 @@ def _shadowcode(args: str, ctx: CommandContext) -> CommandResult:
         "shortcuts",
     ]
     body_lines += [f"  {k:22} {v}" for k, v in shortcuts]
-    return _card("◆", f"Shadow Agent {__version__}", "\n".join(body_lines))
+    return _card("◆", f"ShadowCode {__version__}", "\n".join(body_lines))
 
 
 @register("help")

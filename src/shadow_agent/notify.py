@@ -25,12 +25,12 @@ def notify_done(
     binary = shutil.which("notify-send")
     if not binary:
         return False
-    title = "Shadow Agent — task complete" if success else "Shadow Agent — task stopped"
+    title = "ShadowCode — task complete" if success else "ShadowCode — task stopped"
     first_line = (summary or task).splitlines()[0][:140]
     body = f"{task.splitlines()[0][:80]}\n{first_line}" if summary else task.splitlines()[0][:160]
     try:
         subprocess.Popen(  # noqa: S603 - fixed binary, list args, no shell
-            [binary, "-a", "Shadow Agent", "-i", "shadow-agent", title, body],
+            [binary, "-a", "ShadowCode", "-i", "shadow-agent", title, body],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
