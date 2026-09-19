@@ -306,7 +306,9 @@ def _run_task(workspace: Path, task: str):
             console.print(f"  → {payload.get('tool')} {payload.get('arguments', {})}")
         elif etype == "tool.completed":
             ok = "ok" if payload.get("success") else "fail"
-            console.print(f"  ← {payload.get('tool')} [{ok}]")
+            icon = payload.get("icon") or ("✓" if payload.get("success") else "✗")
+            headline = payload.get("headline") or payload.get("tool") or ""
+            console.print(f"  {icon} {headline}  [{ok}]")
         elif etype == "tool.parallel":
             console.print(f"  ∥ {payload.get('count')} read tools")
         elif etype in {"test.failed", "test.passed"}:

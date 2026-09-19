@@ -14,7 +14,7 @@ def test_hello_world_inspect_plan_create_run_verify(isolated, workspace, store: 
     assert (workspace / "hello.py").is_file()
     assert "Hello, World!" in (workspace / "hello.py").read_text(encoding="utf-8")
     types = [e["type"] for e in bus.history()]
-    assert "agent.planning" in types
+    assert "agent.plan" in types
     assert "tool.started" in types
     assert "agent.completed" in types
     assert any(e["type"] == "tool.started" and e["payload"].get("tool") == "exec" for e in bus.history())

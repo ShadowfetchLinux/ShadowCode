@@ -60,6 +60,7 @@ _BUILTIN_SPECS: list[dict[str, Any]] = [
     {"name": "models", "description": "Alias of /model", "builtin": True},
     {"name": "config", "description": "Show or set config values", "builtin": True},
     {"name": "compact", "description": "Summarize and compact the transcript now", "builtin": True},
+    {"name": "expand", "description": "Expand/collapse the last tool card", "builtin": True},
     {"name": "undo", "description": "Undo the last agent file changes", "builtin": True},
     {"name": "diff", "description": "Show the working-tree diff", "builtin": True},
     {"name": "git", "description": "Show git status and recent log", "builtin": True},

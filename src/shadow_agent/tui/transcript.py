@@ -25,6 +25,10 @@ class Turn:
     live: bool = False
     collapsed: bool = False
     ts: float = field(default_factory=time.time)
+    # Codex-style compact operation card fields (tool turns only).
+    icon: str = ""
+    headline: str = ""
+    full_output: str = ""
 
 
 class TranscriptModel:
@@ -43,6 +47,9 @@ class TranscriptModel:
         self.session_id = session_id
         self.turns: list[Turn] = []
         self.status = {"model": "", "context_pct": 0, "tokens": 0, "step": 0, "busy": False}
+        self.stage = "IDLE"
+        self.fix_retries = 0
+        self.max_fix_retries = 3
         self._usage_total = 0
         self._step = 0
 
@@ -73,7 +80,23 @@ class TranscriptModel:
         ctx = self.status["context_pct"]
         tok = self.status["tokens"] or self._usage_total
         step = self.status["step"]
-        return f"  {self.status['model']}{busy}  ·  ctx {ctx}%  ·  {tok} tok  ·  step {step}  ·  Enter send · Ctrl+J newline · ? help"
+        chip = self._stage_chip()
+        return f"  {self.status['model']}  ·  {chip}{busy}  ·  ctx {ctx}%  ·  {tok} tok  ·  step {step}  ·  Enter send · Ctrl+J newline · ? help"
+
+    def _stage_chip(self) -> str:
+        """Codex-style stage chip for the status line."""
+        if self.stage == "FIX":
+            return f"[ FIX · retry {self.fix_retries}/{self.max_fix_retries} ]"
+        if self.stage and self.stage != "IDLE":
+            return f"[ {self.stage} ]"
+        return "[ IDLE ]"
+
+    def set_stage(self, stage: str, fix_retries: int = 0, max_fix_retries: int = 3) -> None:
+        self.stage = stage or "IDLE"
+        if fix_retries:
+            self.fix_retries = int(fix_retries)
+        if max_fix_retries:
+            self.max_fix_retries = int(max_fix_retries)
 
     # --- turns ------------------------------------------------------------
 
@@ -90,8 +113,38 @@ class TranscriptModel:
         self.status["step"] = steps
         self.turns.append(Turn(kind="result", text=summary, ok=success))
 
-    def add_tool(self, tool: str, ok: bool | None, text: str, live: bool = False) -> None:
-        self.turns.append(Turn(kind="tool", tool=tool, ok=ok, text=text, live=live, collapsed=True))
+    def add_tool(
+        self,
+        tool: str,
+        ok: bool | None,
+        text: str,
+        live: bool = False,
+        icon: str = "",
+        headline: str = "",
+        full_output: str = "",
+    ) -> None:
+        # Codex-style compact card: collapsed by default with a one-line headline.
+        # `text` is the raw preview (kept for backward-compat / fallback).
+        turn = Turn(
+            kind="tool",
+            tool=tool,
+            ok=ok,
+            text=text,
+            live=live,
+            collapsed=True,
+            icon=icon,
+            headline=headline or text[:120],
+            full_output=full_output or text,
+        )
+        self.turns.append(turn)
+
+    def toggle_card(self, idx: int) -> None:
+        """Expand/collapse the tool card at transcript turn index `idx`."""
+        if 0 <= idx < len(self.turns) and self.turns[idx].kind == "tool":
+            self.turns[idx].collapsed = not self.turns[idx].collapsed
+
+    def tool_turn_indices(self) -> list[int]:
+        return [i for i, t in enumerate(self.turns) if t.kind == "tool"]
 
     def add_diff_card(self, path: str, diff: str) -> None:
         self.turns.append(Turn(kind="diff", tool=path, text=diff))
@@ -135,6 +188,25 @@ class TranscriptModel:
         if event_type == "agent.started":
             self._step = 0
             self.status["step"] = 0
+            self.stage = "IDLE"
+            self.fix_retries = 0
+        elif event_type in (
+            "agent.understand",
+            "agent.plan",
+            "agent.inspect",
+            "agent.act",
+            "agent.observe",
+            "agent.verify",
+            "agent.fix",
+            "agent.done",
+            "agent.failed",
+        ):
+            stage = str(payload.get("stage") or event_type.split(".", 1)[1].upper())
+            self.set_stage(
+                stage,
+                fix_retries=int(payload.get("fix_retries") or payload.get("retry") or self.fix_retries),
+                max_fix_retries=int(payload.get("max_fix_retries") or self.max_fix_retries),
+            )
         elif event_type == "model.delta" and payload.get("text"):
             # token-by-token streaming: append to the last agent turn
             text = str(payload["text"])
@@ -150,12 +222,24 @@ class TranscriptModel:
                 if not (self.turns and self.turns[-1].kind == "agent"):
                     self.add_agent(text)
         elif event_type == "tool.started":
-            self.add_tool(str(payload.get("tool") or "tool"), None, json.dumps(payload.get("arguments") or {}), live=True)
+            self.add_tool(
+                str(payload.get("tool") or "tool"),
+                None,
+                json.dumps(payload.get("arguments") or {}),
+                live=True,
+                icon="●",
+                headline=f"{payload.get('tool') or 'tool'} · running",
+                full_output="",
+            )
         elif event_type == "tool.completed":
             ok = bool(payload.get("success"))
             tool = str(payload.get("tool") or "tool")
             text = str(payload.get("output_preview") or payload.get("error") or "")
-            self.add_tool(tool, ok, text, live=False)
+            # Prefer the precomputed Codex-style card fields from the agent loop.
+            from shadow_agent.op_card import headline_for_event
+
+            icon, headline, full = headline_for_event(payload)
+            self.add_tool(tool, ok, text, live=False, icon=icon, headline=headline, full_output=full or text)
         elif event_type == "tool.parallel":
             self.add_agent(f"∥ {payload.get('count')} read tools in parallel")
         elif event_type == "approval.requested":
@@ -165,6 +249,8 @@ class TranscriptModel:
             self._usage_total = int(usage.get("total_tokens", 0)) or self._usage_total
             self.status["busy"] = False
             self.status["step"] = int(payload.get("steps") or self.status["step"])
+            self.stage = payload.get("stage") or ("DONE" if payload.get("success") else "IDLE")
+            self.fix_retries = int(payload.get("fix_retries") or self.fix_retries)
         elif event_type == "model.retry":
             self.add_agent(f"retry {payload.get('attempt')}/{payload.get('max_attempts')} after {payload.get('wait_sec')}s")
 
@@ -182,14 +268,25 @@ class TranscriptModel:
                 out.append(("class:muted", "  agent › "))
                 out.append(("", turn.text + "\n\n"))
             elif turn.kind == "tool":
-                mark = "✓" if turn.ok else ("…" if turn.live else "✗")
-                style = "class:ok" if turn.ok else ("class:muted" if turn.live else "class:danger")
-                head = f"  {mark} {turn.tool}"
+                # Codex-style compact card: one summary line + icon, collapsed by default.
+                if turn.live:
+                    mark = "…"
+                    style = "class:muted"
+                elif turn.ok is True:
+                    mark = turn.icon or "✓"
+                    style = "class:ok"
+                elif turn.ok is False:
+                    mark = turn.icon or "✗"
+                    style = "class:danger"
+                else:
+                    mark = turn.icon or "●"
+                    style = "class:muted"
+                head = f"  {mark} {turn.headline}" if turn.headline else f"  {mark} {turn.tool}"
                 if turn.live:
                     head += " · running"
                 out.append((style, head + "\n"))
-                if not turn.collapsed:
-                    out.append(("class:muted", "    " + turn.text[:600] + "\n"))
+                if not turn.collapsed and turn.full_output:
+                    out.append(("class:muted", "    " + turn.full_output[:1200] + "\n"))
                 out.append(("", "\n"))
             elif turn.kind == "diff":
                 out.append(("class:accent", f"  propose edit · {turn.tool}\n"))
@@ -232,11 +329,13 @@ Shadow Agent — keyboard cheat sheet
   Ctrl+R               rerun last task
   Ctrl+P               session picker
   F2                  model picker
+  Ctrl+O               expand/collapse last tool card
+  [  /  ]               prev / next tool card
   ↑ / ↓                history navigation
   ?                    this help
 
 Slash commands
-  /help /clear /new /model /config /compact /undo /diff /git
+  /help /clear /new /model /config /compact /expand /undo /diff /git
   /branch /sessions /resume <id> /pin /cost /doctor /health /ui /quit
 
 Custom commands live in .shadow/commands/*.md and run as tasks.

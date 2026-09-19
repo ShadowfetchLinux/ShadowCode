@@ -12,7 +12,7 @@ def test_loop_emits_core_events(isolated, workspace, store: Store, bus: EventBus
     result = runner.run("summarize this empty project")
     types = {e["type"] for e in bus.history()}
     assert "agent.started" in types
-    assert "agent.planning" in types
+    assert "agent.plan" in types
     assert "model.request" in types
     assert "agent.completed" in types
     assert result.session_id

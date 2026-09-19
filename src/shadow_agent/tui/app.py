@@ -174,6 +174,13 @@ def run_tui(workspace: Path, resume_session: str | None = None) -> None:
             model.add_agent("Compacting transcript…")
             model.compact()
             return True
+        if name == "expand":
+            indices = model.tool_turn_indices()
+            if indices:
+                model.toggle_card(indices[-1])
+            else:
+                model.add_agent("No tool cards to expand yet.")
+            return True
         if name == "undo":
             from shadow_agent.checkpoints import restore_last
 
@@ -271,6 +278,43 @@ def run_tui(workspace: Path, resume_session: str | None = None) -> None:
     @kb.add("enter", filter=~Condition(lambda: state["overlay"] is not None))
     def _(event):
         _send()
+
+    @kb.add("c-o")
+    def _(event):
+        # Codex-style expand: toggle the most recent tool card. The TUI composer
+        # owns Enter for sending, so Ctrl+O is the expand shortcut. `[` / `]`
+        # move between cards; ? help lists it.
+        indices = model.tool_turn_indices()
+        if not indices:
+            return
+        idx = state.get("card_idx", -1)
+        if idx not in indices:
+            idx = indices[-1]
+        model.toggle_card(idx)
+
+    @kb.add("[")
+    def _(event):
+        indices = model.tool_turn_indices()
+        if not indices:
+            return
+        idx = state.get("card_idx", -1)
+        if idx in indices:
+            pos = indices.index(idx)
+            state["card_idx"] = indices[(pos - 1) % len(indices)]
+        else:
+            state["card_idx"] = indices[-1]
+
+    @kb.add("]")
+    def _(event):
+        indices = model.tool_turn_indices()
+        if not indices:
+            return
+        idx = state.get("card_idx", -1)
+        if idx in indices:
+            pos = indices.index(idx)
+            state["card_idx"] = indices[(pos + 1) % len(indices)]
+        else:
+            state["card_idx"] = indices[0]
 
     @kb.add("c-j")
     def _(event):

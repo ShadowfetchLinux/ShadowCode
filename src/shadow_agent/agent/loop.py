@@ -1,4 +1,12 @@
-"""USER TASK → UNDERSTAND → PLAN → INSPECT → REASON → TOOL → OBSERVE → VERIFY."""
+"""Codex-style agent loop.
+
+USER → UNDERSTAND → PLAN → INSPECT → ACT → OBSERVE → VERIFY
+  → success? → DONE (yes)
+             → FIX → OBSERVE (no, retry) → VERIFY …
+
+The harness owns the stage machine, the retry cap, and the verify/fix
+transition. The model only reasons and selects tools.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from shadow_agent.agent.stages import Stage, StageTracker
 from shadow_agent.approvals import ApprovalHub
 from shadow_agent.checkpoints import CheckpointStore
 from shadow_agent.config import AppConfig, load_config, remember_workspace
@@ -28,7 +37,7 @@ from shadow_agent.system_prompt import SYSTEM_PROMPT
 from shadow_agent.tools.registry import ToolRegistry, default_tools
 from shadow_agent.tools.sandbox import WorkspaceSandbox
 from shadow_agent.verification.recovery import RecoveryPolicy
-from shadow_agent.verification.verifier import Verifier
+from shadow_agent.verification.verifier import VerificationResult, Verifier
 
 WRITE_PARALLEL_UNSAFE = {
     "write_file",
@@ -57,6 +66,9 @@ class AgentResult(BaseModel):
     todos: list[dict[str, Any]] = Field(default_factory=list)
     usage: dict[str, int] = Field(default_factory=dict)
     cancelled: bool = False
+    stage: str = "DONE"
+    fix_retries: int = 0
+    stage_history: list[str] = Field(default_factory=list)
 
 
 class AgentRunner:
@@ -121,6 +133,10 @@ class AgentRunner:
         title = task.splitlines()[0][:80]
         self.store.set_session_title(self.session_id, title)
         self.checkpoints = CheckpointStore(self.workspace, task_id)
+        self.stages = StageTracker(
+            max_fix_retries=int(self.config.agent.max_fix_retries),
+            emit=self._emit,
+        )
         self._emit("agent.started", {"task": task, "workspace": str(self.workspace)}, task_id)
         memory = MemoryStore(self.workspace, task_id)
         memory.append_task(f"Goal: {task}")
@@ -132,18 +148,33 @@ class AgentRunner:
             system += "\n\n" + extra
         context.set_system(system)
         context.set_memory(memory.combined())
+
+        # UNDERSTAND: parse the user task + constraints + workspace context.
+        self.stages.transition(
+            Stage.UNDERSTAND,
+            {"task": task, "workspace": str(self.workspace), "purpose": purpose},
+            task_id=task_id,
+        )
+
+        # PLAN: produce the explicit plan + todos.
         plan = initial_plan(task)
         context.set_plan(plan)
         self.todos = [{"id": step.id, "title": step.title, "status": step.status} for step in plan.steps]
+        self.stages.transition(
+            Stage.PLAN,
+            {"plan": plan.model_dump(), "todos": self.todos},
+            task_id=task_id,
+        )
+        # Legacy alias: older UI/CLI/tests still listen for agent.planning.
         self._emit("agent.planning", {"plan": plan.model_dump(), "todos": self.todos}, task_id)
         context.add_user(task)
         verifier = Verifier(self.workspace)
-        recovery = RecoveryPolicy()
-        event_names = ["agent.started", "agent.planning"]
+        event_names = ["agent.started", "agent.understand", "agent.plan", "agent.planning"]
         summary = ""
         success = False
         cancelled = False
         step = 0
+        last_verify_ok = False
 
         for step in range(1, self.config.agent.max_steps + 1):
             if self.cancelled():
@@ -180,8 +211,34 @@ class AgentRunner:
                 task_id,
             )
             if response.tool_calls:
+                # Classify the turn: INSPECT (read-only) or ACT (write/exec).
+                stage = self._classify_turn(response.tool_calls)
+                self.stages.transition(
+                    stage,
+                    {"step": step, "tools": [c.tool_name for c in response.tool_calls]},
+                    task_id=task_id,
+                )
+                if stage is Stage.INSPECT:
+                    event_names.append("agent.inspect")
+                elif stage is Stage.ACT:
+                    event_names.append("agent.act")
                 context.add_assistant(response.text, response.tool_calls)
                 results = self._execute_batch(response.tool_calls, task_id, plan, context, verifier, event_names)
+                # OBSERVE: capture tool results, build/test output, diffs.
+                self.stages.transition(
+                    Stage.OBSERVE,
+                    {
+                        "step": step,
+                        "tools": [c.tool_name for c in response.tool_calls],
+                        "ok": all(r.success for r in results),
+                        "results": [
+                            {"tool": c.tool_name, "success": r.success, "preview": (r.output or r.error or "")[:500]}
+                            for c, r in zip(response.tool_calls, results, strict=False)
+                        ],
+                    },
+                    task_id=task_id,
+                )
+                event_names.append("agent.observe")
                 for call, result in zip(response.tool_calls, results, strict=False):
                     context.add_tool_result(result, call.tool_name)
                     if call.tool_name == "update_plan":
@@ -203,18 +260,54 @@ class AgentRunner:
             summary = response.text or summary
             context.add_assistant(response.text)
             if response.finish or _looks_finished(response.text):
+                # VERIFY: check success against the task.
                 verdict = verifier.verify(task)
+                self.stages.transition(
+                    Stage.VERIFY,
+                    {"ok": verdict.ok, "reason": verdict.reason, "evidence": verdict.evidence[:1000]},
+                    task_id=task_id,
+                )
+                event_names.append("agent.verify")
+                last_verify_ok = verdict.ok
                 if verdict.ok:
                     success = True
+                    self.stages.transition(
+                        Stage.DONE,
+                        {"summary": summary, "steps": step},
+                        task_id=task_id,
+                    )
+                    event_names.append("agent.done")
                     break
                 self._emit("test.failed", {"reason": verdict.reason}, task_id)
                 event_names.append("test.failed")
-                note = recovery.note(verdict)
+                # FIX: diagnose failure, plan a correction. Loop back to OBSERVE
+                # (re-run / re-check) — never back to ACT blindly. The recovery
+                # note instructs the model to re-run verification, which the
+                # next iteration will OBSERVE before VERIFY again.
+                self.stages.begin_fix(
+                    verdict.reason,
+                    task_id=task_id,
+                    evidence=verdict.evidence,
+                )
+                event_names.append("agent.fix")
+                if self.stages.exhausted():
+                    # Retry cap exceeded: surface a clear failure to the user.
+                    self._emit(
+                        "agent.failed",
+                        {
+                            "reason": verdict.reason,
+                            "evidence": verdict.evidence[:2000],
+                            "fix_retries": self.stages.fix_retries,
+                            "max_fix_retries": self.stages.max_fix_retries,
+                        },
+                        task_id,
+                    )
+                    event_names.append("agent.failed")
+                    summary = f"{summary}\n\nStopped: verification failed {self.stages.fix_retries} times ({verdict.reason})".strip()
+                    break
+                note = _fix_note(verdict, self.stages.fix_retries, self.stages.max_fix_retries)
                 memory.append_task(note)
                 context.add_user(note)
-                if recovery.exhausted():
-                    summary = f"{summary}\n\nStopped: {verdict.reason}".strip()
-                    break
                 continue
             if not response.text:
                 context.add_user("No tool was selected and no message was returned. Inspect, then act or finish.")
@@ -232,9 +325,24 @@ class AgentRunner:
         memory.append_task(f"Result ({status}): {summary}")
         if success:
             memory.append_project(f"- Task: {task.splitlines()[0][:160]} → {summary.splitlines()[0][:160]}")
+        if not success and not cancelled and not last_verify_ok and "agent.failed" not in event_names:
+            # Loop ended without a successful VERIFY and without an explicit
+            # failure emission (e.g. max_steps hit). Surface it as failed.
+            self._emit(
+                "agent.failed",
+                {
+                    "reason": "max_steps reached without verification",
+                    "fix_retries": self.stages.fix_retries,
+                    "max_fix_retries": self.stages.max_fix_retries,
+                },
+                task_id,
+            )
+            event_names.append("agent.failed")
         self._emit(
             "agent.completed",
-            {"success": success, "summary": summary, "steps": step, "usage": self.usage, "cancelled": cancelled},
+            {"success": success, "summary": summary, "steps": step, "usage": self.usage, "cancelled": cancelled,
+             "stage": self.stages.current.value if self.stages.current else "DONE",
+             "fix_retries": self.stages.fix_retries},
             task_id,
         )
         event_names.append("agent.completed")
@@ -249,7 +357,18 @@ class AgentRunner:
             todos=self.todos,
             usage=self.usage,
             cancelled=cancelled,
+            stage=self.stages.current.value if self.stages.current else "DONE",
+            fix_retries=self.stages.fix_retries,
+            stage_history=[s.value for s, _ in self.stages.history],
         )
+
+    @staticmethod
+    def _classify_turn(calls: list[ToolCall]) -> Stage:
+        """INSPECT if every call is read-only; ACT if any call mutates."""
+        from shadow_agent.permissions import READ_TOOLS
+        if all(call.tool_name in READ_TOOLS for call in calls):
+            return Stage.INSPECT
+        return Stage.ACT
 
     def _execute_batch(
         self,
@@ -297,6 +416,10 @@ class AgentRunner:
         if not result.success and _retryable(result) and not self.cancelled():
             self._emit("tool.retry", {"tool": call.tool_name, "error": result.error}, task_id)
             result = self.tools.execute(call, self.gate)
+        # Codex-style compact operation card: one-line headline + expandable full output.
+        from shadow_agent.op_card import summarize as _op_summarize
+
+        card = _op_summarize(call.tool_name, call.arguments, result)
         self._emit(
             "tool.completed",
             {
@@ -305,6 +428,10 @@ class AgentRunner:
                 "error": friendly_error(result.error) if result.error else "",
                 "raw_error": result.error,
                 "output_preview": result.output[:500],
+                "icon": card.icon,
+                "headline": card.headline,
+                "output_full": card.full_output,
+                "arguments": _safe_args(call),
             },
             task_id,
         )
@@ -409,6 +536,22 @@ def _provider_retryable(exc: Exception) -> bool:
 def _looks_finished(text: str) -> bool:
     lowered = text.lower()
     return any(token in lowered for token in ("done.", "completed.", "verified", "all tests passed", "hello, world!"))
+
+
+def _fix_note(verdict: VerificationResult, attempt: int, max_attempts: int) -> str:
+    """Recovery note appended after a VERIFY failure.
+
+    Instructs the model to OBSERVE the failure's effect (re-run the test /
+    command) before claiming success again — never to ACT blindly. The retry
+    counter is shown so the model knows how close it is to the cap.
+    """
+    return (
+        f"VERIFICATION FAILED (FIX · retry {attempt}/{max_attempts}). "
+        f"Reason: {verdict.reason}. Evidence:\n{verdict.evidence[:2000]}\n"
+        "Re-run the test or command first to OBSERVE the actual output, "
+        "then apply a structured fix, then re-run verification. "
+        "Do not claim success without a fresh OBSERVE→VERIFY."
+    )
 
 
 def _advance_plan(plan: Plan, call: ToolCall, result: ToolResult) -> None:

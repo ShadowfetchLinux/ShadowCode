@@ -21,7 +21,17 @@ type Toast = { id: number; text: string; kind: "ok" | "err" | "info" };
 type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "agent"; text: string }
-  | { kind: "tool"; tool: string; ok?: boolean; text: string; live?: boolean };
+  | {
+      kind: "tool";
+      tool: string;
+      ok?: boolean;
+      text: string;
+      live?: boolean;
+      icon?: string;
+      headline?: string;
+      fullOutput?: string;
+      collapsed?: boolean;
+    };
 
 const SHORTCUTS = [
   ["Ctrl+Enter", "Run task"],
@@ -66,6 +76,9 @@ export default function App() {
   const [planMd, setPlanMd] = useState("");
   const [todos, setTodos] = useState<{ id?: string; title: string; status?: string }[]>([]);
   const [usage, setUsage] = useState<Record<string, number>>({});
+  const [stage, setStage] = useState("IDLE");
+  const [fixRetries, setFixRetries] = useState(0);
+  const [maxFixRetries, setMaxFixRetries] = useState(3);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [overlay, setOverlay] = useState<Overlay>("");
   const [paletteQ, setPaletteQ] = useState("");
@@ -264,16 +277,55 @@ export default function App() {
       pushToast(`Model busy — retry ${payload.attempt}/${payload.max_attempts} in ${payload.wait_sec}s`, "info");
     }
     if (row.type === "tool.started") {
-      setChat((items) => [...items, { kind: "tool", tool: String(payload.tool || "tool"), text: JSON.stringify(payload.arguments || {}), live: true }]);
+      setChat((items) => [
+        ...items,
+        {
+          kind: "tool",
+          tool: String(payload.tool || "tool"),
+          text: JSON.stringify(payload.arguments || {}),
+          live: true,
+          icon: "●",
+          headline: `${payload.tool || "tool"} · running`,
+          fullOutput: "",
+          collapsed: true,
+        },
+      ]);
     }
     if (row.type === "tool.completed") {
       setChat((items) => {
         const next = [...items];
         const idx = [...next].reverse().findIndex((item) => item.kind === "tool" && item.tool === payload.tool && item.live);
         const real = idx >= 0 ? next.length - 1 - idx : -1;
-        const text = String(payload.output_preview || payload.error || "");
-        if (real >= 0 && next[real].kind === "tool") next[real] = { kind: "tool", tool: String(payload.tool), ok: Boolean(payload.success), text, live: false };
-        else next.push({ kind: "tool", tool: String(payload.tool || "tool"), ok: Boolean(payload.success), text });
+        // Codex-style compact card: one summary line + icon, expandable.
+        const icon = String(payload.icon || (payload.success ? "✓" : "✗"));
+        const headline = String(payload.headline || payload.tool || "");
+        const fullOutput = String(payload.output_full || payload.output_preview || payload.error || "");
+        if (real >= 0 && next[real].kind === "tool") {
+          const prev = next[real] as Extract<ChatItem, { kind: "tool" }>;
+          next[real] = {
+            kind: "tool",
+            tool: String(payload.tool),
+            ok: Boolean(payload.success),
+            text: String(payload.output_preview || payload.error || ""),
+            live: false,
+            icon,
+            headline,
+            fullOutput,
+            collapsed: prev.collapsed ?? true,
+          };
+        } else {
+          next.push({
+            kind: "tool",
+            tool: String(payload.tool || "tool"),
+            ok: Boolean(payload.success),
+            text: String(payload.output_preview || payload.error || ""),
+            live: false,
+            icon,
+            headline,
+            fullOutput,
+            collapsed: true,
+          });
+        }
         return next;
       });
     }
@@ -285,10 +337,19 @@ export default function App() {
       if (Array.isArray(payload.todos)) setTodos(payload.todos as { title: string; status?: string }[]);
     }
     if (row.type === "todos.updated" && Array.isArray(payload.todos)) setTodos(payload.todos as { title: string }[]);
+    if (row.type === "agent.understand" || row.type === "agent.plan" || row.type === "agent.inspect"
+        || row.type === "agent.act" || row.type === "agent.observe" || row.type === "agent.verify"
+        || row.type === "agent.fix" || row.type === "agent.done" || row.type === "agent.failed") {
+      setStage(String(payload.stage || row.type.split(".")[1].toUpperCase()));
+      if (typeof payload.fix_retries === "number") setFixRetries(payload.fix_retries);
+      if (typeof payload.max_fix_retries === "number") setMaxFixRetries(payload.max_fix_retries);
+    }
     if (row.type === "approval.requested") void api.approvals().then((data) => setApprovals(data.approvals));
     if (row.type === "agent.completed") {
       setSummary(String(payload.summary || ""));
       setUsage((payload.usage as Record<string, number>) || {});
+      setStage(String(payload.stage || (payload.success ? "DONE" : "IDLE")));
+      if (typeof payload.fix_retries === "number") setFixRetries(payload.fix_retries);
       setBusy(false);
     }
   }
@@ -299,6 +360,8 @@ export default function App() {
     setError("");
     setBusy(true);
     setSummary("");
+    setStage("UNDERSTAND");
+    setFixRetries(0);
     setChat((items) => [...items, { kind: "user", text }]);
     // Clear the composer immediately so Enter does not leave the submitted
     // prompt behind. The captured `text` is already in flight; clearing here
@@ -399,7 +462,19 @@ export default function App() {
         .filter((e) => e.type === "agent.started" || e.type === "agent.completed" || e.type === "tool.completed")
         .map((e) => {
           if (e.type === "agent.started") return { kind: "user" as const, text: String(e.payload.task || "") };
-          if (e.type === "tool.completed") return { kind: "tool" as const, tool: String(e.payload.tool || "tool"), ok: Boolean(e.payload.success), text: String(e.payload.output_preview || e.payload.error || "") };
+          if (e.type === "tool.completed") {
+            const p = e.payload;
+            return {
+              kind: "tool" as const,
+              tool: String(p.tool || "tool"),
+              ok: Boolean(p.success),
+              text: String(p.output_preview || p.error || ""),
+              icon: String(p.icon || (p.success ? "✓" : "✗")),
+              headline: String(p.headline || p.tool || ""),
+              fullOutput: String(p.output_full || p.output_preview || p.error || ""),
+              collapsed: true,
+            };
+          }
           return { kind: "agent" as const, text: String(e.payload.summary || "") };
         }),
     );
@@ -572,6 +647,10 @@ export default function App() {
       </header>
 
       <div className="statusline">
+        <span className={`stage-chip stage-${stage.toLowerCase()}`} title={`Loop stage: ${stage}`}>
+          {stage === "FIX" ? `FIX · retry ${fixRetries}/${maxFixRetries}` : stage}
+        </span>
+        <span className="sep">·</span>
         <span>{status.model.provider}/{status.model.name || status.model.default}</span>
         <span className="sep">·</span>
         <span title="Workspace">{workspace ? workspace.split("/").pop() : "no workspace"}</span>
@@ -682,9 +761,26 @@ export default function App() {
               )}
               {chat.map((item, i) =>
                 item.kind === "tool" ? (
-                  <div key={i} className={`tool-card ${item.ok === false ? "bad" : ""}`}>
-                    <header><span>{item.tool}{item.live ? " · running" : ""}</span><span>{item.ok === false ? "failed" : item.ok ? "ok" : ""}</span></header>
-                    <pre>{item.text.slice(0, 1200)}</pre>
+                  <div
+                    key={i}
+                    className={`op-card ${item.ok === false ? "bad" : ""} ${item.collapsed === false ? "open" : ""}`}
+                    onClick={() =>
+                      setChat((items) => {
+                        const next = [...items];
+                        const it = next[i];
+                        if (it && it.kind === "tool") next[i] = { ...it, collapsed: it.collapsed === false };
+                        return next;
+                      })
+                    }
+                  >
+                    <header>
+                      <span className="op-icon">{item.icon || (item.ok === false ? "✗" : item.ok ? "✓" : "●")}</span>
+                      <span className="op-headline">{item.headline || item.tool}{item.live ? " · running" : ""}</span>
+                      <span className="op-chev">{item.collapsed === false ? "▾" : "▸"}</span>
+                    </header>
+                    {item.collapsed === false && item.fullOutput && (
+                      <pre className="op-full">{item.fullOutput.slice(0, 4000)}{(item.fullOutput.length > 4000) ? "\n… (truncated; show full for the rest)" : ""}</pre>
+                    )}
                   </div>
                 ) : item.kind === "user" ? (
                   <div key={i} className="msg-user">

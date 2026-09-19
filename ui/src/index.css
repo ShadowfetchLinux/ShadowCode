@@ -102,6 +102,22 @@ button:disabled { opacity: .45; cursor: default; }
 .statusline .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
 .statusline .live.on { color: var(--ok); }
 .statusline .live.on i { background: var(--ok); box-shadow: 0 0 6px var(--ok); animation: pulse 1.4s infinite; }
+.statusline .stage-chip {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px; font-weight: 600; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border);
+}
+.statusline .stage-chip.stage-understand { color: var(--dim); }
+.statusline .stage-chip.stage-plan { color: var(--dim); }
+.statusline .stage-chip.stage-inspect { color: var(--muted); }
+.statusline .stage-chip.stage-act { color: var(--accent, #4aa); border-color: var(--accent, #4aa); }
+.statusline .stage-chip.stage-observe { color: var(--muted); }
+.statusline .stage-chip.stage-verify { color: var(--warn, #c80); border-color: var(--warn, #c80); }
+.statusline .stage-chip.stage-fix { color: var(--danger, #c44); border-color: var(--danger, #c44); background: rgba(204,68,68,.08); }
+.statusline .stage-chip.stage-done { color: var(--ok, #2a2); border-color: var(--ok, #2a2); }
+.statusline .stage-chip.stage-failed { color: var(--danger, #c44); border-color: var(--danger, #c44); }
 @keyframes pulse { 50% { opacity: .45; } }
 
 .left, .right, .center { min-height: 0; background: var(--canvas); }
@@ -170,6 +186,29 @@ button:disabled { opacity: .45; cursor: default; }
 }
 .tool-card.bad header { color: var(--danger); }
 .tool-card pre { padding: 8px 10px; margin: 0; color: var(--text-2); font-size: 12px; }
+
+/* Codex-style compact operation card: one summary line, click to expand. */
+.op-card {
+  margin: 0 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-2); cursor: pointer; user-select: none;
+  transition: background .12s, border-color .12s;
+}
+.op-card:hover { background: var(--surface-3); border-color: var(--border-strong); }
+.op-card.bad { border-color: rgba(210,58,74,.35); }
+.op-card.bad .op-icon { color: var(--danger); }
+.op-card.open { background: var(--surface-3); }
+.op-card header {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  color: var(--text); font-size: 12px; font-family: var(--mono);
+}
+.op-card .op-icon { width: 14px; text-align: center; color: var(--text-2); flex-shrink: 0; }
+.op-card .op-headline { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.op-card .op-chev { color: var(--muted); font-size: 10px; flex-shrink: 0; }
+.op-card .op-full {
+  margin: 0; padding: 8px 12px; border-top: 1px solid var(--border);
+  color: var(--text-2); font-family: var(--mono); font-size: 11px;
+  white-space: pre-wrap; max-height: 320px; overflow: auto;
+}
 
 .approval {
   max-width: 760px; margin: 0 auto 14px; padding: 14px 16px;

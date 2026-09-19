@@ -61,6 +61,9 @@ class AgentConfig(BaseModel):
     compact_ratio: float = 0.7
     model_retries: int = 3
     retry_backoff_sec: float = 1.0
+    # Codex-style FIX retry cap: VERIFY failure → FIX → OBSERVE → VERIFY,
+    # up to this many FIX attempts before surfacing agent.failed.
+    max_fix_retries: int = 3
 
 
 class OnboardingConfig(BaseModel):
