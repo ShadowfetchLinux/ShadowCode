@@ -1,115 +1,96 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="sa-plate" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1c2834"/>
-      <stop offset="0.45" stop-color="#10161d"/>
-      <stop offset="1" stop-color="#090c10"/>
+    <!-- Dark charcoal plate -->
+    <linearGradient id="plate" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#22282e"/>
+      <stop offset="0.5" stop-color="#161a1f"/>
+      <stop offset="1" stop-color="#0c0f12"/>
     </linearGradient>
-    <linearGradient id="sa-rim" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#e4f7fb"/>
-      <stop offset="0.4" stop-color="#6bd6f0"/>
-      <stop offset="1" stop-color="#2b7d91"/>
-    </linearGradient>
-    <radialGradient id="sa-glow" cx="62%" cy="36%" r="52%">
-      <stop offset="0" stop-color="#6bd6f0" stop-opacity="0.30"/>
-      <stop offset="1" stop-color="#10161d" stop-opacity="0"/>
+    <radialGradient id="plate-vig" cx="50%" cy="42%" r="62%">
+      <stop offset="0" stop-color="#2a3138" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.55"/>
     </radialGradient>
-    <linearGradient id="sa-s" x1="0.18" y1="0.12" x2="0.86" y2="0.92">
-      <stop offset="0" stop-color="#e8fbff"/>
-      <stop offset="0.42" stop-color="#6bd6f0"/>
-      <stop offset="1" stop-color="#2a7a8c"/>
+
+    <!-- Subtle stone grain: fractal turbulence -->
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n"/>
+      <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.10 0"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+
+    <!-- Metallic gold/bronze gradient (light upper-left -> dark lower-right) -->
+    <linearGradient id="gold" x1="0.1" y1="0.08" x2="0.9" y2="0.95">
+      <stop offset="0" stop-color="#f7e9b8"/>
+      <stop offset="0.22" stop-color="#e6c878"/>
+      <stop offset="0.5" stop-color="#b8862e"/>
+      <stop offset="0.78" stop-color="#7d551c"/>
+      <stop offset="1" stop-color="#4d3315"/>
     </linearGradient>
-    <linearGradient id="sa-s-hi" x1="0.2" y1="0" x2="0.7" y2="1">
-      <stop offset="0" stop-color="#f4feff"/>
-      <stop offset="1" stop-color="#6bd6f0"/>
+    <linearGradient id="gold-hi" x1="0.1" y1="0.05" x2="0.5" y2="0.6">
+      <stop offset="0" stop-color="#fff6d6" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#fff6d6" stop-opacity="0"/>
     </linearGradient>
-    <radialGradient id="sa-node" cx="35%" cy="30%" r="70%">
-      <stop offset="0" stop-color="#f4feff"/>
-      <stop offset="0.35" stop-color="#8ae6f6"/>
-      <stop offset="1" stop-color="#2b7d91"/>
-    </radialGradient>
-    <linearGradient id="sa-spark" x1="0.2" y1="0" x2="0.8" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.45" stop-color="#8ae6f6"/>
-      <stop offset="1" stop-color="#2b7d91"/>
-    </linearGradient>
-    <filter id="sa-soft" x="-22%" y="-22%" width="144%" height="144%">
-      <feGaussianBlur stdDeviation="1.6" result="b"/>
+
+    <!-- Bevel: outer dark drop + inner light rim -->
+    <filter id="bevel" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="inner-bevel" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="2.2" result="b"/>
+      <feComposite in="SourceGraphic" in2="b" operator="in" result="clip"/>
       <feMerge>
-        <feMergeNode in="b"/>
-        <feMergeNode in="SourceGraphic"/>
+        <feMergeNode in="clip"/>
       </feMerge>
     </filter>
-    <clipPath id="sa-plate-clip">
-      <rect x="36" y="36" width="440" height="440" rx="112"/>
+
+    <!-- Clip to the squircle plate -->
+    <clipPath id="plate-clip">
+      <rect x="24" y="24" width="464" height="464" rx="116"/>
     </clipPath>
+
+    <!-- Point-up hexagon path, circumradius 184, center (256,256) -->
+    <!-- vertices: top, UR, LR, bottom, LL, UL -->
+    <!-- R=184: dx=R*sin60=159.35, dy=R*cos60=92 -->
+    <path id="hex-outline" d="M 256 72 L 415.35 164 L 415.35 348 L 256 440 L 96.65 348 L 96.65 164 Z"/>
   </defs>
 
-  <rect x="36" y="36" width="440" height="440" rx="112" fill="url(#sa-plate)"/>
-  <rect x="36" y="36" width="440" height="440" rx="112" fill="url(#sa-glow)"/>
-  <rect x="44" y="44" width="424" height="424" rx="104" fill="none" stroke="url(#sa-rim)" stroke-width="10"/>
-  <rect x="62" y="62" width="388" height="388" rx="92" fill="none" stroke="#6bd6f0" stroke-opacity="0.15" stroke-width="2"/>
+  <!-- Plate -->
+  <rect x="24" y="24" width="464" height="464" rx="116" fill="url(#plate)"/>
+  <g clip-path="url(#plate-clip)">
+    <rect x="24" y="24" width="464" height="464" fill="url(#plate-vig)"/>
+    <rect x="24" y="24" width="464" height="464" filter="url(#grain)" opacity="0.9"/>
+  </g>
+  <!-- thin inner rim for premium frame -->
+  <rect x="34" y="34" width="444" height="444" rx="108" fill="none" stroke="#000" stroke-opacity="0.45" stroke-width="2"/>
+  <rect x="38" y="38" width="436" height="436" rx="104" fill="none" stroke="#3a424a" stroke-opacity="0.35" stroke-width="1.5"/>
 
-  <!-- faint harness traces -->
-  <g clip-path="url(#sa-plate-clip)" opacity="0.62">
-    <g fill="none" stroke="#6bd6f0" stroke-opacity="0.30" stroke-width="3.2" stroke-linecap="round">
-      <path d="M118 250 H168"/>
-      <path d="M344 262 H394"/>
-      <path d="M256 118 V148"/>
-      <path d="M148 148 L176 176"/>
-      <path d="M364 364 L336 336"/>
-    </g>
-    <circle cx="118" cy="250" r="5" fill="#6bd6f0" opacity="0.7"/>
-    <circle cx="394" cy="262" r="5" fill="#6bd6f0" opacity="0.7"/>
-    <circle cx="256" cy="118" r="4.5" fill="#8ae6f6" opacity="0.65"/>
-    <circle cx="148" cy="148" r="4" fill="#6bd6f0" opacity="0.55"/>
-    <circle cx="364" cy="364" r="4" fill="#6bd6f0" opacity="0.55"/>
+  <!-- Hexagon: shadow base + gold stroke + highlight rim -->
+  <g filter="url(#bevel)">
+    <use href="#hex-outline" fill="none" stroke="#000" stroke-opacity="0.6" stroke-width="34" stroke-linejoin="round"/>
+    <use href="#hex-outline" fill="none" stroke="url(#gold)" stroke-width="28" stroke-linejoin="round"/>
+    <!-- bright highlight on upper-left edge -->
+    <use href="#hex-outline" fill="none" stroke="url(#gold-hi)" stroke-width="6" stroke-linejoin="round" transform="translate(-1.5,-1.5)"/>
   </g>
 
-  <!-- agent mark: circuit S + nodes + spark -->
-  <g filter="url(#sa-soft)">
-    <path d="M190 160
-             H325
-             A28 28 0 0 1 353 188
-             V222
-             A28 28 0 0 1 325 250
-             H187
-             A28 28 0 0 0 159 278
-             V322
-             A28 28 0 0 0 187 350
-             H338"
-          fill="none"
-          stroke="url(#sa-s)"
-          stroke-width="40"
-          stroke-linecap="round"
-          stroke-linejoin="round"/>
-    <path d="M190 160
-             H325
-             A28 28 0 0 1 353 188
-             V222
-             A28 28 0 0 1 325 250
-             H187
-             A28 28 0 0 0 159 278
-             V322
-             A28 28 0 0 0 187 350
-             H338"
-          fill="none"
-          stroke="url(#sa-s-hi)"
-          stroke-width="14"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          opacity="0.55"/>
+  <!-- Inner symbols: dot + two downward chevrons, centered horizontally, gold with bevel -->
+  <g filter="url(#bevel)">
+    <!-- Dot near top inside hexagon -->
+    <circle cx="256" cy="168" r="22" fill="url(#gold)"/>
+    <circle cx="250" cy="162" r="9" fill="#fff6d6" opacity="0.85"/>
 
-    <circle cx="190" cy="160" r="22" fill="url(#sa-node)"/>
-    <circle cx="184" cy="154" r="7" fill="#ffffff" opacity="0.45"/>
-    <circle cx="256" cy="250" r="24" fill="url(#sa-node)"/>
-    <circle cx="249" cy="243" r="7.5" fill="#ffffff" opacity="0.5"/>
-    <circle cx="338" cy="350" r="22" fill="url(#sa-node)"/>
-    <circle cx="332" cy="344" r="7" fill="#ffffff" opacity="0.45"/>
+    <!-- Chevron 1 (upper) - downward V, rounded ends -->
+    <!-- apex at bottom (256, 248), arms up to (200, 200) and (312, 200) -->
+    <path d="M 200 200 L 256 252 L 312 200"
+          fill="none" stroke="url(#gold)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 200 200 L 256 252 L 312 200"
+          fill="none" stroke="url(#gold-hi)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"
+          transform="translate(-1.2,-1.2)" opacity="0.8"/>
 
-    <g transform="translate(378 148)">
-      <polygon fill="url(#sa-spark)" points="0,-26 5.2,-5.2 26,0 5.2,5.2 0,26 -5.2,5.2 -26,0 -5.2,-5.2"/>
-      <polygon fill="#e8fbff" opacity="0.85" points="0,-12 2.2,-2.2 12,0 2.2,2.2 0,12 -2.2,2.2 -12,0 -2.2,-2.2"/>
-    </g>
+    <!-- Chevron 2 (lower) - same shape, shifted down -->
+    <path d="M 200 276 L 256 328 L 312 276"
+          fill="none" stroke="url(#gold)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 200 276 L 256 328 L 312 276"
+          fill="none" stroke="url(#gold-hi)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"
+          transform="translate(-1.2,-1.2)" opacity="0.8"/>
   </g>
 </svg>
