@@ -11,6 +11,7 @@ import {
   GitBranch,
   GitPullRequest,
   ListChecks,
+  ListPlus,
   LoaderCircle,
   PanelLeft,
   Paperclip,
@@ -46,8 +47,10 @@ import {
   type PaletteItem,
 } from "./components/overlays";
 import { Settings } from "./components/Settings";
+import { QueuedTasks } from "./components/QueuedTasks";
 import { useConversation } from "./hooks/useConversation";
 import { modelLabel } from "./lib/models";
+import { conversationJob } from "./lib/jobs";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -108,6 +111,7 @@ export default function App() {
     message?: string;
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [cancellingQueued, setCancellingQueued] = useState<string[]>([]);
   const [switching, setSwitching] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -201,6 +205,25 @@ export default function App() {
   });
   const { transcript, setTranscript, job, busy, connection } = conversation;
   const locked = busy || submitting || switching || Boolean(shutdown);
+  const projectBusy =
+    busy ||
+    jobs.some(
+      (item) =>
+        item.workspace === workspace &&
+        ["queued", "running", "cancelling"].includes(item.status),
+    );
+  const queueing = isNative() && projectBusy;
+  const composerLocked =
+    submitting || switching || Boolean(shutdown) || (busy && !isNative());
+  const queuedJobs = isNative()
+    ? jobs
+        .filter(
+          (item) => item.workspace === workspace && item.status === "queued",
+        )
+        .slice()
+        .reverse()
+    : [];
+  const commandWaiting = queueing && task.trim().startsWith("/");
 
   async function reloadConfig() {
     const [config, state, modelData, providerData] = await Promise.all([
@@ -252,7 +275,11 @@ export default function App() {
         toast(String(e), "err");
       }
     } finally {
-      if (ticket === selection.current) setSwitching(false);
+      if (ticket === selection.current) {
+        stick.current = true;
+        setAtBottom(true);
+        setSwitching(false);
+      }
     }
   }
 
@@ -321,9 +348,17 @@ export default function App() {
     }
   }, [task]);
   useEffect(() => {
-    if (stick.current)
+    if (ready && !switching && stick.current)
       streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
-  }, [transcript.items, commandCards, busy, approvals]);
+  }, [
+    transcript.items,
+    commandCards,
+    busy,
+    approvals,
+    ready,
+    switching,
+    queuedJobs.length,
+  ]);
   useEffect(() => {
     let live = true;
     async function poll() {
@@ -352,23 +387,8 @@ export default function App() {
   useEffect(() => {
     if (!sessionId || busy || submitting || switching) return;
     const sessionJobs = jobs.filter((item) => item.session_id === sessionId);
-    const previous = sessionJobs.findIndex((item) => item.id === job?.id);
-    const newer = sessionJobs.filter(
-      (item, index) =>
-        item.id !== job?.id &&
-        (!job ||
-          (previous >= 0
-            ? index < previous
-            : item.started_at > job.started_at)),
-    );
-    const next =
-      newer.find((item) => ["running", "cancelling"].includes(item.status)) ||
-      newer
-        .slice()
-        .reverse()
-        .find((item) => item.status === "queued") ||
-      newer[0];
-    if (!next) return;
+    const next = conversationJob(sessionJobs, job);
+    if (!next || next.id === job?.id) return;
     let live = true;
     void api
       .session(sessionId)
@@ -457,6 +477,22 @@ export default function App() {
       await refresh();
     } catch (e) {
       toast(String(e), "err");
+    }
+  }
+  async function cancelQueued(queued: Job) {
+    if (cancellingQueued.includes(queued.id)) return;
+    setCancellingQueued((ids) => [...ids, queued.id]);
+    try {
+      const updated = await api.cancelJob(queued.id, true);
+      setJobs((items) =>
+        items.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      toast("Queued task cancelled.", "info");
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setCancellingQueued((ids) => ids.filter((id) => id !== queued.id));
+      void refresh().catch(() => undefined);
     }
   }
   async function decide(
@@ -556,8 +592,18 @@ export default function App() {
     await refresh();
   }
   async function submit() {
-    if (locked || submittingRef.current || (!task.trim() && !chips.length))
+    if (
+      composerLocked ||
+      submittingRef.current ||
+      (!task.trim() && !chips.length)
+    )
       return;
+    if (commandWaiting) {
+      setError(
+        "Wait for this project's active work to finish before running a slash command. You can queue a message now.",
+      );
+      return;
+    }
     if (["/new", "/clear"].includes(task.trim())) {
       setTask("");
       await newSession();
@@ -590,6 +636,7 @@ export default function App() {
         sessionId || undefined,
         modelChoice || undefined,
         mode,
+        queueing,
       );
       if (submitTicket !== selection.current) {
         await refresh();
@@ -600,7 +647,14 @@ export default function App() {
         setSessionId(started.session_id);
         localStorage.setItem("shadow:selected", started.session_id);
       }
-      conversation.start(started);
+      // Keep streaming the current task while the follow-up waits. A task
+      // submitted from an idle conversation can itself be waiting on a project.
+      if (!busy) conversation.start(started);
+      if (queueing)
+        toast(
+          "Follow-up queued. It will run after earlier project tasks.",
+          "ok",
+        );
       await refresh().catch(() => undefined);
     } catch (e) {
       if (submitTicket !== selection.current) {
@@ -617,6 +671,10 @@ export default function App() {
     }
   }
   async function attach(files: FileList | File[]) {
+    if (projectBusy || composerLocked) {
+      toast("Attach files after the project's active work finishes.", "info");
+      return;
+    }
     for (const file of Array.from(files)) {
       if (file.size > 1_000_000) {
         toast(
@@ -1089,7 +1147,11 @@ export default function App() {
             ) : (
               <>
                 {transcript.items.map((item, i) =>
-                  item.kind === "tool" ? (
+                  item.kind === "user" &&
+                  transcript.activeTaskId !== item.taskId &&
+                  queuedJobs.some(
+                    (queued) => queued.task_id === item.taskId,
+                  ) ? null : item.kind === "tool" ? (
                     <OpCard
                       key={i}
                       item={item}
@@ -1150,12 +1212,16 @@ export default function App() {
                 <LoaderCircle size={15} className="spin" />
                 <span>
                   {submitting
-                    ? "Starting task"
+                    ? queueing
+                      ? "Queuing follow-up"
+                      : "Starting task"
                     : job?.status === "cancelling"
                       ? "Stopping safely"
-                      : transcript.stage === "UNDERSTAND"
-                        ? "Exploring your request"
-                        : transcript.stage.toLowerCase().replaceAll("_", " ")}
+                      : job?.status === "queued"
+                        ? "Waiting for earlier work to finish"
+                        : transcript.stage === "UNDERSTAND"
+                          ? "Exploring your request"
+                          : transcript.stage.toLowerCase().replaceAll("_", " ")}
                 </span>
                 <span className="dim">
                   {elapsed >= 60
@@ -1190,6 +1256,15 @@ export default function App() {
             void attach(e.dataTransfer.files);
           }}
         >
+          <QueuedTasks
+            jobs={queuedJobs}
+            sessions={sessions}
+            selected={sessionId}
+            cancelling={cancellingQueued}
+            disabled={submitting || switching || Boolean(shutdown)}
+            onCancel={(queued) => void cancelQueued(queued)}
+            onOpen={(id) => void openSession(id)}
+          />
           {transcript.plan.length > 0 && (
             <details className="task-plan">
               <summary>
@@ -1279,11 +1354,13 @@ export default function App() {
               value={task}
               rows={2}
               placeholder={
-                busy
-                  ? "Draft your next step while ShadowCode works…"
-                  : empty
-                    ? "Describe what you want to build…"
-                    : "Ask for a follow-up change…"
+                queueing
+                  ? "Add a follow-up to the queue…"
+                  : busy
+                    ? "Draft your next step while ShadowCode works…"
+                    : empty
+                      ? "Describe what you want to build…"
+                      : "Ask for a follow-up change…"
               }
               onChange={(e) => {
                 setTask(e.target.value);
@@ -1325,6 +1402,7 @@ export default function App() {
                 className="icon-btn attach-btn"
                 aria-label="Attach text files"
                 title="Attach text files"
+                disabled={projectBusy || composerLocked}
                 onClick={() => fileRef.current?.click()}
               >
                 <Paperclip size={17} />
@@ -1384,7 +1462,15 @@ export default function App() {
               </select>
               <span className="grow" />
               <span className="composer-hint">
-                {task ? "↵ Send" : "/ for commands"}
+                {commandWaiting
+                  ? "Commands wait until idle"
+                  : task
+                    ? queueing
+                      ? "↵ Queue"
+                      : "↵ Send"
+                    : queueing
+                      ? "Queue a follow-up"
+                      : "/ for commands"}
               </span>
               {busy ? (
                 <button
@@ -1397,16 +1483,23 @@ export default function App() {
                 >
                   <Square size={14} fill="currentColor" />
                 </button>
-              ) : (
+              ) : null}
+              {(!busy || isNative()) && (
                 <button
                   type="submit"
                   className="submit-btn"
-                  aria-label="Send task"
-                  title="Send task"
-                  disabled={locked || (!task.trim() && !chips.length)}
+                  aria-label={queueing ? "Queue follow-up" : "Send task"}
+                  title={queueing ? "Queue follow-up" : "Send task"}
+                  disabled={
+                    composerLocked ||
+                    commandWaiting ||
+                    (!task.trim() && !chips.length)
+                  }
                 >
                   {submitting ? (
                     <LoaderCircle size={17} className="spin" />
+                  ) : queueing ? (
+                    <ListPlus size={19} />
                   ) : (
                     <ArrowUp size={19} />
                   )}

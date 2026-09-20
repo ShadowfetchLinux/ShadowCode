@@ -182,6 +182,13 @@ async fn queued_followups_run_in_order_and_duplicate_active_work_is_rejected() {
         assert_eq!(result.summary, expected);
     }
     assert_eq!(server.requests.lock().unwrap().len(), 4);
+    assert!(engine
+        .cancel_queued(&first.id)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("left the queue"));
+    assert_eq!(engine.job(&first.id).unwrap().unwrap().status, "completed");
     engine.shutdown().await.unwrap();
 }
 
@@ -197,11 +204,25 @@ async fn queued_cancel_is_immediate_and_shutdown_cancels_a_stalled_provider() {
     let mut req = request(root.path(), "queued", Some(first.session_id.clone()));
     req.queue = true;
     let queued = engine.start(req).await.unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(1), engine.cancel(&queued.id))
+    let result = tokio::time::timeout(Duration::from_secs(1), engine.cancel_queued(&queued.id))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(result.status, "cancelled");
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while engine.job(&first.id).unwrap().unwrap().status != "running" {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(engine
+        .cancel_queued(&first.id)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("left the queue"));
+    assert_eq!(engine.job(&first.id).unwrap().unwrap().status, "running");
     tokio::time::timeout(Duration::from_secs(3), engine.shutdown())
         .await
         .unwrap()

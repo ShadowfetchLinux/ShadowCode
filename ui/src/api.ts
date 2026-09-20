@@ -108,6 +108,7 @@ export type HookCatalog = {
 };
 export type Job = {
   id: string;
+  task_id?: string;
   workspace: string;
   event_cursor: number;
   started_at: number;
@@ -118,6 +119,7 @@ export type Job = {
   task?: string;
   usage?: Record<string, number>;
   model?: string;
+  mode?: string;
   routing?: RoutingDecision | null;
   result?: {
     success: boolean;
@@ -557,6 +559,7 @@ export const api = {
     session_id?: string,
     model?: string,
     purpose: string = "coder",
+    queue = false,
   ) =>
     send<Job>("/api/jobs", "POST", {
       task,
@@ -564,9 +567,11 @@ export const api = {
       session_id,
       model: model || undefined,
       purpose,
+      queue,
     }),
   job: (id: string) => get<Job>(`/api/jobs/${id}`),
-  cancelJob: (id: string) => send<Job>(`/api/jobs/${id}/cancel`, "POST", {}),
+  cancelJob: (id: string, only_if_queued = false) =>
+    send<Job>(`/api/jobs/${id}/cancel`, "POST", { only_if_queued }),
   cancelCurrent: (session_id?: string) =>
     send<{ ok: boolean }>(
       `/api/run/cancel${session_id ? `?session_id=${session_id}` : ""}`,

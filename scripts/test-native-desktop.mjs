@@ -21,6 +21,7 @@ for (const name of ["result.json", "failure.txt", "failure.png", "workspace-ligh
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
 for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json", "inspection.png", "accessibility-inspection.json", "diagnostics.png", "accessibility-diagnostics.json"]) await rm(path.join(artifacts, name), { force: true });
+for (const theme of ["light","dark","compact"]) for (const name of [`queue-${theme}.png`,`accessibility-queue-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
@@ -73,6 +74,8 @@ let goalMode = false;
 let workflowMode = false;
 let workflowCalls = 0;
 let mcpMode = false, mcpCalls = 0, mcpHttpCalls = 0;
+let queueMode = false;
+const queueRequests = [], queueReplies = new Map();
 const milestoneCalls = new Map();
 const sockets = new Set();
 const model = createServer(async (req, res) => {
@@ -84,6 +87,21 @@ const model = createServer(async (req, res) => {
   requestedModels.push(payload.model);
   const index = requests++;
   const tool = (name, args) => ({ id: `call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
+  if (queueMode) {
+    const task = payload.messages.filter(message => message.role === "user").at(-1).content;
+    assert.ok(["Queue probe: first", "Queue probe: second"].includes(task), "Cancelled queued tasks must not contact the model");
+    queueRequests.push(task);
+    if (task.endsWith("second")) {
+      assert.equal(payload.model,"native-build");
+      assert.ok(payload.tools.every(item => !["exec","write_file"].includes(item.function.name)), "Queued Review preserves read-only tools");
+      assert.ok(payload.messages.some(message => message.role === "assistant" && message.content?.includes("First task stays visible")), "The follow-up receives the completed predecessor's conversation");
+    }
+    res.writeHead(200,{"Content-Type":"text/event-stream"});
+    await delay(120);
+    res.write(`data: ${JSON.stringify({choices:[{delta:{content:task.endsWith("first") ? "First task stays visible while follow-ups wait." : "Second queued task completed."}}]})}\n\n`);
+    queueReplies.set(task,()=>res.end(`data: ${JSON.stringify({choices:[{delta:{},finish_reason:"stop"}],usage:{prompt_tokens:30,completion_tokens:10,total_tokens:40}})}\n\ndata: [DONE]\n\n`));
+    return;
+  }
   if (mcpMode) {
     const http = mcpMode === "http";
     const call = http ? mcpHttpCalls++ : mcpCalls++;
@@ -391,6 +409,64 @@ try {
   await until("Cancellation persisted", async () => (await api("GET", "/api/jobs")).jobs[0].status === "cancelled");
   await until("Cancellation visible", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>/cancelled/i.test(e.textContent));"));
   await api("PUT", "/api/routing", { values: { enabled: false } });
+  queueMode = true;
+  await type('textarea[aria-label="Message ShadowCode"]', "Queue probe: first");
+  await until("Idle composer after cancellation",()=>execute("return !!document.querySelector('button[aria-label=\"Send task\"]')"));
+  await click('button[aria-label="Send task"]');
+  await until("First queue task streaming",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('First task stays visible'))"));
+  const firstQueue = (await api("GET","/api/jobs")).jobs.find(job=>job.task==="Queue probe: first");
+  await execute("const select=document.querySelector('select[aria-label=\"Agent mode\"]'); select.value='reviewer'; select.dispatchEvent(new Event('change',{bubbles:true})); const model=document.querySelector('select[aria-label=\"Model for this task\"]'); model.value=arguments[0]; model.dispatchEvent(new Event('change',{bubbles:true}));",[registered.model.default]);
+  await type('textarea[aria-label="Message ShadowCode"]', "Queue probe: second");
+  await click('button[aria-label="Queue follow-up"]');
+  await until("Second task queued",()=>execute("return !!document.querySelector('.task-queue')?.textContent.includes('Queue probe: second')"));
+  await execute("const select=document.querySelector('select[aria-label=\"Agent mode\"]');select.value='coder';select.dispatchEvent(new Event('change',{bubbles:true}));const model=document.querySelector('select[aria-label=\"Model for this task\"]');model.value='';model.dispatchEvent(new Event('change',{bubbles:true}));");
+  await type('textarea[aria-label="Message ShadowCode"]', "Queue probe: cancel");
+  await click('button[aria-label="Queue follow-up"]');
+  await until("Two queued follow-ups",()=>execute("return document.querySelectorAll('.task-queue li').length===2"));
+  assert.equal((await api("GET",`/api/jobs/current?session_id=${firstQueue.session_id}&include_finished=true`)).job.id,firstQueue.id);
+  assert.equal(queueRequests.length,1);
+  await click("button.new-task");
+  await until("New conversation selected",()=>execute("return !!document.querySelector('.task-link[aria-current=\"page\"]') && document.querySelector('.task-link[aria-current=\"page\"]').dataset.sessionId!==arguments[0] && !document.querySelector('.loading-task')",[firstQueue.session_id]));
+  await type('textarea[aria-label="Message ShadowCode"]', "Queue probe: other");
+  await click('button[aria-label="Queue follow-up"]');
+  await until("Project queue spans conversations",()=>execute("return document.querySelectorAll('.task-queue li').length===3"));
+  const otherQueue = (await api("GET","/api/jobs")).jobs.find(job=>job.task==="Queue probe: other");
+  assert.notEqual(otherQueue.session_id,firstQueue.session_id);
+  await click(`.task-queue li[data-job-id="${otherQueue.id}"] .queue-cancel`);
+  await until("Other conversation queue item cancelled",async()=>(await api("GET",`/api/jobs/${otherQueue.id}`)).status==="cancelled");
+  await click(`button.task-link[data-session-id="${firstQueue.session_id}"]`);
+  await until("Original stream retained after switching",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('First task stays visible'))"));
+  await wd("POST",`/session/${session}/refresh`,{});
+  await until("Queue restored after reload",()=>execute("return document.querySelectorAll('.task-queue li').length===2 && !!document.querySelector('button[aria-label=\"Stop task\"]')"),25000);
+  await until("Reload follows the running response",()=>execute("const item=[...document.querySelectorAll('.msg-agent')].find(item=>item.textContent.includes('First task stays visible'));if(!item)return false;const bounds=item.getBoundingClientRect();const queue=document.querySelector('.task-queue').getBoundingClientRect();return bounds.top>=55 && bounds.bottom<=queue.top"));
+  assert.equal((await api("GET",`/api/jobs/current?session_id=${firstQueue.session_id}&include_finished=true`)).job.id,firstQueue.id);
+  for (const theme of ["light","dark"]) {
+    await execute("document.documentElement.dataset.theme=arguments[0]",[theme]);
+    await screenshot(`queue-${theme}`);
+    await accessibility(`queue-${theme}`);
+  }
+  await execute("document.documentElement.dataset.theme='light'");
+  await wd("POST",`/session/${session}/window/rect`,{width:620,height:850});
+  await until("Compact queue sidebar closes",()=>execute("return !document.querySelector('.sidebar')"));
+  await screenshot("queue-compact");
+  await accessibility("queue-compact");
+  assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
+  await wd("POST",`/session/${session}/window/rect`,{width:1380,height:920});
+  const cancelledQueue = (await api("GET","/api/jobs")).jobs.find(job=>job.task==="Queue probe: cancel");
+  await click(`.task-queue li[data-job-id="${cancelledQueue.id}"] .queue-cancel`);
+  await until("Queued cancellation persisted",async()=>(await api("GET",`/api/jobs/${cancelledQueue.id}`)).status==="cancelled");
+  assert.equal((await api("GET",`/api/jobs/${firstQueue.id}`)).status,"running");
+  assert.equal(queueRequests.length,1);
+  queueReplies.get("Queue probe: first")();
+  await until("Next queued model call",()=>queueReplies.has("Queue probe: second"));
+  await until("Next queued response streams",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('Second queued task completed'))"));
+  queueReplies.get("Queue probe: second")();
+  await until("Queue drains",async()=>!(await api("GET","/api/jobs")).jobs.some(job=>["queued","running","cancelling"].includes(job.status)));
+  await until("Queue clears in desktop",()=>execute("return !document.querySelector('.task-queue') && !!document.querySelector('button[aria-label=\"Send task\"]')"));
+  await until("Sidebar no longer marks completed tasks as running",()=>execute("return !document.querySelector('.task-link .running-dot')"));
+  assert.deepEqual(queueRequests,["Queue probe: first","Queue probe: second"]);
+  assert.equal(await execute("return [...document.querySelectorAll('.msg-user')].filter(item=>item.textContent==='Queue probe: second').length"),1);
+  queueMode=false;
   assert.equal((await api("GET", `/api/background/${background.id}`)).status, "RUNNING");
   await click('button[aria-label="Terminal"]');
   await clickButton("Background");
@@ -545,7 +621,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

@@ -104,6 +104,11 @@ Implemented foundation:
   workspaces, scoped approvals, cancellation that waits for cleanup, restart
   recovery, and atomic completion/usage/event commits. Continuation and branching
   retain valid function-call histories; interrupted calls are never blindly replayed.
+- A [desktop follow-up queue](NATIVE_QUEUE.md) with visible project-wide waiting
+  messages, model/mode snapshots, independent queued cancellation, continued
+  streaming, conversation switching and reload recovery. Active history remains
+  discoverable beyond recent-list limits; a stale queue action cannot cancel a
+  task that has started running.
 - Native filesystem, search, patch, shell, Git, and plan tools with durable audit
   events. Patches preflight every file, reject ambiguous context, preserve line
   endings, and journal edits for conflict-aware rewind. Shell and Git side effects

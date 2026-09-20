@@ -624,13 +624,9 @@ impl Service {
                 self.select(&workspace, session["id"].as_str().map(str::to_owned))?;
                 return Ok(session);
             }
-            ("GET", "/api/jobs") => return Ok(json!({"jobs":store.jobs(1000)?})),
+            ("GET", "/api/jobs") => return Ok(json!({"jobs":store.active_and_recent_jobs(1000)?})),
             ("GET", "/api/jobs/current") => {
-                let jobs = store.jobs(10000)?;
-                let job = jobs.into_iter().find(|job| {
-                    job["session_id"] == q("session_id")
-                        && (q("include_finished") == "true" || active(job))
-                });
+                let job = store.current_job(q("session_id"), q("include_finished") == "true")?;
                 return Ok(json!({"job":job}));
             }
             ("POST", "/api/jobs/test") => {
@@ -1038,7 +1034,13 @@ impl Service {
             let job = self.engine.job(parts[2])?.context("Job not found")?;
             match (request.method.as_str(), parts.get(3).copied()) {
                 ("GET", None) => return Ok(json!(job)),
-                ("POST", Some("cancel")) => return Ok(json!(self.engine.cancel(&job.id).await?)),
+                ("POST", Some("cancel")) => {
+                    return Ok(json!(if body["only_if_queued"] == true {
+                        self.engine.cancel_queued(&job.id).await?
+                    } else {
+                        self.engine.cancel(&job.id).await?
+                    }))
+                }
                 ("GET", Some("events")) => {
                     return Ok(
                         json!({"events":store.events_after(&job.session_id,q("after").parse().unwrap_or(0),job.finished_at.map(|_|job.event_cursor),query_limit(&query,512,2000))?,"job":job}),

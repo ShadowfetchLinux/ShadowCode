@@ -750,6 +750,93 @@ kbd {
   margin: 0 auto;
   padding: 8px 36px 0;
 }
+.task-queue {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.queue-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  color: var(--text-2);
+}
+.queue-heading strong {
+  font-weight: 600;
+}
+.queue-count {
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: var(--surface-2);
+  font-variant-numeric: tabular-nums;
+}
+.queue-help {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+.task-queue ol {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.task-queue li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.queue-position {
+  color: var(--muted);
+  font-size: 11px;
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.queue-message {
+  min-width: 0;
+  flex: 1;
+}
+.queue-message summary {
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.queue-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+  line-height: 1.5;
+}
+.queue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  font-size: 10px;
+  color: var(--muted);
+  padding-top: 3px;
+}
+.queue-meta > * {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.queue-meta button {
+  font-size: inherit;
+  color: var(--text-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-align: left;
+}
+.queue-cancel {
+  flex: 0 0 28px;
+}
 .composer {
   max-width: none;
   padding: 13px 14px 10px;

@@ -531,6 +531,20 @@ impl Store {
             .pop()
             .map(|v| v["payload"].clone()))
     }
+    /// Keep active work visible even after unrelated projects produce a large
+    /// amount of completed history. Insertion order is the workspace FIFO order.
+    pub fn active_and_recent_jobs(&self, limit: usize) -> Result<Vec<Value>> {
+        Ok(self.query(
+            "SELECT payload FROM desktop_jobs WHERE rowid IN (SELECT rowid FROM desktop_jobs ORDER BY rowid DESC LIMIT ?) OR json_extract(payload,'$.status') IN ('queued','running','cancelling') ORDER BY rowid DESC",
+            [limit.clamp(1, 10000)],
+        )?.into_iter().map(|row|row["payload"].clone()).collect())
+    }
+    pub fn current_job(&self, session: &str, include_finished: bool) -> Result<Option<Value>> {
+        Ok(self.query(
+            "SELECT payload FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND (? OR json_extract(payload,'$.status') IN ('queued','running','cancelling')) ORDER BY CASE json_extract(payload,'$.status') WHEN 'running' THEN 0 WHEN 'cancelling' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END, CASE WHEN json_extract(payload,'$.status')='queued' THEN rowid END ASC, json_extract(payload,'$.finished_at') DESC, rowid DESC LIMIT 1",
+            rusqlite::params![session,include_finished],
+        )?.pop().map(|row|row["payload"].clone()))
+    }
     /// Called only by the profile-lock owner, before accepting new work.
     pub fn recover_jobs(&self) -> Result<usize> {
         let mut db = self.lock()?;

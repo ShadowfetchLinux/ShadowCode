@@ -8,6 +8,57 @@ const event = (
   task_id = "one",
 ): EventRow => ({ id, ts: id, type, payload, task_id });
 describe("durable transcript", () => {
+  it("preserves running state during queue changes and moves each prompt to its execution turn", () => {
+    const started = replay([
+      event(1, "user.message", { text: "First" }),
+      event(2, "agent.started", { task: "First" }),
+      event(3, "plan.updated", {
+        plan: { steps: [{ id: "one", title: "Work", status: "running" }] },
+      }),
+      event(4, "user.message", { text: "Second" }, "two"),
+      event(5, "user.message", { text: "Cancel me" }, "three"),
+      event(
+        6,
+        "agent.completed",
+        {
+          summary: "Queued task cancelled",
+          cancelled: true,
+          plan: { steps: [] },
+          usage: { total_tokens: 0 },
+        },
+        "three",
+      ),
+    ]);
+    expect(started.stage).toBe("UNDERSTAND");
+    expect(started.activeTaskId).toBe("one");
+    expect(started.plan).toHaveLength(1);
+    const completed = applyEvent(
+      started,
+      event(7, "agent.completed", {
+        summary: "First result",
+        success: true,
+        usage: { total_tokens: 30 },
+      }),
+    );
+    expect(completed.usage.total_tokens).toBe(30);
+    const next = applyEvent(
+      completed,
+      event(8, "agent.started", { task: "Second" }, "two"),
+    );
+    expect(next.items.at(-1)).toMatchObject({
+      kind: "user",
+      text: "Second",
+      taskId: "two",
+    });
+    expect(
+      next.items.filter(
+        (item) => item.kind === "user" && item.taskId === "two",
+      ),
+    ).toHaveLength(1);
+    expect(next.activeTaskId).toBe("two");
+    expect(next.usage).toEqual({});
+    expect(next.plan).toEqual([]);
+  });
   it("keeps a final answer once when completion hooks follow it, without hiding a later task or failure", () => {
     const rows = [
       event(1, "model.delta", { text: "Done", message_id: "final" }),

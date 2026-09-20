@@ -20,6 +20,7 @@ workflows, [managed background processes](docs/NATIVE_BACKGROUND.md), and
 [project inspection and diagnostics](docs/NATIVE_INSPECTION.md),
 [project and task notes](docs/NATIVE_MEMORY.md),
 [native SQLite inspection](docs/NATIVE_SQLITE.md),
+[queued follow-ups](docs/NATIVE_QUEUE.md),
 [approved MCP stdio and HTTP tools](docs/NATIVE_MCP.md), a
 [native MCP stdio server](docs/NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode), and a
 [native CLI](docs/NATIVE_CLI.md) that shares the active desktop engine or runs

@@ -13,6 +13,7 @@ export type Transcript = {
   usage: Record<string, number>;
   plan: PlanStep[];
   routing?: RoutingDecision;
+  activeTaskId?: string;
 };
 export const emptyTranscript = (): Transcript => ({
   items: [],
@@ -32,6 +33,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let usage = state.usage;
   let plan = state.plan;
   let routing = state.routing;
+  let activeTaskId = state.activeTaskId;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
   if (event.type === "hook.started" || event.type === "hook.completed") {
@@ -104,14 +106,17 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   }
   if (event.type === "user.message") {
     items = [...items, { kind: "user", text, taskId }];
-    stage = "QUEUED";
+    if (!activeTaskId) stage = "QUEUED";
   }
   if (event.type === "agent.started") {
-    if (
-      !taskId ||
-      !items.some((item) => item.kind === "user" && item.taskId === taskId)
-    )
-      items = [...items, { kind: "user", text: String(p.task || ""), taskId }];
+    const pending = taskId
+      ? items.find((item) => item.kind === "user" && item.taskId === taskId)
+      : undefined;
+    items = [
+      ...items.filter((item) => item !== pending),
+      pending || { kind: "user", text: String(p.task || ""), taskId },
+    ];
+    activeTaskId = taskId;
     stage = "UNDERSTAND";
     plan = [];
     usage = {};
@@ -236,8 +241,10 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     if (index < 0) items.push(card);
     else items[index] = card;
   }
-  if (p.stage) stage = String(p.stage);
-  if (p.plan) plan = (p.plan as { steps?: PlanStep[] }).steps || plan;
+  if (p.stage && (!activeTaskId || activeTaskId === taskId))
+    stage = String(p.stage);
+  if (p.plan && (!activeTaskId || activeTaskId === taskId))
+    plan = (p.plan as { steps?: PlanStep[] }).steps || plan;
   if (event.type === "agent.completed") {
     // Completion checks can appear after the final model response. Match the
     // latest answer within this task, rather than whichever card is last.
@@ -271,8 +278,11 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
               : "Needs attention",
         },
       ];
-    stage = p.cancelled ? "CANCELLED" : p.success ? "DONE" : "FAILED";
-    usage = (p.usage as Record<string, number>) || {};
+    if (!activeTaskId || activeTaskId === taskId) {
+      stage = p.cancelled ? "CANCELLED" : p.success ? "DONE" : "FAILED";
+      usage = (p.usage as Record<string, number>) || {};
+      activeTaskId = undefined;
+    }
   }
   return {
     items,
@@ -280,6 +290,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     usage,
     plan,
     routing,
+    activeTaskId,
     cursor: event.id || state.cursor,
   };
 }

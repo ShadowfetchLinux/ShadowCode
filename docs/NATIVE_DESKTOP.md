@@ -66,6 +66,11 @@ ID so a navigation change cannot send the decision to another task.
 tools, also available through the CLI and MCP server, with parameter binding,
 live WAL support, cancellation and result limits.
 
+[Queued follow-ups](NATIVE_QUEUE.md) let you send the next instruction while the
+current task streams. The project queue shows waiting messages across
+conversations, retains their model/mode choices and supports cancellation.
+Reloads return to the running task before waiting follow-ups.
+
 Project [lifecycle commands](NATIVE_HOOKS.md) can be reviewed and enabled in
 Settings → Hooks or through the same native CLI. Their command gates and
 completion checks run inside the native task lifecycle without Python callbacks.

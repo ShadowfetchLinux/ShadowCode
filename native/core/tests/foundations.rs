@@ -345,6 +345,53 @@ fn branching_is_independent_and_deleting_parent_preserves_branch() {
 }
 
 #[test]
+fn job_listing_keeps_old_active_work_and_selects_execution_order() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("db")).unwrap();
+    let first = json!({"id":"first","session_id":"session","status":"running","started_at":1});
+    let second = json!({"id":"second","session_id":"session","status":"queued","started_at":2});
+    let third = json!({"id":"third","session_id":"session","status":"queued","started_at":3});
+    for job in [&first, &second, &third] {
+        store.save_job(job).unwrap();
+    }
+    for i in 0..10005 {
+        store.save_job(&json!({"id":format!("other-{i}"),"session_id":"another","status":"completed","finished_at":10+i})).unwrap();
+    }
+    let listed = store.active_and_recent_jobs(3).unwrap();
+    assert_eq!(listed.len(), 6);
+    assert_eq!(listed[5]["id"], "first");
+    for include_finished in [false, true] {
+        assert_eq!(
+            store
+                .current_job("session", include_finished)
+                .unwrap()
+                .unwrap()["id"],
+            "first"
+        );
+    }
+    let mut completed = first.clone();
+    completed["status"] = json!("completed");
+    completed["finished_at"] = json!(5);
+    store.save_job(&completed).unwrap();
+    assert_eq!(
+        store.current_job("session", true).unwrap().unwrap()["id"],
+        "second"
+    );
+    for mut job in [second, third] {
+        job["status"] = json!("cancelled");
+        job["finished_at"] = json!(4);
+        store.save_job(&job).unwrap();
+    }
+    assert_eq!(
+        store.current_job("session", true).unwrap().unwrap()["id"],
+        "first"
+    );
+    assert!(store.current_job("session", false).unwrap().is_none());
+    assert!(store.current_job("missing", true).unwrap().is_none());
+    assert_eq!(store.active_and_recent_jobs(3).unwrap().len(), 3);
+}
+
+#[test]
 fn job_recovery_is_durable_and_usage_is_idempotent() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("db");

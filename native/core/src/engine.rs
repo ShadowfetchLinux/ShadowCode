@@ -503,23 +503,37 @@ impl Engine {
         self.request_cancel(id)?;
         self.wait(id).await
     }
+    pub async fn cancel_queued(&self, id: &str) -> Result<Job> {
+        self.request_cancel_if(id, true)?;
+        self.wait(id).await
+    }
     pub(crate) fn request_cancel(&self, id: &str) -> Result<()> {
+        self.request_cancel_if(id, false)
+    }
+    fn request_cancel_if(&self, id: &str, only_if_queued: bool) -> Result<()> {
+        const LEFT_QUEUE: &str = "This task has already left the queue. Open its conversation to review it or stop active work.";
         let Some(job) = self.running(id)? else {
-            self.job(id)?.context("Job not found")?;
+            let previous = self.job(id)?.context("Job not found")?;
+            ensure!(
+                !only_if_queued || previous.status == "cancelled",
+                LEFT_QUEUE
+            );
             return Ok(());
         };
-        job.cancel.cancel();
-        self.0.approvals.deny_task(&job.snapshot()?.task_id);
-        {
+        let task_id = {
             let mut record = job
                 .record
                 .lock()
                 .map_err(|_| anyhow!("Job lock poisoned"))?;
+            ensure!(!only_if_queued || record.status == "queued", LEFT_QUEUE);
+            job.cancel.cancel();
             if matches!(record.status.as_str(), "queued" | "running") {
                 record.status = "cancelling".into();
                 self.0.store.save_job(&json!(*record))?;
             }
-        }
+            record.task_id.clone()
+        };
+        self.0.approvals.deny_task(&task_id);
         // A queued cancellation should not wait for the current coding task.
         let is_front = {
             let queues = self
@@ -740,18 +754,22 @@ impl Engine {
         Ok(())
     }
     async fn run(&self, running: &Running) -> Result<(String, Value)> {
-        ensure!(
-            !running.cancel.is_cancelled(),
-            "Task cancelled before starting"
-        );
-        let mut job = running.snapshot()?;
-        job.status = "running".into();
-        job.started_at = crate::now();
-        *running
-            .record
-            .lock()
-            .map_err(|_| anyhow!("Job lock poisoned"))? = job.clone();
-        self.0.store.save_job(&json!(job))?;
+        // Queue removal and starting work share this lock. A stale queue button
+        // can never cancel a task that has already transitioned to running.
+        let job = {
+            let mut record = running
+                .record
+                .lock()
+                .map_err(|_| anyhow!("Job lock poisoned"))?;
+            ensure!(
+                !running.cancel.is_cancelled(),
+                "Task cancelled before starting"
+            );
+            record.status = "running".into();
+            record.started_at = crate::now();
+            self.0.store.save_job(&json!(*record))?;
+            record.clone()
+        };
         self.0.store.execute(
             "UPDATE tasks SET status='running' WHERE id=?",
             [&job.task_id],

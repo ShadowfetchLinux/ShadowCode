@@ -19,6 +19,11 @@
 - Required task inspection recognizes successful native database reads. Small
   model contexts can use a shorter, enforced response budget while retaining
   required input; requests that still cannot fit fail before contacting the model.
+- The native desktop can queue follow-up messages while the current task streams,
+  show waiting work across project conversations and cancel individual queued
+  tasks. Reloads select the running task first; queue cancellation cannot stop a
+  task that has already begun. Sidebar activity and transcript progress now
+  distinguish queued, running and completed work.
 - Native goals preserve milestone results, pause and resume, require recorded
   inspection/verification for the default checklist, and stop on failed checks.
   Goal tasks appear live in the conversation; results and progress are accessible

@@ -110,6 +110,20 @@ export function useConversation(onComplete: () => void) {
           return;
         }
         cursor.current = Math.max(cursor.current, row.id || 0);
+        if (
+          row.type === "agent.started" &&
+          (!job?.task_id || row.task_id === job.task_id)
+        ) {
+          setJob((current) =>
+            current?.id === id && current.status === "queued"
+              ? {
+                  ...current,
+                  status: "running",
+                  started_at: row.ts || current.started_at,
+                }
+              : current,
+          );
+        }
         setTranscript((s) => applyEvent(s, row));
       } catch {
         /* malformed events do not tear down a working connection */

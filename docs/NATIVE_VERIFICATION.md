@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **182 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **183 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -22,6 +22,11 @@ integration tests** pass on the development machine. The suite covers:
   conflict preflight that preserves unrelated edits.
 - Approval isolation, expiry, cancellation, aborted futures, read-only tasks,
   queued cancellation, hung providers, and managed shutdown.
+- Queued-only cancellation refuses tasks that have already started and preserves
+  their running state. Task startup and cancellation share a transition lock.
+  Active work remains listed behind 10,005 newer completed jobs; conversation
+  selection prefers running work, then FIFO waiting work, then actual completion
+  time, including when a newer submission was cancelled before its predecessor.
 - Tool-call/result pairing across compaction and recovery, live file attachments,
   verification retries, token limits, and labelled estimates for absent usage.
 - Smaller response reserves for constrained models, enforced in the actual
@@ -273,13 +278,26 @@ passed Rust, CLI and MCP checks but caught a notification mid-fade at insufficie
 contrast. Toasts now animate position with fully opaque text. The rebuilt native
 window passes all twelve accessibility views and the complete twenty-request
 workflow locally, including the changed-selection goal approval regression.
-Seventeen interface unit tests cover ordered replay, pagination, stream finalization,
+Twenty interface unit tests cover ordered replay, pagination, stream finalization,
 listener cleanup, interruption, native tool cards, routing/fallback replay,
 workflow provenance, durable command/hook cards, completion checks between
 answers and task results, and disambiguated model labels that omit URL credentials. The seven existing browser
 tests continue to pass through the legacy transport.
 
-The same native window workflow also passes when launched from the local optimized
+The queued-follow-up update extends the real native-window probe to 22 scripted
+model requests and 15 passing Axe views. While a model response is deliberately
+held open, the UI queues two follow-ups, creates another conversation in the
+same project, queues and cancels its message, returns to the original task and
+reloads. The running task stays selected and visible; the queue survives.
+The probe cancels a waiting message without interrupting the first task, then
+releases it and observes the second task start automatically with its selected
+model, read-only Review tools and the completed predecessor's conversation.
+Cancelled messages never contact the model. Queue screenshots and accessibility
+reports cover light, dark and compact layouts; the sidebar returns to idle after
+completion. UI unit tests also cover interleaved queue cancellation without
+resetting the running task's plan/usage, and prompt ordering without duplication.
+
+The earlier twenty-request window workflow also passed from the local optimized
 AppImage in FUSE-free extraction mode with the legacy `ui` argument. The package
 checker confirms that AppImage and Debian packages contain native ELF application
 code with matching versions and no Python runtime or sidecars. Packaging now
