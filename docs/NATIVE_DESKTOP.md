@@ -40,6 +40,41 @@ Model inference remains in Ollama or the selected provider; it is not bundled.
 
 To work on the live interface, run `./ui/node_modules/.bin/tauri dev` from the
 repository root. The Tauri configuration starts Vite and builds the native app.
+Build hooks explicitly use the `ui` directory, including when the CLI is invoked
+from the repository root.
+
+## Development packages
+
+From the repository root, build both package formats with:
+
+```sh
+node scripts/build-native.mjs
+node scripts/check-native-package.mjs \
+  target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage \
+  target/release/bundle/deb/ShadowCode_0.20.0_amd64.deb
+```
+
+The build script collects [dependency notices](../licenses/native/README.md),
+restores the original executable before packaging each format because Tauri
+modifies its bundle-type marker, and repacks the AppImage with notices for its
+actual bundled system libraries. Build tools are cached in `target/.tauri/`.
+Unknown dependencies or a changed AppImage runtime stop packaging until their
+notices are supplied. The checker verifies FUSE-free
+startup, the legacy `shadow ui` launch form, native ELF code, package versions,
+dependency resolution on the build host, and absence of Python interpreters,
+libraries, and sidecars. It also verifies the SHA-256 digest of every listed
+notice in each extracted package. It produces checksums in `artifacts/native-package/`.
+
+The initial local packages contain an approximately 17 MB executable, an 80 MB
+AppImage (including native GTK/WebKit libraries), and a 7.5 MB Debian package
+(using system GTK/WebKit), before the notice inventory was added. These are
+development artifacts. Corresponding-source release artifacts, clean-runner
+package verification, complete feature migration, and release
+installation are still required before publication as the supported download.
+
+If linuxdeploy aborts while scanning an inaccessible symlink in a PATH directory,
+remove that directory from PATH for the packaging command; the application does
+not require that tool. No global PATH change is needed.
 
 ## Desktop integration
 
@@ -83,6 +118,12 @@ reload, cancellation, compact layout, goals and their live transcript, pause,
 light/dark/compact/goals accessibility, and managed shutdown. It also verifies
 that the executable embeds the current compiled interface and does not load
 `libpython`.
+
+To run this same workflow against the actual AppImage, set
+`SHADOW_DESKTOP_BINARY` to its absolute path,
+`SHADOW_DESKTOP_ARGS='["--appimage-extract-and-run","ui"]'`, and
+`SHADOW_NATIVE_ARTIFACTS` to a separate output directory. Its test profile and
+workspace remain disposable, so it does not migrate the installed app's data.
 
 See [verification evidence](NATIVE_VERIFICATION.md) for engine stress tests and
 separate real-model coding probes. The scripted window test establishes UI and

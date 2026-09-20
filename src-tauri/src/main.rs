@@ -163,16 +163,14 @@ fn run() -> Result<()> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--version" | "-V" => {
-                println!(
-                    "ShadowCode {} · native Rust desktop",
-                    shadowcode_core::VERSION
-                );
+                println!("ShadowCode {}", shadowcode_core::VERSION);
                 return Ok(());
             }
             "--help" | "-h" => {
                 println!("ShadowCode {}\n\nUsage: shadowcode [--workspace PATH] [--profile PATH]\n\n  --workspace PATH  Open this project\n  --profile PATH    Use an isolated data profile\n  --version         Print version\n  --help            Show help",shadowcode_core::VERSION);
                 return Ok(());
             }
+            "ui" => {}
             "--profile" => {
                 profile = Some(PathBuf::from(
                     args.next().context("--profile requires a path")?,

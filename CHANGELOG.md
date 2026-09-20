@@ -14,6 +14,10 @@
   from the drawer.
 - Native window automation covers actual tool execution, approvals, reload,
   cancellation, goal progression/pause, accessibility, and subprocess cleanup.
+- Native AppImage and Debian build scripts preserve per-format executable
+  metadata, include versioned dependency notices, and check startup, versions,
+  matching compiled code, notice hashes, and absence of Python sidecars. The
+  packaged AppImage runs the same real-window workflow as the debug executable.
 
 This development branch is not yet the replacement release. Remaining
 integrations, broader stress checks, packaging, and installation are tracked in

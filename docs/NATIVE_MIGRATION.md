@@ -46,6 +46,7 @@ the existing React visual design. This document tracks engineering acceptance;
 - Exercise both the real native window and the browser test transport. Verify
   accessibility and appearance at desktop and compact sizes.
 - Build on a clean CI runner, verify the downloadable artifact on this machine,
+  include dependency notices and checked package metadata,
   update all user/developer/security/release documentation and repository info,
   publish source plus checksummed binaries to GitHub, and install the verified
   release in Applications while retaining user data.
@@ -103,6 +104,13 @@ Implemented foundation:
   The default inspection requires current reads; final verification requires a
   recorded successful command. Failed verification blocks further progression.
   Manual checklist edits are labelled and disallowed while the goal is running.
+- Repeatable Linux AppImage and Debian packaging with the native ELF executable,
+  embedded UI, legacy `shadow ui` launcher compatibility, exact version metadata,
+  and package inspection for Python runtimes or sidecars. Both packages contain
+  application dependency notices; the AppImage adds an inventory and copyright
+  texts for its actual bundled libraries. Package checks verify every listed
+  notice's checksum. Corresponding-source artifacts and final release validation
+  remain separate gates.
 
 The remaining orchestration/integrations, full desktop interaction/stress
 coverage, and release packaging are still in progress. The native

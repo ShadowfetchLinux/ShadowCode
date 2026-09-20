@@ -73,9 +73,21 @@ Eleven interface unit tests cover ordered replay, pagination, stream finalizatio
 listener cleanup, interruption, and native tool cards. The seven existing browser
 tests continue to pass through the legacy transport.
 
+The same native window workflow also passes when launched from the local release
+AppImage in FUSE-free extraction mode with the legacy `ui` argument. The package
+checker confirms that AppImage and Debian packages contain native ELF application
+code with matching versions and no Python runtime or sidecars. Packaging now
+collects notices for 523 application dependencies, including the resolved Cargo
+build/test graph and production npm graph. The local AppImage inventory records
+156 system packages; that number depends on the build host's libraries and GTK
+data. Unattributed system files stop packaging, and the extracted-package check
+verifies the SHA-256 digest of every listed notice. Exact source package versions
+are retained for corresponding-source release preparation.
+
 OS dialog interaction, notification delivery, default-profile single-instance
 behavior, broader stress/accessibility coverage, real models through the native
-window, and final release packages still need their release-gate checks.
+window, corresponding-source artifacts, clean-runner package builds, and the final installed
+release still need their release-gate checks.
 
 ## Real local models
 

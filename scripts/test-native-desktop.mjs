@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const binary = process.env.SHADOW_DESKTOP_BINARY || path.join(root, "target/debug/shadowcode");
-const artifacts = path.join(root, "artifacts/native");
+const binaryArgs = JSON.parse(process.env.SHADOW_DESKTOP_ARGS || "[]");
+assert.ok(Array.isArray(binaryArgs) && binaryArgs.every(arg => typeof arg === "string"), "SHADOW_DESKTOP_ARGS must be a JSON array of strings");
+const artifacts = process.env.SHADOW_NATIVE_ARTIFACTS || path.join(root, "artifacts/native");
 await mkdir(artifacts, { recursive: true });
 for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json"]) {
   await rm(path.join(artifacts, name), { force: true });
@@ -132,7 +134,7 @@ async function accessibility(name) {
 }
 try {
   await until("WebDriver startup", async () => { if (spawnError) throw spawnError; return wd("GET", "/status"); });
-  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: binary, args: ["--profile", profile, "--workspace", project] } } } });
+  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: binary, args: [...binaryArgs, "--profile", profile, "--workspace", project] } } } });
   session = created.sessionId;
   await wd("POST", `/session/${session}/timeouts`, { script: 20000, implicit: 0, pageLoad: 30000 });
   await until("Native workspace", () => execute("return !!document.querySelector('textarea[aria-label=\"Message ShadowCode\"]') && !document.querySelector('textarea[aria-label=\"Message ShadowCode\"]').disabled;"), 25000);
