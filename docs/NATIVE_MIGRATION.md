@@ -77,6 +77,10 @@ Implemented foundation:
   editable Plan/Build/Review/Test selections, preserved custom credentials and
   context limits, queued configuration snapshots, explicit per-task overrides,
   persisted model/fallback notices, and goal verification routed to Test.
+- [Managed background processes](NATIVE_BACKGROUND.md) for project servers and
+  watchers, with permission checks, bounded live log tails, durable status and
+  audit events, project-scoped controls, bounded concurrency, legacy history
+  import, and cancellation/shutdown that waits for process-group cleanup.
 - A persisted native task loop, per-workspace FIFO follow-ups, four concurrent
   workspaces, scoped approvals, cancellation that waits for cleanup, restart
   recovery, and atomic completion/usage/event commits. Continuation and branching

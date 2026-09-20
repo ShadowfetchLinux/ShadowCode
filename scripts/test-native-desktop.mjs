@@ -15,7 +15,7 @@ const binaryArgs = JSON.parse(process.env.SHADOW_DESKTOP_ARGS || "[]");
 assert.ok(Array.isArray(binaryArgs) && binaryArgs.every(arg => typeof arg === "string"), "SHADOW_DESKTOP_ARGS must be a JSON array of strings");
 const artifacts = process.env.SHADOW_NATIVE_ARTIFACTS || path.join(root, "artifacts/native");
 await mkdir(artifacts, { recursive: true });
-for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "routing.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json", "accessibility-routing.json"]) {
+for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "routing.png", "background.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json", "accessibility-routing.json", "accessibility-background.json"]) {
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
@@ -123,6 +123,10 @@ async function clickButton(text) {
 async function type(selector, text) {
   await wd("POST", `/session/${session}/element/${await element(selector)}/value`, { text });
 }
+async function fill(selector, text) {
+  await wd("POST", `/session/${session}/element/${await element(selector)}/clear`, {});
+  await type(selector, text);
+}
 async function screenshot(name) {
   await writeFile(path.join(artifacts, `${name}.png`), Buffer.from(await wd("GET", `/session/${session}/screenshot`), "base64"));
 }
@@ -165,6 +169,22 @@ try {
   await accessibility("routing");
   await click('button.drawer-close');
   assert.match(await execute("return document.querySelector('select[aria-label=\"Model for this task\"]').selectedOptions[0].textContent"), /Automatic/);
+  await click('button[aria-label="Terminal"]');
+  await clickButton("Background");
+  await fill('#background-name', "dev");
+  await type('#background-command', "printf 'native-background-ready\\n'; trap 'printf graceful-stop; exit 0' TERM; while :; do sleep 1; done");
+  await clickButton("Start process");
+  const background = await until("Background process output", async () => {
+    const task = (await api("GET", "/api/background")).tasks[0];
+    return task?.status === "RUNNING" && task.output.includes("native-background-ready") && task;
+  });
+  await until("Background output in drawer", () => execute("return !!document.querySelector('.background-output pre')?.textContent.includes('native-background-ready')"));
+  await clickButton("Read retained output");
+  await until("Retained background output", () => execute("return !!document.querySelector('.background-output summary')?.textContent.includes('Retained output snapshot')"));
+  await clickButton("Return to live output");
+  await screenshot("background");
+  await accessibility("background");
+  await click('button.drawer-close');
   await type('textarea[aria-label="Message ShadowCode"]', "Create hello.txt containing native-window-ok and verify its contents with the terminal.");
   await click('button[aria-label="Send task"]');
   await until("Command approval", () => execute("return !!document.querySelector('.approval button.primary')"));
@@ -197,6 +217,17 @@ try {
   await until("Cancellation persisted", async () => (await api("GET", "/api/jobs")).jobs[0].status === "cancelled");
   await until("Cancellation visible", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>/cancelled/i.test(e.textContent));"));
   await api("PUT", "/api/routing", { values: { enabled: false } });
+  assert.equal((await api("GET", `/api/background/${background.id}`)).status, "RUNNING");
+  await click('button[aria-label="Terminal"]');
+  await clickButton("Background");
+  await until("Background stop control", () => execute("return !!document.querySelector('button[aria-label=\"Stop dev\"]')"));
+  await click('button[aria-label="Stop dev"]');
+  await until("Background cancellation persisted", async () => {
+    const task = await api("GET", `/api/background/${background.id}`);
+    return task.status === "CANCELLED" && task.output.includes("graceful-stop");
+  });
+  await until("Background cancellation visible", () => execute("return !!document.querySelector('.bg-task .st-cancelled')"));
+  await click('button.drawer-close');
   await wd("POST", `/session/${session}/window/rect`, { width: 620, height: 850 });
   await until("Compact sidebar collapsed", () => execute("return !document.querySelector('.sidebar')"));
   await screenshot("compact");
@@ -247,6 +278,15 @@ try {
     const goal = (await api("GET", `/api/goals/${pausedGoal.id}`));
     return goal.status === "paused" && !goal.running;
   });
+  await clickButton("Background");
+  await fill('#background-name', "shutdown-server");
+  await type('#background-command', "trap '' TERM; sleep 60 & echo $! > background-child.pid; printf shutdown-ready; wait");
+  await clickButton("Start process");
+  const shutdownBackground = await until("Background process for shutdown", async () => {
+    const task = (await api("GET", "/api/background")).tasks[0];
+    return task?.name === "shutdown-server" && task.output.includes("shutdown-ready") && task;
+  });
+  const backgroundChild = (await readFile(path.join(project, "background-child.pid"), "utf8")).trim();
   // A terminal command is still running when the actual native quit command is
   // invoked. The process and its child must be gone before shutdown completes.
   await execute("window.__TAURI_INTERNALS__.invoke('api',{request:{method:'POST',path:'/api/workspace/exec',body:{command:'sleep 60 & echo $! > child.pid; wait',timeout:120}}}).catch(()=>{});return true;");
@@ -257,8 +297,10 @@ try {
   };
   await until("Native shutdown", () => dead(version.pid));
   await until("Terminal cleanup", () => dead(child));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "cancellation", "compact layout", "native light/dark/compact/goals/routing accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
-  console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, replay, cancellation, layout, goals, accessibility, shutdown.");
+  await until("Background child cleanup", () => dead(backgroundChild));
+  await until("Background process cleanup", () => dead(shutdownBackground.pid));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {
     await screenshot("failure").catch(() => {});

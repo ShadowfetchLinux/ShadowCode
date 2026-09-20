@@ -141,6 +141,46 @@ impl Service {
                 );
             }
             ("GET", "/api/config") => return Ok(json!(self.config()?)),
+            ("GET", "/api/background") => {
+                let tasks = self
+                    .engine
+                    .background()
+                    .list(&self.workspace()?)?
+                    .into_iter()
+                    .map(|mut task| {
+                        if task.command.len() > 4000 {
+                            task.command = format!("{}…", truncate(&task.command, 4000));
+                        }
+                        let clipped = task.output.len() > 4000;
+                        if clipped {
+                            let mut cut = task.output.len() - 4000;
+                            while !task.output.is_char_boundary(cut) {
+                                cut += 1;
+                            }
+                            task.output.drain(..cut);
+                        }
+                        let mut value = json!(task);
+                        value["output_preview_truncated"] = json!(clipped);
+                        value
+                    })
+                    .collect::<Vec<_>>();
+                return Ok(json!({"tasks":tasks}));
+            }
+            ("POST", "/api/background") => {
+                let selection = self
+                    .selection
+                    .read()
+                    .map_err(|_| anyhow::anyhow!("Project selection lock poisoned"))?
+                    .clone();
+                let config = Config::load(self.engine.paths(), Some(&selection.workspace))?;
+                return Ok(json!(self.engine.background().start(
+                    &selection.workspace,
+                    &config,
+                    selection.session,
+                    text("name"),
+                    text("command")
+                )?));
+            }
             ("PUT", "/api/config") => {
                 let mut values = body["values"].clone();
                 ensure!(values.is_object(), "values must be an object");
@@ -641,6 +681,20 @@ impl Service {
                 return Ok(json!({"ok":true}));
             }
             _ => {}
+        }
+        if parts.get(1) == Some(&"background") && parts.len() >= 3 {
+            let task = self.engine.background().get(parts[2])?;
+            ensure!(
+                Path::new(&task.cwd) == self.workspace()?,
+                "Switch to this process's project before managing it"
+            );
+            match (request.method.as_str(), parts.get(3).copied(), parts.len()) {
+                ("GET", None, 3) => return Ok(json!(task)),
+                ("POST", Some("stop"), 4) => {
+                    return Ok(json!(self.engine.background().stop(parts[2]).await?))
+                }
+                _ => {}
+            }
         }
         if parts.get(1) == Some(&"goals") && parts.len() >= 3 {
             let gid = parts[2];

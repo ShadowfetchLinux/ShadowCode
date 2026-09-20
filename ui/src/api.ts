@@ -166,6 +166,12 @@ export type BackgroundTask = {
   pid: number;
   exit_code: number | null;
   output: string;
+  cwd?: string;
+  started_at?: number;
+  ended_at?: number | null;
+  error?: string;
+  truncated?: boolean;
+  output_preview_truncated?: boolean;
 };
 export type RoutingDecision = {
   purpose: string;
@@ -350,6 +356,7 @@ export const api = {
       detail: "",
     }),
   background: () => get<{ tasks: BackgroundTask[] }>("/api/background"),
+  backgroundTask: (id: string) => get<BackgroundTask>(`/api/background/${id}`),
   startBackground: (name: string, command: string) =>
     send<BackgroundTask>("/api/background", "POST", { name, command }),
   stopBackground: (id: string) =>

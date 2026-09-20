@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+mod background;
 mod goals;
 pub use goals::MilestoneSpec;
 
@@ -44,6 +45,11 @@ CREATE TABLE IF NOT EXISTS pins (
  task_id TEXT, ts REAL NOT NULL, label TEXT NOT NULL, body TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS desktop_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS background_processes (
+ id TEXT PRIMARY KEY, workspace TEXT NOT NULL, started_at REAL NOT NULL,
+ status TEXT NOT NULL, payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS background_workspace ON background_processes(workspace,started_at);
 CREATE TABLE IF NOT EXISTS native_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS goals (
  id TEXT PRIMARY KEY, workspace TEXT NOT NULL, instruction TEXT NOT NULL,
@@ -96,10 +102,10 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", true)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 22,
+            version <= 23,
             "This database was created by a newer ShadowCode version"
         );
-        if version < 22 {
+        if version < 23 {
             if existed {
                 let backup_path = path.with_extension(format!("pre-native-{}.sqlite", id()));
                 let mut backup = Connection::open(&backup_path)?;
@@ -138,7 +144,7 @@ impl Store {
                     tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
                 }
             }
-            tx.pragma_update(None, "user_version", 22)?;
+            tx.pragma_update(None, "user_version", 23)?;
             tx.commit()?;
         }
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -148,6 +154,7 @@ impl Store {
             connection: Mutex::new(connection),
         };
         store.import_legacy_goals()?;
+        store.import_legacy_background()?;
         Ok(store)
     }
 

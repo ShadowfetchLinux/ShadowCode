@@ -522,6 +522,38 @@ kbd {
   gap: 14px;
   margin: 16px 0;
 }
+.background-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  margin: 20px 0;
+}
+.background-form label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.background-form input {
+  width: 100%;
+  min-width: 0;
+}
+.background-form button {
+  justify-self: start;
+  margin-top: 4px;
+}
+.bg-task > code,
+.bg-task .health-bad {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.background-output summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.background-output pre {
+  max-height: 240px;
+  overflow: auto;
+}
 .routing-field {
   display: grid;
   gap: 6px;

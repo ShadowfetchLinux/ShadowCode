@@ -69,6 +69,14 @@ pub struct ProcessResult {
 
 struct ProcessGroup(u32);
 impl ProcessGroup {
+    fn terminate(&self) {
+        #[cfg(unix)]
+        if self.0 != 0 {
+            unsafe {
+                libc::kill(-(self.0 as i32), libc::SIGTERM);
+            }
+        }
+    }
     fn kill(&mut self) {
         #[cfg(unix)]
         if self.0 != 0 {
@@ -99,6 +107,63 @@ pub async fn run(
     spec: ProcessSpec,
     cancel: CancellationToken,
     chunks: Option<mpsc::Sender<ProcessChunk>>,
+) -> Result<ProcessResult> {
+    run_internal(spec, cancel, chunks, None).await
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct LiveOutput {
+    pub pid: u32,
+    pub output: String,
+    pub truncated: bool,
+    pub revision: u64,
+}
+#[derive(Clone, Default)]
+pub struct ProcessMonitor(Arc<Mutex<LiveOutput>>);
+impl ProcessMonitor {
+    pub fn snapshot(&self) -> Result<LiveOutput> {
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Process output lock poisoned"))?
+            .clone())
+    }
+    fn append(&self, text: &str) -> Result<()> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Process output lock poisoned"))?;
+        state.output.push_str(text);
+        if state.output.len() > 64_000 {
+            let mut cut = state.output.len() - 64_000;
+            while !state.output.is_char_boundary(cut) {
+                cut += 1;
+            }
+            state.output.drain(..cut);
+            state.truncated = true;
+        }
+        state.revision = state.revision.saturating_add(1);
+        Ok(())
+    }
+}
+
+/// A user-started server or watcher runs until it exits or is stopped, rather
+/// than inheriting the one-hour foreground-command timeout. The monitor keeps
+/// the latest 64 KB while both pipes continue draining. Stop allows two seconds
+/// for SIGTERM, then kills the remaining process group.
+pub async fn run_background(
+    spec: ProcessSpec,
+    cancel: CancellationToken,
+    monitor: ProcessMonitor,
+) -> Result<ProcessResult> {
+    run_internal(spec, cancel, None, Some(monitor)).await
+}
+
+async fn run_internal(
+    spec: ProcessSpec,
+    cancel: CancellationToken,
+    chunks: Option<mpsc::Sender<ProcessChunk>>,
+    monitor: Option<ProcessMonitor>,
 ) -> Result<ProcessResult> {
     ensure!(spec.cwd.is_dir(), "Command workspace does not exist");
     ensure!(
@@ -152,6 +217,14 @@ pub async fn run(
         .with_context(|| format!("Could not start {}", spec.program))?;
     let pid = child.id().context("Command has no process ID")?;
     let mut group = ProcessGroup(pid);
+    if let Some(monitor) = &monitor {
+        let mut state = monitor
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Process output lock poisoned"))?;
+        state.pid = pid;
+        state.revision += 1;
+    }
     let used = Arc::new(AtomicUsize::new(0));
     let output = Arc::new(Mutex::new(Vec::new()));
     let errors = Arc::new(Mutex::new(Vec::new()));
@@ -162,6 +235,7 @@ pub async fn run(
         used.clone(),
         chunks.clone(),
         output.clone(),
+        monitor.clone(),
     )));
     let mut stderr = DrainTask(tokio::spawn(drain(
         child.stderr.take().context("Missing stderr")?,
@@ -170,11 +244,29 @@ pub async fn run(
         used.clone(),
         chunks,
         errors.clone(),
+        monitor.clone(),
     )));
+    let deadline = async {
+        if monitor.is_some() {
+            std::future::pending::<()>().await;
+        } else {
+            tokio::time::sleep(spec.timeout).await;
+        }
+    };
     let (status, timed_out, cancelled) = tokio::select! {
         status=child.wait()=>(Some(status?),false,false),
-        _=tokio::time::sleep(spec.timeout)=>(None,true,false),
+        _=deadline=>(None,true,false),
         _=cancel.cancelled()=>(None,false,true),
+    };
+    let status = if cancelled && monitor.is_some() {
+        group.terminate();
+        tokio::time::timeout(Duration::from_secs(2), child.wait())
+            .await
+            .ok()
+            .transpose()?
+            .or(status)
+    } else {
+        status
     };
     group.kill();
     let status = match status {
@@ -224,12 +316,39 @@ async fn drain(
     used: Arc<AtomicUsize>,
     chunks: Option<mpsc::Sender<ProcessChunk>>,
     result: Arc<Mutex<Vec<u8>>>,
+    monitor: Option<ProcessMonitor>,
 ) -> Result<()> {
     let mut buffer = [0_u8; 8192];
+    let mut pending = Vec::new();
     loop {
         let count = reader.read(&mut buffer).await?;
         if count == 0 {
             break;
+        }
+        if let Some(monitor) = &monitor {
+            pending.extend_from_slice(&buffer[..count]);
+            let mut consumed = 0;
+            while consumed < pending.len() {
+                match std::str::from_utf8(&pending[consumed..]) {
+                    Ok(text) => {
+                        monitor.append(text)?;
+                        consumed = pending.len();
+                    }
+                    Err(error) => {
+                        let valid = error.valid_up_to();
+                        monitor
+                            .append(std::str::from_utf8(&pending[consumed..consumed + valid])?)?;
+                        consumed += valid;
+                        if let Some(invalid) = error.error_len() {
+                            monitor.append("\u{fffd}")?;
+                            consumed += invalid;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            pending.drain(..consumed);
         }
         let previous = used.fetch_add(count, Ordering::Relaxed);
         let keep = count.min(limit.saturating_sub(previous));
@@ -244,6 +363,11 @@ async fn drain(
                     text: String::from_utf8_lossy(&buffer[..keep]).into_owned(),
                 });
             }
+        }
+    }
+    if let Some(monitor) = monitor {
+        if !pending.is_empty() {
+            monitor.append(&String::from_utf8_lossy(&pending))?;
         }
     }
     Ok(())

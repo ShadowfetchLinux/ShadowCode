@@ -106,14 +106,9 @@ test("compact layout keeps composer and controls reachable", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 600, height: 850 });
-  if (
-    await page
-      .getByRole("button", { name: "Hide sidebar", exact: true })
-      .isVisible()
-  )
-    await page
-      .getByRole("button", { name: "Hide sidebar", exact: true })
-      .click();
+  // Resizing closes the sidebar asynchronously. Waiting for that state avoids
+  // trying to click a control that disappears between isVisible() and click().
+  await expect(page.locator(".sidebar")).toHaveCount(0);
   await expect(
     page.getByRole("textbox", { name: "Message ShadowCode" }),
   ).toBeVisible();

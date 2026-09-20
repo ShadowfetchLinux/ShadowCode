@@ -96,6 +96,9 @@ not require that tool. No global PATH change is needed.
 - [Model routing](NATIVE_ROUTING.md) selects a registered model for Plan, Build,
   Review, and Test. Provider-scoped IDs keep identical model names on different
   servers distinct; conversations retain the actual selection and fallback notices.
+- [Background processes](NATIVE_BACKGROUND.md) run project servers and watchers
+  alongside coding tasks, with live bounded logs, retained history, stop controls,
+  and process-group cleanup during application shutdown.
 
 ## Checks
 
@@ -121,7 +124,8 @@ and `SHADOW_WEBKIT_DRIVER` select explicit executable paths. Logs, screenshots,
 and a machine-readable result are written to `artifacts/native/`. This test
 checks the real embedded window, Rust IPC, approval, file and terminal tools,
 reload, cancellation, compact layout, model routing/fallback notices, goals and
-their live transcript, pause, light/dark/compact/goals/routing accessibility,
+their live transcript, pause, managed background processes,
+light/dark/compact/goals/routing/background accessibility,
 and managed shutdown. It also verifies
 that the executable embeds the current compiled interface and does not load
 `libpython`.

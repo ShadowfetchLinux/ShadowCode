@@ -1,6 +1,7 @@
 //! Durable task orchestration shared by the native window and optional transports.
 use crate::{
     approvals::ApprovalHub,
+    background::BackgroundManager,
     config::{Config, ModelConfig, PermissionLevel},
     context,
     events::TaskEvents,
@@ -118,16 +119,19 @@ struct Inner {
     goals: Mutex<HashMap<String, Arc<GoalRun>>>,
     slots: Semaphore,
     closing: AtomicBool,
-    _profile_lock: std::fs::File,
+    background: BackgroundManager,
+    _profile_lock: Arc<std::fs::File>,
 }
 #[derive(Clone)]
 pub struct Engine(Arc<Inner>);
 impl Engine {
     pub fn open(paths: AppPaths) -> Result<Self> {
-        let profile_lock = paths.lock()?;
+        let profile_lock = Arc::new(paths.lock()?);
         let store = Arc::new(Store::open(&paths.database())?);
         store.recover_jobs()?;
         store.recover_goals()?;
+        store.recover_background()?;
+        let background = BackgroundManager::new(store.clone(), profile_lock.clone());
         let (sender, _) = broadcast::channel(1024);
         Ok(Self(Arc::new(Inner {
             paths,
@@ -139,6 +143,7 @@ impl Engine {
             goals: Mutex::new(HashMap::new()),
             slots: Semaphore::new(4),
             closing: AtomicBool::new(false),
+            background,
             _profile_lock: profile_lock,
         })))
     }
@@ -153,6 +158,9 @@ impl Engine {
     }
     pub fn paths(&self) -> &AppPaths {
         &self.0.paths
+    }
+    pub fn background(&self) -> &BackgroundManager {
+        &self.0.background
     }
     pub fn delete_session(&self, id: &str) -> Result<bool> {
         let goals = self
@@ -424,6 +432,7 @@ impl Engine {
     }
     pub async fn shutdown(&self) -> Result<()> {
         self.0.closing.store(true, Ordering::Release);
+        self.0.background.begin_shutdown()?;
         let goals: Vec<_> = self
             .0
             .goals
@@ -461,6 +470,7 @@ impl Engine {
             self.0.approvals.deny_task(&job.snapshot()?.task_id);
         }
         tokio::time::timeout(Duration::from_secs(15), async {
+            self.0.background.wait_shutdown().await?;
             for goal in goals {
                 goal.wait().await;
             }

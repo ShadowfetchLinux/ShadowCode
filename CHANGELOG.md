@@ -16,6 +16,10 @@
   task overrides, and recorded selection/fallback notices. Model registration
   distinguishes identical names on different endpoints and preserves saved
   credential references and context limits during discovery.
+- Native background processes run development servers and watchers alongside
+  tasks, retain bounded live logs and durable history, honor project permissions,
+  and stop managed child processes when the application closes. Legacy history
+  is imported without signalling stored PIDs or replaying old commands.
 - Native window automation covers actual tool execution, approvals, reload,
   cancellation, goal progression/pause, accessibility, and subprocess cleanup.
 - Native AppImage and Debian build scripts preserve per-format executable

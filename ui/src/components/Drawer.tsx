@@ -132,7 +132,9 @@ export function Drawer({
             onRoutingChanged={onRefreshSessions}
           />
         )}
-        {tab === "background" && <BackgroundTab toast={toast} />}
+        {tab === "background" && (
+          <BackgroundTab key={workspace} toast={toast} />
+        )}
       </div>
     </aside>
   );
@@ -1193,64 +1195,92 @@ function BackgroundTab({ toast }: { toast: Toast }) {
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const [name, setName] = useState("dev");
   const [command, setCommand] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState<string[]>([]);
+  const [error, setError] = useState("");
+  const [retained, setRetained] = useState<BackgroundTask | null>(null);
   const load = useCallback(async () => {
     try {
       setTasks((await api.background()).tasks);
-    } catch {
-      setTasks([]);
+      setError("");
+    } catch (error) {
+      setError(String(error));
     }
   }, []);
   useEffect(() => {
     void load();
-    const id = setInterval(() => void load(), 3000);
+    const id = setInterval(() => void load(), 1000);
     return () => clearInterval(id);
   }, [load]);
+  const start = async () => {
+    if (starting || !name.trim() || !command.trim()) return;
+    setStarting(true);
+    try {
+      await api.startBackground(name.trim(), command);
+      setCommand("");
+      await load();
+    } catch (error) {
+      toast(String(error), "err");
+    } finally {
+      setStarting(false);
+    }
+  };
+  const stop = async (id: string) => {
+    setStopping((current) => [...current, id]);
+    try {
+      await api.stopBackground(id);
+      await load();
+    } catch (error) {
+      toast(String(error), "err");
+    } finally {
+      setStopping((current) => current.filter((value) => value !== id));
+    }
+  };
   return (
     <>
       <p className="hint">
-        Long-running processes (dev servers, watchers) that outlive a single
-        task.
+        Development servers and watchers continue between tasks.
+        {isNative() &&
+          " This panel shows the current project's processes. They stop when ShadowCode closes."}
       </p>
-      <div className="field inline">
+      <form
+        className="background-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void start();
+        }}
+      >
+        <label htmlFor="background-name">Process name</label>
         <input
+          id="background-name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="name"
-          style={{ maxWidth: 90 }}
+          maxLength={80}
+          disabled={starting}
         />
+        <label htmlFor="background-command">Background command</label>
         <input
+          id="background-command"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
           placeholder="npm run dev"
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && command.trim())
-              void api
-                .startBackground(name, command)
-                .then(() => {
-                  setCommand("");
-                  void load();
-                })
-                .catch((err) => toast(String(err), "err"));
-          }}
+          maxLength={64000}
+          disabled={starting}
         />
         <button
-          type="button"
+          type="submit"
           className="mini"
-          disabled={!command.trim()}
-          onClick={() =>
-            void api
-              .startBackground(name, command)
-              .then(() => {
-                setCommand("");
-                void load();
-              })
-              .catch((err) => toast(String(err), "err"))
-          }
+          disabled={starting || !name.trim() || !command.trim()}
         >
-          Start
+          {starting ? "Starting…" : "Start process"}
         </button>
-      </div>
-      {tasks.length === 0 && <Empty title="Nothing running" />}
+      </form>
+      {error && (
+        <p className="health-bad" role="alert">
+          {error}
+        </p>
+      )}
+      {!error && tasks.length === 0 && <Empty title="No process history" />}
       {tasks.map((t) => (
         <div key={t.id} className="bg-task">
           <header>
@@ -1259,18 +1289,90 @@ function BackgroundTab({ toast }: { toast: Toast }) {
               {t.status}
               {t.exit_code !== null ? ` · exit ${t.exit_code}` : ""}
             </span>
-            {t.status.toUpperCase() === "RUNNING" && (
+            {["STARTING", "RUNNING", "STOPPING"].includes(
+              t.status.toUpperCase(),
+            ) && (
               <button
                 type="button"
                 className="mini danger-text"
-                onClick={() => void api.stopBackground(t.id).then(load)}
+                aria-label={`Stop ${t.name}`}
+                disabled={
+                  stopping.includes(t.id) ||
+                  t.status.toUpperCase() === "STOPPING"
+                }
+                onClick={() => void stop(t.id)}
               >
-                Stop
+                {stopping.includes(t.id) ||
+                t.status.toUpperCase() === "STOPPING"
+                  ? "Stopping…"
+                  : "Stop"}
               </button>
             )}
           </header>
-          <code className="dim">{t.command}</code>
-          {t.output && <pre className="plan log">{t.output.slice(-1500)}</pre>}
+          <code className="dim">
+            {retained?.id === t.id ? retained.command : t.command}
+          </code>
+          {t.pid > 0 && (
+            <p className="hint">
+              PID {t.pid}
+              {t.started_at
+                ? ` · started ${new Date(t.started_at * 1000).toLocaleTimeString()}`
+                : ""}
+            </p>
+          )}
+          {t.error && <p className="health-bad">{t.error}</p>}
+          {t.output && (
+            <details
+              className="background-output"
+              open={
+                ["STARTING", "RUNNING", "STOPPING"].includes(
+                  t.status.toUpperCase(),
+                ) || retained?.id === t.id
+              }
+            >
+              <summary>
+                {retained?.id === t.id
+                  ? "Retained output snapshot"
+                  : t.truncated || t.output_preview_truncated
+                    ? "Recent output · older output omitted"
+                    : "Process output"}
+              </summary>
+              <pre
+                className="plan log"
+                tabIndex={0}
+                aria-label={`${t.name} process output`}
+              >
+                {retained?.id === t.id ? retained.output : t.output}
+              </pre>
+              {isNative() && (
+                <div className="row">
+                  <button
+                    type="button"
+                    className="mini"
+                    onClick={() =>
+                      void api
+                        .backgroundTask(t.id)
+                        .then(setRetained)
+                        .catch((error) => toast(String(error), "err"))
+                    }
+                  >
+                    {retained?.id === t.id
+                      ? "Refresh retained output"
+                      : "Read retained output"}
+                  </button>
+                  {retained?.id === t.id && (
+                    <button
+                      type="button"
+                      className="mini"
+                      onClick={() => setRetained(null)}
+                    >
+                      Return to live output
+                    </button>
+                  )}
+                </div>
+              )}
+            </details>
+          )}
         </div>
       ))}
     </>
