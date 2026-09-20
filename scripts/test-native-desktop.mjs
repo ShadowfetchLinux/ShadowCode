@@ -20,7 +20,7 @@ for (const name of ["result.json", "failure.txt", "failure.png", "workspace-ligh
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
-for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json"]) await rm(path.join(artifacts, name), { force: true });
+for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json"]) await rm(path.join(artifacts, name), { force: true });
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
@@ -35,6 +35,10 @@ delete nativeEnv.NO_CLEANUP;
 nativeEnv.SHADOW_WINDOW_MCP_PID = path.join(scratch, "mcp-pids.json");
 nativeEnv.SHADOW_WINDOW_MCP_REQUESTS = path.join(scratch, "mcp-requests.jsonl");
 nativeEnv.SHADOW_WINDOW_MCP_SECRET = "private-window-mcp-credential";
+nativeEnv.SHADOW_WINDOW_HTTP_SECRET = "http-private-fixture-key";
+const httpRoot = path.join(scratch,"http-peer");
+await mkdir(httpRoot);
+let httpPeer;
 await mkdir(nativeEnv.TMPDIR);
 await mkdir(project); await mkdir(configDirectory, { recursive: true });
 await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
@@ -68,7 +72,7 @@ const requestedModels = [];
 let goalMode = false;
 let workflowMode = false;
 let workflowCalls = 0;
-let mcpMode = false, mcpCalls = 0;
+let mcpMode = false, mcpCalls = 0, mcpHttpCalls = 0;
 const milestoneCalls = new Map();
 const sockets = new Set();
 const model = createServer(async (req, res) => {
@@ -81,18 +85,22 @@ const model = createServer(async (req, res) => {
   const index = requests++;
   const tool = (name, args) => ({ id: `call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
   if (mcpMode) {
-    const call = mcpCalls++;
+    const http = mcpMode === "http";
+    const call = http ? mcpHttpCalls++ : mcpCalls++;
+    const server = http ? "config:window-http" : "config:window-mcp";
+    const expected = http ? "native-http-ok" : "native-mcp-ok";
     assert.ok(payload.tools.some(t => t.function.name === "mcp_call"));
     if (call === 2) {
       const result = JSON.parse(payload.messages.filter(m => m.role === "tool").at(-1).content);
       assert.equal(result.success, true);
-      assert.equal(result.output.result.structuredContent.arguments.message, "native-mcp-ok");
-      assert.equal(result.output.result.structuredContent.environment, "[redacted]");
-      assert.equal(JSON.stringify(payload).includes(nativeEnv.SHADOW_WINDOW_MCP_SECRET), false);
+      assert.equal(result.output.result.structuredContent.arguments.message, expected);
+      if (http) assert.equal(result.output.result.structuredContent.headers.authorization, "Bearer [redacted]");
+      else assert.equal(result.output.result.structuredContent.environment, "[redacted]");
+      assert.equal(JSON.stringify(payload).includes(http ? nativeEnv.SHADOW_WINDOW_HTTP_SECRET : nativeEnv.SHADOW_WINDOW_MCP_SECRET), false);
     }
-    const message = call === 0 ? {role:"assistant", content:"Inspecting the enabled MCP tool.", tool_calls:[tool("mcp_tools",{server:"config:window-mcp",tool:"echo"})]}
-      : call === 1 ? {role:"assistant", content:"Requesting the external tool call.", tool_calls:[tool("mcp_call",{server:"config:window-mcp",tool:"echo",arguments:{message:"native-mcp-ok"}})]}
-      : {role:"assistant",content:"External fixture returned native-mcp-ok."};
+    const message = call === 0 ? {role:"assistant", content:"Inspecting the enabled MCP tool.", tool_calls:[tool("mcp_tools",{server,tool:"echo"})]}
+      : call === 1 ? {role:"assistant", content:"Requesting the external tool call.", tool_calls:[tool("mcp_call",{server,tool:"echo",arguments:{message:expected,...(http?{action:"sse"}:{})}})]}
+      : {role:"assistant",content:`External fixture returned ${expected}.`};
     res.writeHead(200,{"Content-Type":"application/json"});
     res.end(JSON.stringify({choices:[{message,finish_reason:call<2?"tool_calls":"stop"}],usage:{prompt_tokens:30,completion_tokens:10,total_tokens:40}}));
     return;
@@ -331,6 +339,44 @@ try {
   await until("MCP removal ready", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Remove window-mcp' && !e.disabled)"));
   await clickButton("Remove window-mcp");
   await until("MCP registration removed", async () => !(await api("GET","/api/mcp/servers")).servers.length);
+  // Exercise HTTP registration and the same exact-argument approval in WebKit.
+  httpPeer = spawn(process.execPath,[path.join(root,"native/core/tests/fixtures/mcp-http.mjs"),"auth",httpRoot],{stdio:["ignore","ignore","pipe"]});
+  httpPeer.stderr.pipe(output, {end:false});
+  let httpUrl;
+  await until("HTTP peer ready", async()=> { httpUrl=JSON.parse(await readFile(path.join(httpRoot,"ready.json"),"utf8")).url; return httpUrl; });
+  const httpRequests = async()=> (await readFile(path.join(httpRoot,"requests.jsonl"),"utf8").catch(e=>{if(e.code!=="ENOENT")throw e;return "";})).split("\n").filter(Boolean).map(line=>JSON.parse(line));
+  await until("MCP registration form reopened", () => execute("return document.querySelector('.mcp-add').open"));
+  await type('.mcp-settings input', "window-http");
+  await execute("const select=document.querySelector('.mcp-settings select');select.value='http';select.dispatchEvent(new Event('change',{bubbles:true}));");
+  await type('.mcp-settings input[type="url"]',httpUrl);
+  await type('.mcp-settings input[placeholder="MY_MCP_TOKEN"]',"SHADOW_WINDOW_HTTP_SECRET");
+  await clickButton("Register MCP server");
+  await until("HTTP registration in Settings", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Enable window-http' && !e.disabled)"));
+  assert.equal((await httpRequests()).length,0);
+  await clickButton("Enable window-http");
+  await until("HTTP activated", async()=> (await api("GET","/api/mcp/servers")).servers[0].enabled);
+  assert.equal((await httpRequests()).length,0);
+  await screenshot("mcp-http");
+  await accessibility("mcp-http");
+  await clickButton("Close");
+  mcpMode = "http";
+  await fill('textarea[aria-label="Message ShadowCode"]',"Call the HTTP fixture with native-http-ok.");
+  await click('button[aria-label="Send task"]');
+  await until("HTTP tool approval",()=>execute("return !!document.querySelector('.approval')?.textContent.includes('window-http')"));
+  assert.match(await execute("return document.querySelector('.approval .code').textContent"),/MCP config:window-http \/ echo[\s\S]*"message": "native-http-ok"/);
+  assert.ok((await httpRequests()).every(r=>r.message?.method!=="tools/call"));
+  await click(".approval button.primary");
+  await until("HTTP tool completed",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('External fixture returned native-http-ok.'))"));
+  await until("HTTP task completed", async()=> (await api("GET","/api/jobs")).jobs[0].status==="completed");
+  assert.equal(mcpHttpCalls,3);
+  assert.equal((await httpRequests()).filter(r=>r.message?.method==="tools/call").length,1);
+  await until("HTTP streams closed",async()=> (await (await fetch(httpUrl.replace("/mcp","/status"))).json()).streams===0);
+  mcpMode=false;
+  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+  await clickButton("MCP");
+  await until("HTTP removal ready",()=>execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Remove window-http' && !e.disabled)"));
+  await clickButton("Remove window-http");
+  await until("HTTP registration removed",async()=>!(await api("GET","/api/mcp/servers")).servers.length);
   await clickButton("Close");
   // A missing model in an older saved configuration must be visible when the
   // engine chooses the default, including after the conversation is reloaded.
@@ -471,7 +517,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, subprocess result, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {
@@ -486,6 +532,7 @@ try {
   model.close();
   await delay(300);
   try { process.kill(-driver.pid, "SIGKILL"); } catch { /* Already exited. */ }
+  if(httpPeer && httpPeer.exitCode === null && httpPeer.signalCode === null) { const closed=new Promise(resolve=>httpPeer.once("close",resolve)); httpPeer.kill("SIGKILL"); await closed; }
   output.end();
   await rm(scratch, { recursive: true, force: true });
 }

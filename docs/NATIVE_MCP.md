@@ -1,17 +1,17 @@
 # Native MCP migration — development
 
-MCP remains an open [native release gate](NATIVE_MIGRATION.md). The Rust stdio
-client now connects to native Settings, CLI registration, project activation,
-and individually approved agent tool calls. Streamable HTTP, built-in SQLite
-compatibility, the ShadowCode MCP server, and broader interoperability/real-model
-verification are still being migrated. Existing URL definitions remain visible
-and inactive; this development build does not silently launch the Python client.
+MCP remains an open [native release gate](NATIVE_MIGRATION.md). The Rust stdio and Streamable HTTP
+clients now connect to native Settings, CLI registration, project activation,
+and individually approved agent tool calls. Built-in SQLite compatibility, the
+ShadowCode MCP server, and broader interoperability/real-model verification are
+still being migrated. The application does not launch the Python MCP client.
 
 ## Enable external tools
 
 In **Settings → MCP**, register a server with its name and a JSON array containing
-the executable and literal arguments, then review and enable it for the current
-trusted project. Registration and catalog refresh do not execute the command.
+the executable and literal arguments, or choose **Streamable HTTP** and enter
+the server endpoint. Review and enable it for the current trusted project.
+Registration and catalog refresh do not execute commands or contact servers.
 Four servers may be enabled per project. A grant records the project's canonical
 path, the definition ID, and its SHA-256 content hash.
 
@@ -37,6 +37,30 @@ history. Avoid placing credentials in executable arguments, URLs, descriptions,
 or task prompts. External servers run with the user's OS privileges; activation
 is not an OS sandbox or a guarantee of network confinement.
 
+HTTP definitions use `url` instead of `command`, and an optional `api_key_env`
+reference for a bearer token:
+
+```json
+{
+  "name": "remote-tools",
+  "url": "https://example.com/mcp",
+  "api_key_env": "MY_MCP_TOKEN",
+  "timeout_sec": 30
+}
+```
+
+HTTP credentials resolve from the same protected store or application environment
+when the connection starts; the catalog shows the reference name only. Credential
+values are redacted from metadata and tool results. `env` and `env_refs` apply to
+stdio commands and are rejected on HTTP definitions rather than silently ignored.
+Loopback endpoints work with network access disabled. Other hosts require
+**Permissions → Network access**, and bearer credentials require HTTPS outside
+loopback. The hostname `localhost` resolves only to loopback addresses in this
+transport. Redirects and inherited HTTP proxies are disabled. Tokens are sent
+only to the reviewed endpoint; authentication challenges do not trigger an
+automatic login or credential exchange. OAuth and custom authentication headers
+are not yet supported.
+
 The same controls are available without a display:
 
 ```sh
@@ -60,13 +84,14 @@ servers, lists tool names in pages of 20, or reads one exact tool schema;
 is lazy and uses the explicit launch grant. Every `mcp_call` requires a separate
 session-scoped approval, even if the peer marks its tool read-only. The server
 ID, tool name, and complete arguments appear in that approval. Plan, Review,
-and untrusted projects cannot start MCP processes.
+and untrusted projects cannot open MCP connections.
 
 Running and queued tasks retain their configuration snapshot. Disabling a grant
 or replacing a global registration applies to new tasks; cancel existing tasks
 to stop their current connections. Project files are re-read and their hash
 checked before each external action, including after an approval wait.
-Definitions cannot replace their command while an earlier approval is pending.
+Definitions cannot replace their command or endpoint while an earlier approval
+is pending.
 MCP actions invalidate earlier file observations and disable parallel native
 reads for that task. Changes made by an external server are not checkpointed by
 ShadowCode's file tools.
@@ -118,9 +143,40 @@ prove that the remote tool made no changes; the client never retries it silently
 A closed connection cannot return its old catalog as if it were still live;
 start a new task to reconnect after a protocol failure.
 
+## Streamable HTTP
+
+`native/core/src/mcp/http.rs` supplies a bounded backend to the official SDK's
+HTTP worker. It first negotiates the 2026-07-28 discovery lifecycle. Legacy
+2025 Streamable HTTP servers use `initialize`, optional session IDs and GET SSE,
+and bounded session deletion during cleanup. The separate-endpoint 2024 HTTP+SSE
+transport is not implemented; use the server's Streamable HTTP endpoint or stdio.
+
+The 2026 lifecycle sends protocol/method/name headers and schema-declared
+`x-mcp-header` parameters, including encoded Unicode values. Its requests are
+stateless: no session creation, GET stream, or session deletion. The SDK validates
+header annotations before exposing tools. JSON and SSE responses preserve
+structured results and tool error status.
+
+HTTP shares the 16-connection, 128-tool, 512-KiB argument and 32-MiB lifetime
+limits above. JSON bodies and raw SSE events are capped at 1 MiB before parsing;
+128 events per second include blank frames, preventing comment/whitespace floods
+from bypassing limits. Session IDs are bounded to 1 KiB, event IDs to 4 KiB, and
+protocol headers to 16 KiB. Two ordinary requests and a bounded control channel
+limit transport concurrency. Initialization, discovery and calls have deadlines.
+Malformed, oversized, truncated, or interrupted responses close the connection.
+Peer error bodies and authentication challenges are not included in diagnostics.
+
+Automatic retry, SSE resumption, and session reinitialization are disabled. A
+404 for an expired legacy session fails the call and closes the connection; it
+never silently repeats an approved operation. Cancellation closes active
+streams. Legacy session deletion has a one-second deadline, including after
+task cancellation. Connection permits remain held by transport workers through
+cleanup, including abandoned initialization. The SSE parser's omitted notices
+are retained from the exact `sse-stream` 0.2.6 source commit and digest-checked.
+
 ## Ownership and cancellation
 
-Each connection owns its subprocess group and bounded stderr drain. Cancellation
+Each stdio connection owns its subprocess group and bounded stderr drain. Cancellation
 also works while initialization is pending or the connection is idle. Cleanup
 sends TERM, allows 150 ms, then kills the group and waits for the leader. The
 leader remains unreaped until group signaling finishes, preventing PID reuse
@@ -139,7 +195,7 @@ and cleanup outcome without environment values.
 ## Verification
 
 ```sh
-cargo test -p shadowcode-core --test mcp_stdio --test mcp_application --locked
+cargo test -p shadowcode-core --test mcp_stdio --test mcp_http --test mcp_application --locked
 ```
 
 Ten regressions exercise real subprocess pipes, current and legacy protocol
@@ -150,17 +206,27 @@ stubborn descendant cleanup, leader reaping, stderr floods, protocol floods, and
 refusal of unsolicited sampling/credential requests. The small Node peer is a
 test fixture; no Node or Python runtime is added to the application.
 
-Eight application regressions cover inert/symlink-confined discovery, malformed
+Eleven application regressions cover inert/symlink-confined discovery, malformed
 definitions, hidden credentials, project trust and permissions, definition
 hashes, removal/re-registration, exact argument approval and denial, connection
 reuse, error-result preservation, bounded single-pass credential redaction,
 closed-catalog rejection, stale file observations, read-only tasks, and
-process cleanup before actual engine completion on every exit path. The native
+process cleanup before actual engine completion on every exit path. HTTP
+coverage includes loopback/remote activation, transport-specific credential
+fields, lazy secret resolution, redaction of reflected authorization headers,
+and active stream/session cleanup on task completion, cancellation and shutdown. The native
 CLI and real-window probes also exercise their respective controls; the window
 probe drives a scripted model through discovery, approval, a real subprocess
 tool result, and cleanup.
 
-These checks do not stand in for the remaining HTTP, server, interoperability,
+Six HTTP regressions exercise modern and legacy negotiation, metadata and Unicode
+headers, fragmented UTF-8/CRLF SSE, explicit bearer authentication, redirect
+refusal, expired sessions without replay, malformed/oversized/truncated/flooded
+responses, private discovery errors, initialization/call deadlines, cancellation,
+client drop, and abandoned initialization. The desktop probe also registers an
+HTTP endpoint in Settings and completes an approved, authenticated streaming call.
+
+These checks do not stand in for the remaining server, interoperability,
 and real local-model checks required for the full MCP migration. The standalone
 application does not bundle runtimes for third-party servers: install whatever
 an explicitly selected external command requires separately.

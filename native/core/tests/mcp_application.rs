@@ -1,4 +1,6 @@
 #![cfg(unix)]
+#[path = "fixtures/http.rs"]
+mod http_peer;
 mod support;
 use serde_json::{json, Value};
 use shadowcode_core::{
@@ -586,6 +588,220 @@ async fn engine_waits_for_mcp_cleanup_on_success_failure_limits_cancellation_and
             .unwrap()
             .iter()
             .any(|s| s["function"]["name"] == "mcp_call"));
+        f.service.engine.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn http_activation_requires_network_trust_and_transport_specific_credentials() {
+    let f = Fixture::new("http://127.0.0.1:1/v1");
+    let ws = Workspace::open(&f.project()).unwrap();
+    let mut cfg = Config::load(f.service.engine.paths(), None).unwrap();
+    for url in [
+        "http://127.0.0.1:1234/mcp",
+        "http://localhost:1234/mcp",
+        "http://[::1]:1234/mcp",
+        "https://example.com/mcp",
+        "http://localhost.example.com/mcp",
+    ] {
+        let value = json!({"name":"http","url":url});
+        cfg.mcp["servers"] = json!([value]);
+        let entry = registry::read(&ws, &cfg, "config:http").unwrap();
+        assert_eq!(
+            registry::authorize_start(&ws, &cfg, &entry).is_ok(),
+            url.contains("127.0.0.1") || url.contains("localhost:") || url.contains("[::1]")
+        );
+        let mut network = cfg.clone();
+        network.permissions.network = true;
+        assert!(registry::authorize_start(&ws, &network, &entry).is_ok());
+        network.permissions.level = PermissionLevel::ReadOnly;
+        assert!(registry::authorize_start(&ws, &network, &entry).is_err());
+        network.permissions.level = PermissionLevel::Workspace;
+        network.trusted_workspaces.clear();
+        assert!(registry::authorize_start(&ws, &network, &entry).is_err());
+    }
+    for definition in [
+        json!({"name":"bad","url":"http://example.com/mcp","api_key_env":"TOKEN"}),
+        json!({"name":"bad","url":"https://example.com/mcp","env":{"TOKEN":"secret"}}),
+        json!({"name":"bad","url":"https://example.com/mcp","env_refs":{"TOKEN":"SECRET"}}),
+        json!({"name":"bad","command":["node"],"api_key_env":"TOKEN"}),
+        json!({"name":"bad","url":"https://example.com/mcp","api_key_env":"bad ref"}),
+    ] {
+        assert!(f
+            .api("POST", "/api/mcp/servers", json!({"definition":definition}))
+            .await
+            .is_err());
+    }
+    f.service.engine.shutdown().await.unwrap();
+}
+
+async fn enable_http(f: &Fixture, http: &http_peer::Fixture, auth: bool) {
+    let mut definition = json!({"name":"fixture","url":http.spec.url,"timeout_sec":3});
+    if auth {
+        definition["api_key_env"] = json!("HTTP_FIXTURE_KEY");
+    }
+    let catalog = f
+        .api("POST", "/api/mcp/servers", json!({"definition":definition}))
+        .await
+        .unwrap();
+    f.api("POST","/api/mcp/activation",json!({"workspace":f.project(),"server":"config:fixture","hash":catalog["servers"][0]["hash"],"enabled":true})).await.unwrap();
+    assert!(
+        http.requests().is_empty(),
+        "Registration and activation must stay inert"
+    );
+}
+
+#[tokio::test]
+async fn http_tools_require_exact_approval_resolve_secrets_lazily_and_redact_history() {
+    let http = http_peer::Fixture::new("auth").await;
+    let f = Fixture::new("http://127.0.0.1:1/v1");
+    enable_http(&f, &http, true).await;
+    let missing = f.tools(None);
+    let result = call(&missing, "mcp_tools", json!({"server":"config:fixture"})).await;
+    assert!(!result.success && result.error.contains("not configured"));
+    assert!(http.requests().is_empty());
+    missing.close_integrations().await.unwrap();
+    // A bad credential fails once; there is no fallback or credential prompt.
+    assert!(http.connect(CancellationToken::new()).await.is_err());
+    config::set_secret(
+        f.service.engine.paths(),
+        "HTTP_FIXTURE_KEY",
+        "http-private-fixture-key",
+    )
+    .unwrap();
+    let tools = f.tools(None);
+    assert!(call(&tools, "mcp_tools", json!({})).await.success);
+    assert_eq!(http.requests().len(), 1);
+    assert!(
+        call(
+            &tools,
+            "mcp_tools",
+            json!({"server":"config:fixture","tool":"echo"})
+        )
+        .await
+        .success
+    );
+    let worker = tools.clone();
+    let args =
+        json!({"server":"config:fixture","tool":"echo","arguments":{"exact":"雪","action":"sse"}});
+    let expected = args.clone();
+    let task = tokio::spawn(async move { call(&worker, "mcp_call", args).await });
+    let record = approval(&f.service).await;
+    assert_eq!(record.arguments, expected);
+    assert!(record.command.contains("雪"));
+    assert!(http
+        .requests()
+        .iter()
+        .all(|r| r["message"]["method"] != "tools/call"));
+    f.service
+        .engine
+        .approvals()
+        .decide(&record.id, &record.session_id, true)
+        .unwrap();
+    let result = task.await.unwrap();
+    assert!(result.success, "{}", result.error);
+    assert_eq!(
+        result.output["result"]["structuredContent"]["headers"]["authorization"],
+        "Bearer [redacted]"
+    );
+    assert!(!approved(&f, &tools, "failure").await.success);
+    tools.close_integrations().await.unwrap();
+    http.closed_streams().await;
+    let events = json!(tools
+        .events
+        .store
+        .recent_events(&tools.events.session_id, 100)
+        .unwrap());
+    let catalog = f.api("GET", "/api/mcp/servers", Value::Null).await.unwrap();
+    assert_eq!(catalog["servers"][0]["api_key_env"], "HTTP_FIXTURE_KEY");
+    assert!(!format!("{events}{catalog}").contains("http-private-fixture-key"));
+    assert_eq!(
+        http.requests()
+            .iter()
+            .filter(|r| r["message"]["method"] == "tools/call")
+            .count(),
+        2
+    );
+    f.service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn engine_http_streams_close_on_completion_cancellation_and_shutdown() {
+    for scenario in ["success", "cancel", "shutdown"] {
+        let http = http_peer::Fixture::new("legacy").await;
+        let server = support::server(move |index,_| {
+            let calls = match index {
+                0 => json!([tool("mcp_tools",json!({"server":"config:fixture"}))]),
+                1 => json!([tool("mcp_call",json!({"server":"config:fixture","tool":"echo","arguments":{"action":if scenario=="success" {"sse"} else {"hang"}}}))]),
+                _ => json!([]),
+            };
+            (response("HTTP fixture complete",calls),Duration::ZERO)
+        }).await;
+        let f = Fixture::new(&server.endpoint);
+        enable_http(&f, &http, false).await;
+        let job = f
+            .service
+            .engine
+            .start(StartRequest {
+                workspace: f.project(),
+                task: "Call the HTTP fixture".into(),
+                session_id: None,
+                model: None,
+                mode: "code".into(),
+                queue: false,
+            })
+            .await
+            .unwrap();
+        let record = approval(&f.service).await;
+        f.service
+            .engine
+            .approvals()
+            .decide(&record.id, &record.session_id, true)
+            .unwrap();
+        if scenario != "success" {
+            tokio::time::timeout(Duration::from_secs(4), async {
+                while !http
+                    .requests()
+                    .iter()
+                    .any(|r| r["message"]["method"] == "tools/call")
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            if scenario == "shutdown" {
+                f.service.engine.shutdown().await.unwrap();
+            } else {
+                f.service.engine.cancel(&job.id).await.unwrap();
+            }
+        }
+        let finished = tokio::time::timeout(Duration::from_secs(6), f.service.engine.wait(&job.id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            finished.status == "completed",
+            scenario == "success",
+            "{scenario}: {} {}",
+            finished.status,
+            finished.summary
+        );
+        http.closed_streams().await;
+        assert_eq!(
+            http.requests()
+                .iter()
+                .filter(|r| r["method"] == "DELETE")
+                .count(),
+            1
+        );
+        assert_eq!(
+            http.requests()
+                .iter()
+                .filter(|r| r["message"]["method"] == "tools/call")
+                .count(),
+            1
+        );
         f.service.engine.shutdown().await.unwrap();
     }
 }

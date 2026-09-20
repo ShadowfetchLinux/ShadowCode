@@ -19,6 +19,8 @@ pub struct Definition {
     pub name: String,
     pub command: Option<Vec<String>>,
     pub url: Option<String>,
+    /// Bearer token reference; the credential is resolved only on connection.
+    pub api_key_env: Option<String>,
     pub description: String,
     /// Retained legacy literal environment, never emitted in catalogs/events.
     pub env: BTreeMap<String, String>,
@@ -36,6 +38,7 @@ impl Default for Definition {
             name: String::new(),
             command: None,
             url: None,
+            api_key_env: None,
             description: String::new(),
             env: BTreeMap::new(),
             env_refs: BTreeMap::new(),
@@ -61,6 +64,10 @@ impl Definition {
         );
         if let Some(command) = command {
             ensure!(
+                self.api_key_env.is_none(),
+                "Bearer credentials require an HTTP server"
+            );
+            ensure!(
                 command.len() <= 128
                     && !command[0].trim().is_empty()
                     && command.iter().all(|s| !s.contains('\0'))
@@ -69,16 +76,21 @@ impl Definition {
             );
         }
         if let Some(url) = url {
-            ensure!(url.len() <= 4096, "MCP URL exceeds 4096 bytes");
-            let parsed = reqwest::Url::parse(url).context("Invalid MCP URL")?;
+            let parsed = super::http::validate_url(url)?;
             ensure!(
-                matches!(parsed.scheme(), "http" | "https")
-                    && parsed.host_str().is_some()
-                    && parsed.username().is_empty()
-                    && parsed.password().is_none()
-                    && parsed.fragment().is_none(),
-                "MCP URLs need HTTP(S), a host, and no embedded credentials or fragment"
+                self.env.is_empty() && self.env_refs.is_empty(),
+                "HTTP servers use api_key_env; process environment entries require a command"
             );
+            if let Some(reference) = &self.api_key_env {
+                ensure!(
+                    crate::config::valid_secret_name(reference),
+                    "Invalid MCP bearer secret reference"
+                );
+                ensure!(
+                    parsed.scheme() == "https" || super::http::loopback(&parsed),
+                    "MCP bearer credentials require HTTPS outside loopback"
+                );
+            }
         }
         ensure!(
             self.env.len() + self.env_refs.len() <= 64,
@@ -187,7 +199,7 @@ pub struct Entry {
 }
 impl Entry {
     pub fn public(&self, enabled: bool) -> Value {
-        json!({"id":self.id,"hash":self.hash,"name":self.definition.name,"description":self.definition.description,"command":self.definition.command,"url":self.definition.url,"timeout_sec":self.definition.timeout_sec,"env_names":self.definition.env.keys().collect::<Vec<_>>(),"env_refs":self.definition.env_refs,"enabled":enabled,"transport":if self.definition.command.as_ref().is_some_and(|v| !v.is_empty()) { "stdio" } else { "http" }})
+        json!({"id":self.id,"hash":self.hash,"name":self.definition.name,"description":self.definition.description,"command":self.definition.command,"url":self.definition.url,"api_key_env":self.definition.api_key_env,"timeout_sec":self.definition.timeout_sec,"env_names":self.definition.env.keys().collect::<Vec<_>>(),"env_refs":self.definition.env_refs,"enabled":enabled,"transport":if self.definition.command.as_ref().is_some_and(|v| !v.is_empty()) { "stdio" } else { "http" }})
     }
 }
 pub fn read(workspace: &Workspace, config: &Config, id: &str) -> Result<Entry> {
@@ -290,14 +302,22 @@ pub fn authorize_start(workspace: &Workspace, config: &Config, entry: &Entry) ->
     );
     ensure!(
         config.permissions.level != PermissionLevel::ReadOnly,
-        "MCP processes are inactive in read-only mode"
+        "MCP connections are inactive in read-only mode"
     );
+    if let Some(url) = entry.definition.url.as_ref().filter(|v| !v.is_empty()) {
+        let url = super::http::validate_url(url)?;
+        ensure!(
+            config.permissions.network || super::http::loopback(&url),
+            "Enable network access in permissions before connecting to a remote MCP server"
+        );
+        return Ok(());
+    }
     let command = entry
         .definition
         .command
         .as_ref()
         .filter(|v| !v.is_empty())
-        .context("Native HTTP MCP is not available yet; this definition remains inactive")?;
+        .context("MCP command is missing")?;
     if let Decision::Deny(reason) = permissions::check(
         &config.permissions,
         "exec",

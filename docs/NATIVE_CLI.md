@@ -119,8 +119,8 @@ reads all settings, `config key` reads a dotted key, and `config key value`
 validates and saves JSON or text. Use the configured environment variable or
 desktop secret editor for credentials; never put secret values in shell history.
 
-For [native MCP stdio integrations](NATIVE_MCP.md), register a JSON/YAML
-definition, inspect its command and hash, and explicitly enable it for the
+For [native MCP stdio and HTTP integrations](NATIVE_MCP.md), register a JSON/YAML
+definition, inspect its command or endpoint and hash, and explicitly enable it for the
 selected project:
 
 ```sh
@@ -136,8 +136,9 @@ definition. Project files have IDs such as `project:.shadowcode/mcp/my-tools.yam
 Each agent call still uses the same exact-argument approval flow as the window;
 noninteractive tasks stop for approval instead of accepting it automatically.
 Disabling affects new tasks; cancel running and queued tasks to end their
-existing grants. Native HTTP connections and `mcp serve/register` are still
-being migrated.
+existing grants. HTTP definitions use `url` and an optional `api_key_env` bearer
+secret reference; remote hosts require network access in Permissions. Native
+`mcp serve/register` is still being migrated.
 
 ## One engine per profile
 

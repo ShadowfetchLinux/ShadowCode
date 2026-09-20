@@ -9,7 +9,7 @@ use rmcp::{
     },
     service::{ClientCacheConfig, RunningService, RxJsonRpcMessage, TxJsonRpcMessage},
     transport::Transport,
-    RoleClient, ServiceExt,
+    ClientLifecycleMode, RoleClient,
 };
 use serde_json::Value;
 use std::{
@@ -34,6 +34,7 @@ const TOTAL_LIMIT: usize = 32 * FRAME_LIMIT;
 const STDERR_LIMIT: usize = 16_384;
 const CATALOG_LIMIT: usize = 2 * FRAME_LIMIT;
 static CONNECTIONS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+pub mod http;
 pub mod registry;
 pub mod runner;
 
@@ -219,7 +220,8 @@ impl Drop for ReaderTask {
 struct Owner {
     cancel: CancellationToken,
     task: Option<JoinHandle<Result<()>>>,
-    group: Arc<Mutex<Group>>,
+    group: Option<Arc<Mutex<Group>>>,
+    http_permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
 }
 impl Owner {
     async fn close(&mut self) -> Result<()> {
@@ -227,13 +229,16 @@ impl Owner {
         if let Some(task) = self.task.take() {
             task.await.context("MCP cleanup worker failed")??;
         }
+        self.http_permit.take();
         Ok(())
     }
 }
 impl Drop for Owner {
     fn drop(&mut self) {
         self.cancel.cancel();
-        self.group.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        if let Some(group) = &self.group {
+            group.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        }
     }
 }
 
@@ -243,7 +248,7 @@ pub struct Client {
     diagnostics: Diagnostics,
     timeout: Duration,
     tools: Vec<Tool>,
-    pid: u32,
+    pid: Option<u32>,
 }
 impl Client {
     /// Starts an explicitly authorized command in a canonical project. It does
@@ -351,53 +356,68 @@ impl Client {
             diagnostics: diagnostics.clone(),
             cancel: cancel.clone(),
         };
-        let mut client = Self {
+        let client = Self {
             service: None,
             owner: Owner {
                 cancel: cancel.clone(),
                 task: Some(task),
-                group,
+                group: Some(group),
+                http_permit: None,
             },
             diagnostics,
             timeout: spec.timeout,
             tools: Vec::new(),
-            pid,
+            pid: Some(pid),
         };
+        client.initialize(transport).await
+    }
+    async fn initialize<T: Transport<RoleClient> + 'static>(
+        mut self,
+        transport: T,
+    ) -> Result<Self> {
+        let cancel = self.owner.cancel.clone();
         let info = ClientConfig::new(
             Default::default(),
             Implementation::new("ShadowCode", crate::VERSION),
         );
+        let lifecycle = if self.pid.is_some() {
+            ClientLifecycleMode::Initialize
+        } else {
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(rmcp::model::ProtocolVersion::V_2025_11_25),
+            }
+        };
         let result = tokio::select! {
             _ = cancel.cancelled() => Err(anyhow!("MCP connection cancelled")),
-            result = tokio::time::timeout(spec.timeout, info.serve_with_ct(transport, cancel.clone())) => match result {
-                Ok(Ok(service)) => { client.service = Some(service); Ok(()) },
+            result = tokio::time::timeout(self.timeout, rmcp::service::serve_client_with_lifecycle_and_ct(info, transport, lifecycle, cancel.clone())) => match result {
+                Ok(Ok(service)) => { self.service = Some(service); Ok(()) },
                 Ok(Err(_)) => Err(anyhow!("MCP initialization failed")),
                 Err(_) => Err(anyhow!("MCP initialization timed out")),
             }
         };
         if let Err(error) = result {
-            let reason = client.diagnostics.error();
-            client.close().await?;
+            let reason = self.diagnostics.error();
+            self.close().await?;
             return Err(
                 error.context(reason.unwrap_or_else(|| "Cannot initialize MCP connection".into()))
             );
         }
-        client
-            .service
+        self.service
             .as_ref()
             .unwrap()
             .set_response_cache_config(ClientCacheConfig::disabled())
             .await;
-        if let Err(error) = client.refresh_tools().await {
-            client.close().await?;
+        if let Err(error) = self.refresh_tools().await {
+            self.close().await?;
             return Err(error);
         }
-        Ok(client)
+        Ok(self)
     }
     pub fn tools(&self) -> &[Tool] {
         &self.tools
     }
-    pub fn pid(&self) -> u32 {
+    pub fn pid(&self) -> Option<u32> {
         self.pid
     }
     pub fn is_closed(&self) -> bool {
@@ -440,7 +460,7 @@ impl Client {
             params.cursor = cursor;
             let page = tokio::select! {
                 _ = self.owner.cancel.cancelled() => bail!(self.diagnostics.error().unwrap_or_else(|| "MCP catalog cancelled".into())),
-                result = tokio::time::timeout_at(deadline, service.list_tools(Some(params))) => result.context("MCP tool discovery timed out")?.context("MCP tool discovery failed")?
+                result = tokio::time::timeout_at(deadline, service.list_tools(Some(params))) => result.context("MCP tool discovery timed out")?.map_err(|_| anyhow!("MCP tool discovery failed"))?
             };
             for tool in page.tools {
                 ensure!(

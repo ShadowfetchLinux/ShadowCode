@@ -203,6 +203,22 @@
       "file": "rmcp-3.4.0/LICENSE",
       "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/fd7811fdaa9fefa1c8034534b4d7a31c97204f89/LICENSE",
       "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a"
+    },
+    {
+      "packages": [
+        "sse-stream@0.2.6"
+      ],
+      "file": "sse-stream-0.2.6/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/4t145/sse-stream/3108d1ec2b5b34b6bd35e5b50bd0eb2c8fa6e04f/LICENSE-APACHE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "packages": [
+        "sse-stream@0.2.6"
+      ],
+      "file": "sse-stream-0.2.6/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/4t145/sse-stream/3108d1ec2b5b34b6bd35e5b50bd0eb2c8fa6e04f/LICENSE-MIT",
+      "sha256": "049d23c7810a0723f186a193f841378dbc307f62be89bdba21c73126b0df2c52"
     }
   ]
 }

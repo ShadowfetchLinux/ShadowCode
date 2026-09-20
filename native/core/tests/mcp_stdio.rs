@@ -83,7 +83,7 @@ async fn native_mcp_handshake_paginated_catalog_literal_arguments_and_error_resu
     let fixture = Fixture::new("paginated");
     let mut client = fixture.connect(CancellationToken::new()).await.unwrap();
     assert_eq!(client.tools().len(), 2);
-    assert_eq!(client.pid(), fixture.pids()[0]);
+    assert_eq!(client.pid(), Some(fixture.pids()[0]));
     let args = json!({"literal":"$(touch owned)","unicode":"雪"});
     let result = client.call("echo", args.clone()).await.unwrap();
     assert_eq!(result["structuredContent"]["arguments"], args);

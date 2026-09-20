@@ -13,6 +13,9 @@ export function McpSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [name, setName] = useState("");
+  const [transport, setTransport] = useState("stdio");
+  const [url, setUrl] = useState("");
+  const [bearerReference, setBearerReference] = useState("");
   const [command, setCommand] = useState("");
   const [references, setReferences] = useState("{}");
   async function perform(
@@ -33,38 +36,49 @@ export function McpSettings({
     }
   }
   async function register() {
-    let argv: unknown, env_refs: unknown;
-    try {
-      argv = JSON.parse(command);
-      env_refs = JSON.parse(references);
-      if (
-        !Array.isArray(argv) ||
-        !argv.length ||
-        !argv.every((value) => typeof value === "string")
-      )
-        throw new Error("Command must be a JSON array of strings.");
-      if (
-        !env_refs ||
-        typeof env_refs !== "object" ||
-        Array.isArray(env_refs) ||
-        !Object.values(env_refs).every((value) => typeof value === "string")
-      )
-        throw new Error("Secret references must be a JSON object of names.");
-    } catch {
-      setError(
-        "Use a JSON array of strings for the command and a JSON object of names for secret references.",
-      );
-      return;
+    let definition: Record<string, unknown> = { name: name.trim() };
+    if (transport === "http") {
+      definition = {
+        ...definition,
+        url: url.trim(),
+        ...(bearerReference.trim()
+          ? { api_key_env: bearerReference.trim() }
+          : {}),
+      };
+    } else {
+      try {
+        const argv: unknown = JSON.parse(command);
+        const env_refs: unknown = JSON.parse(references);
+        if (
+          !Array.isArray(argv) ||
+          !argv.length ||
+          !argv.every((value) => typeof value === "string")
+        )
+          throw new Error("Command must be a JSON array of strings.");
+        if (
+          !env_refs ||
+          typeof env_refs !== "object" ||
+          Array.isArray(env_refs) ||
+          !Object.values(env_refs).every((value) => typeof value === "string")
+        )
+          throw new Error("Secret references must be a JSON object of names.");
+        definition = { ...definition, command: argv, env_refs };
+      } catch (error) {
+        setError(String(error));
+        return;
+      }
     }
     if (
       await perform(
-        () => api.registerMcp({ name: name.trim(), command: argv, env_refs }),
+        () => api.registerMcp(definition),
         "MCP server registered; review and enable it for this project",
       )
     ) {
       setName("");
       setCommand("");
       setReferences("{}");
+      setUrl("");
+      setBearerReference("");
     }
   }
   const missing = catalog.approved.filter(
@@ -75,8 +89,9 @@ export function McpSettings({
       <h3>MCP servers</h3>
       <p className="hint">
         Connect external tools to Build tasks in this project. Enabling a server
-        allows its command to start as your user; each tool call still needs
-        approval. Plan and Review keep external servers inactive.
+        allows its command to start or its HTTP endpoint to connect. Each tool
+        call still needs approval. Plan and Review keep external servers
+        inactive.
       </p>
       <p className="hint">
         Changes apply to new tasks. Cancel running or queued tasks to stop using
@@ -135,7 +150,7 @@ export function McpSettings({
               <p className="hint">{server.id}</p>
               {server.description && <p>{server.description}</p>}
               <pre className="mcp-command">
-                {server.command
+                {server.transport === "stdio"
                   ? JSON.stringify(server.command, null, 2)
                   : server.url}
               </pre>
@@ -157,10 +172,15 @@ export function McpSettings({
                     .join(", ")}
                 </p>
               )}
+              {server.api_key_env && (
+                <p className="hint">
+                  Bearer secret reference: {server.api_key_env}
+                </p>
+              )}
               {server.transport === "http" && (
                 <p className="hint">
-                  HTTP connections are still being migrated; this definition
-                  remains inactive.
+                  Streamable HTTP · Remote hosts require network access in
+                  Permissions.
                 </p>
               )}
               <div className="mcp-actions">
@@ -168,9 +188,7 @@ export function McpSettings({
                   <button
                     type="button"
                     className="ghost"
-                    disabled={
-                      busy || !catalog.trusted || server.transport !== "stdio"
-                    }
+                    disabled={busy || !catalog.trusted}
                     onClick={() =>
                       void perform(
                         () =>
@@ -261,7 +279,7 @@ export function McpSettings({
         </div>
       )}
       <details className="mcp-add" open={catalog.servers.length === 0}>
-        <summary>Register a stdio server</summary>
+        <summary>Register an MCP server</summary>
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -279,32 +297,75 @@ export function McpSettings({
             />
           </label>
           <label className="field">
-            Command and arguments
-            <textarea
-              required
-              rows={3}
-              value={command}
-              onChange={(event) => setCommand(event.target.value)}
-              placeholder={'["/path/to/server", "--stdio"]'}
-            />
+            Connection
+            <select
+              value={transport}
+              onChange={(event) => setTransport(event.target.value)}
+            >
+              <option value="stdio">Local command (stdio)</option>
+              <option value="http">Streamable HTTP</option>
+            </select>
           </label>
-          <p className="hint">
-            Use a JSON array. Arguments, spaces, and quotes are passed
-            literally. Registration does not start the command.
-          </p>
-          <label className="field">
-            Secret references
-            <textarea
-              rows={2}
-              value={references}
-              onChange={(event) => setReferences(event.target.value)}
-              placeholder={'{"API_TOKEN":"MY_STORED_KEY"}'}
-            />
-          </label>
-          <p className="hint">
-            Map a server environment variable to a stored secret or environment
-            variable name. Enter names here; store credential values separately.
-          </p>
+          {transport === "http" ? (
+            <>
+              <label className="field">
+                Server URL
+                <input
+                  required
+                  type="url"
+                  maxLength={4096}
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  placeholder="https://example.com/mcp"
+                />
+              </label>
+              <label className="field">
+                Bearer secret reference (optional)
+                <input
+                  maxLength={128}
+                  value={bearerReference}
+                  onChange={(event) => setBearerReference(event.target.value)}
+                  placeholder="MY_MCP_TOKEN"
+                />
+              </label>
+              <p className="hint">
+                Enter a stored secret or environment variable name. Credentials
+                require HTTPS outside localhost. Registration does not connect
+                to the server.
+              </p>
+            </>
+          ) : (
+            <>
+              <label className="field">
+                Command and arguments
+                <textarea
+                  required
+                  rows={3}
+                  value={command}
+                  onChange={(event) => setCommand(event.target.value)}
+                  placeholder={'["/path/to/server", "--stdio"]'}
+                />
+              </label>
+              <p className="hint">
+                Use a JSON array. Arguments, spaces, and quotes are passed
+                literally. Registration does not start the command.
+              </p>
+              <label className="field">
+                Secret references
+                <textarea
+                  rows={2}
+                  value={references}
+                  onChange={(event) => setReferences(event.target.value)}
+                  placeholder={'{"API_TOKEN":"MY_STORED_KEY"}'}
+                />
+              </label>
+              <p className="hint">
+                Map a server environment variable to a stored secret or
+                environment variable name. Enter names here; store credential
+                values separately.
+              </p>
+            </>
+          )}
           <button type="submit" className="ghost" disabled={busy}>
             Register MCP server
           </button>

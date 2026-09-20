@@ -240,6 +240,7 @@ export type McpServer = {
   url?: string | null;
 };
 export type NativeMcpServer = McpServer & {
+  api_key_env?: string | null;
   id: string;
   hash: string;
   description: string;
