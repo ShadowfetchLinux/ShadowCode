@@ -20,7 +20,7 @@ for (const name of ["result.json", "failure.txt", "failure.png", "workspace-ligh
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
-for (const name of ["hooks.png", "accessibility-hooks.json"]) await rm(path.join(artifacts, name), { force: true });
+for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json"]) await rm(path.join(artifacts, name), { force: true });
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
@@ -32,6 +32,9 @@ const nativeEnv = {...process.env, TMPDIR: path.join(scratch,"images"), ...(defa
   XDG_CONFIG_HOME: path.join(profile,"config"), XDG_DATA_HOME: path.join(profile,"data"), XDG_STATE_HOME: path.join(profile,"state"),
 } : {})};
 delete nativeEnv.NO_CLEANUP;
+nativeEnv.SHADOW_WINDOW_MCP_PID = path.join(scratch, "mcp-pids.json");
+nativeEnv.SHADOW_WINDOW_MCP_REQUESTS = path.join(scratch, "mcp-requests.jsonl");
+nativeEnv.SHADOW_WINDOW_MCP_SECRET = "private-window-mcp-credential";
 await mkdir(nativeEnv.TMPDIR);
 await mkdir(project); await mkdir(configDirectory, { recursive: true });
 await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
@@ -65,6 +68,7 @@ const requestedModels = [];
 let goalMode = false;
 let workflowMode = false;
 let workflowCalls = 0;
+let mcpMode = false, mcpCalls = 0;
 const milestoneCalls = new Map();
 const sockets = new Set();
 const model = createServer(async (req, res) => {
@@ -76,6 +80,23 @@ const model = createServer(async (req, res) => {
   requestedModels.push(payload.model);
   const index = requests++;
   const tool = (name, args) => ({ id: `call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
+  if (mcpMode) {
+    const call = mcpCalls++;
+    assert.ok(payload.tools.some(t => t.function.name === "mcp_call"));
+    if (call === 2) {
+      const result = JSON.parse(payload.messages.filter(m => m.role === "tool").at(-1).content);
+      assert.equal(result.success, true);
+      assert.equal(result.output.result.structuredContent.arguments.message, "native-mcp-ok");
+      assert.equal(result.output.result.structuredContent.environment, "[redacted]");
+      assert.equal(JSON.stringify(payload).includes(nativeEnv.SHADOW_WINDOW_MCP_SECRET), false);
+    }
+    const message = call === 0 ? {role:"assistant", content:"Inspecting the enabled MCP tool.", tool_calls:[tool("mcp_tools",{server:"config:window-mcp",tool:"echo"})]}
+      : call === 1 ? {role:"assistant", content:"Requesting the external tool call.", tool_calls:[tool("mcp_call",{server:"config:window-mcp",tool:"echo",arguments:{message:"native-mcp-ok"}})]}
+      : {role:"assistant",content:"External fixture returned native-mcp-ok."};
+    res.writeHead(200,{"Content-Type":"application/json"});
+    res.end(JSON.stringify({choices:[{message,finish_reason:call<2?"tool_calls":"stop"}],usage:{prompt_tokens:30,completion_tokens:10,total_tokens:40}}));
+    return;
+  }
   if (workflowMode) {
     const system = payload.messages.find(m => m.role === "system").content;
     assert.ok(system.includes("WINDOW_SKILL: inspect README.md"));
@@ -274,13 +295,50 @@ try {
   await until("Hook disable control", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable verify-result')"));
   await clickButton("Disable verify-result");
   await until("Hook disabled", async () => !(await api("GET", "/api/hooks")).hooks[0].enabled);
+  await clickButton("MCP");
+  await until("Native MCP Settings", () => execute("return !!document.querySelector('.mcp-settings form')"));
+  await type('.mcp-settings input', "window-mcp");
+  await type('.mcp-settings textarea', JSON.stringify(["node", path.join(root,"native/core/tests/fixtures/mcp-server.mjs"),"normal"]));
+  await fill('.mcp-settings textarea[rows="2"]', JSON.stringify({MCP_PID_FILE:"SHADOW_WINDOW_MCP_PID",MCP_REQUEST_FILE:"SHADOW_WINDOW_MCP_REQUESTS",MCP_LITERAL:"SHADOW_WINDOW_MCP_SECRET"}));
+  await clickButton("Register MCP server");
+  await until("MCP registration in Settings", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Enable window-mcp' && !e.disabled)"));
+  assert.equal(await readFile(nativeEnv.SHADOW_WINDOW_MCP_PID).then(()=>true,()=>false),false);
+  await clickButton("Enable window-mcp");
+  await until("MCP activated", async () => (await api("GET","/api/mcp/servers")).servers[0].enabled);
+  await screenshot("mcp");
+  await accessibility("mcp");
+  await clickButton("Close");
+  mcpMode = true;
+  await fill('textarea[aria-label="Message ShadowCode"]', "Call the enabled fixture tool with the message native-mcp-ok.");
+  await click('button[aria-label="Send task"]');
+  await until("External tool approval", () => execute("return !!document.querySelector('.approval')?.textContent.includes('window-mcp')"));
+  assert.match(await execute("return document.querySelector('.approval .code').textContent"), /MCP config:window-mcp \/ echo[\s\S]*"message": "native-mcp-ok"/);
+  assert.ok((await readFile(nativeEnv.SHADOW_WINDOW_MCP_REQUESTS,"utf8")).split("\n").filter(Boolean).map(line=>JSON.parse(line)).every(r=>r.method!=="tools/call"));
+  await click(".approval button.primary");
+  await until("External tool completed", () => execute("return document.querySelector('.msg-agent:last-of-type')?.textContent.includes('External fixture returned native-mcp-ok.') || [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('External fixture returned native-mcp-ok.'))"));
+  await until("External task finished", async () => !(await api("GET","/api/jobs")).jobs.some(j=>j.status==="running" || j.status==="queued"));
+  const mcpPids = JSON.parse(await readFile(nativeEnv.SHADOW_WINDOW_MCP_PID,"utf8"));
+  for (const pid of mcpPids) {
+    await until("MCP process cleanup", async () => { try { return /\) [ZX] /.test(await readFile(`/proc/${pid}/stat`,"utf8")); } catch (error) { if(error.code!=="ENOENT") throw error; return true; } });
+  }
+  assert.equal(mcpCalls,3);
+  mcpMode = false;
+  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+  await clickButton("MCP");
+  await until("MCP disable control", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable window-mcp' && !e.disabled)"));
+  await clickButton("Disable window-mcp");
+  await until("MCP disabled", async () => !(await api("GET","/api/mcp/servers")).servers[0].enabled);
+  await until("MCP removal ready", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Remove window-mcp' && !e.disabled)"));
+  await clickButton("Remove window-mcp");
+  await until("MCP registration removed", async () => !(await api("GET","/api/mcp/servers")).servers.length);
   await clickButton("Close");
   // A missing model in an older saved configuration must be visible when the
   // engine chooses the default, including after the conversation is reloaded.
   await api("PUT", "/api/config", { values: { routing: { coder: "removed-native-model" } } });
+  const beforeFallback = requests;
   await type('textarea[aria-label="Message ShadowCode"]', "Explain the result again.");
   await click('button[aria-label="Send task"]');
-  await until("Second model request", () => requests >= 4);
+  await until("Fallback model request", () => requests > beforeFallback);
   await until("Fallback visible", () => execute("return [...document.querySelectorAll('.msg-note.warning')].some(e=>e.textContent.includes('Using default: native-fixture'))"));
   assert.equal(requestedModels.at(-1), "native-fixture");
   await click('button[aria-label="Stop task"]');
@@ -413,8 +471,8 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
-  console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, subprocess result, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {
     await screenshot("failure").catch(() => {});

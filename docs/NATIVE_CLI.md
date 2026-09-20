@@ -119,6 +119,26 @@ reads all settings, `config key` reads a dotted key, and `config key value`
 validates and saves JSON or text. Use the configured environment variable or
 desktop secret editor for credentials; never put secret values in shell history.
 
+For [native MCP stdio integrations](NATIVE_MCP.md), register a JSON/YAML
+definition, inspect its command and hash, and explicitly enable it for the
+selected project:
+
+```sh
+shadowcode mcp add /path/to/definition.json
+shadowcode --json mcp
+shadowcode mcp enable config:my-tools --hash HASH_FROM_CATALOG
+shadowcode mcp disable config:my-tools
+shadowcode mcp remove config:my-tools --hash HASH_FROM_CATALOG
+```
+
+Registration is inert. `mcp add --hash CURRENT_HASH` replaces an existing global
+definition. Project files have IDs such as `project:.shadowcode/mcp/my-tools.yaml`.
+Each agent call still uses the same exact-argument approval flow as the window;
+noninteractive tasks stop for approval instead of accepting it automatically.
+Disabling affects new tasks; cancel running and queued tasks to end their
+existing grants. Native HTTP connections and `mcp serve/register` are still
+being migrated.
+
 ## One engine per profile
 
 The AppImage runtime extracts each invocation into a private temporary directory.

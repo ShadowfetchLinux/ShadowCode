@@ -1,9 +1,12 @@
 import { Dialog } from "./Dialog";
+import { McpSettings } from "./McpSettings";
+import { isNative } from "../lib/transport";
 import { useEffect, useState } from "react";
 import {
   api,
   type DetectedProvider,
   type McpServer,
+  type NativeMcpCatalog,
   type ProviderInfo,
   type HookCatalog,
 } from "../api";
@@ -78,6 +81,8 @@ export function Settings({
   const [hookError, setHookError] = useState("");
   const [hookBusy, setHookBusy] = useState(false);
   const [servers, setServers] = useState<McpServer[]>([]);
+  const [nativeMcp, setNativeMcp] = useState<NativeMcpCatalog | null>(null);
+  const [mcpError, setMcpError] = useState("");
   const [newServer, setNewServer] = useState({ name: "", target: "" });
   const [plugins, setPlugins] = useState<{
     installed: { name: string; version: string; description: string }[];
@@ -99,8 +104,10 @@ export function Settings({
       .catch((error) => setHookError(String(error)));
     void api
       .mcpServers()
-      .then((d) => setServers(d.servers))
-      .catch(() => undefined);
+      .then((d) =>
+        d.format === "native-mcp-v1" ? setNativeMcp(d) : setServers(d.servers),
+      )
+      .catch((error) => setMcpError(String(error)));
     void api
       .plugins()
       .then(setPlugins)
@@ -584,7 +591,18 @@ export function Settings({
           </section>
         )}
 
-        {section === "mcp" && (
+        {section === "mcp" && nativeMcp && (
+          <McpSettings
+            catalog={nativeMcp}
+            onChange={setNativeMcp}
+            onToast={onToast}
+          />
+        )}
+        {section === "mcp" && mcpError && <p role="alert">{mcpError}</p>}
+        {section === "mcp" && !nativeMcp && !mcpError && isNative() && (
+          <p role="status">Loading MCP definitions…</p>
+        )}
+        {section === "mcp" && !nativeMcp && !mcpError && !isNative() && (
           <section>
             <h3>MCP servers</h3>
             <p className="hint">

@@ -79,9 +79,13 @@ pub fn check(config: &PermissionsConfig, tool: &str, args: &Value) -> Decision {
                             | "pip"
                             | "pip3"
                             | "npm"
+                            | "npx"
                             | "pnpm"
                             | "yarn"
                             | "uv"
+                            | "uvx"
+                            | "bunx"
+                            | "pipx"
                     )
                 })
             {

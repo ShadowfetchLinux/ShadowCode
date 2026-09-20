@@ -239,6 +239,27 @@ export type McpServer = {
   command?: string[] | null;
   url?: string | null;
 };
+export type NativeMcpServer = McpServer & {
+  id: string;
+  hash: string;
+  description: string;
+  timeout_sec: number;
+  env_names: string[];
+  env_refs: Record<string, string>;
+  enabled: boolean;
+  transport: "stdio" | "http";
+};
+export type NativeMcpCatalog = {
+  format: "native-mcp-v1";
+  servers: NativeMcpServer[];
+  approved: { workspace: string; server: string; hash: string }[];
+  issues: string[];
+  workspace: string;
+  trusted: boolean;
+  dirs: string[];
+};
+export type McpCatalog =
+  NativeMcpCatalog | { format?: undefined; servers: McpServer[] };
 export type UpdateInfo = {
   current: string;
   latest: string;
@@ -404,7 +425,23 @@ export const api = {
       hash,
       enabled,
     }),
-  mcpServers: () => get<{ servers: McpServer[] }>("/api/mcp/servers"),
+  mcpServers: () => get<McpCatalog>("/api/mcp/servers"),
+  registerMcp: (definition: Record<string, unknown>, hash = "") =>
+    send<NativeMcpCatalog>("/api/mcp/servers", "POST", { definition, hash }),
+  activateMcp: (
+    workspace: string,
+    server: string,
+    hash: string,
+    enabled: boolean,
+  ) =>
+    send<NativeMcpCatalog>("/api/mcp/activation", "POST", {
+      workspace,
+      server,
+      hash,
+      enabled,
+    }),
+  removeMcp: (server: string, hash: string) =>
+    send<NativeMcpCatalog>("/api/mcp/servers/delete", "POST", { server, hash }),
   saveMcpServers: (servers: McpServer[]) =>
     send<{ servers: McpServer[] }>("/api/mcp/servers", "PUT", {
       values: { servers },

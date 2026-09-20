@@ -21,7 +21,7 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 pub use args::Options;
-use args::{Background, Command, Run, TaskOptions};
+use args::{Background, Command, Mcp, Run, TaskOptions};
 use backend::Backend;
 use clap::Parser;
 use serde_json::{json, Value};
@@ -358,6 +358,56 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 backend.call("GET", "/api/hooks", Value::Null).await?
             }
         }
+        Command::Mcp { action } => match action {
+            None => backend.call("GET", "/api/mcp/servers", Value::Null).await?,
+            Some(Mcp::Add { definition, hash }) => {
+                use std::io::Read;
+                let file = std::fs::File::open(definition).context("Cannot open MCP definition")?;
+                ensure!(
+                    file.metadata()?.is_file(),
+                    "MCP definition must be a regular file"
+                );
+                let mut text = String::new();
+                file.take(32_001).read_to_string(&mut text)?;
+                ensure!(text.len() <= 32_000, "MCP definition exceeds 32 KB");
+                let definition: Value = serde_yaml_ng::from_str(&text)
+                    .map_err(|_| anyhow::anyhow!("Invalid MCP JSON/YAML definition"))?;
+                backend
+                    .call(
+                        "POST",
+                        "/api/mcp/servers",
+                        json!({"definition":definition,"hash":hash.as_deref().unwrap_or("")}),
+                    )
+                    .await?
+            }
+            Some(Mcp::Enable { server, hash }) => {
+                backend
+                    .call(
+                        "POST",
+                        "/api/mcp/activation",
+                        json!({"workspace":workspace,"server":server,"hash":hash,"enabled":true}),
+                    )
+                    .await?
+            }
+            Some(Mcp::Disable { server }) => {
+                backend
+                    .call(
+                        "POST",
+                        "/api/mcp/activation",
+                        json!({"workspace":workspace,"server":server,"enabled":false}),
+                    )
+                    .await?
+            }
+            Some(Mcp::Remove { server, hash }) => {
+                backend
+                    .call(
+                        "POST",
+                        "/api/mcp/servers/delete",
+                        json!({"server":server,"hash":hash}),
+                    )
+                    .await?
+            }
+        },
         Command::Status => {
             let mut status = backend
                 .call("GET", "/api/workspace/status", Value::Null)

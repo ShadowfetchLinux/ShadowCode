@@ -223,6 +223,8 @@ impl Config {
             self.mcp.get("servers").is_some_and(Value::is_array),
             "MCP servers must be an array"
         );
+        #[cfg(unix)]
+        crate::mcp::registry::validate_config(&self.mcp)?;
         crate::routing::validate(&self.routing)?;
         self.hooks.validate()?;
         Ok(())

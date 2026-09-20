@@ -49,6 +49,8 @@ pub struct ToolExecutor {
     observed: Arc<Mutex<HashMap<String, String>>>,
     plan: Arc<Mutex<Value>>,
     hooks: hooks::Runner,
+    #[cfg(unix)]
+    mcp: crate::mcp::runner::Runner,
 }
 impl ToolExecutor {
     pub fn new(
@@ -75,6 +77,8 @@ impl ToolExecutor {
             "Task workspace does not match its session"
         );
         let hooks = hooks::Runner::load(&workspace, &config)?;
+        #[cfg(unix)]
+        let mcp = crate::mcp::runner::Runner::load(workspace.clone(), config.clone())?;
         Ok(Self {
             workspace,
             config,
@@ -84,7 +88,34 @@ impl ToolExecutor {
             observed: Arc::new(Mutex::new(HashMap::new())),
             plan: Arc::new(Mutex::new(json!({"goal":"","steps":[]}))),
             hooks,
+            #[cfg(unix)]
+            mcp,
         })
+    }
+    pub fn with_profile(mut self, paths: crate::paths::AppPaths) -> Self {
+        #[cfg(unix)]
+        self.mcp.set_profile(paths);
+        self
+    }
+    pub fn schemas(&self) -> Vec<Value> {
+        let mut schemas = schemas();
+        #[cfg(unix)]
+        if !self.mcp.is_empty() {
+            schemas.extend(crate::mcp::runner::schemas());
+        }
+        schemas
+    }
+    pub fn has_external_processes(&self) -> bool {
+        #[cfg(unix)]
+        if !self.mcp.is_empty() {
+            return true;
+        }
+        self.has_hooks()
+    }
+    pub async fn close_integrations(&self) -> Result<()> {
+        #[cfg(unix)]
+        self.mcp.close(&self.events).await?;
+        Ok(())
     }
     pub fn plan(&self) -> Value {
         self.plan
@@ -128,6 +159,8 @@ impl ToolExecutor {
                     success,
                     error: if success {
                         String::new()
+                    } else if let Some(error) = output["error"].as_str() {
+                        error.into()
                     } else {
                         format!(
                             "Command exited with status {}{}",
@@ -223,7 +256,16 @@ impl ToolExecutor {
             call.arguments.to_string().len() <= 8_000_000,
             "Tool arguments exceed the limit"
         );
-        match permissions::check(&self.config.permissions, &call.name, &call.arguments) {
+        let decision = permissions::check(&self.config.permissions, &call.name, &call.arguments);
+        #[cfg(unix)]
+        let decision = if matches!(call.name.as_str(), "mcp_tools" | "mcp_call") {
+            self.mcp
+                .decision(&call.name, &call.arguments, &self.events)
+                .await?
+        } else {
+            decision
+        };
+        match decision {
             Decision::Deny(reason) => bail!(reason),
             Decision::Ask(reason) => {
                 let record = Approval {
@@ -232,10 +274,19 @@ impl ToolExecutor {
                     task_id: self.events.task_id.clone(),
                     tool: call.name.clone(),
                     arguments: call.arguments.clone(),
-                    command: call.arguments["command"]
-                        .as_str()
-                        .unwrap_or(&call.name)
-                        .into(),
+                    command: if call.name == "mcp_call" {
+                        format!(
+                            "MCP {} / {}\n{}",
+                            call.arguments["server"].as_str().unwrap_or(""),
+                            call.arguments["tool"].as_str().unwrap_or(""),
+                            serde_json::to_string_pretty(&call.arguments["arguments"])?
+                        )
+                    } else {
+                        call.arguments["command"]
+                            .as_str()
+                            .unwrap_or(&call.name)
+                            .into()
+                    },
                     reason,
                     pending: true,
                     created_at: 0.0,
@@ -273,6 +324,24 @@ impl ToolExecutor {
             !self.cancel.is_cancelled(),
             "Task cancelled before executing tool"
         );
+        #[cfg(unix)]
+        if matches!(call.name.as_str(), "mcp_tools" | "mcp_call") {
+            // An external process can change the workspace even during catalog
+            // discovery. Blind edits must not reuse observations from before it.
+            self.observed
+                .lock()
+                .map_err(|_| anyhow::anyhow!("File observations lock poisoned"))?
+                .clear();
+            return self
+                .mcp
+                .execute(
+                    &call.name,
+                    &call.arguments,
+                    &self.events,
+                    self.cancel.clone(),
+                )
+                .await;
+        }
         let before = match call.name.as_str() {
             "exec" => Some("before_command"),
             "git_commit" => Some("before_commit"),

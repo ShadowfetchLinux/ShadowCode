@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **117 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **136 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -71,6 +71,13 @@ integration tests** pass on the development machine. The suite covers:
   checks, queued manifest changes, compaction and
   provider failure. Output floods, timeouts, cancellation and engine shutdown
   assert that recorded parent/child processes actually stop.
+- MCP stdio negotiation, framing/catalog bounds, exact arguments, error results,
+  denied sampling/elicitation, inert registration, workspace/hash activation,
+  literal environment privacy, single-pass credential redaction, exact tool-call
+  approval and denial, stale definitions during approval, read-only exclusion,
+  connection reuse and closed-catalog rejection. Engine success, provider errors,
+  step limits, cancellation and shutdown all wait for process cleanup. The test
+  peer is Node-based test infrastructure, not a bundled application dependency.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:
@@ -93,6 +100,12 @@ checks its actual completion side effect, replays human/structured hook events,
 and disables it. There are nine scenario groups with 27 scripted model requests.
 Actual pseudo-terminal sessions cover approval, denial, and Ctrl-C while a
 prompt is waiting. Noninteractive requests never silently grant approval.
+
+The MCP update passes 11 CLI scenario groups with 30 scripted model requests.
+It adds inert server registration, hidden environment values, exact-hash
+activation, disable/removal, refusal without a terminal, and actual PTY approval
+of a displayed server/tool/argument object. A real MCP subprocess returns the
+expected result and its recorded process group is stopped before CLI exit.
 
 The probe also hosts `serve`, starts and stops background commands, reads their
 logs, runs a task alongside them, observes and cancels detached work, and approves
@@ -122,7 +135,7 @@ sessions existed. A regression now covers real session listing and literal
 search. Visual inspection also found a cancellation transcript race and an open
 sidebar obscuring a resized compact window; the window test checks both.
 Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, compact, Goals, Router,
-Background, Skills, and Hooks workspace views. The compact check caught the Review button losing its accessible name
+Background, Skills, Hooks, and MCP workspace views. The compact check caught the Review button losing its accessible name
 when its text was hidden; the control now retains an explicit label.
 The native test also creates a goal through the drawer, completes all three
 milestones, approves its verification command, checks the resulting file and
@@ -239,9 +252,26 @@ deterministic fork regression reproduces that failure in the old implementation;
 the shared guard still keeps the profile locked while owned background cleanup
 is running. A forked copy cannot unlock its parent's live guard.
 
+The profile-lock fix and runtime source changes passed the complete
+[CI run for 0f6de80](https://github.com/ShadowfetchLinux/ShadowCode/actions/runs/35522325919),
+including clean-runner compilation, both package formats, offline runtime source
+rebuild, runtime lifecycle stress, and the packaged CLI/window. The later MCP
+integration is recorded separately; this green run does not certify it.
+
 OS dialog interaction, notification delivery, broader stress/accessibility
 coverage, corresponding sources for remaining redistributed components,
 and the final installed release still need their release-gate checks.
+
+The MCP window update passes 17 scripted model requests and nine Axe views. It
+registers a server through Settings, confirms registration is inert, enables the
+reviewed definition, displays the exact call arguments, approves an actual MCP
+subprocess request, checks the redacted result reaches the model, waits for
+process cleanup, and disables/removes the registration. Visual review uses
+`artifacts/native/mcp.png`; the complete run is recorded in
+`artifacts/native/result.json`. The test exposed notifications covering Close
+and Send controls; dialogs now stay above transient messages and notification
+bodies no longer intercept clicks. The registration form collapses after adding
+a server so its reviewed command and controls stay in view.
 
 ## Real local models
 

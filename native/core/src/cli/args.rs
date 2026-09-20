@@ -85,6 +85,11 @@ pub enum Command {
         #[arg(long, requires = "enable")]
         hash: Option<String>,
     },
+    /// List inert MCP definitions, register one, or review a project activation.
+    Mcp {
+        #[command(subcommand)]
+        action: Option<Mcp>,
+    },
     /// List/search saved conversations, or rename/delete a unique ID prefix.
     Sessions {
         query: Option<String>,
@@ -156,6 +161,30 @@ pub enum Command {
     },
     /// Run the shared engine without a window until Ctrl-C or SIGTERM.
     Serve,
+}
+#[derive(Debug, Subcommand)]
+pub enum Mcp {
+    /// Register a JSON/YAML definition; does not launch or enable it.
+    Add {
+        definition: PathBuf,
+        /// Current definition hash when replacing an existing registration.
+        #[arg(long)]
+        hash: Option<String>,
+    },
+    /// Allow this exact server definition to start for new Build tasks here.
+    Enable {
+        server: String,
+        #[arg(long)]
+        hash: String,
+    },
+    /// Revoke this project's activation for future tasks.
+    Disable { server: String },
+    /// Remove a global registration and its project activations.
+    Remove {
+        server: String,
+        #[arg(long)]
+        hash: String,
+    },
 }
 #[derive(Debug, Args)]
 pub struct Run {

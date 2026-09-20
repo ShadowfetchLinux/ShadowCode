@@ -670,9 +670,29 @@ impl Engine {
             self.0.approvals.clone(),
             events.clone(),
             running.cancel.clone(),
-        )?;
+        )?
+        .with_profile(self.0.paths.clone());
+        let result = self.run_with_tools(running, job, events, &tools).await;
+        let cleanup = tools.close_integrations().await;
+        match (result, cleanup) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(error.context("External tool cleanup failed")),
+            (Err(error), Err(cleanup)) => {
+                Err(error.context(format!("External tool cleanup failed: {cleanup:#}")))
+            }
+        }
+    }
+    async fn run_with_tools(
+        &self,
+        running: &Running,
+        job: Job,
+        events: TaskEvents,
+        tools: &ToolExecutor,
+    ) -> Result<(String, Value)> {
         let model = ModelClient::new(running.config.model.clone(), &self.0.paths)?;
-        let schemas: Vec<_> = tools::schemas()
+        let schemas: Vec<_> = tools
+            .schemas()
             .into_iter()
             .filter(|schema| {
                 let name = schema["function"]["name"].as_str().unwrap_or("");
@@ -956,7 +976,7 @@ impl Engine {
                 let start = index;
                 index += 1;
                 if running.config.agent.parallel_reads
-                    && !tools.has_hooks()
+                    && !tools.has_external_processes()
                     && permissions::parallel_safe(
                         &response.tool_calls[start].name,
                         &response.tool_calls[start].arguments,

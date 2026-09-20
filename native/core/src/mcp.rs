@@ -34,6 +34,8 @@ const TOTAL_LIMIT: usize = 32 * FRAME_LIMIT;
 const STDERR_LIMIT: usize = 16_384;
 const CATALOG_LIMIT: usize = 2 * FRAME_LIMIT;
 static CONNECTIONS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+pub mod registry;
+pub mod runner;
 
 #[derive(Clone, Debug)]
 pub struct StdioSpec {
@@ -217,6 +219,7 @@ impl Drop for ReaderTask {
 struct Owner {
     cancel: CancellationToken,
     task: Option<JoinHandle<Result<()>>>,
+    group: Arc<Mutex<Group>>,
 }
 impl Owner {
     async fn close(&mut self) -> Result<()> {
@@ -230,6 +233,7 @@ impl Owner {
 impl Drop for Owner {
     fn drop(&mut self) {
         self.cancel.cancel();
+        self.group.lock().unwrap_or_else(|e| e.into_inner()).kill();
     }
 }
 
@@ -292,7 +296,7 @@ impl Client {
             .process_group(0);
         let mut child = command.spawn().context("Cannot start MCP server")?;
         let pid = child.id().context("MCP process has no PID")?;
-        let group = Group(pid);
+        let group = Arc::new(Mutex::new(Group(pid)));
         let stdin = child.stdin.take().context("MCP stdin is unavailable")?;
         let stdout = child.stdout.take().context("MCP stdout is unavailable")?;
         let mut stderr = child.stderr.take().context("MCP stderr is unavailable")?;
@@ -312,16 +316,22 @@ impl Client {
         }));
         let cancel = cancel.child_token();
         let worker_cancel = cancel.clone();
+        let worker_group = group.clone();
         let task = tokio::spawn(async move {
             let _permit = permit;
-            let mut group = group;
             let mut drain = drain;
             // Keep the leader unreaped until its group has been killed: this
             // reserves the PID and prevents a late signal hitting a reused ID.
             worker_cancel.cancelled().await;
-            group.signal(libc::SIGTERM);
+            worker_group
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .signal(libc::SIGTERM);
             tokio::time::sleep(Duration::from_millis(150)).await;
-            group.kill();
+            worker_group
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .kill();
             child.start_kill().ok();
             tokio::time::timeout(Duration::from_secs(2), child.wait())
                 .await
@@ -346,6 +356,7 @@ impl Client {
             owner: Owner {
                 cancel: cancel.clone(),
                 task: Some(task),
+                group,
             },
             diagnostics,
             timeout: spec.timeout,
@@ -388,6 +399,9 @@ impl Client {
     }
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+    pub fn is_closed(&self) -> bool {
+        self.service.is_none() || self.owner.cancel.is_cancelled()
     }
     /// Captured stderr is untrusted diagnostic data; callers must redact secrets
     /// before persisting or displaying it. It is not appended to protocol errors.

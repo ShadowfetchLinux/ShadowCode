@@ -173,6 +173,56 @@ impl Service {
         let text = |key: &str| body[key].as_str().unwrap_or("");
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
         match (request.method.as_str(), path) {
+            #[cfg(unix)]
+            ("GET", "/api/mcp/servers") => {
+                let workspace = Workspace::open(&self.workspace()?)?;
+                let config = Config::load(self.engine.paths(), Some(&workspace.path))?;
+                return crate::mcp::registry::catalog(&workspace, &config);
+            }
+            #[cfg(unix)]
+            ("POST", "/api/mcp/servers" | "/api/mcp/servers/delete") => {
+                let workspace = Workspace::open(&self.workspace()?)?;
+                let mut config = Config::load(self.engine.paths(), None)?;
+                if path.ends_with("/delete") {
+                    crate::mcp::registry::remove_server(&mut config, text("server"), text("hash"))?;
+                } else {
+                    crate::mcp::registry::save_server(
+                        &mut config,
+                        body["definition"].clone(),
+                        text("hash"),
+                    )?;
+                }
+                config.save(self.engine.paths())?;
+                store.add_event("mcp.registration", &json!({"workspace":workspace.path,"server":if path.ends_with("/delete") { text("server").to_owned() } else { format!("config:{}",body["definition"]["name"].as_str().unwrap_or("")) },"removed":path.ends_with("/delete")}), None, None)?;
+                return crate::mcp::registry::catalog(&workspace, &config);
+            }
+            #[cfg(unix)]
+            ("POST", "/api/mcp/activation") => {
+                let workspace = Workspace::open(&self.workspace()?)?;
+                ensure!(
+                    text("workspace") == workspace.path.to_string_lossy(),
+                    "Project changed; reload MCP servers before enabling one"
+                );
+                let enabled = body["enabled"]
+                    .as_bool()
+                    .context("Choose whether to enable this MCP server")?;
+                let effective = Config::load(self.engine.paths(), Some(&workspace.path))?;
+                if enabled {
+                    let entry = crate::mcp::registry::read(&workspace, &effective, text("server"))?;
+                    crate::mcp::registry::authorize_start(&workspace, &effective, &entry)?;
+                }
+                let mut config = Config::load(self.engine.paths(), None)?;
+                crate::mcp::registry::activate(
+                    &workspace,
+                    &mut config,
+                    text("server"),
+                    text("hash"),
+                    enabled,
+                )?;
+                config.save(self.engine.paths())?;
+                store.add_event("mcp.activation", &json!({"workspace":workspace.path,"server":text("server"),"hash":text("hash"),"enabled":enabled}), None, None)?;
+                return crate::mcp::registry::catalog(&workspace, &config);
+            }
             ("GET", "/api/hooks") => {
                 let workspace = Workspace::open(&self.workspace()?)?;
                 let config = Config::load(self.engine.paths(), Some(&workspace.path))?;

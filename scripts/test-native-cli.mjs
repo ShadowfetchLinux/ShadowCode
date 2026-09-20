@@ -88,7 +88,9 @@ const model = createServer(async (req, res) => {
     }
     if (prompt.includes("HANG")) { hungRequests++; res.writeHead(200, { "Content-Type": "application/json" }); res.flushHeaders(); return; }
     let message;
-    if (prompt.includes("APPROVE") && !hadTool) {
+    if (prompt.includes("MCP") && !hadTool) {
+      message = { role: "assistant", content: "Requesting the reviewed MCP call.", tool_calls: [tool("mcp_call", { server: "config:cli-peer", tool: "echo", arguments: { message: "native-cli-mcp-ok" } })] };
+    } else if (prompt.includes("APPROVE") && !hadTool) {
       message = { role: "assistant", content: "Checking the exact authorized operation.", tool_calls: [tool("exec", { command: "printf approval-ran > approval.txt" })] };
     } else if (prompt.includes("CHECK_WRITE") && !hadTool) {
       message = { role: "assistant", content: "Writing a checkpointed file.", tool_calls: [tool("write_file", { path: "checkpoint.txt", content: "checkpoint-value\n", expected_hash: "missing" })] };
@@ -96,7 +98,11 @@ const model = createServer(async (req, res) => {
       message = { role: "assistant", content: "Inspecting this project.", tool_calls: [tool("read_file", { path: "README.md" })] };
     } else {
       if (prompt.includes("CONTINUE")) assert.ok(payload.messages.some(m => m.role === "assistant" && m.content?.includes("CLI completed")), "Continuation must preserve prior assistant history");
-      if (!prompt.includes("APPROVE") && !prompt.includes("CHECK_WRITE")) assert.ok(current.some(m => m.role === "tool" && m.content.includes("fixture-read-value")), "Read result must reach the model");
+      if (prompt.includes("MCP")) {
+        const result = JSON.parse(current.filter(m=>m.role==="tool").at(-1).content);
+        assert.equal(result.success,true);
+        assert.equal(result.output.result.structuredContent.arguments.message,"native-cli-mcp-ok");
+      } else if (!prompt.includes("APPROVE") && !prompt.includes("CHECK_WRITE")) assert.ok(current.some(m => m.role === "tool" && m.content.includes("fixture-read-value")), "Read result must reach the model");
       message = { role: "assistant", content: "CLI completed the requested inspection." };
     }
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -130,6 +136,36 @@ try {
   assert.equal(registered.model.context_limit, 32768);
   assert.equal(await cli(["config", "model.context_limit"]), 32768);
   checks.push("headless startup, arguments, project trust and lifecycle validation");
+
+  const mcpDefinition = path.join(scratch, "mcp.json");
+  await writeFile(mcpDefinition, JSON.stringify({ name: "cli-mcp", command: ["sh", "-c", "touch unexpected-mcp"], env: { TOKEN: "cli-private-mcp-value" } }));
+  const mcpRegistered = await cli(["mcp", "add", mcpDefinition]);
+  assert.equal(mcpRegistered.format, "native-mcp-v1");
+  assert.equal(JSON.stringify(mcpRegistered).includes("cli-private-mcp-value"), false);
+  const mcpServer = mcpRegistered.servers[0];
+  assert.equal(mcpServer.enabled, false);
+  await finish(launch(["mcp", "enable", mcpServer.id]), 2);
+  assert.match((await cli(["mcp", "enable", mcpServer.id, "--hash", "0".repeat(64)], 1)).error, /changed|review/i);
+  assert.equal((await cli(["mcp", "enable", mcpServer.id, "--hash", mcpServer.hash])).servers[0].enabled, true);
+  assert.equal((await cli(["mcp", "disable", mcpServer.id])).servers[0].enabled, false);
+  assert.equal((await cli(["mcp", "remove", mcpServer.id, "--hash", mcpServer.hash])).servers.length, 0);
+  assert.equal(await readFile(path.join(project, "unexpected-mcp")).then(() => true, () => false), false);
+  checks.push("inert MCP registration, private environment metadata, exact-hash project activation, disable and removal");
+
+  const peerPids = path.join(scratch,"mcp-pids.json"), peerRequests = path.join(scratch,"mcp-requests.jsonl");
+  await writeFile(mcpDefinition,JSON.stringify({name:"cli-peer",command:["node",path.join(root,"native/core/tests/fixtures/mcp-server.mjs"),"normal"],env:{MCP_PID_FILE:peerPids,MCP_REQUEST_FILE:peerRequests}}));
+  const peer = (await cli(["mcp","add",mcpDefinition])).servers[0];
+  await cli(["mcp","enable",peer.id,"--hash",peer.hash]);
+  assert.equal((await cli(["run","MCP unattended"],2)).status,"needs_approval");
+  assert.equal(await readFile(peerPids).then(()=>true,()=>false),false,"Unapproved MCP call must not launch the server");
+  const peerTask = launch(["run","MCP interactively","--interactive"],{tty:true});
+  await until("MCP exact argument prompt",()=>peerTask.output.stdout.includes("[y/N]"));
+  assert.match(peerTask.output.stdout,/MCP config:cli-peer \/ echo[\s\S]*"message": "native-cli-mcp-ok"/);
+  peerTask.child.stdin.write("y\n");
+  await finish(peerTask);
+  for (const pid of JSON.parse(await readFile(peerPids,"utf8"))) await until("CLI MCP cleanup",()=>dead(pid));
+  await cli(["mcp","remove",peer.id,"--hash",peer.hash]);
+  checks.push("MCP refusal without a terminal, exact argument display, real PTY approval, subprocess result and cleanup");
 
   const hookPath = ".shadowcode/hooks/cli-check.json";
   await mkdir(path.join(project, ".shadowcode/hooks"), { recursive: true });

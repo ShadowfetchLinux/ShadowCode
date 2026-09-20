@@ -22,6 +22,7 @@ const tool = (name) => ({
   name,
   description: `Fixture ${name}`,
   inputSchema: { type: "object", properties: {} },
+  annotations: { readOnlyHint: name === "echo" },
 });
 createInterface({ input: process.stdin }).on("line", async (line) => {
   const msg = JSON.parse(line);
