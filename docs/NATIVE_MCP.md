@@ -3,8 +3,8 @@
 MCP remains an open [native release gate](NATIVE_MIGRATION.md). The Rust stdio and Streamable HTTP
 clients now connect to native Settings, CLI registration, project activation,
 and individually approved agent tool calls. The native stdio server now exposes
-tasks, goals, reviews, memory and checkpoints to external clients. Built-in SQLite
-compatibility, the remaining server features, and broader interoperability/real-model
+tasks, goals, reviews, memory, SQLite inspection and checkpoints to external clients.
+The remaining server features and broader interoperability/real-model
 verification are still being migrated. Neither direction launches Python.
 
 ## Connect another coding tool to ShadowCode
@@ -46,7 +46,7 @@ client's task or all pending actions. Denying an owned approval does not require
 the approval flag. The client is responsible for obtaining the user's agreement
 to the displayed action before submitting approval.
 
-The current server exposes sixteen tools:
+The current server exposes seventeen tools:
 
 - `shadow_status`, `shadow_models`, `shadow_sessions`, `shadow_review`, and
   `shadow_tools` inspect the selected project and native capabilities.
@@ -57,6 +57,9 @@ The current server exposes sixteen tools:
 - `shadow_memory` reads, appends or replaces project/task notes. Task scope uses
   an exact existing task ID in this project; replacement requires the current
   content hash. Changes require write access. See [native memory](NATIVE_MEMORY.md).
+- `shadow_sqlite` lists tables or runs one bounded read-only query against an
+  existing project database. It supports bound parameters and live WAL data;
+  SQLite may maintain coordination sidecars. See [SQLite inspection](NATIVE_SQLITE.md).
 - `shadow_goal` creates, lists, inspects, advances or abandons durable goals.
   Creating or advancing a goal here does not start an agent automatically.
 - `shadow_run` creates a fresh conversation and returns its job ID. `shadow_jobs`

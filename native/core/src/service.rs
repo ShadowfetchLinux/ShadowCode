@@ -183,6 +183,15 @@ impl Service {
         let text = |key: &str| body[key].as_str().unwrap_or("");
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
         match (request.method.as_str(), path) {
+            #[cfg(unix)]
+            ("POST", "/api/sqlite") => {
+                return crate::sqlite::inspect(
+                    Arc::new(Workspace::open(&self.workspace()?)?),
+                    serde_json::from_value(body.clone())?,
+                    CancellationToken::new(),
+                )
+                .await
+            }
             ("GET", "/api/workspace/understand") => return self.project_map(false).await,
             ("POST", "/api/workspace/understand") => {
                 return self.project_map(body["save"] == true).await

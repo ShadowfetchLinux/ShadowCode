@@ -247,6 +247,34 @@ impl Workspace {
             content: String::from_utf8(bytes).context("File is not valid UTF-8")?,
         })
     }
+    /// Keep a directory capability alive while a native library reads a file
+    /// and its adjacent sidecars. Every relative parent must be a real directory.
+    #[cfg(unix)]
+    pub(crate) fn confined_parent(&self, path: &str) -> Result<(Dir, String)> {
+        use cap_std::fs::OpenOptionsExt;
+        let relative = self.relative(path)?;
+        let name = relative
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("A regular file path with a UTF-8 name is required")?
+            .to_owned();
+        let mut parent = self.dir.try_clone()?;
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        for part in relative.parent().unwrap_or(Path::new(".")).components() {
+            if let Component::Normal(name) = part {
+                parent = Dir::from_std_file(
+                    parent
+                        .open_with(name, &options)
+                        .context("Database parent must be a real workspace directory")?
+                        .into_std(),
+                );
+            }
+        }
+        Ok((parent, name))
+    }
     pub fn write(&self, path: &str, bytes: &[u8], expected: Option<&str>) -> Result<String> {
         ensure!(
             bytes.len() <= MAX_FILE_BYTES,

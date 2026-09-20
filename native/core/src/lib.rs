@@ -25,6 +25,8 @@ pub mod process;
 pub mod project;
 pub mod routing;
 pub mod service;
+#[cfg(unix)]
+pub mod sqlite;
 pub mod store;
 pub mod tools;
 pub mod workflows;

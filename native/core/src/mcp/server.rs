@@ -236,6 +236,11 @@ impl Handler {
     async fn dispatch(&self, name: &str, args: &Value, ct: CancellationToken) -> Result<Value> {
         self.check_workspace(args)?;
         match name {
+            "shadow_sqlite" => {
+                let mut body = args.clone();
+                body.as_object_mut().unwrap().remove("workspace");
+                self.call("POST", "/api/sqlite", body).await
+            }
             "shadow_understand" => {
                 if args["save"] == true {
                     self.write()?;

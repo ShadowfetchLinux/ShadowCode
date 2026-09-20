@@ -12,6 +12,13 @@
   existing profiles, without deleting data or changing existing parent-directory
   permissions. Unsafe profile leaves and lock files are rejected. Notifications
   keep full text contrast throughout their entrance animation.
+- Native SQLite tools, CLI and MCP queries replace the Python built-in reader,
+  with parameter binding, live WAL support, confined paths, denied SQL writes
+  and bounded/cancellable results. Bundled SQLite is updated to 3.53.2, including
+  its WAL-reset corruption fix.
+- Required task inspection recognizes successful native database reads. Small
+  model contexts can use a shorter, enforced response budget while retaining
+  required input; requests that still cannot fit fail before contacting the model.
 - Native goals preserve milestone results, pause and resume, require recorded
   inspection/verification for the default checklist, and stop on failed checks.
   Goal tasks appear live in the conversation; results and progress are accessible

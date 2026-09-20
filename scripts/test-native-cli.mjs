@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const binary = process.env.SHADOW_DESKTOP_BINARY || path.join(root, "target/debug/shadowcode");
@@ -149,6 +150,16 @@ try {
   await finish(launch(["why", "--count", "0"]), 2);
   assert.match((await cli(["why", "../outside"], 1)).error, /outside|escape|traversal/i);
   checks.push("native project inspection, saved map, readable diagnostics and history argument validation");
+  const database = new DatabaseSync(path.join(project,"data.db"));
+  database.exec("CREATE TABLE items(value TEXT); INSERT INTO items VALUES('cli sqlite')");
+  database.close();
+  assert.deepEqual((await cli(["sqlite","data.db"])).tables,["items"]);
+  assert.equal((await cli(["sqlite","data.db","SELECT value FROM items WHERE value=?","--params",'["cli sqlite"]'])).rows[0].value,"cli sqlite");
+  assert.match((await cli(["sqlite","data.db","DELETE FROM items"],1)).error,/read-only/);
+  await cli(["sqlite","data.db","SELECT ?","--params","{}"],1);
+  await finish(launch(["sqlite","data.db","--limit","0"]),2);
+  assert.equal((await cli(["sqlite","data.db","SELECT count(*) AS total FROM items"])).rows[0].total,1);
+  checks.push("native SQLite table discovery, bound queries, read-only enforcement and input limits");
 
   const mcpDefinition = path.join(scratch, "mcp.json");
   await writeFile(mcpDefinition, JSON.stringify({ name: "cli-mcp", command: ["sh", "-c", "touch unexpected-mcp"], env: { TOKEN: "cli-private-mcp-value" } }));

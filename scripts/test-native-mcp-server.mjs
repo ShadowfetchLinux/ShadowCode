@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const binary =
   process.env.SHADOW_DESKTOP_BINARY ||
@@ -278,7 +279,13 @@ try {
   assert.equal(rejected.stdout, "");
   const readonly = await connect();
   const catalog = await readonly.rpc("tools/list");
-  assert.equal(catalog.tools.length, 16);
+  assert.equal(catalog.tools.length, 17);
+  const database = new DatabaseSync(path.join(project,"data.db"));
+  database.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES('mcp sqlite')");
+  database.close();
+  assert.deepEqual((await readonly.call("shadow_sqlite",{path:"data.db"})).structuredContent.tables,["records"]);
+  assert.equal((await readonly.call("shadow_sqlite",{path:"data.db",sql:"SELECT value FROM records WHERE value=?",params:["mcp sqlite"]})).structuredContent.rows[0].value,"mcp sqlite");
+  assert.equal((await readonly.call("shadow_sqlite",{path:"data.db",sql:"DROP TABLE records"})).isError,true);
   const inspected = await readonly.call("shadow_understand");
   assert.equal(inspected.structuredContent.saved, false);
   assert.equal(
@@ -477,13 +484,14 @@ try {
       {
         passed: true,
         modelRequests: requests,
-        tools: 16,
+        tools: catalog.tools.length,
         resources: 4,
         checks: [
           "standalone headless native MCP process",
           "JSON-RPC-only stdout",
           "registration uses stable executable/project/profile",
           "read-only default",
+          "native SQLite table discovery, bound queries and denied SQL writes",
           "native task with exact approval",
           "real write, terminal verification, checkpoint and rollback",
           "resource reads",

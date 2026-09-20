@@ -371,6 +371,20 @@ impl ToolExecutor {
         if call.name.starts_with("git_") {
             return self.git(&call.name, &call.arguments).await;
         }
+        #[cfg(unix)]
+        if matches!(call.name.as_str(), "mcp_sqlite_tables" | "mcp_sqlite_query") {
+            let mut request: crate::sqlite::Request =
+                serde_json::from_value(call.arguments.clone())?;
+            ensure!(
+                request.sql.is_some() == (call.name == "mcp_sqlite_query"),
+                "Use mcp_sqlite_query with sql, or mcp_sqlite_tables without sql"
+            );
+            request.timeout_ms = request
+                .timeout_ms
+                .min(self.config.agent.tool_timeout_sec.saturating_mul(1000));
+            return crate::sqlite::inspect(self.workspace.clone(), request, self.cancel.clone())
+                .await;
+        }
         let worker = self.clone();
         let call = call.clone();
         tokio::task::spawn_blocking(move || worker.files(&call.name, &call.arguments))
@@ -881,6 +895,8 @@ pub fn schemas() -> Vec<Value> {
         ("search_files","Find filenames by substring; respects ignore rules.",json!({"query":s,"path":s}),vec!["query"]),
         ("search_text","Search text; literal by default, optional regex and file glob.",json!({"query":s,"path":s,"regex":b,"glob":s,"max_hits":n}),vec!["query"]),
         ("search_symbol","Find likely symbol definitions by name.",json!({"query":s,"path":s}),vec!["query"]),
+        ("mcp_sqlite_tables","List tables and CREATE TABLE definitions in a project SQLite file. Native read-only tool; no registration. SQLite may maintain WAL sidecars.",json!({"path":s}),vec!["path"]),
+        ("mcp_sqlite_query","Read a project SQLite file with SELECT/WITH or schema PRAGMA (table_info etc). Bind ? placeholders with params; check truncated. Unique column aliases required. SQLite may maintain WAL sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]}},"limit":n}),vec!["path","sql"]),
         ("write_file","Create/replace text. Read existing files first. Optional expected_hash: 'missing' for new files or read_file's SHA-256; omit when unused, never empty.",json!({"path":s,"content":s,"expected_hash":s}),vec!["path","content"]),
         ("edit_file","Replace exact unique text. Set replace_all explicitly for repeated matches.",json!({"path":s,"old_string":s,"new_string":s,"replace_all":b,"expected_hash":s}),vec!["path","old_string","new_string"]),
         ("apply_patch","Apply a unified diff or complete *** Begin Patch block. All file contexts are preflighted; changes are checkpointed.",json!({"patch":s,"path":s}),vec!["patch"]),

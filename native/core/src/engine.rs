@@ -1124,6 +1124,8 @@ impl Engine {
                                 | "git_diff"
                                 | "git_status"
                                 | "git_log"
+                                | "mcp_sqlite_tables"
+                                | "mcp_sqlite_query"
                         )
                     {
                         inspected = true;

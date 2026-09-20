@@ -147,7 +147,7 @@ async fn official_sdk_lists_native_tools_resources_prompts_and_confines_project_
     }
     let c = f.connect(Access::default()).await;
     let catalog = c.peer.list_tools(None).await.unwrap();
-    assert_eq!(catalog.tools.len(), 16);
+    assert_eq!(catalog.tools.len(), 17);
     assert!(
         catalog
             .tools
@@ -224,6 +224,31 @@ async fn official_sdk_lists_native_tools_resources_prompts_and_confines_project_
         .get_prompt(GetPromptRequestParams::new("missing"))
         .await
         .is_err());
+    c.close().await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn official_sdk_queries_project_sqlite_with_read_only_server_access() {
+    let f = Fixture::new("http://127.0.0.1:1/v1");
+    let db = rusqlite::Connection::open(f.project.join("data.db")).unwrap();
+    db.execute_batch("CREATE TABLE items(value TEXT); INSERT INTO items VALUES('sqlite native');")
+        .unwrap();
+    drop(db);
+    let c = f.connect(Access::default()).await;
+    let tables = c.call("shadow_sqlite", json!({"path":"data.db"})).await;
+    assert_eq!(tables["error"], false, "{tables}");
+    assert_eq!(tables["value"]["tables"], json!(["items"]));
+    let query = c.call("shadow_sqlite",json!({"path":"data.db","sql":"SELECT value FROM items WHERE value=?","params":["sqlite native"],"limit":1})).await;
+    assert_eq!(query["value"]["rows"][0]["value"], "sqlite native");
+    for args in [
+        json!({"path":"data.db","sql":"DROP TABLE items"}),
+        json!({"path":"data.db","workspace":f.other}),
+        json!({"path":"../other/data.db"}),
+    ] {
+        assert_eq!(c.call("shadow_sqlite", args).await["error"], true);
+    }
+    assert_eq!(f.service.workspace().unwrap(), f.other);
     c.close().await;
     f.close().await;
 }

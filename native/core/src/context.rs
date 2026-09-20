@@ -61,6 +61,20 @@ pub fn estimate_tokens(value: &Value) -> usize {
     value.to_string().len().div_ceil(3)
 }
 
+/// Keep the advertised input window intact while allowing a shorter response
+/// when essential context leaves less than the usual quarter-window reserve.
+/// This same budget is enforced in the actual provider request.
+pub fn response_budget(
+    messages: &[Value],
+    schemas: &[Value],
+    context_limit: usize,
+) -> Result<usize> {
+    let input = estimate_tokens(&json!(messages)) + estimate_tokens(&json!(schemas)) + 256;
+    let available = context_limit.saturating_sub(input);
+    ensure!(available >= 256, "The current request and required tool context exceed the selected model's context budget: {} estimated tokens needed including tools and a minimum response reserve, {} configured; shorten the request or select a larger context",input+256,context_limit);
+    Ok(available.min((context_limit / 4).min(8192)))
+}
+
 /// A direct request to read one named file is also an explicit attachment.
 /// Only existing, confined text files are attached; general instructions remain
 /// the model's responsibility. Never infer a shell command from prompt text.
@@ -84,10 +98,10 @@ pub fn compact(
 ) -> Result<Option<Value>> {
     let reserved = (context_limit / 4).min(8192) + estimate_tokens(&json!(schemas)) + 256;
     ensure!(
-        context_limit > reserved + 256,
+        context_limit > estimate_tokens(&json!(schemas)) + 512,
         "Model context is too small for the tools; select a larger context budget"
     );
-    let hard_limit = context_limit - reserved;
+    let hard_limit = context_limit.saturating_sub(reserved);
     let target = ((hard_limit as f64 * ratio) as usize).max(256);
     let before = estimate_tokens(&json!(messages));
     if before <= hard_limit {
@@ -139,11 +153,14 @@ pub fn compact(
         kept.insert(1.min(kept.len()), note);
     }
     let after = estimate_tokens(&json!(kept));
-    ensure!(after<=hard_limit,"The current request and required tool context exceed the selected model's context budget; shorten the request or select a larger context");
+    let response_tokens = response_budget(&kept, schemas, context_limit)?;
     validate_pairs(&kept)?;
+    if kept == *messages {
+        return Ok(None);
+    }
     *messages = kept;
     Ok(Some(
-        json!({"before_estimated_tokens":before,"after_estimated_tokens":after,"omitted_messages":removed,"method":"bounded_history"}),
+        json!({"before_estimated_tokens":before,"after_estimated_tokens":after,"omitted_messages":removed,"response_token_limit":response_tokens,"method":"bounded_history"}),
     ))
 }
 

@@ -153,10 +153,9 @@ transports, inert Settings/CLI registration, explicit project/content activation
 discovery, individually approved calls, and task-owned process/stream cleanup.
 HTTP uses explicit credential references, prevents redirects and automatic call
 retries, and supports modern and legacy Streamable HTTP negotiation. The native
-stdio server exposes sixteen tools, four resources and two prompts through
+stdio server exposes seventeen tools, four resources and two prompts through
 the shared engine, with a fixed project, reduced per-task permissions, explicit
-approval delegation and connection-owned jobs. Built-in SQLite compatibility,
-HTTP serving and broader interoperability/real-model
+approval delegation and connection-owned jobs. HTTP serving and broader interoperability/real-model
 verification remain open requirements. Private engine-side ownership now cancels
 MCP jobs after gateway SIGKILL, including unread submission replies, queued tasks
 and active command children; unrelated work continues.
@@ -171,6 +170,11 @@ queue ownership, real output/exit status, and timeout/process cleanup.
 notes, legacy-file preservation, atomic edits with stale-hash rejection, bounded
 continuation context, independent branch archives and complete note exports.
 The desktop, CLI and MCP server share this service.
+
+[Native SQLite inspection](NATIVE_SQLITE.md) replaces the Python built-in tools
+with confined, bounded read-only queries, typed results, parameter binding,
+live WAL coordination and cancellation. Model tools, CLI and MCP share the
+reader. The history store also uses the updated bundled SQLite 3.53.2 library.
 
 AppImage extraction now uses a source-pinned runtime patch with private
 per-invocation directories, signal forwarding, and checked cleanup. A dedicated

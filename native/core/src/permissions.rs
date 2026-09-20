@@ -16,6 +16,8 @@ pub fn read_only(tool: &str) -> bool {
             | "search_files"
             | "search_text"
             | "search_symbol"
+            | "mcp_sqlite_tables"
+            | "mcp_sqlite_query"
             | "git_status"
             | "git_diff"
             | "git_log"

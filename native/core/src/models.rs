@@ -172,7 +172,9 @@ impl ModelClient {
                 }
             )
         };
-        let body = self.request_body(messages, tools, 8192.min(self.config.context_limit / 4));
+        let response_tokens =
+            crate::context::response_budget(messages, tools, self.config.context_limit)?;
+        let body = self.request_body(messages, tools, response_tokens);
         let mut request = self.client.post(&url).json(&body);
         if let Some(key) = &self.key {
             request = request.bearer_auth(key);

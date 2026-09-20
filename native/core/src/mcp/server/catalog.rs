@@ -11,6 +11,7 @@ pub(super) fn tools() -> Vec<Tool> {
         ("shadow_why","Read bounded commit history and current/staged diffs for a project path. Recorded evidence does not establish author intent.",json!({"path":s,"count":{"type":"integer","minimum":1,"maximum":50}}),vec![],true),
         ("shadow_test","Run an exact test command as an owned native task, without a model. If omitted, auto-select only a single unambiguous detected command. Requires --allow-write and an exact command approval. Returns a job ID; inspect shadow_jobs for completion, stdout/stderr, exit status and approvals. Closing the connection cancels it.",json!({"command":s,"timeout":{"type":"integer","minimum":1,"maximum":3600},"queue":b}),vec![],false),
         ("shadow_status","Read this server's workspace, model, permissions and active jobs.",json!({}),vec![],true),
+        ("shadow_sqlite","List tables when sql is omitted, or execute a read-only SELECT/WITH or schema PRAGMA in an existing project database. Bind ? placeholders with params. No SQL writes, attachments, extensions or Python. Results are capped at 1000 rows / 1 MB; check truncated. SQLite may maintain WAL coordination sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]},"maxItems":128},"limit":{"type":"integer","minimum":1,"maximum":1000},"timeout_ms":{"type":"integer","minimum":1,"maximum":10000}}),vec!["path"],true),
         ("shadow_models","List saved models; detect=true also probes configured/local providers.",json!({"detect":b}),vec![],false),
         ("shadow_sessions","List recent conversations in this workspace only.",json!({"limit":{"type":"integer","minimum":1,"maximum":100}}),vec![],true),
         ("shadow_review","Read Git status and pending/staged diffs in this workspace.",json!({"path":s}),vec![],true),
@@ -53,12 +54,16 @@ pub(super) fn validate(tool: &Tool, args: &Value) -> anyhow::Result<()> {
                 "string" => value.is_string(),
                 "boolean" => value.is_boolean(),
                 "integer" => value.is_u64(),
+                "array" => value.is_array(),
                 _ => false,
             },
             "Invalid type for {key}"
         );
         if let Some(choices) = prop["enum"].as_array() {
             ensure!(choices.contains(value), "Invalid value for {key}");
+        }
+        if let (Some(values), Some(limit)) = (value.as_array(), prop["maxItems"].as_u64()) {
+            ensure!(values.len() <= limit as usize, "Too many values for {key}");
         }
         if prop["format"] == "uuid" {
             uuid::Uuid::parse_str(value.as_str().unwrap()).context("Invalid ID")?;

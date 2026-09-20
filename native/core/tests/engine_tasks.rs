@@ -9,6 +9,7 @@ use shadowcode_core::{
     workspace::Workspace,
 };
 use std::{fs, path::Path, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 fn response(text: &str, calls: Value) -> Value {
     let reason = if calls.as_array().is_some_and(|v| !v.is_empty()) {
@@ -294,6 +295,62 @@ async fn usage_limit_stops_before_executing_new_tool_calls() {
     engine.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn successful_sqlite_reads_satisfy_current_workspace_inspection() {
+    for (name, arguments, succeeds) in [
+        ("mcp_sqlite_tables", json!({"path":"billing.db"}), true),
+        (
+            "mcp_sqlite_query",
+            json!({"path":"billing.db","sql":"SELECT sum(total_cents) AS total FROM invoices"}),
+            true,
+        ),
+        (
+            "mcp_sqlite_query",
+            json!({"path":"billing.db","sql":"DELETE FROM invoices RETURNING total_cents"}),
+            false,
+        ),
+    ] {
+        let peer = support::server(move |index, body| {
+            context::validate_pairs(body["messages"].as_array().unwrap()).unwrap();
+            let reply = if index == 0 {
+                response("", json!([tool("sql", name, arguments.clone())]))
+            } else {
+                response("Inspected the database.", json!([]))
+            };
+            (reply, Duration::ZERO)
+        })
+        .await;
+        let (root, engine) = setup(&peer.endpoint);
+        Config::patch(engine.paths(), json!({"agent":{"max_fix_retries":0}})).unwrap();
+        let db = rusqlite::Connection::open(root.path().join("project/billing.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE invoices(total_cents INTEGER); INSERT INTO invoices VALUES(1000);",
+        )
+        .unwrap();
+        let mut start = request(root.path(), "Inspect the project database billing.db", None);
+        start.mode = "review".into();
+        let job = engine.start(start).await.unwrap();
+        let completed = wait(&engine, &job.id).await;
+        assert_eq!(
+            completed.status,
+            if succeeds { "completed" } else { "failed" },
+            "{name}: {}",
+            completed.summary
+        );
+        assert_eq!(completed.steps, 2);
+        if !succeeds {
+            assert!(completed.summary.contains("did not inspect"));
+        }
+        assert_eq!(
+            db.query_row("SELECT total_cents FROM invoices", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1000
+        );
+        engine.shutdown().await.unwrap();
+    }
+}
+
 #[test]
 fn recovery_repairs_missing_tool_results_without_replaying_mutations() {
     let mut messages = vec![
@@ -334,6 +391,59 @@ fn compaction_keeps_current_request_and_complete_function_groups() {
         "Current request must remain intact"
     );
     assert!(context::estimate_tokens(&json!(messages)) < 4096);
+}
+
+#[tokio::test]
+async fn small_context_keeps_required_input_and_sends_a_bounded_response_budget() {
+    let peer = support::server(|_, _| {
+        (
+            json!({"choices":[{"message":{"content":"Short answer"},"finish_reason":"stop"}]}),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let paths = shadowcode_core::paths::AppPaths::isolated(root.path()).unwrap();
+    let client = shadowcode_core::models::ModelClient::new(
+        shadowcode_core::config::ModelConfig {
+            provider: "local".into(),
+            endpoint: peer.endpoint.clone(),
+            name: "small".into(),
+            context_limit: 4096,
+            ..Default::default()
+        },
+        &paths,
+    )
+    .unwrap();
+    let mut messages = vec![
+        json!({"role":"system","content":"x".repeat(9200)}),
+        json!({"role":"user","content":"Keep my complete current request"}),
+    ];
+    let original = messages.clone();
+    assert!(context::compact(&mut messages, &[], 4096, 0.7)
+        .unwrap()
+        .is_none());
+    assert_eq!(messages, original);
+    let response = client
+        .chat(&messages, &[], CancellationToken::new(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(response.text, "Short answer");
+    let wire = peer.requests.lock().unwrap()[0].clone();
+    let limit = wire["max_tokens"].as_u64().unwrap() as usize;
+    assert!((256..1024).contains(&limit));
+    assert!(context::estimate_tokens(&wire["messages"]) + limit + 256 <= 4096);
+    messages[0]["content"] = json!("x".repeat(16000));
+    assert!(context::compact(&mut messages, &[], 4096, 0.7).is_err());
+    assert!(client
+        .chat(&messages, &[], CancellationToken::new(), |_| {})
+        .await
+        .is_err());
+    assert_eq!(
+        peer.requests.lock().unwrap().len(),
+        1,
+        "oversized input must not reach the provider"
+    );
 }
 
 #[tokio::test]

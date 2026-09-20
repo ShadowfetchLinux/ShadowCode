@@ -10,6 +10,13 @@ a specific model in the composer overrides the route for that task. The model
 note above the response records the actual model, provider, and purpose, and
 survives reload. The context meter uses that task's model context limit.
 
+The engine normally reserves a quarter of that window for a response (up to
+8,192 tokens). If essential input leaves less room after history compaction,
+it can request a shorter response down to 256 tokens. The actual provider
+request uses that reduced limit; the configured context window never grows
+silently. If input, tools and the minimum response still cannot fit, the task
+reports the estimated requirement and stops before sending an oversized request.
+
 Default goal milestones use Plan for inspection, Build for implementation, and
 Test for required command verification. Planning and review retain read-only
 permissions regardless of the selected model. A different model never grants

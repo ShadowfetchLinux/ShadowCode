@@ -48,6 +48,18 @@ pub enum Command {
     },
     /// Show the selected project and active work.
     Status,
+    /// List tables or run one read-only query against an existing project database.
+    Sqlite {
+        path: String,
+        sql: Option<String>,
+        /// JSON array of values bound to positional SQL placeholders.
+        #[arg(long, default_value = "[]", requires = "sql")]
+        params: String,
+        #[arg(long, default_value_t = 200, value_parser = clap::value_parser!(u16).range(1..=1000))]
+        limit: u16,
+        #[arg(long, default_value_t = 5000, value_parser = clap::value_parser!(u64).range(1..=10000))]
+        timeout_ms: u64,
+    },
     /// Inspect native runtime and configured provider health.
     Health {
         #[arg(long)]

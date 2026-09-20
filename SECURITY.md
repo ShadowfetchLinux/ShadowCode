@@ -63,6 +63,14 @@ Review applies only current unstaged hunks. A changed diff causes a conflict,
 rather than applying a stale client patch. File restores can overwrite later
 edits; review the checkpoint and retain independent version-control backups.
 
+[Native SQLite inspection](docs/NATIVE_SQLITE.md) opens existing project
+databases read-only and authorizes only queries returning rows. SQL writes,
+ATTACH, configuration PRAGMAs and extension loading are denied; a small explicit
+allowlist supports read-only schema PRAGMAs. SQLite may maintain its WAL
+coordination sidecars. Directory capabilities confine database/sidecar paths;
+query work, concurrent readers and output are bounded. Cancellation interrupts
+SQLite and releases its connection; an OS filesystem stall may delay return.
+
 ## Secrets and transcript content
 
 Keys belong in `~/.config/shadow-agent/secrets.env` with mode 600, or environment

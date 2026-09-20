@@ -52,6 +52,48 @@ async fn call(tools: &ToolExecutor, name: &str, args: Value) -> shadowcode_core:
 }
 
 #[tokio::test]
+async fn sqlite_builtins_work_in_read_only_mode_without_external_activation() {
+    let mut config = Config::default();
+    config.permissions.level = PermissionLevel::ReadOnly;
+    let (_root, tools) = fixture(config);
+    let db = rusqlite::Connection::open(tools.workspace.path.join("app.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE records(value TEXT); INSERT INTO records VALUES('native sqlite');",
+    )
+    .unwrap();
+    drop(db);
+    for name in ["mcp_sqlite_tables", "mcp_sqlite_query"] {
+        assert!(tools
+            .schemas()
+            .iter()
+            .any(|tool| tool["function"]["name"] == name));
+        assert!(shadowcode_core::permissions::parallel_safe(
+            name,
+            &json!({})
+        ));
+    }
+    let tables = call(&tools, "mcp_sqlite_tables", json!({"path":"app.db"})).await;
+    assert!(tables.success, "{}", tables.error);
+    let query = call(&tools,"mcp_sqlite_query",json!({"path":"app.db","sql":"SELECT value FROM records WHERE value=?","params":["native sqlite"]})).await;
+    assert!(query.success, "{}", query.error);
+    assert!(query.output.to_string().contains("native sqlite"));
+    assert!(
+        !call(
+            &tools,
+            "mcp_sqlite_query",
+            json!({"path":"app.db","sql":"DELETE FROM records RETURNING value"})
+        )
+        .await
+        .success
+    );
+    assert!(
+        !call(&tools, "mcp_sqlite_query", json!({"path":"app.db"}))
+            .await
+            .success
+    );
+}
+
+#[tokio::test]
 async fn tool_edits_reject_stale_reads_and_rewind_moves_and_new_files() {
     let (_root, tools) = fixture(Config::default());
     let invalid = call(

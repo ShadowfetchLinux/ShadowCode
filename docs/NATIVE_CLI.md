@@ -41,6 +41,11 @@ uses an exact task in the current project. `--json` exposes content hashes;
 string clearing it. See [native memory](NATIVE_MEMORY.md) for persistence,
 legacy notes, continuation, branching and export.
 
+`sqlite PATH [SQL]` lists tables or reads an existing project database.
+`--params '[100]'` binds positional placeholders; `--limit 50` and
+`--timeout-ms 2000` reduce result/work limits. Check `truncated` in the response.
+See [SQLite inspection](NATIVE_SQLITE.md) for types, limits and WAL behavior.
+
 `hooks` lists project lifecycle command definitions. Review the command and its
 hash, then use `hooks --enable PATH --hash HASH` to enable those exact contents
 or `hooks --disable PATH` to remove the registration. Hooks remain inactive in

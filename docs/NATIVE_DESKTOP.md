@@ -62,6 +62,10 @@ the CLI/MCP server, with bounded continuation context, independent branch copies
 and note exports. Approval decisions carry the displayed prompt's conversation
 ID so a navigation change cannot send the decision to another task.
 
+[Native SQLite inspection](NATIVE_SQLITE.md) gives models read-only table/query
+tools, also available through the CLI and MCP server, with parameter binding,
+live WAL support, cancellation and result limits.
+
 Project [lifecycle commands](NATIVE_HOOKS.md) can be reviewed and enabled in
 Settings → Hooks or through the same native CLI. Their command gates and
 completion checks run inside the native task lifecycle without Python callbacks.

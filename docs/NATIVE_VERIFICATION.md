@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **172 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **182 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -24,6 +24,19 @@ integration tests** pass on the development machine. The suite covers:
   queued cancellation, hung providers, and managed shutdown.
 - Tool-call/result pairing across compaction and recovery, live file attachments,
   verification retries, token limits, and labelled estimates for absent usage.
+- Smaller response reserves for constrained models, enforced in the actual
+  provider request. Required input remains intact, 4K goal verification still
+  passes with the expanded tool catalog, and oversized input fails before HTTP.
+- Native SQLite table/query tools, typed results and bound parameters, denied
+  SQL writes/attachments/extensions/multiple statements, symlink/sidecar/FIFO
+  confinement, held-directory behavior after a rename, explicit row/byte limits,
+  VM/time limits, cancellation and lock release. An independent Node SQLite
+  writer verifies live committed WAL reads, recovery without a shared-memory
+  file and reads after a writer closes, with unchanged database/WAL bytes.
+  Wide existing schemas remain readable through projected columns; oversized
+  results, exclusive locks and corrupt files produce bounded errors. Read-only
+  model tools and the official MCP client share the same reader. Successful SQL
+  reads satisfy the task's inspection check; rejected queries do not.
 - Streaming UTF-8/SSE/NDJSON, malformed/truncated provider responses, large frame
   batches, bounded process output, concurrent commands, and process-group cleanup.
 - Ollama templates receive later runtime repair/compaction guidance in their
@@ -129,7 +142,7 @@ a shared engine. SIGKILL of the MCP gateway is checked to cancel its running/que
 jobs and stop the command child, without stopping the unrelated task or invoking
 the model for cancelled queued work. The six-request probe passes locally; CI
 is configured to repeat it against the source binary and packaged AppImage.
-The sixteen-tool catalog includes project inspection, native diagnostics and
+The seventeen-tool catalog includes project inspection, native diagnostics, SQLite and
 approved test execution, which the probe exercises without extra model requests.
 These fixtures do not substitute for broader client and real-model interoperability.
 
@@ -170,6 +183,14 @@ requests. It checks persistent task notes, readable output, parser validation,
 stale replacement rejection and actual note inclusion in a continued model
 request. The MCP executable probe also saves and reads notes for its completed
 native test task, without additional model calls.
+
+The SQLite update adds a fourteenth CLI scenario group covering native table
+discovery, parameter binding, denied SQL writes and input validation, without
+extra model calls. This run recorded 29 scripted requests; cancellation timing
+can stop one of the earlier requests before it reaches the fixture. The
+executable MCP probe also queries and rejects a write
+through its default read-only server. Dependency notice collection resolves
+539 application dependencies with the updated SQLite library.
 
 The probe also hosts `serve`, starts and stops background commands, reads their
 logs, runs a task alongside them, observes and cancels detached work, and approves
@@ -365,6 +386,29 @@ is pinned to the SDK's tested version; its omitted upstream license texts are
 retained at the exact source commit, with digests verified by the notice builder.
 
 ## Real local models
+
+`native/core/examples/probe_sqlite.rs` creates an isolated profile and disposable
+invoice database. The model must discover its schema and use the native SQLite
+query tool to calculate the sum for paid invoices. The probe checks the recorded
+query result, final task status and answer, and unchanged database bytes.
+
+Both **gpt-oss:20b** and **qwen3:14b** completed this read-only task in three
+model steps, with the correct total of 1,000 cents. Their reported token totals
+were 2,829 and 3,456 respectively. Neither final run needed an inspection retry.
+Earlier runs exposed missing schema-PRAGMA support and an inspection check that
+failed to recognize successful SQLite tools. That check caused unnecessary
+repair prompts, followed by empty model answers. Both defects are fixed and
+covered by regression tests, including rejection of a failed query as evidence.
+These are individual tool-interoperability probes, not performance benchmarks.
+
+With either model already available in local Ollama, reproduce the probe with:
+
+```sh
+cargo run -p shadowcode-core --example probe_sqlite --locked -- gpt-oss:20b sqlite-probe.json
+```
+
+The optional report path records the actual model, results, usage and tool/
+verification events. The disposable profile and project are removed on exit.
 
 `scripts/probe-native-hooks.mjs` tests an installed Ollama model through the
 headless executable with a disposable project/profile and an explicitly enabled
