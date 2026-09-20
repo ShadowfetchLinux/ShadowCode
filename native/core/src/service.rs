@@ -537,7 +537,7 @@ impl Service {
             }
             ("GET", "/api/sessions") => {
                 return Ok(
-                    json!({"sessions":store.sessions(q("q"),query_limit(&query,100,10000))?}),
+                    json!({"sessions":store.sessions_in(q("q"),query_limit(&query,100,10000),(!q("workspace").is_empty()).then(||Path::new(q("workspace"))))?}),
                 )
             }
             ("GET", "/api/goals") => {
@@ -625,7 +625,7 @@ impl Service {
                 };
                 let job = self
                     .engine
-                    .start_for_purpose(
+                    .start_limited(
                         StartRequest {
                             workspace: workspace.clone(),
                             task: text("task").into(),
@@ -645,6 +645,10 @@ impl Service {
                             queue: body["queue"].as_bool().unwrap_or(false),
                         },
                         purpose,
+                        body.get("permission_limit")
+                            .filter(|v| !v.is_null())
+                            .map(|v| serde_json::from_value(v.clone()))
+                            .transpose()?,
                     )
                     .await?;
                 self.select_if(

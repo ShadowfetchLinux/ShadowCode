@@ -220,6 +220,14 @@ impl Store {
             .next())
     }
     pub fn sessions(&self, search: &str, limit: usize) -> Result<Vec<Value>> {
+        self.sessions_in(search, limit, None)
+    }
+    pub fn sessions_in(
+        &self,
+        search: &str,
+        limit: usize,
+        workspace: Option<&Path>,
+    ) -> Result<Vec<Value>> {
         let needle = format!(
             "%{}%",
             search
@@ -227,9 +235,9 @@ impl Store {
                 .replace('%', "!%")
                 .replace('_', "!_")
         );
-        self.query("SELECT s.* FROM sessions s WHERE s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
-            OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '!')
-            ORDER BY s.updated_at DESC LIMIT ?", params![needle,needle,needle,limit.clamp(1,10000)])
+        self.query("SELECT s.* FROM sessions s WHERE (? IS NULL OR s.workspace=?) AND (s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
+            OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '!'))
+            ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,limit.clamp(1,10000)])
     }
     pub fn rename_session(&self, sid: &str, title: &str) -> Result<()> {
         ensure!(title.len() <= 500, "Task title is too long");

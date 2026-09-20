@@ -30,6 +30,13 @@ jobs:
       - run: cargo +1.95.0 build -p shadowcode-desktop --locked
       - name: Exercise the native CLI without a display
         run: node scripts/test-native-cli.mjs
+      - name: Exercise the native MCP server without a display
+        run: node scripts/test-native-mcp-server.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: native-mcp-server-diagnostics
+          path: artifacts/native-mcp-server
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -67,6 +74,12 @@ jobs:
           SHADOW_NATIVE_DEFAULT_PROFILE: '1'
           SHADOW_NATIVE_ARTIFACTS: artifacts/native-package/window
         run: xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- node scripts/test-native-desktop.mjs
+      - name: Exercise the packaged native MCP server
+        env:
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage
+          SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
+          SHADOW_MCP_ARTIFACTS: artifacts/native-package/mcp-server
+        run: node scripts/test-native-mcp-server.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

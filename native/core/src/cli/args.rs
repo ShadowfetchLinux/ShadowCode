@@ -164,6 +164,23 @@ pub enum Command {
 }
 #[derive(Debug, Subcommand)]
 pub enum Mcp {
+    /// Expose this project to an MCP client over stdin/stdout, without a window.
+    Serve {
+        /// Delegate changes within the configured project permissions.
+        #[arg(long)]
+        allow_write: bool,
+        /// Delegate approval decisions for this connection's own tasks.
+        #[arg(long, requires = "allow_write")]
+        allow_approvals: bool,
+    },
+    /// Print a generic MCP stdio registration using this executable and project.
+    Register {
+        #[arg(long)]
+        allow_write: bool,
+        #[arg(long, requires = "allow_write")]
+        allow_approvals: bool,
+    },
+
     /// Register a JSON/YAML definition; does not launch or enable it.
     Add {
         definition: PathBuf,

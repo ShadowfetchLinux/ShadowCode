@@ -50,8 +50,11 @@ completion checks run inside the native task lifecycle without Python callbacks.
 [Native MCP stdio and HTTP servers](NATIVE_MCP.md) can be registered and enabled in
 Settings → MCP. The agent discovers their tools lazily and requests approval for
 each exact call. HTTP bearer secrets resolve only on connection, and remote
-hosts require network access. Connections close before the task finishes. The
-ShadowCode MCP server remains part of the ongoing migration.
+hosts require network access. Connections close before the task finishes.
+`shadowcode mcp serve` also exposes the selected project to another client over
+stdio, with read-only defaults and explicitly delegated write/approval access.
+The [server guide](NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode) lists
+the implemented tools and remaining migration requirements.
 
 To work on the live interface, run `./ui/node_modules/.bin/tauri dev` from the
 repository root. The Tauri configuration starts Vite and builds the native app.

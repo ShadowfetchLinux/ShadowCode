@@ -12,6 +12,16 @@ pub enum PermissionLevel {
     Elevated,
 }
 
+impl PermissionLevel {
+    pub fn restricted_to(self, limit: Self) -> Self {
+        match (self, limit) {
+            (Self::ReadOnly, _) | (_, Self::ReadOnly) => Self::ReadOnly,
+            (Self::Workspace, _) | (_, Self::Workspace) => Self::Workspace,
+            _ => Self::Elevated,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelConfig {

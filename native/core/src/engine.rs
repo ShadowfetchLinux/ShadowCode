@@ -234,7 +234,8 @@ impl Engine {
         self.start_for_purpose(request, "").await
     }
     pub async fn start_for_purpose(&self, request: StartRequest, purpose: &str) -> Result<Job> {
-        self.start_with_context(request, None, purpose, None).await
+        self.start_with_context(request, None, purpose, None, None)
+            .await
     }
     pub async fn start_guided(
         &self,
@@ -251,8 +252,19 @@ impl Engine {
             Some(guidance.instructions),
             purpose,
             Some(guidance.info),
+            None,
         )
         .await
+    }
+    /// A transport may reduce a task's authority without changing saved settings.
+    pub async fn start_limited(
+        &self,
+        request: StartRequest,
+        purpose: &str,
+        limit: Option<PermissionLevel>,
+    ) -> Result<Job> {
+        self.start_with_context(request, None, purpose, None, limit)
+            .await
     }
     async fn start_with_context(
         &self,
@@ -260,6 +272,7 @@ impl Engine {
         system_context: Option<String>,
         purpose: &str,
         workflow: Option<WorkflowInfo>,
+        permission_limit: Option<PermissionLevel>,
     ) -> Result<Job> {
         ensure!(
             !self.0.closing.load(Ordering::Acquire),
@@ -278,6 +291,9 @@ impl Engine {
         let purpose = routing::purpose(purpose, &request.mode)?;
         let (model, decision) = routing::select(&self.0.store, &config, request.model, purpose)?;
         config.model = model;
+        if let Some(limit) = permission_limit {
+            config.permissions.level = config.permissions.level.restricted_to(limit);
+        }
         if request.mode != "code" {
             config.permissions.level = PermissionLevel::ReadOnly;
         }

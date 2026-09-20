@@ -164,7 +164,7 @@ fn run() -> Result<()> {
     let extraction_parent = shadowcode_core::lifecycle::extraction_parent();
     let options = cli::Options::parse_args();
     if !options.desktop() {
-        let json_output = options.json;
+        let json_output = options.json && !options.mcp_stdio();
         let events_output = options.events();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

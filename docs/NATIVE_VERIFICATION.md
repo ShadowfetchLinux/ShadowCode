@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **145 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **151 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -84,6 +84,20 @@ integration tests** pass on the development machine. The suite covers:
   remote-network activation, redirect rejection, expired sessions without retry,
   bounded/malformed/truncated responses, private discovery errors, abandoned
   initialization, and stream/session cleanup at task completion or cancellation.
+- Native MCP server negotiation with the official SDK, tools/resources/prompts,
+  fixed-project reads and writes, session filtering before limits, trust and
+  per-task permission ceilings, ownership of delegated tasks and exact approvals,
+  real approved execution, connection cancellation/EOF/abandoned-future cleanup,
+  malformed/truncated/oversized frames and input floods. A separate shared task
+  is checked to continue after the MCP connection stops.
+
+`scripts/test-native-mcp-server.mjs` exercises the real executable without a
+display or Python. Its four scripted model requests perform a read, file write,
+approved terminal verification and completion. The probe checks checkpoint
+restoration, all three resources, read-only defaults, registration with stable
+paths, JSON-RPC-only stdout, EOF cleanup and profile restart. It passes locally;
+CI is configured to repeat it against the source binary and packaged AppImage.
+These fixtures do not substitute for broader client and real-model interoperability.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:

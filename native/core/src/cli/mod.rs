@@ -13,7 +13,7 @@ macro_rules! err {
     ($($arg:tt)*) => { write!(std::io::stderr(), $($arg)*).context("Could not write terminal status")? };
 }
 pub mod args;
-mod backend;
+pub(crate) mod backend;
 mod watch;
 use crate::{
     paths::{self, AppPaths},
@@ -53,6 +53,14 @@ impl Options {
     }
     pub fn desktop(&self) -> bool {
         matches!(self.command, None | Some(Command::Ui))
+    }
+    pub fn mcp_stdio(&self) -> bool {
+        matches!(
+            self.command,
+            Some(Command::Mcp {
+                action: Some(Mcp::Serve { .. })
+            })
+        )
     }
     pub fn events(&self) -> bool {
         match &self.command {
@@ -170,6 +178,90 @@ pub async fn run(options: Options) -> Result<i32> {
     )?)?
     .path;
     let paths = options.paths()?;
+    if let Some(Command::Mcp {
+        action: Some(action @ (Mcp::Serve { .. } | Mcp::Register { .. })),
+    }) = &options.command
+    {
+        let (allow_write, allow_approvals) = match action {
+            Mcp::Serve {
+                allow_write,
+                allow_approvals,
+            }
+            | Mcp::Register {
+                allow_write,
+                allow_approvals,
+            } => (*allow_write, *allow_approvals),
+            _ => unreachable!(),
+        };
+        if matches!(action, Mcp::Register { .. }) {
+            let current = std::env::current_exe()?;
+            let appimage = std::env::var_os("APPIMAGE")
+                .map(PathBuf::from)
+                .filter(|image| {
+                    image.is_absolute()
+                        && image.is_file()
+                        && std::env::var_os("APPDIR")
+                            .is_some_and(|dir| current.starts_with(PathBuf::from(dir)))
+                });
+            let mut args = Vec::new();
+            if appimage.is_some() {
+                args.push("--appimage-extract-and-run".into());
+            }
+            let executable = appimage.unwrap_or(current);
+            args.extend([
+                "--workspace".to_owned(),
+                workspace.to_string_lossy().into_owned(),
+            ]);
+            if let Some(profile) = &options.profile {
+                args.extend([
+                    "--profile".into(),
+                    expand(profile)?
+                        .canonicalize()?
+                        .to_string_lossy()
+                        .into_owned(),
+                ]);
+            }
+            args.extend(["mcp".into(), "serve".into()]);
+            if allow_write {
+                args.push("--allow-write".into());
+            }
+            if allow_approvals {
+                args.push("--allow-approvals".into());
+            }
+            outln!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &json!({"mcpServers":{"shadowcode":{"command":executable,"args":args}}})
+                )?
+            );
+            return Ok(0);
+        }
+        ensure!(
+            !options.json,
+            "MCP stdout is reserved for JSON-RPC; omit --json"
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let signal = cancel.clone();
+        let listener = tokio::spawn(async move {
+            crate::lifecycle::interrupted(parent).await;
+            signal.cancel();
+        });
+        let result = crate::mcp::server::serve_io(
+            paths,
+            workspace,
+            crate::mcp::server::Access {
+                allow_write,
+                allow_approvals,
+            },
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+            cancel,
+        )
+        .await;
+        listener.abort();
+        result?;
+        return Ok(0);
+    }
     let serving = matches!(options.command, Some(Command::Serve));
     let events = options.events();
     let backend = Backend::open(paths, workspace.clone(), serving, parent).await?;
@@ -359,6 +451,9 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
             }
         }
         Command::Mcp { action } => match action {
+            Some(Mcp::Serve { .. } | Mcp::Register { .. }) => {
+                unreachable!("MCP transport handled before CLI engine setup")
+            }
             None => backend.call("GET", "/api/mcp/servers", Value::Null).await?,
             Some(Mcp::Add { definition, hash }) => {
                 use std::io::Read;

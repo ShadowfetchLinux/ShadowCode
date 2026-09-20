@@ -137,8 +137,15 @@ Each agent call still uses the same exact-argument approval flow as the window;
 noninteractive tasks stop for approval instead of accepting it automatically.
 Disabling affects new tasks; cancel running and queued tasks to end their
 existing grants. HTTP definitions use `url` and an optional `api_key_env` bearer
-secret reference; remote hosts require network access in Permissions. Native
-`mcp serve/register` is still being migrated.
+secret reference; remote hosts require network access in Permissions.
+
+To expose ShadowCode itself to another MCP client, use `mcp serve` over stdio.
+`mcp register` prints generic JSON for that executable, project and explicit
+profile. Both default to read-only access. `--allow-write` delegates changes
+within the trusted project's configured permissions; adding `--allow-approvals`
+also delegates individual approvals for that connection's own tasks. Run
+`mcp serve` without `--json` so stdout remains protocol-only. See the
+[native server's tools, lifecycle and remaining limits](NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode).
 
 ## One engine per profile
 

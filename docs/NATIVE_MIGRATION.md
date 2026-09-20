@@ -150,8 +150,13 @@ The [native MCP client](NATIVE_MCP.md) has bounded Rust stdio and Streamable HTT
 transports, inert Settings/CLI registration, explicit project/content activation, lazy tool
 discovery, individually approved calls, and task-owned process/stream cleanup.
 HTTP uses explicit credential references, prevents redirects and automatic call
-retries, and supports modern and legacy Streamable HTTP negotiation. Built-in
-SQLite compatibility, server migration, and broader interoperability/real-model verification remain open requirements.
+retries, and supports modern and legacy Streamable HTTP negotiation. The native
+stdio server exposes twelve tools, three resources and a delegation prompt through
+the shared engine, with a fixed project, reduced per-task permissions, explicit
+approval delegation and connection-owned jobs. Built-in SQLite compatibility,
+remaining server tools/resources/HTTP serving, engine-side ownership after a
+gateway is forcibly killed, and broader interoperability/real-model verification
+remain open requirements.
 
 AppImage extraction now uses a source-pinned runtime patch with private
 per-invocation directories, signal forwarding, and checked cleanup. A dedicated

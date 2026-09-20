@@ -7,26 +7,19 @@ use rmcp::{
         CallToolRequestParams, CallToolResponse, ClientConfig, Implementation,
         PaginatedRequestParams, Tool,
     },
-    service::{ClientCacheConfig, RunningService, RxJsonRpcMessage, TxJsonRpcMessage},
+    service::{ClientCacheConfig, RunningService},
     transport::Transport,
     ClientLifecycleMode, RoleClient,
 };
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashSet},
-    future::Future,
-    io,
     path::Path,
     process::Stdio,
     sync::{Arc, Mutex, OnceLock},
-    time::{Duration, Instant},
+    time::Duration,
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    process::{ChildStdin, ChildStdout, Command},
-    sync::Semaphore,
-    task::JoinHandle,
-};
+use tokio::{io::AsyncReadExt, process::Command, sync::Semaphore, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 pub const FRAME_LIMIT: usize = 1_048_576;
@@ -37,6 +30,9 @@ static CONNECTIONS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 pub mod http;
 pub mod registry;
 pub mod runner;
+pub mod server;
+mod transport;
+use transport::BoundedStdio;
 
 #[derive(Clone, Debug)]
 pub struct StdioSpec {
@@ -90,105 +86,6 @@ impl Diagnostics {
     }
     fn error(&self) -> Option<String> {
         self.error.lock().ok().and_then(|e| e.clone())
-    }
-}
-
-struct BoundedStdio {
-    reader: BufReader<ChildStdout>,
-    writer: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
-    line: Vec<u8>,
-    total: usize,
-    window: Instant,
-    frames: usize,
-    diagnostics: Diagnostics,
-    cancel: CancellationToken,
-}
-impl BoundedStdio {
-    fn stop(&self, message: &str) {
-        self.diagnostics.fail(message);
-        self.cancel.cancel();
-    }
-}
-impl Transport<RoleClient> for BoundedStdio {
-    type Error = io::Error;
-    fn send(
-        &mut self,
-        item: TxJsonRpcMessage<RoleClient>,
-    ) -> impl Future<Output = io::Result<()>> + Send + 'static {
-        let writer = self.writer.clone();
-        async move {
-            let mut bytes = serde_json::to_vec(&item)?;
-            if bytes.len() > FRAME_LIMIT {
-                return Err(io::Error::other("MCP outgoing frame exceeds 1 MiB"));
-            }
-            bytes.push(b'\n');
-            let mut guard = writer.lock().await;
-            let writer = guard
-                .as_mut()
-                .ok_or_else(|| io::Error::other("MCP transport closed"))?;
-            writer.write_all(&bytes).await?;
-            writer.flush().await
-        }
-    }
-    async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
-        loop {
-            // fill_buf/consume and the persistent line are cancellation-safe:
-            // a simultaneous outgoing message cannot discard a partial reply.
-            let buffer = match self.reader.fill_buf().await {
-                Ok(buffer) => buffer,
-                Err(_) => {
-                    self.stop("MCP stdout read failed");
-                    return None;
-                }
-            };
-            if buffer.is_empty() {
-                self.stop(if self.line.is_empty() {
-                    "MCP server closed stdout"
-                } else {
-                    "MCP server ended with an incomplete frame"
-                });
-                return None;
-            }
-            let end = buffer.iter().position(|b| *b == b'\n').map(|i| i + 1);
-            let count = end.unwrap_or(buffer.len());
-            if self.line.len() + count > FRAME_LIMIT || self.total + count > TOTAL_LIMIT {
-                self.stop("MCP incoming frame or connection byte limit exceeded");
-                return None;
-            }
-            self.line.extend_from_slice(&buffer[..count]);
-            self.total += count;
-            self.reader.consume(count);
-            if end.is_none() {
-                continue;
-            }
-            if self.window.elapsed() >= Duration::from_secs(1) {
-                self.window = Instant::now();
-                self.frames = 0;
-            }
-            self.frames += 1;
-            if self.frames > 128 {
-                self.stop("MCP incoming frame rate exceeded");
-                return None;
-            }
-            if self.line.iter().all(u8::is_ascii_whitespace) {
-                self.line.clear();
-                continue;
-            }
-            let parsed = serde_json::from_slice(&self.line);
-            self.line.clear();
-            return match parsed {
-                Ok(message) => Some(message),
-                Err(_) => {
-                    self.stop("MCP server sent malformed JSON-RPC");
-                    None
-                }
-            };
-        }
-    }
-    async fn close(&mut self) -> io::Result<()> {
-        self.cancel.cancel();
-        self.writer.lock().await.take();
-        Ok(())
     }
 }
 
@@ -346,16 +243,13 @@ impl Client {
             let _ = tokio::time::timeout(Duration::from_millis(200), &mut drain.0).await;
             Ok(())
         });
-        let transport = BoundedStdio {
-            reader: BufReader::new(stdout),
-            writer: Arc::new(tokio::sync::Mutex::new(Some(stdin))),
-            line: Vec::new(),
-            total: 0,
-            window: Instant::now(),
-            frames: 0,
-            diagnostics: diagnostics.clone(),
-            cancel: cancel.clone(),
-        };
+        let transport = BoundedStdio::new(
+            stdout,
+            stdin,
+            diagnostics.clone(),
+            cancel.clone(),
+            FRAME_LIMIT,
+        );
         let client = Self {
             service: None,
             owner: Owner {

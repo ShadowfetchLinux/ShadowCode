@@ -2,9 +2,88 @@
 
 MCP remains an open [native release gate](NATIVE_MIGRATION.md). The Rust stdio and Streamable HTTP
 clients now connect to native Settings, CLI registration, project activation,
-and individually approved agent tool calls. Built-in SQLite compatibility, the
-ShadowCode MCP server, and broader interoperability/real-model verification are
-still being migrated. The application does not launch the Python MCP client.
+and individually approved agent tool calls. The native stdio server now exposes
+tasks, goals, reviews, memory and checkpoints to external clients. Built-in SQLite
+compatibility, the remaining server features, and broader interoperability/real-model
+verification are still being migrated. Neither direction launches Python.
+
+## Connect another coding tool to ShadowCode
+
+The native executable can serve a single MCP client without a display:
+
+```sh
+shadowcode --workspace /absolute/project mcp serve
+shadowcode --workspace /absolute/project mcp register
+```
+
+`mcp register` prints generic `mcpServers` JSON containing the absolute executable,
+canonical project, and explicit `--profile` when supplied. It does not edit another
+application's settings or start a model. AppImage registration uses the persistent
+AppImage path and `--appimage-extract-and-run`, not a temporary extracted binary.
+Keep the registered executable in that location. The server's stdout contains only
+newline-delimited JSON-RPC; errors go to stderr. Do not combine `mcp serve` with
+the CLI's `--json` option.
+
+The server uses the active desktop/headless engine for the selected profile, or
+opens its own temporary engine. Its project selection does not navigate the
+desktop. It cannot switch projects, modify trust, or change the profile's settings.
+Sessions are filtered by project before the listing limit is applied. Goals and
+checkpoints are checked against that same canonical project before being returned
+or changed.
+
+Access is read-only by default. `--allow-write` permits changes only in an already
+trusted project and within its configured permission level. Each `shadow_run`
+also defaults to `permission_level: "read_only"`; a client must explicitly request
+`"workspace"` or `"elevated"` for a writing task. This per-task ceiling can reduce
+the configured authority, never increase it, and does not alter saved settings.
+
+Pending actions can be approved through ShadowCode's desktop or CLI. To delegate
+approval decisions to the connecting client, explicitly add **both**
+`--allow-write --allow-approvals` to `mcp serve` (or to `mcp register` when producing
+its configuration). The `shadow_approve` tool then resolves one exact pending
+approval from a task created by this connection. It cannot approve another
+client's task or all pending actions. Denying an owned approval does not require
+the approval flag. The client is responsible for obtaining the user's agreement
+to the displayed action before submitting approval.
+
+The current server exposes twelve tools:
+
+- `shadow_status`, `shadow_models`, `shadow_sessions`, `shadow_review`, and
+  `shadow_tools` inspect the selected project and native capabilities.
+- `shadow_memory` reads or appends project notes. Append requires write access.
+- `shadow_goal` creates, lists, inspects, advances or abandons durable goals.
+  Creating or advancing a goal here does not start an agent automatically.
+- `shadow_run` creates a fresh conversation and returns its job ID. `shadow_jobs`
+  inspects that connection's jobs, paginated events and pending approvals, or
+  cancels one. A returned job ID is not a claim that the task has completed.
+- `shadow_approve` handles the individual decision described above.
+- `shadow_checkpoint` inspects a project checkpoint. `shadow_rollback` requires
+  an exact task ID, `confirm: true`, write access and the engine's conflict checks.
+
+Resources are `shadow://sessions`, `shadow://memory`, and `shadow://plan`.
+The plan resource reads recorded events and returns null when no plan is recorded.
+The `delegate` prompt accepts a task for the fixed project.
+
+The connection owns its delegated jobs. Normal EOF, protocol failure, explicit
+cancellation and an abandoned server future cancel unfinished owned jobs and await
+cleanup; unrelated tasks in the shared engine continue. A temporary engine closes
+when its server exits. A forcibly killed gateway attached to a separate persistent
+engine does not yet have an engine-side ownership lease; this remains a release
+gate. Inspect and cancel any surviving job through the desktop/CLI in that case.
+
+Incoming messages share the 1-MiB frame, 32-MiB lifetime and 128-frames-per-second
+transport limits. Initialization has a ten-second deadline. Up to eight tool or
+resource operations and 64 delegated tasks are allowed per connection. Other
+operations have a 45-second deadline; model jobs are asynchronous and follow the
+engine's own limits. Tool/resource results are capped at 2 MB and response writes
+have a five-second deadline. Reconnect after a connection limit is reached.
+
+This is a development server, not full compatibility with the earlier Python
+server. `shadow_understand`, `shadow_doctor`, `shadow_why`, `shadow_test`, task
+memory, the project resource/understand prompt, HTTP serving, and client-specific
+registration formats remain unimplemented. The current tests use the official
+Rust SDK and a real executable protocol probe; broader client interoperability
+and real local-model server tasks remain release checks.
 
 ## Enable external tools
 
@@ -196,6 +275,8 @@ and cleanup outcome without environment values.
 
 ```sh
 cargo test -p shadowcode-core --test mcp_stdio --test mcp_http --test mcp_application --locked
+cargo test -p shadowcode-core --test mcp_native_server --locked
+node scripts/test-native-mcp-server.mjs
 ```
 
 Ten regressions exercise real subprocess pipes, current and legacy protocol
@@ -226,7 +307,16 @@ responses, private discovery errors, initialization/call deadlines, cancellation
 client drop, and abandoned initialization. The desktop probe also registers an
 HTTP endpoint in Settings and completes an approved, authenticated streaming call.
 
-These checks do not stand in for the remaining server, interoperability,
+Six server regressions use the official SDK to check discovery, resources/prompts,
+project isolation, session filtering before limits, write/trust restrictions,
+per-task permission reduction, owned-job and approval isolation, real approved
+execution, EOF/drop cleanup, malformed/oversized/truncated frames, and floods.
+The headless executable probe completes a scripted task with a file read, real
+write, exact command approval, terminal verification, checkpoint and rollback.
+It also checks registration, protocol-only stdout, resources, EOF and profile
+restart. CI runs this probe against both the source binary and AppImage.
+
+These checks do not stand in for the remaining server features, interoperability,
 and real local-model checks required for the full MCP migration. The standalone
 application does not bundle runtimes for third-party servers: install whatever
 an explicitly selected external command requires separately.
