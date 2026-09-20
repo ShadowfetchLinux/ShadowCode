@@ -82,7 +82,7 @@ struct State {
 pub struct BackgroundManager {
     store: Arc<Store>,
     state: Mutex<State>,
-    profile_lock: Arc<std::fs::File>,
+    profile_lock: Arc<crate::paths::ProfileLock>,
 }
 impl Drop for BackgroundManager {
     fn drop(&mut self) {
@@ -90,7 +90,7 @@ impl Drop for BackgroundManager {
     }
 }
 impl BackgroundManager {
-    pub(crate) fn new(store: Arc<Store>, profile_lock: Arc<std::fs::File>) -> Self {
+    pub(crate) fn new(store: Arc<Store>, profile_lock: Arc<crate::paths::ProfileLock>) -> Self {
         Self {
             store,
             state: Mutex::new(State::default()),

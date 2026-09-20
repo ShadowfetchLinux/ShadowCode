@@ -232,6 +232,13 @@ download-failure and offline-rebuild checks before the existing packaged-runtime
 CLI, and window checks. This verifies runtime sources; corresponding sources for
 the other redistributed components remain required.
 
+Profile locks explicitly unlock when their last native owner is dropped. This
+prevents an unrelated fork from briefly retaining the lock until it reaches
+`exec`, which could reject an immediate restart after clean shutdown. A
+deterministic fork regression reproduces that failure in the old implementation;
+the shared guard still keeps the profile locked while owned background cleanup
+is running. A forked copy cannot unlock its parent's live guard.
+
 OS dialog interaction, notification delivery, broader stress/accessibility
 coverage, corresponding sources for remaining redistributed components,
 and the final installed release still need their release-gate checks.

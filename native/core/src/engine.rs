@@ -123,7 +123,7 @@ struct Inner {
     slots: Semaphore,
     closing: AtomicBool,
     background: BackgroundManager,
-    _profile_lock: Arc<std::fs::File>,
+    _profile_lock: Arc<crate::paths::ProfileLock>,
 }
 #[derive(Clone)]
 pub struct Engine(Arc<Inner>);

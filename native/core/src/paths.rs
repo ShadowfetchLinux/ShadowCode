@@ -13,6 +13,21 @@ pub struct AppPaths {
     pub state: PathBuf,
 }
 
+/// A lock is released when its last legitimate owner drops, even if an
+/// unrelated concurrent fork inherited the descriptor before close-on-exec.
+pub struct ProfileLock {
+    file: fs::File,
+    owner_pid: u32,
+}
+impl Drop for ProfileLock {
+    fn drop(&mut self) {
+        // A forked copy must not unlock a still-live parent's engine.
+        if self.owner_pid == std::process::id() {
+            let _ = FileExt::unlock(&self.file);
+        }
+    }
+}
+
 impl AppPaths {
     pub fn discover() -> Result<Self> {
         let home = env::var_os("HOME").context("HOME is not set")?;
@@ -77,7 +92,7 @@ impl AppPaths {
 
     /// Hold this for the whole process lifetime. A second manager must not mark
     /// live jobs interrupted or overwrite another manager's workspace state.
-    pub fn lock(&self) -> Result<fs::File> {
+    pub fn lock(&self) -> Result<ProfileLock> {
         let file = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -86,7 +101,10 @@ impl AppPaths {
             .open(self.state.join("native.lock"))?;
         file.try_lock_exclusive()
             .context("ShadowCode is already running for this profile")?;
-        Ok(file)
+        Ok(ProfileLock {
+            file,
+            owner_pid: std::process::id(),
+        })
     }
 }
 

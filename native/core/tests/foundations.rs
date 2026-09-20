@@ -18,6 +18,41 @@ fn profile_lock_prevents_a_second_manager_and_releases_on_drop() {
 }
 
 #[test]
+#[cfg(unix)]
+fn profile_lock_release_does_not_wait_for_an_unrelated_fork_to_exec() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(root.path()).unwrap();
+    let first = paths.lock().unwrap();
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        // Only async-signal-safe syscalls after fork: no allocator, Rust
+        // destructors, locks, or test assertions run in the child.
+        loop {
+            unsafe {
+                libc::pause();
+            }
+        }
+    }
+    drop(first);
+    let reopened = paths.lock();
+    // Release/reap the child before asserting, including the failing baseline.
+    unsafe {
+        libc::kill(child, libc::SIGKILL);
+        while libc::waitpid(child, std::ptr::null_mut(), 0) < 0 {
+            if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                break;
+            }
+        }
+    }
+    assert!(
+        reopened.is_ok(),
+        "A forked child retained the released profile lock: {:?}",
+        reopened.err()
+    );
+}
+
+#[test]
 fn config_round_trip_validates_and_preserves_extension_fields() {
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(root.path()).unwrap();
