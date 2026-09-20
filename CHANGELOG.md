@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Desktop polling uses compact recent/active job records instead of repeatedly
+  transferring full saved results. Older active jobs remain visible; expanding
+  queued prompts and opening conversations fetch their complete records on demand.
+
 - CLI conversation and job IDs resolve against the full saved history instead
   of recent-list limits. Old records remain available for continuation, export,
   rename and job inspection; default conversation selection is project-scoped.

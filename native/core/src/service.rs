@@ -688,7 +688,11 @@ impl Service {
                 self.select(&workspace, session["id"].as_str().map(str::to_owned))?;
                 return Ok(session);
             }
-            ("GET", "/api/jobs") => return Ok(json!({"jobs":store.active_and_recent_jobs(1000)?})),
+            ("GET", "/api/jobs") => {
+                return Ok(
+                    json!({"jobs":if q("view")=="summary" {store.job_summaries(query_limit(&query,100,100))?}else{store.active_and_recent_jobs(1000)?}}),
+                )
+            }
             ("GET", "/api/jobs/current") => {
                 let job = store.current_job(q("session_id"), q("include_finished") == "true")?;
                 return Ok(json!({"job":job}));

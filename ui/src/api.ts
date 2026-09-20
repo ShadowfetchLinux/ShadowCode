@@ -117,6 +117,8 @@ export type Job = {
   status: string;
   summary?: string;
   task?: string;
+  task_truncated?: boolean;
+  purpose?: string;
   usage?: Record<string, number>;
   model?: string;
   mode?: string;
@@ -490,7 +492,7 @@ export const api = {
     get<{ job: Job | null }>(
       `/api/jobs/current?session_id=${encodeURIComponent(id)}&include_finished=true`,
     ),
-  jobs: () => get<{ jobs: Job[] }>("/api/jobs"),
+  jobs: () => get<{ jobs: Job[] }>("/api/jobs?view=summary&limit=100"),
   createSession: (workspace: string, title = "") =>
     send<{ id: string; workspace: string }>("/api/sessions", "POST", {
       workspace,

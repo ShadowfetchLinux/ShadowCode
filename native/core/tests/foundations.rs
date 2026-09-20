@@ -563,3 +563,31 @@ fn identifier_resolution_uses_all_history_and_rejects_ambiguous_or_invalid_prefi
         "old-session"
     );
 }
+
+#[test]
+fn polling_summaries_bound_output_preserve_old_active_jobs_and_keep_full_records() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("jobs.db")).unwrap();
+    let prompt = "界".repeat(10_000);
+    let result = "result evidence".repeat(10_000);
+    for i in 0..150 {
+        let id = format!("job-{i:03}");
+        store.save_job(&json!({"id":id,"workspace":"/project","session_id":"session","task_id":"task","task":prompt,"status":if i==0{"running"}else if i==1{"queued"}else{"completed"},"mode":"code","routing":{"purpose":"tester"},"result":{"summary":result},"summary":result,"started_at":i})).unwrap();
+    }
+    let rows = store.job_summaries(10_000).unwrap();
+    assert_eq!(rows.len(), 102);
+    assert!(rows.iter().any(|r| r["id"] == "job-000"));
+    assert!(rows.iter().any(|r| r["id"] == "job-001"));
+    assert!(rows
+        .iter()
+        .all(|r| r.get("result").is_none() && r.get("summary").is_none()));
+    assert_eq!(rows[0]["purpose"], "tester");
+    assert_eq!(rows[0]["task_truncated"], true);
+    assert_eq!(rows[0]["task"].as_str().unwrap().chars().count(), 512);
+    assert!(serde_json::to_vec(&rows).unwrap().len() < 200_000);
+    assert_eq!(store.job("job-000").unwrap().unwrap()["task"], prompt);
+    assert_eq!(
+        store.job("job-000").unwrap().unwrap()["result"]["summary"],
+        result
+    );
+}

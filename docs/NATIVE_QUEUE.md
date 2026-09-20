@@ -51,3 +51,14 @@ messages too if they are no longer wanted.
 
 See [NATIVE_VERIFICATION.md](NATIVE_VERIFICATION.md) for the engine and real-window
 checks and [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md) for the remaining release gates.
+
+## Polling and long prompts
+
+The native desktop polls `/api/jobs?view=summary&limit=100`: at most 100 recent
+records plus all active records, including older running/queued work. Polling
+omits full results and summaries and limits prompt previews to 512 Unicode
+characters. A truncated preview is marked explicitly. Expanding a queued prompt
+loads the complete job once, with a visible error and retry if loading fails.
+Opening a conversation fetches its full job separately, preserving its result,
+original prompt and continuation behavior. The existing full job endpoint and
+ordinary CLI listing remain available; this change targets repeated UI polling.

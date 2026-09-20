@@ -273,6 +273,19 @@ regression tests verify compact-dialog scrolling/resizing and trust confirmation
 bound to the displayed project; all ten library tests pass after that fix. Broader
 real-terminal resize coverage remains open.
 
+## Compact desktop job polling
+
+A 150-job stress fixture stores long Unicode prompts and large saved results. The
+polling projection returns 100 recent records plus two older active records in
+less than 200 KB, without copying result bodies or completion summaries. Full
+prompt and result retrieval remains unchanged. All 18 foundation tests pass.
+The UI's 21 tests include on-demand loading and caching of a complete queued
+prompt while retaining its Test route label; all seven browser scenarios pass.
+The real native-window workflow also passes with 29 scripted model requests,
+including queued follow-ups, inherited results, reload, goals and accessibility.
+Clippy, the interface build and native executable build pass. Sustained process
+memory measurement and broader history virtualization remain separate gates.
+
 ## Full-history identifier resolution
 
 The CLI history regression adds 10,050 newer conversations and 1,100 newer jobs

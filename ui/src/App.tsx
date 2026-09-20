@@ -397,11 +397,10 @@ export default function App() {
     const next = conversationJob(sessionJobs, job);
     if (!next || next.id === job?.id) return;
     let live = true;
-    void api
-      .session(sessionId)
-      .then((detail) => {
+    void Promise.all([api.session(sessionId), api.job(next.id)])
+      .then(([detail, fullJob]) => {
         if (live && selectedRef.current === sessionId && !submittingRef.current)
-          conversation.load(detail, next);
+          conversation.load(detail, fullJob);
       })
       .catch(() => {
         /* The next poll retries a failed snapshot. */
