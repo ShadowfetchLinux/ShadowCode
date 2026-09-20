@@ -201,18 +201,13 @@ test("new-task shortcuts and deletion keep task selection usable", async ({
   await prompt.fill("/new");
   await page.getByRole("button", { name: "Send task", exact: true }).click();
   await expect(prompt).toHaveValue("");
+  await expect(page.locator(".loading-task")).toHaveCount(0);
   await expect
-    .poll(async () => {
-      const selected = await page.evaluate(() =>
-        localStorage.getItem("shadow:selected"),
-      );
-      return Boolean(selected && selected !== first);
-    })
-    .toBe(true);
+    .poll(() => page.evaluate(() => localStorage.getItem("shadow:selected")))
+    .not.toBe(first);
   const toDelete = await page.evaluate(() =>
     localStorage.getItem("shadow:selected"),
   );
-  expect(toDelete).not.toBe(first);
   await page.keyboard.press("Control+k");
   await page
     .getByRole("textbox", { name: "Search commands" })
