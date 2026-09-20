@@ -26,6 +26,8 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 mod commands;
+#[cfg(unix)]
+mod inspection;
 
 #[derive(Clone)]
 struct Selection {
@@ -180,6 +182,23 @@ impl Service {
         let text = |key: &str| body[key].as_str().unwrap_or("");
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
         match (request.method.as_str(), path) {
+            ("GET", "/api/workspace/understand") => return self.project_map(false).await,
+            ("POST", "/api/workspace/understand") => {
+                return self.project_map(body["save"] == true).await
+            }
+            ("GET", "/api/workspace/why") => {
+                return self
+                    .change_history(
+                        q("path"),
+                        if q("count").is_empty() {
+                            8
+                        } else {
+                            q("count").parse().context("Invalid history count")?
+                        },
+                    )
+                    .await
+            }
+            ("GET", "/api/doctor") => return self.doctor(q("test_model") == "true").await,
             #[cfg(unix)]
             ("GET", "/api/mcp/servers") => {
                 let workspace = Workspace::open(&self.workspace()?)?;
@@ -602,6 +621,41 @@ impl Service {
                         && (q("include_finished") == "true" || active(job))
                 });
                 return Ok(json!({"job":job}));
+            }
+            ("POST", "/api/jobs/test") => {
+                let workspace = self.workspace()?;
+                if let Some(path) = body["workspace"].as_str() {
+                    ensure!(
+                        Workspace::open(Path::new(path))?.path == workspace,
+                        "Test task belongs to another workspace"
+                    );
+                }
+                let command = if text("command").trim().is_empty() {
+                    crate::project::test_command(
+                        &crate::project::inspect(Arc::new(Workspace::open(&workspace)?)).await?,
+                    )?
+                } else {
+                    text("command").to_owned()
+                };
+                let job = self
+                    .engine
+                    .start_command(
+                        StartRequest {
+                            workspace,
+                            task: String::new(),
+                            session_id: body["session_id"].as_str().map(str::to_owned),
+                            model: None,
+                            mode: "command".into(),
+                            queue: body["queue"].as_bool().unwrap_or(false),
+                        },
+                        crate::engine::CommandRequest {
+                            command,
+                            timeout_sec: body["timeout"].as_u64().unwrap_or(300),
+                        },
+                        self.job_owner.as_ref(),
+                    )
+                    .await?;
+                return Ok(json!(job));
             }
             ("POST", "/api/jobs" | "/api/run") => {
                 let selection = self

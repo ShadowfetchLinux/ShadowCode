@@ -482,7 +482,7 @@ export default function App() {
       goals: "goals",
       skills: "skills",
       health: "health",
-      doctor: "health",
+      ...(!isNative() ? { doctor: "health" as DrawerTab } : {}),
       background: "background",
     };
     if (panels[name] && !args) {

@@ -384,6 +384,9 @@ h4 {
   padding: 8px 10px;
   color: var(--text-2);
 }
+.tool-card > .markdown {
+  padding: 10px 14px;
+}
 .status-row {
   display: flex;
   justify-content: space-between;
@@ -391,6 +394,17 @@ h4 {
   color: var(--muted);
   padding: 4px 10px;
   font-size: 12px;
+}
+.status-row > span {
+  flex: 0 0 30%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.status-row > code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 /* approval: subtle */
@@ -1085,6 +1099,26 @@ button.mini.primary-mini {
 }
 .health-bad {
   color: var(--danger);
+}
+.diagnostic-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.diagnostic-check {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+.diagnostic-check strong {
+  font-weight: 500;
+}
+.diagnostic-check p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
 }
 .update-row {
   padding: 8px 10px;

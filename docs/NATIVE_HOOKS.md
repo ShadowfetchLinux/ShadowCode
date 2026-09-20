@@ -92,7 +92,12 @@ to 16 KB per invocation while both streams continue draining.
   conversation positions and persisted history is unchanged.
 - `on_compaction`: after context history is compacted. Failure stops the task.
 
-Hooks belong to agent tasks. Manual terminal commands, background processes,
+Native [MCP test jobs](NATIVE_INSPECTION.md#test-jobs-without-a-model) also use
+these command and completion checks. They call no model: a failed completion
+check leaves the job failed with the original command output and exit status
+retained, without attempting an automatic repair.
+
+Hooks belong to agent and native test tasks. Manual terminal commands, background processes,
 UI Git actions, and commands launched inside another hook do not invoke them.
 They are not an operating-system policy or repository-wide Git hook mechanism.
 

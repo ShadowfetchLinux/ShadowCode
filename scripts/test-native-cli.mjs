@@ -136,6 +136,16 @@ try {
   assert.equal(registered.model.context_limit, 32768);
   assert.equal(await cli(["config", "model.context_limit"]), 32768);
   checks.push("headless startup, arguments, project trust and lifecycle validation");
+  const projectMap = await cli(["understand"]);
+  assert.equal(projectMap.saved, false);
+  assert.equal((await cli(["understand", "--save"])).saved, true);
+  assert.equal((await cli(["doctor"])).runtime, "rust");
+  assert.match((await finish(launch(["doctor"]))).stdout, /Native diagnostics/);
+  assert.equal((await cli(["command", "understand"])).headline, "Project map");
+  assert.equal((await cli(["command", "doctor"])).headline, "Native diagnostics");
+  await finish(launch(["why", "--count", "0"]), 2);
+  assert.match((await cli(["why", "../outside"], 1)).error, /outside|escape|traversal/i);
+  checks.push("native project inspection, saved map, readable diagnostics and history argument validation");
 
   const mcpDefinition = path.join(scratch, "mcp.json");
   await writeFile(mcpDefinition, JSON.stringify({ name: "cli-mcp", command: ["sh", "-c", "touch unexpected-mcp"], env: { TOKEN: "cli-private-mcp-value" } }));

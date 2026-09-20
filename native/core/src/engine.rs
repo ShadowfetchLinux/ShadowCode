@@ -34,6 +34,17 @@ mod goals;
 use goals::GoalRun;
 mod owner;
 pub(crate) use owner::JobOwner;
+mod command;
+pub use command::CommandRequest;
+#[derive(Default)]
+struct LaunchContext<'a> {
+    system_context: Option<String>,
+    purpose: &'a str,
+    workflow: Option<WorkflowInfo>,
+    permission_limit: Option<PermissionLevel>,
+    owner: Option<&'a JobOwner>,
+    command: Option<CommandRequest>,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartRequest {
@@ -77,6 +88,7 @@ struct Running {
     record: Mutex<Job>,
     config: Config,
     system_context: Option<String>,
+    command: Option<CommandRequest>,
     workspace: Arc<Workspace>,
     cancel: CancellationToken,
     finished: AtomicBool,
@@ -236,8 +248,14 @@ impl Engine {
         self.start_for_purpose(request, "").await
     }
     pub async fn start_for_purpose(&self, request: StartRequest, purpose: &str) -> Result<Job> {
-        self.start_with_context(request, None, purpose, None, None, None)
-            .await
+        self.start_with_context(
+            request,
+            LaunchContext {
+                purpose,
+                ..Default::default()
+            },
+        )
+        .await
     }
     pub async fn start_guided(
         &self,
@@ -251,11 +269,12 @@ impl Engine {
         );
         self.start_with_context(
             request,
-            Some(guidance.instructions),
-            purpose,
-            Some(guidance.info),
-            None,
-            None,
+            LaunchContext {
+                system_context: Some(guidance.instructions),
+                purpose,
+                workflow: Some(guidance.info),
+                ..Default::default()
+            },
         )
         .await
     }
@@ -276,17 +295,21 @@ impl Engine {
         limit: Option<PermissionLevel>,
         owner: Option<&JobOwner>,
     ) -> Result<Job> {
-        self.start_with_context(request, None, purpose, None, limit, owner)
-            .await
+        self.start_with_context(
+            request,
+            LaunchContext {
+                purpose,
+                permission_limit: limit,
+                owner,
+                ..Default::default()
+            },
+        )
+        .await
     }
     async fn start_with_context(
         &self,
         request: StartRequest,
-        system_context: Option<String>,
-        purpose: &str,
-        workflow: Option<WorkflowInfo>,
-        permission_limit: Option<PermissionLevel>,
-        owner: Option<&JobOwner>,
+        context: LaunchContext<'_>,
     ) -> Result<Job> {
         ensure!(
             !self.0.closing.load(Ordering::Acquire),
@@ -297,22 +320,39 @@ impl Engine {
             "Task must contain between 1 and 128000 bytes"
         );
         ensure!(
-            matches!(request.mode.as_str(), "code" | "plan" | "review"),
+            matches!(request.mode.as_str(), "code" | "plan" | "review")
+                || (request.mode == "command" && context.command.is_some()),
             "Unknown task mode"
         );
         let workspace = Arc::new(Workspace::open(&request.workspace)?);
         let mut config = Config::load(&self.0.paths, Some(&workspace.path))?;
-        let purpose = routing::purpose(purpose, &request.mode)?;
-        let (model, decision) = routing::select(&self.0.store, &config, request.model, purpose)?;
-        config.model = model;
-        if let Some(limit) = permission_limit {
+        let decision = if context.command.is_some() {
+            ensure!(
+                config.is_trusted(&workspace.path),
+                "Trust this project before running a command task"
+            );
+            ensure!(
+                config.permissions.level != PermissionLevel::ReadOnly,
+                "Project permissions are read-only"
+            );
+            config.permissions.approve_shell = true;
+            config.permissions.require_approval_for_dangerous = true;
+            None
+        } else {
+            let purpose = routing::purpose(context.purpose, &request.mode)?;
+            let (model, decision) =
+                routing::select(&self.0.store, &config, request.model, purpose)?;
+            config.model = model;
+            Some(decision)
+        };
+        if let Some(limit) = context.permission_limit {
             config.permissions.level = config.permissions.level.restricted_to(limit);
         }
-        if request.mode != "code" {
+        if matches!(request.mode.as_str(), "plan" | "review") {
             config.permissions.level = PermissionLevel::ReadOnly;
         }
         config.validate()?;
-        ensure!(config.model.provider!="mock","Choose a local or compatible model before starting a coding task. The offline preview does not execute tasks.");
+        ensure!(context.command.is_some()||config.model.provider!="mock","Choose a local or compatible model before starting a coding task. The offline preview does not execute tasks.");
         let mut queues = self
             .0
             .queues
@@ -367,9 +407,13 @@ impl Engine {
             task: request.task,
             status: "queued".into(),
             mode: request.mode,
-            model: config.model.name.clone(),
-            routing: Some(decision),
-            workflow,
+            model: if context.command.is_some() {
+                "native command".into()
+            } else {
+                config.model.name.clone()
+            },
+            routing: decision,
+            workflow: context.workflow,
             started_at: crate::now(),
             finished_at: None,
             event_cursor,
@@ -379,12 +423,12 @@ impl Engine {
             result: None,
             steps: 0,
         };
-        let cancel = match owner {
+        let cancel = match context.owner {
             Some(owner) => owner.register(self, &job.id)?,
             None => CancellationToken::new(),
         };
         if let Err(error) = self.0.store.create_job(&json!(job)) {
-            if let Some(owner) = owner {
+            if let Some(owner) = context.owner {
                 owner.forget(&job.id);
             }
             return Err(error);
@@ -392,7 +436,8 @@ impl Engine {
         let running = Arc::new(Running {
             record: Mutex::new(job.clone()),
             config,
-            system_context,
+            system_context: context.system_context,
+            command: context.command,
             workspace: workspace.clone(),
             cancel,
             finished: AtomicBool::new(false),
@@ -676,6 +721,15 @@ impl Engine {
         job.result = Some(
             json!({"success":success,"cancelled":cancelled,"summary":job.summary,"plan":plan,"usage":job.usage,"usage_is_estimated":job.usage_is_estimated,"verification":verification}),
         );
+        if job.mode == "command" {
+            if let Some(event) = self
+                .0
+                .store
+                .last_task_event(&job.task_id, "command.completed")?
+            {
+                job.result.as_mut().unwrap()["command"] = event["payload"].clone();
+            }
+        }
         self.0.approvals.deny_task(&job.task_id);
         let mut saved = json!(*job);
         let event = self.0.store.finish_job(&mut saved)?;
@@ -716,7 +770,12 @@ impl Engine {
             running.cancel.clone(),
         )?
         .with_profile(self.0.paths.clone());
-        let result = self.run_with_tools(running, job, events, &tools).await;
+        let result = if let Some(command) = &running.command {
+            self.run_command_job(running, &job, &events, &tools, command)
+                .await
+        } else {
+            self.run_with_tools(running, job, events, &tools).await
+        };
         let cleanup = tools.close_integrations().await;
         match (result, cleanup) {
             (Ok(result), Ok(())) => Ok(result),

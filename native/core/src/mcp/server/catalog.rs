@@ -6,6 +6,10 @@ pub(super) fn tools() -> Vec<Tool> {
     let b = json!({"type":"boolean"});
     let id = json!({"type":"string","format":"uuid"});
     let definitions = vec![
+        ("shadow_understand","Inspect the selected project's stack, modules, source markers and test candidates without running code or a model. save=true updates only the generated section of project notes and requires --allow-write.",json!({"save":b}),vec![],false),
+        ("shadow_doctor","Check the native runtime, configuration, private profile files, SQLite integrity and project toolchains. test_model=true explicitly sends a small diagnostic model prompt. No automatic fixes or installs.",json!({"test_model":b}),vec![],false),
+        ("shadow_why","Read bounded commit history and current/staged diffs for a project path. Recorded evidence does not establish author intent.",json!({"path":s,"count":{"type":"integer","minimum":1,"maximum":50}}),vec![],true),
+        ("shadow_test","Run an exact test command as an owned native task, without a model. If omitted, auto-select only a single unambiguous detected command. Requires --allow-write and an exact command approval. Returns a job ID; inspect shadow_jobs for completion, stdout/stderr, exit status and approvals. Closing the connection cancels it.",json!({"command":s,"timeout":{"type":"integer","minimum":1,"maximum":3600},"queue":b}),vec![],false),
         ("shadow_status","Read this server's workspace, model, permissions and active jobs.",json!({}),vec![],true),
         ("shadow_models","List saved models; detect=true also probes configured/local providers.",json!({"detect":b}),vec![],false),
         ("shadow_sessions","List recent conversations in this workspace only.",json!({"limit":{"type":"integer","minimum":1,"maximum":100}}),vec![],true),
@@ -21,7 +25,7 @@ pub(super) fn tools() -> Vec<Tool> {
     ];
     definitions.into_iter().map(|(name,description,mut properties,required,read)| {
         properties["workspace"] = json!({"type":"string","description":"If supplied, must equal the project selected when this server started."});
-        serde_json::from_value(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":read,"destructiveHint":!read,"idempotentHint":read,"openWorldHint":matches!(name,"shadow_run"|"shadow_models"|"shadow_approve")}})).expect("static MCP tool schema")
+        serde_json::from_value(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":read,"destructiveHint":!read,"idempotentHint":read,"openWorldHint":matches!(name,"shadow_run"|"shadow_models"|"shadow_approve"|"shadow_test"|"shadow_doctor")}})).expect("static MCP tool schema")
     }).collect()
 }
 

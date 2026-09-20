@@ -20,7 +20,7 @@ for (const name of ["result.json", "failure.txt", "failure.png", "workspace-ligh
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
-for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json"]) await rm(path.join(artifacts, name), { force: true });
+for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json", "inspection.png", "accessibility-inspection.json", "diagnostics.png", "accessibility-diagnostics.json"]) await rm(path.join(artifacts, name), { force: true });
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
@@ -430,6 +430,23 @@ try {
   await type('textarea[aria-label="Message ShadowCode"]', "/status");
   await click('button[aria-label="Send task"]');
   await until("Durable command card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Permission mode'))"));
+  await type('textarea[aria-label="Message ShadowCode"]', "/understand");
+  await click('button[aria-label="Send task"]');
+  await until("Native project map card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Project map') && e.textContent.includes('Test candidates'))"));
+  assert.equal(await execute("return [...document.querySelectorAll('.tool-card .markdown h1')].some(e=>e.textContent==='Project map')"), true);
+  await type('textarea[aria-label="Message ShadowCode"]', "/doctor");
+  await click('button[aria-label="Send task"]');
+  await until("Native diagnostic card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Native diagnostics') && e.textContent.includes('SQLite quick_check passed'))"));
+  await screenshot("inspection");
+  await accessibility("inspection");
+  await type('textarea[aria-label="Message ShadowCode"]', "/health");
+  await click('button[aria-label="Send task"]');
+  await until("Native diagnostics in Health", () => execute("return [...document.querySelectorAll('.diagnostic-check')].some(e=>e.textContent.includes('Actual model response') && e.textContent.includes('Not checked'))"));
+  assert.equal(await execute("return [...document.querySelectorAll('.status-row code')].every(e=>e.getBoundingClientRect().right<=e.closest('.tool-card').getBoundingClientRect().right+1 && e.scrollWidth<=e.clientWidth+1)"), true, "Command details wrap within the narrowed conversation");
+  assert.equal(await execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Auto-fix')"), false);
+  assert.equal(await execute("return [...document.querySelectorAll('.diagnostic-check')].some(e=>e.textContent.includes('Actual model response') && e.querySelector('.health-bad'))"), false);
+  await screenshot("diagnostics");
+  await accessibility("diagnostics");
   await wd("POST", `/session/${session}/refresh`, {});
   await until("Skill and command reload", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('.shadow/skills/audit.md')) && [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Permission mode'))"));
   goalMode = true;
@@ -517,7 +534,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

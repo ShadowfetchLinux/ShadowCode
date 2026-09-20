@@ -21,6 +21,7 @@ pub mod patch;
 pub mod paths;
 pub mod permissions;
 pub mod process;
+pub mod project;
 pub mod routing;
 pub mod service;
 pub mod store;

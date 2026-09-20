@@ -53,6 +53,22 @@ pub enum Command {
         #[arg(long)]
         test_model: bool,
     },
+    /// Inspect native installation, profile, project and optional model response.
+    Doctor {
+        #[arg(long)]
+        test_model: bool,
+    },
+    /// Inspect the project without running code or a model.
+    Understand {
+        #[arg(long)]
+        save: bool,
+    },
+    /// Show recorded commit history and pending changes for a path.
+    Why {
+        path: Option<String>,
+        #[arg(long, default_value_t=8, value_parser=clap::value_parser!(u16).range(1..=50))]
+        count: u16,
+    },
     /// List, register, or select models.
     Models {
         #[arg(long = "use", short = 'u')]

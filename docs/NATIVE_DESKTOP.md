@@ -43,6 +43,13 @@ The [native CLI](NATIVE_CLI.md) uses this same executable. Commands such as
 engine without changing its selected project. `serve` explicitly hosts the
 engine headlessly for detached tasks and background servers.
 
+[Project inspection and diagnostics](NATIVE_INSPECTION.md) are available as
+`/understand`, `/understand --save`, `/doctor`, `/doctor --test-model` and
+`/why [path]` in the conversation. Health shows the same native checks with
+separate warning, failure and not-checked labels and readable repair suggestions.
+Model connectivity is tested only when explicitly requested. Automatic native
+diagnostic repairs remain a migration requirement.
+
 Project [lifecycle commands](NATIVE_HOOKS.md) can be reviewed and enabled in
 Settings → Hooks or through the same native CLI. Their command gates and
 completion checks run inside the native task lifecycle without Python callbacks.
@@ -163,7 +170,8 @@ checks the real embedded window, Rust IPC, approval, file and terminal tools,
 reload, cancellation, compact layout, model routing/fallback notices, goals and
 their live transcript, pause, managed background processes,
 CLI coexistence and project isolation,
-light/dark/compact/goals/routing/background accessibility,
+project inspection and diagnostic status presentation,
+light/dark/compact/goals/routing/background/skills/hooks/MCP/inspection/diagnostics accessibility,
 and managed shutdown. It also verifies
 that the executable embeds the current compiled interface and does not load
 `libpython`.

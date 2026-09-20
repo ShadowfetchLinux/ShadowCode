@@ -149,6 +149,13 @@ also delegates individual approvals for that connection's own tasks. Run
 
 ## One engine per profile
 
+`understand [--save]`, `doctor [--test-model]`, and `why [path] [--count N]`
+provide native project inspection, diagnostics and recorded change history.
+They also have `/understand`, `/doctor`, and `/why` desktop commands. Inspection
+is read-only by default; saving preserves existing project notes. Diagnostics
+contact a model only when `--test-model` is explicit. See the
+[workflow details and limits](NATIVE_INSPECTION.md).
+
 MCP delegates jobs through a private ownership connection to this engine.
 Gateway termination, including SIGKILL, cancels its owned running and queued work.
 The engine records ownership before scheduling, including when the submission
@@ -207,7 +214,7 @@ clients and idle reads are bounded. The connection exposes no TCP port and
 accepts no browser HTTP requests. Different application versions refuse to share
 an engine. Existing non-socket files and active endpoints are never overwritten.
 
-The native full-screen TUI, updater/doctor, plugins, and MCP migration
+The native full-screen TUI, updater/automatic diagnostic repairs, plugins, and MCP migration
 remain in progress; their 0.19 commands are not silently emulated here.
 
 ## Verification

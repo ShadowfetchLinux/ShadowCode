@@ -1149,41 +1149,63 @@ function HealthTab({
           )}
         </div>
       )}
-      <h4>Doctor</h4>
+      <h4>{isNative() ? "Native diagnostics" : "Doctor"}</h4>
       {report && (
-        <div className="kv">
-          {report.checks.map((c) => (
-            <div key={c.id}>
-              <span className={c.ok ? "health-ok" : "health-bad"}>
-                {c.ok ? "✓" : "✗"} {c.label}
-              </span>
-              <code>{c.detail}</code>
-            </div>
-          ))}
+        <div className="diagnostic-list">
+          {report.checks.map((c) => {
+            const status = c.status || (c.ok ? "pass" : "fail");
+            const label = {
+              pass: "Passed",
+              warn: "Warning",
+              fail: "Failed",
+              info: "Information",
+              not_checked: "Not checked",
+            }[status];
+            return (
+              <div className="diagnostic-check" key={c.id}>
+                <strong>{c.label}</strong>
+                <span
+                  className={
+                    status === "pass"
+                      ? "health-ok"
+                      : status === "fail"
+                        ? "health-bad"
+                        : "dim"
+                  }
+                >
+                  {label}
+                </span>
+                <p>{c.detail}</p>
+                {c.fix && <p className="dim">{c.fix}</p>}
+              </div>
+            );
+          })}
         </div>
       )}
       <div className="row">
-        <button
-          type="button"
-          className="mini"
-          disabled={fixing}
-          onClick={() => {
-            setFixing(true);
-            void api
-              .doctorFix()
-              .then((r) => {
-                setReport(r.report);
-                toast(
-                  r.applied.length ? r.applied.join("; ") : "Nothing to fix",
-                  "ok",
-                );
-              })
-              .catch((err) => toast(String(err), "err"))
-              .finally(() => setFixing(false));
-          }}
-        >
-          {fixing ? "Fixing…" : "Auto-fix"}
-        </button>
+        {!isNative() && (
+          <button
+            type="button"
+            className="mini"
+            disabled={fixing}
+            onClick={() => {
+              setFixing(true);
+              void api
+                .doctorFix()
+                .then((r) => {
+                  setReport(r.report);
+                  toast(
+                    r.applied.length ? r.applied.join("; ") : "Nothing to fix",
+                    "ok",
+                  );
+                })
+                .catch((err) => toast(String(err), "err"))
+                .finally(() => setFixing(false));
+            }}
+          >
+            {fixing ? "Fixing…" : "Auto-fix"}
+          </button>
+        )}
         <button type="button" className="mini" onClick={() => void load()}>
           Refresh
         </button>

@@ -228,6 +228,7 @@ export type DoctorReport = {
   checks: {
     id: string;
     ok: boolean;
+    status?: "pass" | "warn" | "fail" | "info" | "not_checked";
     label: string;
     detail?: string;
     fix?: string;

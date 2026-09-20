@@ -1,4 +1,5 @@
 import type { Approval, CommandResult } from "../api";
+import { Markdown } from "./Markdown";
 
 export type ChatItem =
   | { kind: "command"; card: CommandResult; text: string; taskId?: string }
@@ -231,7 +232,12 @@ export function CommandCardView({ card }: { card: CommandResult }) {
           {card.icon || "◆"} {card.headline}
         </span>
       </header>
-      {card.body && <pre>{card.body}</pre>}
+      {card.body &&
+        (card.metadata.project_map ? (
+          <Markdown>{card.body}</Markdown>
+        ) : (
+          <pre>{card.body}</pre>
+        ))}
     </div>
   );
 }

@@ -147,7 +147,7 @@ async fn official_sdk_lists_native_tools_resources_prompts_and_confines_project_
     }
     let c = f.connect(Access::default()).await;
     let catalog = c.peer.list_tools(None).await.unwrap();
-    assert_eq!(catalog.tools.len(), 12);
+    assert_eq!(catalog.tools.len(), 16);
     assert!(
         catalog
             .tools
@@ -193,7 +193,7 @@ async fn official_sdk_lists_native_tools_resources_prompts_and_confines_project_
         .await
         .is_err());
     let resources = c.peer.list_resources(None).await.unwrap();
-    assert_eq!(resources.resources.len(), 3);
+    assert_eq!(resources.resources.len(), 4);
     let read = c
         .peer
         .read_resource(ReadResourceRequestParams::new("shadow://memory"))
@@ -205,7 +205,7 @@ async fn official_sdk_lists_native_tools_resources_prompts_and_confines_project_
         .read_resource(ReadResourceRequestParams::new("shadow://project/etc"))
         .await
         .is_err());
-    assert_eq!(c.peer.list_prompts(None).await.unwrap().prompts.len(), 1);
+    assert_eq!(c.peer.list_prompts(None).await.unwrap().prompts.len(), 2);
     let prompt = c
         .peer
         .get_prompt(
@@ -475,6 +475,100 @@ fn active_status(job: &Value) -> bool {
         job["status"].as_str(),
         Some("queued" | "running" | "cancelling")
     )
+}
+
+#[tokio::test]
+async fn native_mcp_inspection_and_test_jobs_use_real_permissions_without_a_model() {
+    let f = Fixture::new("http://127.0.0.1:1/v1");
+    fs::write(
+        f.project.join("Cargo.toml"),
+        "[package]\nname='fixture'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let readonly = f.connect(Access::default()).await;
+    let map = readonly.call("shadow_understand", json!({})).await;
+    assert_eq!(map["error"], false);
+    assert_eq!(map["value"]["saved"], false);
+    assert_eq!(
+        readonly
+            .call("shadow_understand", json!({"save":true}))
+            .await["error"],
+        true
+    );
+    assert_eq!(
+        readonly
+            .call("shadow_test", json!({"command":"touch forbidden"}))
+            .await["error"],
+        true
+    );
+    assert!(!f.project.join("forbidden").exists());
+    let doctor = readonly.call("shadow_doctor", json!({})).await;
+    assert_eq!(doctor["error"], false);
+    assert_eq!(doctor["value"]["report"]["runtime"], "rust");
+    assert!(json!(readonly
+        .peer
+        .read_resource(ReadResourceRequestParams::new("shadow://project"))
+        .await
+        .unwrap())
+    .to_string()
+    .contains("Cargo.toml"));
+    assert!(json!(readonly
+        .peer
+        .get_prompt(GetPromptRequestParams::new("understand"))
+        .await
+        .unwrap())
+    .to_string()
+    .contains("shadow_understand"));
+    let writer = f
+        .connect(Access {
+            allow_write: true,
+            allow_approvals: true,
+        })
+        .await;
+    assert_eq!(
+        writer.call("shadow_understand", json!({"save":true})).await["value"]["saved"],
+        true
+    );
+    let auto = writer.call("shadow_test", json!({})).await;
+    assert_eq!(auto["error"], false, "{auto}");
+    let id = auto["value"]["job"]["id"].as_str().unwrap();
+    let pending = approval(&writer, id).await;
+    assert_eq!(pending["command"], "cargo test");
+    writer
+        .call(
+            "shadow_approve",
+            json!({"approval_id":pending["id"],"decision":"deny"}),
+        )
+        .await;
+    assert_eq!(finished(&f, id).await["status"], "failed");
+    assert!(!f.project.join("target").exists());
+    let started = writer
+        .call("shadow_test", json!({"command":"printf mcp-native-test"}))
+        .await;
+    let id = started["value"]["job"]["id"].as_str().unwrap();
+    let pending = approval(&writer, id).await;
+    assert_eq!(
+        readonly
+            .call(
+                "shadow_approve",
+                json!({"approval_id":pending["id"],"decision":"approve"})
+            )
+            .await["error"],
+        true
+    );
+    writer
+        .call(
+            "shadow_approve",
+            json!({"approval_id":pending["id"],"decision":"approve"}),
+        )
+        .await;
+    let result = finished(&f, id).await;
+    assert_eq!(result["status"], "completed");
+    assert_eq!(result["result"]["command"]["stdout"], "mcp-native-test");
+    assert_eq!(result["usage"]["total_tokens"], 0);
+    writer.close().await;
+    readonly.close().await;
+    f.close().await;
 }
 
 #[tokio::test]

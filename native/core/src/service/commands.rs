@@ -2,6 +2,21 @@ use super::*;
 use crate::workflows;
 
 const BUILTINS: &[(&str, &str, &str)] = &[
+    (
+        "understand",
+        "Inspect project structure and test candidates without a model",
+        "[--save]",
+    ),
+    (
+        "doctor",
+        "Inspect native runtime, profile and project diagnostics",
+        "[--test-model]",
+    ),
+    (
+        "why",
+        "Show recorded change history and current diffs",
+        "[path]",
+    ),
     ("help", "List native commands and project workflows", ""),
     ("shadowcode", "Show workspace and runtime information", ""),
     (
@@ -157,6 +172,49 @@ impl Service {
         let api =
             |method: &str, path: &str, value: Value| self.command_api(method, path.into(), value);
         let result = match name {
+            "understand" => {
+                ensure!(
+                    matches!(args.trim(), "" | "--save"),
+                    "Usage: /understand [--save]"
+                );
+                let map = self.project_map(args.trim() == "--save").await?;
+                let mut value = card(
+                    if map["saved"] == true {
+                        "Project map saved"
+                    } else {
+                        "Project map"
+                    },
+                    map["text"].as_str().unwrap_or(""),
+                );
+                value["metadata"] = map;
+                value
+            }
+            "doctor" => {
+                ensure!(
+                    matches!(args.trim(), "" | "--test-model"),
+                    "Usage: /doctor [--test-model]"
+                );
+                let report = self.doctor(args.trim() == "--test-model").await?;
+                let mut value=list("Native diagnostics",report["checks"].as_array().unwrap().iter().map(|c|json!({"label":format!("{} · {}",c["status"].as_str().unwrap_or(""),c["label"].as_str().unwrap_or("")),"value":c["detail"]})).collect());
+                value["metadata"] = report;
+                value
+            }
+            "why" => {
+                let report = self.change_history(args.trim(), 8).await?;
+                let mut value = card(
+                    "Recorded change history",
+                    format!(
+                        "{}\n\nWorking tree:\n{}\nStaged:\n{}\n{}",
+                        report["log"].as_str().unwrap_or(""),
+                        report["diff"]["diff"].as_str().unwrap_or(""),
+                        report["diff"]["staged"].as_str().unwrap_or(""),
+                        report["note"].as_str().unwrap_or("")
+                    ),
+                );
+                value["diff"] = report["diff"]["diff"].clone();
+                value["metadata"] = report;
+                value
+            }
             "help" => {
                 let catalog = self.command_catalog()?;
                 let mut result=list("Commands",catalog["commands"].as_array().unwrap().iter().map(|row|json!({"label":format!("/{} {}",row["name"].as_str().unwrap_or(""),row["arg_spec"].as_str().unwrap_or("")),"value":row["description"]})).collect());

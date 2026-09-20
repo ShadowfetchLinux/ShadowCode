@@ -46,10 +46,14 @@ client's task or all pending actions. Denying an owned approval does not require
 the approval flag. The client is responsible for obtaining the user's agreement
 to the displayed action before submitting approval.
 
-The current server exposes twelve tools:
+The current server exposes sixteen tools:
 
 - `shadow_status`, `shadow_models`, `shadow_sessions`, `shadow_review`, and
   `shadow_tools` inspect the selected project and native capabilities.
+- `shadow_understand`, `shadow_doctor`, and `shadow_why` provide bounded project
+  maps, native diagnostics and recorded change history. See
+  [inspection and diagnostics](NATIVE_INSPECTION.md) for their limits and optional
+  saving/model-probe behavior.
 - `shadow_memory` reads or appends project notes. Append requires write access.
 - `shadow_goal` creates, lists, inspects, advances or abandons durable goals.
   Creating or advancing a goal here does not start an agent automatically.
@@ -57,12 +61,17 @@ The current server exposes twelve tools:
   inspects that connection's jobs, paginated events and pending approvals, or
   cancels one. A returned job ID is not a claim that the task has completed.
 - `shadow_approve` handles the individual decision described above.
+- `shadow_test` submits an owned native test job without calling a model. An
+  omitted command must have one unambiguous detected candidate. Write access
+  and exact command approval are required; results include real output and exit
+  status through `shadow_jobs`.
 - `shadow_checkpoint` inspects a project checkpoint. `shadow_rollback` requires
   an exact task ID, `confirm: true`, write access and the engine's conflict checks.
 
-Resources are `shadow://sessions`, `shadow://memory`, and `shadow://plan`.
+Resources are `shadow://project`, `shadow://sessions`, `shadow://memory`, and `shadow://plan`.
 The plan resource reads recorded events and returns null when no plan is recorded.
-The `delegate` prompt accepts a task for the fixed project.
+The `delegate` prompt accepts a task for the fixed project; `understand` requests
+a read-only project inspection.
 
 The connection owns its delegated jobs. Normal EOF, protocol failure, explicit
 cancellation and an abandoned server future cancel unfinished owned jobs and await
@@ -89,9 +98,10 @@ engine's own limits. Tool/resource results are capped at 2 MB and response write
 have a five-second deadline. Reconnect after a connection limit is reached.
 
 This is a development server, not full compatibility with the earlier Python
-server. `shadow_understand`, `shadow_doctor`, `shadow_why`, `shadow_test`, task
-memory, the project resource/understand prompt, HTTP serving, and client-specific
-registration formats remain unimplemented. The current tests use the official
+server. Task memory, HTTP serving, and client-specific registration formats
+remain unimplemented. Tools use the fixed project and asynchronous owned jobs;
+map saving is explicit, and diagnostics do not perform automatic repairs.
+The current tests use the official
 Rust SDK and a real executable protocol probe; broader client interoperability
 and real local-model server tasks remain release checks.
 
@@ -318,7 +328,7 @@ responses, private discovery errors, initialization/call deadlines, cancellation
 client drop, and abandoned initialization. The desktop probe also registers an
 HTTP endpoint in Settings and completes an approved, authenticated streaming call.
 
-Six server regressions use the official SDK to check discovery, resources/prompts,
+Seven server regressions use the official SDK to check discovery, resources/prompts,
 project isolation, session filtering before limits, write/trust restrictions,
 per-task permission reduction, owned-job and approval isolation, real approved
 execution, EOF/drop cleanup, malformed/oversized/truncated frames, and floods.
@@ -330,6 +340,8 @@ and an approved long-running terminal command. The probe kills the native MCP
 gateway with SIGKILL and verifies that the command child stops, owned queued
 work never reaches the model, and the unrelated task remains running. CI runs
 this probe against both the source binary and AppImage.
+The probe also reads project maps/diagnostics and completes an explicitly approved
+native test job while verifying that no additional model requests are made.
 
 Four private-control regressions check owner capacity without exhausting normal
 control access, recovery after rejected task submissions, deleted completed

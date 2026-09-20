@@ -175,11 +175,11 @@ impl Engine {
                         mode: milestone["mode"].as_str().unwrap_or("code").into(),
                         queue: true,
                     },
-                    Some(context),
-                    if verify { "tester" } else { "" },
-                    None,
-                    None,
-                    None,
+                    LaunchContext {
+                        system_context: Some(context),
+                        purpose: if verify { "tester" } else { "" },
+                        ..Default::default()
+                    },
                 )
                 .await?;
             if let Err(error) = self

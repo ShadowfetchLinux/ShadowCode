@@ -38,11 +38,17 @@ impl OwnedJobs {
     /// Submissions are serialized. Taking the stream before awaiting means an
     /// aborted/failed exchange closes ownership instead of reusing a partial reply.
     pub async fn submit(&self, body: Value) -> Result<Value> {
+        self.exchange("job", body).await
+    }
+    pub async fn submit_test(&self, body: Value) -> Result<Value> {
+        self.exchange("test", body).await
+    }
+    async fn exchange(&self, operation: &str, body: Value) -> Result<Value> {
         let mut guard = self.stream.lock().await;
         let mut stream = guard
             .take()
             .context("Task ownership connection is closed")?;
-        send(&mut stream, &json!({"job":body}), REQUEST_LIMIT).await?;
+        send(&mut stream, &json!({operation:body}), REQUEST_LIMIT).await?;
         let response = tokio::time::timeout(
             Duration::from_secs(30),
             receive(&mut stream, RESPONSE_LIMIT),
@@ -117,7 +123,12 @@ pub(super) async fn serve(
             if message["close"] == true {
                 break;
             }
-            let mut body = message["job"]
+            let operation = if message.get("test").is_some() {
+                "test"
+            } else {
+                "job"
+            };
+            let mut body = message[operation]
                 .as_object()
                 .context("A job object is required")?
                 .clone();
@@ -129,13 +140,20 @@ pub(super) async fn serve(
                 );
             }
             body.insert("workspace".into(), json!(workspace));
-            let result = service
-                .dispatch(Request {
+            let request = Request {
                     method: "POST".into(),
-                    path: "/api/jobs".into(),
+                    path: if operation == "test" {
+                        "/api/jobs/test".into()
+                    } else {
+                        "/api/jobs".into()
+                    },
                     body: Value::Object(body),
-                })
-                .await;
+                };
+            let mut extra=[0u8;1];
+            let result=tokio::select! {
+                result=service.dispatch(request)=>result,
+                _=stream.read(&mut extra)=>bail!("Task owner disconnected or pipelined another submission"),
+            };
             // Ownership is registered in Engine::start before scheduling, so
             // even a failed response or an aborted handler cannot lose a job.
             let response = match result {

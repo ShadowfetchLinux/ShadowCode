@@ -278,7 +278,14 @@ try {
   assert.equal(rejected.stdout, "");
   const readonly = await connect();
   const catalog = await readonly.rpc("tools/list");
-  assert.equal(catalog.tools.length, 12);
+  assert.equal(catalog.tools.length, 16);
+  const inspected = await readonly.call("shadow_understand");
+  assert.equal(inspected.structuredContent.saved, false);
+  assert.equal(
+    (await readonly.call("shadow_doctor")).structuredContent.report.runtime,
+    "rust",
+  );
+  assert.equal((await readonly.rpc("prompts/list")).prompts.length, 2);
   const status = await readonly.call("shadow_status");
   assert.equal(status.structuredContent.status.workspace, project);
   assert.equal(
@@ -340,10 +347,46 @@ try {
     ),
     false,
   );
-  assert.equal((await c.rpc("resources/list")).resources.length, 3);
+  assert.equal((await c.rpc("resources/list")).resources.length, 4);
+  assert.ok(
+    (await c.rpc("resources/read", { uri: "shadow://project" })).contents
+      .length,
+  );
   const plan = await c.rpc("resources/read", { uri: "shadow://plan" });
   assert.ok(plan.contents.length);
   await c.close();
+  const testClient = await connect(["--allow-write", "--allow-approvals"]);
+  const testJob = (
+    await testClient.call("shadow_test", {
+      command: "printf standalone-test-ok",
+    })
+  ).structuredContent.job;
+  assert.ok(testJob?.id);
+  const testApproval = await until(
+    "Native test approval",
+    async () =>
+      (await testClient.call("shadow_jobs", { job_id: testJob.id }))
+        .structuredContent.approvals[0],
+  );
+  assert.equal(testApproval.command, "printf standalone-test-ok");
+  assert.equal(
+    (
+      await testClient.call("shadow_approve", {
+        approval_id: testApproval.id,
+        decision: "approve",
+      })
+    ).isError,
+    false,
+  );
+  const testResult = await until("Native test completion", async () => {
+    const job = (await testClient.call("shadow_jobs", { job_id: testJob.id }))
+      .structuredContent.job;
+    return !["queued", "running", "cancelling"].includes(job.status) && job;
+  });
+  assert.equal(testResult.status, "completed");
+  assert.equal(testResult.result.command.stdout, "standalone-test-ok");
+  assert.equal(testResult.result.command.exit_code, 0);
+  await testClient.close();
   // The owning server closed its profile cleanly; another invocation can reopen.
   const reopened = await finish(launch(["--json", "status"]));
   assert.equal(reopened.code, 0, reopened.stderr);
@@ -430,8 +473,8 @@ try {
       {
         passed: true,
         modelRequests: requests,
-        tools: 12,
-        resources: 3,
+        tools: 16,
+        resources: 4,
         checks: [
           "standalone headless native MCP process",
           "JSON-RPC-only stdout",
@@ -440,6 +483,7 @@ try {
           "native task with exact approval",
           "real write, terminal verification, checkpoint and rollback",
           "resource reads",
+          "native project inspection, diagnostics, and approved test execution without model calls",
           "EOF cleanup and profile restart",
           "SIGKILL gateway cleanup on a shared engine, including queued tasks and an active command child",
           "unrelated detached task survives gateway death",

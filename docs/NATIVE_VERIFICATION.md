@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **155 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **164 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -95,17 +95,31 @@ integration tests** pass on the development machine. The suite covers:
   cleanup after completed history deletion, queued cancellation behind unrelated
   work, aborted control handlers, unread submission replies, malformed frames
   and cross-project submission rejection.
+- Bounded project inspection, ignored dependencies, symlink/FIFO exclusion,
+  content/depth limits, nested manifests and ambiguous test-command selection.
+  Generated memory sections preserve user notes and reject stale/malformed maps.
+  Diagnostics distinguish actual checks from untested model connectivity; only
+  the explicit connectivity probe contacts the model. Git history handles literal
+  pathspecs, linked worktrees and repositories without a first commit.
+- Model-free test jobs retain exact command approval even under shell auto-approval,
+  reject read-only requests, preserve stdout and real exit status on failure,
+  run completion hooks once without model repair, and stop timed-out command
+  children. A failed completion hook retains the successful command's output
+  while correctly failing the overall task. MCP read-only access cannot save maps,
+  start test jobs or approve another connection's task.
 
 `scripts/test-native-mcp-server.mjs` exercises the real executable without a
 display or Python. Its first four scripted model requests perform a read, file
 write, approved terminal verification and completion. The probe checks checkpoint
-restoration, all three resources, read-only defaults, registration with stable
+restoration, all four resources, both prompts, read-only defaults, registration with stable
 paths, JSON-RPC-only stdout, EOF cleanup and profile restart. Two further requests
 run an unrelated detached task and an approved long-running terminal command on
 a shared engine. SIGKILL of the MCP gateway is checked to cancel its running/queued
 jobs and stop the command child, without stopping the unrelated task or invoking
 the model for cancelled queued work. The six-request probe passes locally; CI
 is configured to repeat it against the source binary and packaged AppImage.
+The sixteen-tool catalog includes project inspection, native diagnostics and
+approved test execution, which the probe exercises without extra model requests.
 These fixtures do not substitute for broader client and real-model interoperability.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
@@ -136,6 +150,10 @@ activation, disable/removal, refusal without a terminal, and actual PTY approval
 of a displayed server/tool/argument object. A real MCP subprocess returns the
 expected result and its recorded process group is stopped before CLI exit.
 
+The inspection update passes 12 CLI scenario groups with the same 30 model
+requests. It adds read-only/saved project maps, structured and readable native
+diagnostics, durable command responses and history argument validation.
+
 The probe also hosts `serve`, starts and stops background commands, reads their
 logs, runs a task alongside them, observes and cancels detached work, and approves
 a waiting task from another CLI. SIGINT/SIGTERM/SIGHUP, a closed stdout pipe, remote
@@ -164,7 +182,8 @@ sessions existed. A regression now covers real session listing and literal
 search. Visual inspection also found a cancellation transcript race and an open
 sidebar obscuring a resized compact window; the window test checks both.
 Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, compact, Goals, Router,
-Background, Skills, Hooks, MCP, and HTTP MCP workspace views. The compact check caught the Review button losing its accessible name
+Background, Skills, Hooks, MCP, HTTP MCP, Inspection, and Diagnostics workspace views.
+The compact check caught the Review button losing its accessible name
 when its text was hidden; the control now retains an explicit label.
 The native test also creates a goal through the drawer, completes all three
 milestones, approves its verification command, checks the resulting file and
@@ -196,6 +215,15 @@ command side effect, reloads its result once, and disables it. This exposed a
 duplicate final answer when a hook card followed the model's response; completion
 now matches the last answer within the same task while retaining failure notices.
 The hook Settings screenshot was inspected for command readability and spacing.
+The inspection update exercises `/understand` and `/doctor` as durable command
+cards and `/health` as the native diagnostics panel, with twenty total scripted
+model requests. The window check caught `/doctor` being intercepted by an older
+panel shortcut and the Health panel showing unperformed checks as failures.
+Native commands now retain their diagnostic report, while Health distinguishes
+passes, warnings, failures and unperformed checks with readable details. The
+unsupported native Auto-fix control is absent; automatic repair remains a release
+requirement. Project maps render as Markdown, and command details wrap when the
+Health panel narrows the conversation.
 Seventeen interface unit tests cover ordered replay, pagination, stream finalization,
 listener cleanup, interruption, native tool cards, routing/fallback replay,
 workflow provenance, durable command/hook cards, completion checks between

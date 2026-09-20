@@ -334,6 +334,29 @@ fn display(value: &Value) -> Result<()> {
                 watch::plain(&value["metadata"].to_string())
             );
         }
+    } else if let Some(checks) = value["checks"].as_array() {
+        outln!("Native diagnostics");
+        for check in checks {
+            outln!(
+                "[{}] {}: {}",
+                watch::plain(check["status"].as_str().unwrap_or("")),
+                watch::plain(check["label"].as_str().unwrap_or("")),
+                watch::plain(check["detail"].as_str().unwrap_or(""))
+            );
+            if let Some(fix) = check["fix"].as_str().filter(|v| !v.is_empty()) {
+                outln!("  {}", watch::plain(fix));
+            }
+        }
+    } else if value["project_map"].is_object() && value["text"].is_string() {
+        outln!("{}", watch::plain(value["text"].as_str().unwrap_or("")));
+    } else if value["log"].is_string() && value["diff"].is_object() {
+        outln!(
+            "{}\nWorking tree:\n{}\nStaged:\n{}\n{}",
+            watch::plain(value["log"].as_str().unwrap_or("")),
+            watch::plain(value["diff"]["diff"].as_str().unwrap_or("")),
+            watch::plain(value["diff"]["staged"].as_str().unwrap_or("")),
+            watch::plain(value["note"].as_str().unwrap_or(""))
+        );
     } else if let Some(summary) = value["summary"].as_str() {
         outln!(
             "{}\n{}",
@@ -357,6 +380,39 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
         .context("No CLI command selected")?;
     let value = match command {
         Command::Ui => bail!("Desktop startup must use the native window"),
+        Command::Doctor { test_model } => {
+            backend
+                .call(
+                    "GET",
+                    if *test_model {
+                        "/api/doctor?test_model=true"
+                    } else {
+                        "/api/doctor"
+                    },
+                    Value::Null,
+                )
+                .await?
+        }
+        Command::Understand { save } => {
+            backend
+                .call("POST", "/api/workspace/understand", json!({"save":save}))
+                .await?
+        }
+        Command::Why { path, count } => {
+            backend
+                .call(
+                    "GET",
+                    query(
+                        "/api/workspace/why",
+                        &[
+                            ("path", path.as_deref().unwrap_or("")),
+                            ("count", &count.to_string()),
+                        ],
+                    )?,
+                    Value::Null,
+                )
+                .await?
+        }
         Command::Serve => {
             ensure!(
                 backend.service().is_some(),

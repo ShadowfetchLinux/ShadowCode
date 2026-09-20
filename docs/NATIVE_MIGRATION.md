@@ -86,7 +86,7 @@ Implemented foundation:
   without a display and shares an active desktop or explicit headless owner
   through a private local connection. Client navigation does not switch the
   desktop project. Owned tasks cancel on interrupt/output failure; watching an
-  existing task leaves it running. Full TUI, updater/doctor, and integration
+  existing task leaves it running. Full TUI, updater/automatic diagnostic repairs, and integration
   migration remain separate requirements.
 - [Native lifecycle hooks](NATIVE_HOOKS.md) with explicit project/content
   activation, bounded sequential command execution, gates before commands and
@@ -151,13 +151,19 @@ transports, inert Settings/CLI registration, explicit project/content activation
 discovery, individually approved calls, and task-owned process/stream cleanup.
 HTTP uses explicit credential references, prevents redirects and automatic call
 retries, and supports modern and legacy Streamable HTTP negotiation. The native
-stdio server exposes twelve tools, three resources and a delegation prompt through
+stdio server exposes sixteen tools, four resources and two prompts through
 the shared engine, with a fixed project, reduced per-task permissions, explicit
 approval delegation and connection-owned jobs. Built-in SQLite compatibility,
-remaining server tools/resources/HTTP serving and broader interoperability/real-model
+task-memory compatibility, HTTP serving and broader interoperability/real-model
 verification remain open requirements. Private engine-side ownership now cancels
 MCP jobs after gateway SIGKILL, including unread submission replies, queued tasks
 and active command children; unrelated work continues.
+
+[Native project inspection](NATIVE_INSPECTION.md) supplies bounded maps, generated
+note sections that preserve user text, native runtime/profile/project diagnostics,
+and literal-path Git history. CLI and desktop commands use the same service.
+MCP test jobs run actual commands without a model, with exact approvals, hooks,
+queue ownership, real output/exit status, and timeout/process cleanup.
 
 AppImage extraction now uses a source-pinned runtime patch with private
 per-invocation directories, signal forwarding, and checked cleanup. A dedicated

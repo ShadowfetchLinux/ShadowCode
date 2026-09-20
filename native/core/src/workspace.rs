@@ -194,6 +194,23 @@ impl Workspace {
             mode,
         })
     }
+    /// A bounded inspection read. Nonblocking/no-follow open avoids hanging on
+    /// a FIFO or following a final symlink swapped in after directory discovery.
+    pub(crate) fn inspect(&self, path: &str, limit: usize) -> Result<(Vec<u8>, u64)> {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+        }
+        let file = self.dir.open_with(self.relative(path)?, &options)?;
+        let meta = file.metadata()?;
+        ensure!(meta.is_file(), "Inspection requires a regular file");
+        let mut bytes = Vec::new();
+        file.take(limit as u64).read_to_end(&mut bytes)?;
+        Ok((bytes, meta.len()))
+    }
     pub fn read(&self, path: &str) -> Result<FileContent> {
         let snapshot = self.snapshot(path)?;
         let bytes = snapshot.bytes.context("File not found")?;
