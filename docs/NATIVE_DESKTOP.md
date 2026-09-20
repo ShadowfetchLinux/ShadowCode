@@ -65,12 +65,15 @@ dependency resolution on the build host, and absence of Python interpreters,
 libraries, and sidecars. It also verifies the SHA-256 digest of every listed
 notice in each extracted package. It produces checksums in `artifacts/native-package/`.
 
-The initial local packages contain an approximately 17 MB executable, an 80 MB
-AppImage (including native GTK/WebKit libraries), and a 7.5 MB Debian package
-(using system GTK/WebKit), before the notice inventory was added. These are
-development artifacts. Corresponding-source release artifacts, clean-runner
-package verification, complete feature migration, and release
-installation are still required before publication as the supported download.
+The first verified CI packages contain an approximately 17.5 MB executable, an
+83 MB AppImage (including native GTK/WebKit libraries), and an 8.2 MB Debian
+package (using system GTK/WebKit). CI builds, inspects, and exercises the actual
+AppImage on Ubuntu 24.04, with development downloads retained for 14 days.
+The downloaded packages also passed inspection and the AppImage window workflow
+on the development machine. These remain development artifacts.
+Corresponding-source release artifacts, complete feature migration, and final
+release verification/installation are still required before publication as the
+supported download.
 
 If linuxdeploy aborts while scanning an inaccessible symlink in a PATH directory,
 remove that directory from PATH for the packaging command; the application does
@@ -128,3 +131,23 @@ workspace remain disposable, so it does not migrate the installed app's data.
 See [verification evidence](NATIVE_VERIFICATION.md) for engine stress tests and
 separate real-model coding probes. The scripted window test establishes UI and
 engine integration; the real-model probes establish provider/tool behavior.
+
+To exercise an installed Ollama model through the actual native window, run:
+
+```sh
+xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- \
+  node scripts/probe-native-model.mjs gpt-oss:20b
+# Repeat with another installed model:
+xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- \
+  node scripts/probe-native-model.mjs qwen3:14b
+```
+
+This manual probe defaults to `target/release/shadowcode` and accepts the same
+binary, argument, driver, and artifact environment variables as the scripted
+window test. It uses a temporary Rust project and isolated profile, approves
+only `cargo test --offline --lib` in that project, checks the minimal edit and
+unchanged tests independently, reloads the conversation, submits a read-only
+follow-up, clicks Stop during actual model streaming, restores the checkpoint,
+and verifies native-process shutdown. Results and screenshots are saved under
+`artifacts/native-model/<model>/`. Ollama must already have the selected model;
+the probe does not download models or change the installed app's profile.

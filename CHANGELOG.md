@@ -18,6 +18,9 @@
   metadata, include versioned dependency notices, and check startup, versions,
   matching compiled code, notice hashes, and absence of Python sidecars. The
   packaged AppImage runs the same real-window workflow as the debug executable.
+- Manual native-window probes with installed Ollama models cover minimal coding
+  edits, visible command approval, independent verification, saved continuation,
+  cancellation during actual streaming, checkpoint rewind, and process shutdown.
 
 This development branch is not yet the replacement release. Remaining
 integrations, broader stress checks, packaging, and installation are tracked in

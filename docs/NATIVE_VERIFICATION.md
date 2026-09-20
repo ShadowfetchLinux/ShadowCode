@@ -73,7 +73,7 @@ Eleven interface unit tests cover ordered replay, pagination, stream finalizatio
 listener cleanup, interruption, and native tool cards. The seven existing browser
 tests continue to pass through the legacy transport.
 
-The same native window workflow also passes when launched from the local release
+The same native window workflow also passes when launched from the local optimized
 AppImage in FUSE-free extraction mode with the legacy `ui` argument. The package
 checker confirms that AppImage and Debian packages contain native ELF application
 code with matching versions and no Python runtime or sidecars. Packaging now
@@ -84,10 +84,19 @@ data. Unattributed system files stop packaging, and the extracted-package check
 verifies the SHA-256 digest of every listed notice. Exact source package versions
 are retained for corresponding-source release preparation.
 
+The clean Ubuntu 24.04 [CI run for 5aaba82](https://github.com/ShadowfetchLinux/ShadowCode/actions/runs/35510335761)
+passed all native/UI checks, built both formats, inspected their notices and
+executable contents, and ran the actual packaged-window workflow. Those exact
+development artifacts were downloaded to the development machine; their published
+SHA-256 checksums matched, both packages passed inspection again, and the downloaded
+AppImage passed the full scripted native-window workflow. The CI AppImage has
+523 application dependencies and 113 system-package attributions; its fewer
+system resources reflect the clean runner's environment. Artifacts and results
+for that download are retained locally in `artifacts/native-ci-package/`.
+
 OS dialog interaction, notification delivery, default-profile single-instance
-behavior, broader stress/accessibility coverage, real models through the native
-window, corresponding-source artifacts, clean-runner package builds, and the final installed
-release still need their release-gate checks.
+behavior, broader stress/accessibility coverage, corresponding-source artifacts,
+and the final installed release still need their release-gate checks.
 
 ## Real local models
 
@@ -115,5 +124,24 @@ the probe asserts that fresh inspection actually occurred.
 
 These small coding probes establish tool interoperability, recovery from a real
 compiler failure, continuation, and rewind. They do not establish performance
-on large repositories or complete native-window usability. Broader desktop/UI tests, integrations,
-release artifact checks, and installation remain mandatory before release.
+on large repositories or complete native-window usability.
+
+The local optimized AppImage was also exercised through WebKit WebDriver using
+`scripts/probe-native-model.mjs` with both **gpt-oss:20b** and **qwen3:14b**.
+Both models made the exact one-expression fix without altering the fixture's
+tests or manifest. The probe clicked the native approval card for the bounded
+test command, independently reran those unchanged tests, reloaded the saved
+conversation, and submitted a read-only follow-up that inspected the current
+file. It then clicked Stop after observing a real streamed model response,
+verified persisted cancellation and its visible transcript, restored the first
+task's checkpoint byte for byte through IPC, and checked native-process exit.
+
+In these individual window runs, gpt-oss used six steps and 8,272 reported tokens
+for coding plus continuation; Qwen used seven steps and 13,267 reported tokens.
+Observed Stop-to-visible-cancellation times were 93 ms and 234 ms respectively.
+These are single disposable-project observations, not performance benchmarks.
+Screenshots, the saved event history, independent test output, scoped approval
+decisions, and machine-readable results are retained in `artifacts/native-model/`.
+
+Broader desktop/UI tests, integrations, release artifact checks, and installation
+remain mandatory before release.
