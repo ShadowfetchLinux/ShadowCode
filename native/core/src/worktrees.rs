@@ -57,15 +57,12 @@ pub fn list(paths: &AppPaths, source: &Path) -> Result<Vec<Record>> {
             records.len() < 64,
             "Managed worktree inventory exceeds its limit"
         );
-        let meta = entry.file_type()?;
-        ensure!(meta.is_file(), "Worktree records must be regular files");
-        let mut data = Vec::new();
-        fs::File::open(entry.path())?
-            .take(64_001)
-            .read_to_end(&mut data)?;
-        ensure!(data.len() <= 64_000, "Worktree record exceeds 64 KB");
-        let record: Record = serde_json::from_slice(&data)
-            .context("Cannot read managed worktree recovery record")?;
+        let path = entry.path();
+        let id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("Invalid managed worktree record filename")?;
+        let record = read_record_identity(paths, id)?;
         records.push(record);
     }
     records.retain(|r| r.source == source);
@@ -198,7 +195,7 @@ pub struct Inspection {
     pub reason: String,
     pub hash: String,
 }
-fn read_record(paths: &AppPaths, source: &Path, id: &str) -> Result<Record> {
+fn read_record_identity(paths: &AppPaths, id: &str) -> Result<Record> {
     ensure!(
         id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),
         "Use the full managed worktree ID"
@@ -229,6 +226,10 @@ fn read_record(paths: &AppPaths, source: &Path, id: &str) -> Result<Record> {
             && record.branch == format!("shadowcode/{id}"),
         "Managed worktree record identity changed"
     );
+    Ok(record)
+}
+fn read_record(paths: &AppPaths, source: &Path, id: &str) -> Result<Record> {
+    let record = read_record_identity(paths, id)?;
     ensure!(
         record.source == Workspace::open(source)?.path,
         "Worktree belongs to another source project"

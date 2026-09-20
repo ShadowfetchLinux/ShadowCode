@@ -378,7 +378,11 @@ async fn worktree_inspection_rejects_detached_heads_symlinks_and_forged_paths() 
         .data
         .join("managed-worktrees/records")
         .join(format!("{}.json", record.id));
-    fs::write(file, serde_json::to_vec(&forged).unwrap()).unwrap();
+    fs::write(&file, serde_json::to_vec(&forged).unwrap()).unwrap();
+    assert!(worktrees::list(&paths, &project)
+        .unwrap_err()
+        .to_string()
+        .contains("identity changed"));
     assert!(
         worktrees::inspect(&paths, &project, &record.id, CancellationToken::new())
             .await
@@ -386,5 +390,10 @@ async fn worktree_inspection_rejects_detached_heads_symlinks_and_forged_paths() 
             .to_string()
             .contains("identity changed")
     );
+    fs::remove_file(&file).unwrap();
+    let outside = root.path().join("outside.json");
+    fs::write(&outside, serde_json::to_vec(&record).unwrap()).unwrap();
+    symlink(&outside, &file).unwrap();
+    assert!(worktrees::list(&paths, &project).is_err());
     assert!(project.join("tracked.txt").exists());
 }

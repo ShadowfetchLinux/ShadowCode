@@ -66,3 +66,7 @@ registrations still require manual inspection; the recovery record remains.
 Carrying uncommitted changes into an isolated checkout, reviewed return/merge
 operations and recovery controls for missing/damaged checkouts remain part of the
 [native migration gates](NATIVE_MIGRATION.md).
+
+Inventory and individual actions share the same bounded, non-following record
+reader. A record whose filename, managed path or branch identity has changed is
+rejected before it can be presented as a usable worktree.
