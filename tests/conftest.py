@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import sys
 
 import pytest
 
@@ -27,6 +29,9 @@ def _never_touch_real_xdg(tmp_path_factory: pytest.TempPathFactory, monkeypatch:
     monkeypatch.setenv("SHADOW_AGENT_NO_NOTIFY", "1")
     # doctor --fix must never run npm or the install script from the suite.
     monkeypatch.setenv("SHADOW_AGENT_DOCTOR_NO_INSTALL", "1")
+    # Tool-integration tests spawn `python3 -m pytest`. Use this suite's
+    # interpreter environment instead of depending on globally installed pytest.
+    monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""))
 
 
 @pytest.fixture
