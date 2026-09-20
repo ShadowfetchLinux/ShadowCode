@@ -270,8 +270,13 @@ full 216-test suite pass. The existing 15 CLI groups / 30 model requests also pa
 Dependency notice generation now covers 575 application dependencies. Terminal
 picker/navigation, visual and sustained stress coverage remain open. Two further
 regression tests verify compact-dialog scrolling/resizing and trust confirmation
-bound to the displayed project; all ten library tests pass after that fix. Broader
-real-terminal resize coverage remains open.
+bound to the displayed project; all ten library tests pass after that fix. The
+real-PTY probe now resizes through 30×8, 60×18, 80×18, 81×18, 110×40 and
+110×32, checks the minimum-size warning, scrolls compact help to the final line
+and back with Home, and preserves the exact multiline Unicode draft through
+these transitions. Assertions inspect fresh complete frames because incremental
+ANSI updates can split words. This covers resize recovery; broader picker
+navigation, visual review and sustained terminal stress remain open.
 
 ## Desktop worktree controls
 

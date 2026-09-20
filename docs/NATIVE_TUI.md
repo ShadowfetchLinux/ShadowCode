@@ -70,12 +70,14 @@ terminal settings. Drafts and prompt recall are currently in memory.
 `node scripts/test-native-tui.mjs` drives a real PTY and scripted compatible model
 with no display. It covers multiline Unicode paste, actual file inspection, shared
 CLI attachment, explicit command approval, planning mode, owned task cancellation
-and terminal restoration. Rust tests cover grapheme editing, bounded event replay,
+and terminal restoration. Live PTY resizing covers the below-minimum warning,
+compact help scrolling to its final line and Home, expanded-dialog recovery, and
+Unicode draft preservation without accidental submission. Rust tests cover grapheme editing, bounded event replay,
 small-terminal rendering, approval isolation, queue-full draft retention, workflow
 ownership and exclusive history pagination. CI runs the PTY check against source
 and AppImage builds.
 
-This is a development interface. Broader picker/navigation, resizing, failure and
+This is a development interface. Broader picker/navigation, failure and
 long-session stress, terminal visual review and final packaged verification remain
 part of the [native release gates](NATIVE_MIGRATION.md). The full native release is
 not declared complete by this interface's initial checks.

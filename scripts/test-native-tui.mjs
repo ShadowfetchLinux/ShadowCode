@@ -1,12 +1,15 @@
 // Real PTY smoke/lifecycle test. Node and util-linux are test tools only.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+const execute = promisify(execFile);
+let terminalCounter = 0;
 const root = fileURLToPath(new URL("../", import.meta.url));
 const binary =
   process.env.SHADOW_DESKTOP_BINARY ||
@@ -153,7 +156,8 @@ function launch(args, tty = false) {
     ...args,
   ];
   const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
-  const command = `stty rows 32 cols 110; before=$(stty -g); ${[binary, ...argv].map(quote).join(" ")}; result=$?; after=$(stty -g); if [ "$before" = "$after" ]; then printf '\\nTERMINAL_RESTORED\\n'; else printf '\\nTERMINAL_BROKEN\\n'; fi; exit "$result"`;
+  const ttyFile = path.join(scratch, `terminal-${terminalCounter++}.tty`);
+  const command = `tty > ${quote(ttyFile)}; stty rows 32 cols 110; before=$(stty -g); ${[binary, ...argv].map(quote).join(" ")}; result=$?; after=$(stty -g); if [ "$before" = "$after" ]; then printf '\\nTERMINAL_RESTORED\\n'; else printf '\\nTERMINAL_BROKEN\\n'; fi; exit "$result"`;
   const child = tty
     ? spawn(
         "script",
@@ -173,7 +177,23 @@ function launch(args, tty = false) {
       resolve(output);
     });
   });
-  return { child, output, done };
+  return { child, output, done, ttyFile };
+}
+async function resize(run, rows, columns, expected) {
+  const terminal = (await readFile(run.ttyFile, "utf8")).trim();
+  assert.match(terminal, /^\/dev\/pts\/\d+$/);
+  const start = run.output.stdout.length;
+  await execute("stty", [
+    "-F",
+    terminal,
+    "rows",
+    String(rows),
+    "cols",
+    String(columns),
+  ]);
+  await until(`terminal resize ${columns}x${rows}`, () =>
+    run.output.stdout.slice(start).includes(expected),
+  );
 }
 async function finish(run) {
   await until("process exit", () => run.output.code !== undefined, 20000);
@@ -209,6 +229,33 @@ try {
   tui.child.stdin.write("\x1b[200~Inspect 界\nsecond line\x1b[201~");
   await delay(200);
   assert.equal(requests.length, 0);
+  await resize(tui, 8, 30, "Resize terminal");
+  await resize(tui, 18, 60, "SHADOWCODE");
+  tui.child.stdin.write("\x1bOP");
+  await until("compact help", () => tui.output.stdout.includes("Help · PgUp"));
+  tui.child.stdin.write("\x1b[6~".repeat(40));
+  await delay(150);
+  // A width change forces a complete frame: incremental ANSI updates may split words.
+  await resize(
+    tui,
+    18,
+    80,
+    "When attached to another engine, unrelated tasks continue.",
+  );
+  tui.child.stdin.write("\x1b[H");
+  await delay(150);
+  await resize(tui, 18, 81, "ShadowCode · native terminal");
+  tui.child.stdin.write("\x1b[6~".repeat(40));
+  await delay(150);
+  await resize(tui, 40, 110, "unrelated tasks continue.");
+  tui.child.stdin.write("\x1b");
+  await delay(150);
+  await resize(tui, 32, 110, "SHADOWCODE");
+  assert.equal(
+    requests.length,
+    0,
+    "Resizing and help must not submit the draft",
+  );
   tui.child.stdin.write("\r");
   await until("completed pasted task", () =>
     jobs().some((j) => j.status === "completed"),
@@ -296,7 +343,8 @@ try {
         requests: requests.length,
         checks: [
           "real PTY startup",
-          "multiline Unicode paste",
+          "multiline Unicode paste preserved through minimum-size and restored layouts",
+          "real PTY compact help scrolling and resize recovery",
           "shared CLI attachment",
           "explicit tool approval",
           "read-only planning mode",
