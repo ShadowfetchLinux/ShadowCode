@@ -65,6 +65,8 @@ Implemented foundation:
 - Validated configuration and private atomic secret storage. Project overlays
   can tune bounded agent settings or reduce permissions; they cannot redirect
   credentials, grant permissions, or register executable integrations.
+  Native profile directories use mode 700, preserving legacy contents and
+  existing parent permissions; unsafe directory leaves and lock files fail closed.
 - Workspace directory capabilities, atomic text edits, stale-content checks,
   bounded search and file reads, and Git metadata protections.
 - A native subprocess runner with bounded concurrent output capture, cancellation,

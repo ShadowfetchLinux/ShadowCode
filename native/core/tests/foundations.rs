@@ -19,6 +19,119 @@ fn profile_lock_prevents_a_second_manager_and_releases_on_drop() {
 
 #[test]
 #[cfg(unix)]
+fn profile_permissions_are_private_and_legacy_data_is_preserved() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("existing-parent");
+    fs::create_dir(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+    // Relocated XDG/profile parents are supported; application-owned leaves
+    // themselves cannot be links.
+    let alias = root.path().join("parent-alias");
+    symlink(&parent, &alias).unwrap();
+    let paths = AppPaths::isolated(&alias).unwrap();
+    for path in [&paths.config, &paths.data, &paths.state] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        fs::write(path.join("legacy.txt"), "preserve me").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::write(paths.state.join("native.lock"), "legacy lock").unwrap();
+    fs::set_permissions(
+        paths.state.join("native.lock"),
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let lock = paths.lock().unwrap();
+    for path in [&paths.config, &paths.data, &paths.state] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("legacy.txt")).unwrap(),
+            "preserve me"
+        );
+    }
+    assert_eq!(
+        fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::metadata(paths.state.join("native.lock"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::read_to_string(paths.state.join("native.lock")).unwrap(),
+        "legacy lock"
+    );
+    assert!(paths.lock().is_err());
+    drop(lock);
+    assert!(paths.lock().is_ok());
+}
+
+#[test]
+#[cfg(unix)]
+fn unsafe_profile_leaves_and_lock_files_are_rejected_without_touching_targets() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("outside");
+    fs::create_dir(&target).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+    let profile = root.path().join("profile");
+    fs::create_dir(&profile).unwrap();
+    for name in ["config", "data", "state"] {
+        let leaf = profile.join(name);
+        if leaf.exists() {
+            fs::remove_dir(&leaf).unwrap();
+        }
+        symlink(&target, &leaf).unwrap();
+        assert!(AppPaths::isolated(&profile).is_err());
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        fs::remove_file(&leaf).unwrap();
+    }
+    let paths = AppPaths::isolated(&profile).unwrap();
+    let destination = target.join("keep");
+    fs::write(&destination, "unchanged").unwrap();
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o644)).unwrap();
+    let lock = paths.state.join("native.lock");
+    symlink(&destination, &lock).unwrap();
+    assert!(paths.lock().is_err());
+    fs::remove_file(&lock).unwrap();
+    fs::hard_link(&destination, &lock).unwrap();
+    assert!(paths.lock().is_err());
+    fs::remove_file(&lock).unwrap();
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "unchanged");
+    assert_eq!(
+        fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    let fifo = std::ffi::CString::new(lock.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    assert!(paths
+        .lock()
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("regular file"));
+    fs::remove_file(&lock).unwrap();
+    fs::create_dir(&lock).unwrap();
+    assert!(paths.lock().is_err());
+    fs::remove_dir(&lock).unwrap();
+    assert!(paths.lock().is_ok());
+}
+
+#[test]
+#[cfg(unix)]
 fn profile_lock_release_does_not_wait_for_an_unrelated_fork_to_exec() {
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(root.path()).unwrap();

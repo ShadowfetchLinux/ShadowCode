@@ -17,6 +17,14 @@ no TCP listener. See [native CLI lifecycle and trust](docs/NATIVE_CLI.md).
 These boundaries trust processes running as the same user. Plugins and MCP
 migration remain in progress.
 
+Native profile config, data, and state directories are created with mode 700;
+existing application directories are restricted to that mode without deleting
+their contents or changing permissions on an existing parent directory. Each
+must be owned by the current account and must not itself be a symlink. A
+relocated XDG base or `--profile` parent may be a symlink. The native profile lock
+is a private regular file with mode 600; symlinks, additional hard links, foreign
+owners and special files are rejected before acquiring it.
+
 [Native lifecycle hooks](docs/NATIVE_HOOKS.md) require explicit activation for a
 trusted workspace and exact definition hash. Discovery never imports repository
 code. The approval pins the command definition, not the scripts or dependencies

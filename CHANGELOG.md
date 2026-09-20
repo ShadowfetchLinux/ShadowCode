@@ -8,6 +8,10 @@
 - Tauri desktop window embeds the compiled interface and communicates through
   IPC, without a Python runtime or browser launcher. Native dialogs, external
   links, window state, notifications, and managed shutdown are implemented.
+- Native profile directories are private to the current account, including
+  existing profiles, without deleting data or changing existing parent-directory
+  permissions. Unsafe profile leaves and lock files are rejected. Notifications
+  keep full text contrast throughout their entrance animation.
 - Native goals preserve milestone results, pause and resume, require recorded
   inspection/verification for the default checklist, and stop on failed checks.
   Goal tasks appear live in the conversation; results and progress are accessible

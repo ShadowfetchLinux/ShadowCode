@@ -6,11 +6,15 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **170 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **172 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
   legacy SQLite backups and goal import, session branching, and durable replay.
+- Private native profile directories and lock permissions, migration of permissive
+  existing directories without changing their contents or parent permissions,
+  relocated profile parents, and rejection of symlink leaves, symlink/hard-linked
+  locks, directories and FIFOs without changing their targets or hanging startup.
 - 2,000 events from eight concurrent writers; 32 concurrent workspaces plus 24
   immediate follow-ups, then restart and exact completion/usage checks.
 - Native tool execution, stale edits, ambiguous/malformed multi-file patches,
@@ -243,6 +247,11 @@ approval. Desktop decisions now carry the displayed approval's conversation ID;
 an explicit regression changes the backend selection before clicking Allow and
 checks that the correct goal approval resolves and all milestones finish. A
 late approval refresh cannot replace another selected conversation's approvals.
+The subsequent [clean-runner check](https://github.com/ShadowfetchLinux/ShadowCode/actions/runs/35530082798)
+passed Rust, CLI and MCP checks but caught a notification mid-fade at insufficient
+contrast. Toasts now animate position with fully opaque text. The rebuilt native
+window passes all twelve accessibility views and the complete twenty-request
+workflow locally, including the changed-selection goal approval regression.
 Seventeen interface unit tests cover ordered replay, pagination, stream finalization,
 listener cleanup, interruption, native tool cards, routing/fallback replay,
 workflow provenance, durable command/hook cards, completion checks between

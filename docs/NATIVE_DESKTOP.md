@@ -34,6 +34,13 @@ from the installed application. Without it, the application uses the existing
 `shadow-agent` XDG directories and backs up SQLite before migrating. Do not run
 the legacy Python application against the same profile during migration.
 
+Native startup restricts its config, data and state directories to the current
+account (mode 700), retaining existing files and parent-directory permissions.
+Those three application directories must be real directories owned by your
+account. To relocate storage through a symlink, link the XDG base or explicit
+profile parent instead. An unsafe `native.lock` (symlink, extra hard link,
+foreign owner or special file) causes a startup error without replacing it.
+
 Choose an installed local model or a compatible endpoint in onboarding. The
 offline preview lets you inspect the workspace but cannot execute coding tasks.
 Model inference remains in Ollama or the selected provider; it is not bundled.
