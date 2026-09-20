@@ -1,18 +1,12 @@
 // Package each format from the original executable. The bundler patches its
 // bundle type into the binary; reusing an already patched binary loses that tag.
 import { execFile, spawn } from "node:child_process";
-import {
-  copyFile,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { applicationNotices, appdirNotices } from "./native-notices.mjs";
+import { buildRuntime, runtimeNotices } from "./native-runtime.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const cli = path.join(root, "ui/node_modules/@tauri-apps/cli/tauri.js");
 const exec = promisify(execFile);
@@ -35,6 +29,7 @@ const run = (args) => command(process.execPath, [cli, ...args]);
 if (process.platform !== "linux" || process.arch !== "x64")
   throw new Error("This packaging workflow currently supports Linux x86_64");
 const notices = path.join(root, "target/native-notices");
+const nativeRuntime = await buildRuntime();
 await applicationNotices(notices);
 const files = { "/usr/share/doc/shadowcode/notices": notices };
 const config = JSON.stringify({
@@ -84,16 +79,8 @@ try {
         throw new Error(
           "AppImage runtime changed; update and verify its dependency notices before packaging",
         );
-      // Reuse the exact first-stage runtime instead of downloading another
-      // continuous runtime while repacking the system-library notices.
-      const offset = Number(
-        (await exec(appimage, ["--appimage-offset"])).stdout.trim(),
-      );
-      if (!Number.isSafeInteger(offset) || offset < 4096 || offset > 10000000)
-        throw new Error("Invalid AppImage runtime offset");
-      const runtime = path.join(scratch, "runtime-x86_64");
-      await writeFile(runtime, (await readFile(appimage)).subarray(0, offset));
       await appdirNotices(appdir);
+      await runtimeNotices(appdir, nativeRuntime);
       const repacked = path.join(scratch, path.basename(appimage));
       await command(
         path.join(root, "target/.tauri/linuxdeploy-plugin-appimage.AppImage"),
@@ -102,10 +89,30 @@ try {
           APPIMAGE_EXTRACT_AND_RUN: "1",
           OUTPUT: repacked,
           ARCH: "x86_64",
-          LDAI_RUNTIME_FILE: runtime,
+          LDAI_RUNTIME_FILE: nativeRuntime.runtime,
         },
       );
       await rename(repacked, appimage);
+      const sources = path.join(
+        root,
+        `target/release/bundle/appimage/ShadowCode_${version}_appimage-runtime-sources.tar.gz`,
+      );
+      const pendingSources = path.join(scratch, path.basename(sources));
+      await command("tar", [
+        "-czf",
+        pendingSources,
+        "-C",
+        nativeRuntime.directory,
+        "sources",
+        "receipt.json",
+        "runtime.map",
+        "build-packages.db",
+        "build-packages.txt",
+        "compiler.txt",
+        "runtime-dynamic.txt",
+        "runtime-x86_64.debug",
+      ]);
+      await rename(pendingSources, sources);
     }
   }
 } finally {

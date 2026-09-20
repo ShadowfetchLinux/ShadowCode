@@ -3,7 +3,7 @@ on:
   push:
     branches: [native-0.20]
   pull_request:
-    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'scripts/*native*.mjs', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml']
+    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'scripts/*native*.mjs', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml']
 permissions:
   contents: read
 jobs:
@@ -48,6 +48,8 @@ jobs:
         run: node scripts/build-native.mjs
       - name: Inspect both packages
         run: node scripts/check-native-package.mjs target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage target/release/bundle/deb/ShadowCode_0.20.0_amd64.deb
+      - name: Exercise concurrent AppImage extraction and shutdown
+        run: node scripts/test-native-runtime.mjs
       - name: Exercise the packaged CLI without a display
         env:
           SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage
@@ -58,6 +60,7 @@ jobs:
         env:
           SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage
           SHADOW_DESKTOP_ARGS: '["--appimage-extract-and-run","ui"]'
+          SHADOW_NATIVE_DEFAULT_PROFILE: '1'
           SHADOW_NATIVE_ARTIFACTS: artifacts/native-package/window
         run: xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- node scripts/test-native-desktop.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -71,5 +74,6 @@ jobs:
           retention-days: 14
           path: |
             target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*runtime-sources.tar.gz
             target/release/bundle/deb/*.deb
             artifacts/native-package/SHA256SUMS

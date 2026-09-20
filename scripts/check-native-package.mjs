@@ -119,6 +119,77 @@ try {
   await run(appimagePath, ["--appimage-extract"], { ...options, cwd: scratch });
   const appdir = path.join(scratch, "squashfs-root");
   const appimageNotices = await verifyNotices(appdir, true);
+  const runtimeBase = path.join(
+    appdir,
+    "usr/share/doc/shadowcode/notices/runtime",
+  );
+  const runtime = JSON.parse(
+    await readFile(path.join(runtimeBase, "runtime.json"), "utf8"),
+  );
+  assert.equal(runtime.schema, 1);
+  assert.equal(runtime.patchset, "isolated-extraction-v1");
+  const runtimeVersion = await run(
+    appimagePath,
+    ["--appimage-version"],
+    options,
+  );
+  assert.ok(
+    (runtimeVersion.stdout + runtimeVersion.stderr).includes(
+      `ShadowCode runtime patchset: ${runtime.patchset}`,
+    ),
+  );
+  assert.ok(
+    runtime.files.length > 15,
+    "Runtime notices and provenance must be present",
+  );
+  for (const file of runtime.files) {
+    const absolute = path.resolve(runtimeBase, file.file);
+    assert.ok(absolute.startsWith(`${runtimeBase}${path.sep}`));
+    assert.equal(
+      await digest(absolute),
+      file.sha256,
+      `Runtime notice changed: ${file.file}`,
+    );
+  }
+  await run(
+    "objcopy",
+    [
+      "--dump-section",
+      `.text=${path.join(scratch, "runtime.text")}`,
+      appimagePath,
+      path.join(scratch, "runtime.elf"),
+    ],
+    options,
+  );
+  assert.equal(
+    await digest(path.join(scratch, "runtime.text")),
+    runtime.textSha256,
+    "Final AppImage must contain the source-built patched runtime",
+  );
+  const sourcesPath = path.join(
+    path.dirname(appimagePath),
+    `ShadowCode_${version.split(" ")[1]}_appimage-runtime-sources.tar.gz`,
+  );
+  const sources = path.join(scratch, "runtime-sources");
+  await mkdir(sources);
+  await run("tar", ["-xzf", sourcesPath, "-C", sources], options);
+  const sourceReceipt = JSON.parse(
+    await readFile(path.join(sources, "receipt.json"), "utf8"),
+  );
+  assert.equal(sourceReceipt.inputHash, runtime.inputHash);
+  assert.equal(sourceReceipt.sha256, runtime.sha256);
+  for (const file of sourceReceipt.files.filter(
+    (file) =>
+      file.file.startsWith("sources/") || !file.file.startsWith("notices/"),
+  )) {
+    const absolute = path.resolve(sources, file.file);
+    assert.ok(absolute.startsWith(`${sources}${path.sep}`));
+    assert.equal(
+      await digest(absolute),
+      file.sha256,
+      `Runtime source artifact changed: ${file.file}`,
+    );
+  }
   const files = await inspectTree(appdir);
   const python = files.filter((file) =>
     /^(?:python[\d.]*|libpython.*|.*\.py[co]?)$/i.test(path.basename(file)),
@@ -206,9 +277,10 @@ try {
       "host dependency resolution",
       "matching compiled code and versions in AppImage and Debian packages",
       "versioned dependency inventories and SHA-256 verification of every notice",
+      "patched AppImage runtime machine code, notices, and matching source archive",
     ],
     packages: await Promise.all(
-      [appimagePath, debPath].map(async (file) => ({
+      [appimagePath, debPath, sourcesPath].map(async (file) => ({
         file: path.basename(file),
         bytes: (await stat(file)).size,
         sha256: await digest(file),
@@ -220,7 +292,11 @@ try {
     maintainer: (
       await run("dpkg-deb", ["--field", debPath, "Maintainer"], options)
     ).stdout.trim(),
-    notices: { appimage: appimageNotices, deb: debNotices },
+    notices: {
+      appimage: appimageNotices,
+      deb: debNotices,
+      runtime: { patchset: runtime.patchset, files: runtime.files.length },
+    },
   };
   await writeFile(
     path.join(artifacts, "package.json"),

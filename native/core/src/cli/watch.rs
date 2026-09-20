@@ -18,18 +18,7 @@ pub fn plain(text: &str) -> String {
         .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
         .collect()
 }
-pub async fn interrupted(parent: Option<u32>) {
-    #[cfg(unix)]
-    {
-        if let Ok(mut terminate) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{},_=crate::lifecycle::parent_exited(parent)=>{}}
-            return;
-        }
-    }
-    tokio::select! {_=tokio::signal::ctrl_c()=>{},_=crate::lifecycle::parent_exited(parent)=>{}}
-}
+pub use crate::lifecycle::interrupted;
 async fn line() -> Result<String> {
     ensure!(
         std::io::stdin().is_terminal(),

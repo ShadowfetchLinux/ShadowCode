@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createWriteStream } from "node:fs";
-import { mkdtemp, mkdir, readFile, writeFile, readlink, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, readlink, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +23,16 @@ const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.m
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
-await mkdir(project); await mkdir(path.join(profile, "config"), { recursive: true });
+const defaultProfile = process.env.SHADOW_NATIVE_DEFAULT_PROFILE === "1";
+const profileArgs = defaultProfile ? [] : ["--profile",profile];
+const configDirectory = path.join(profile,defaultProfile ? "config/shadow-agent" : "config");
+const stateDirectory = path.join(profile,defaultProfile ? "state/shadow-agent" : "state");
+const nativeEnv = {...process.env, TMPDIR: path.join(scratch,"images"), ...(defaultProfile ? {
+  XDG_CONFIG_HOME: path.join(profile,"config"), XDG_DATA_HOME: path.join(profile,"data"), XDG_STATE_HOME: path.join(profile,"state"),
+} : {})};
+delete nativeEnv.NO_CLEANUP;
+await mkdir(nativeEnv.TMPDIR);
+await mkdir(project); await mkdir(configDirectory, { recursive: true });
 await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
 let modelError;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -101,7 +110,7 @@ const model = createServer(async (req, res) => {
 });
 model.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
 await new Promise(resolve => model.listen(0, "127.0.0.1", resolve));
-await writeFile(path.join(profile, "config/config.yaml"), JSON.stringify({
+await writeFile(path.join(configDirectory, "config.yaml"), JSON.stringify({
   model: { default: "native-fixture", name: "native-fixture", provider: "local", endpoint: `http://127.0.0.1:${model.address().port}/v1`, context_limit: 16384 },
   onboarding: { completed: true, workspace: project }, trusted_workspaces: [project], ui: { theme: "light", notify: false },
 }));
@@ -111,7 +120,7 @@ const output = createWriteStream(path.join(artifacts, "webdriver.log"));
 const args = ["--port", String(port), "--native-port", String(nativePort)];
 if (process.env.SHADOW_WEBKIT_DRIVER) args.push("--native-driver", process.env.SHADOW_WEBKIT_DRIVER);
 const driver = spawn(process.env.SHADOW_TAURI_DRIVER || "tauri-driver", args, {
-  detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, WEBKIT_DISABLE_DMABUF_RENDERER: "1" },
+  detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...nativeEnv, WEBKIT_DISABLE_DMABUF_RENDERER: "1" },
 });
 driver.stdout.pipe(output); driver.stderr.pipe(output);
 let spawnError;
@@ -166,7 +175,7 @@ async function accessibility(name) {
 }
 try {
   await until("WebDriver startup", async () => { if (spawnError) throw spawnError; return wd("GET", "/status"); });
-  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: binary, args: [...binaryArgs, "--profile", profile, "--workspace", project] } } } });
+  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: binary, args: [...binaryArgs, ...profileArgs, "--workspace", project] } } } });
   session = created.sessionId;
   await wd("POST", `/session/${session}/timeouts`, { script: 20000, implicit: 0, pageLoad: 30000 });
   await until("Native workspace", () => execute("return !!document.querySelector('textarea[aria-label=\"Message ShadowCode\"]') && !document.querySelector('textarea[aria-label=\"Message ShadowCode\"]').disabled;"), 25000);
@@ -177,6 +186,16 @@ try {
   assert.equal(path.basename(await readlink(`/proc/${version.pid}/exe`)), "shadowcode");
   assert.match(await execute("return location.href"), /^(tauri:\/\/localhost|https?:\/\/tauri.localhost)/);
   assert.equal((await readFile(`/proc/${version.pid}/maps`, "utf8")).includes("libpython"), false);
+  if (defaultProfile) {
+    // Run under a private DBus session and disposable XDG roots. Repeated
+    // activation must reuse this real window and preserve its extracted files.
+    await Promise.all(Array.from({length:3},()=>promisify(execFile)(binary,[...binaryArgs,"--workspace",project],{env:nativeEnv,timeout:20000,maxBuffer:2_000_000})));
+    assert.equal(path.basename(await readlink(`/proc/${version.pid}/exe`)),"shadowcode","Activation must not unlink the running executable");
+    assert.equal((await api("GET","/api/version")).pid,version.pid);
+    await wd("POST",`/session/${session}/refresh`,{});
+    await until("Workspace after repeated activation",()=>execute("return !!document.querySelector('textarea[aria-label=\"Message ShadowCode\"]') && !document.querySelector('textarea[aria-label=\"Message ShadowCode\"]').disabled;"),25000);
+    if (binaryArgs.includes("--appimage-extract-and-run")) assert.equal((await readdir(nativeEnv.TMPDIR)).filter(name=>name.startsWith("appimage_extracted_")).length,1,"Only the live window's extraction remains");
+  }
   await screenshot("workspace-light");
   await accessibility("light");
   await execute("document.documentElement.dataset.theme='dark'"); await screenshot("workspace-dark");
@@ -340,12 +359,12 @@ try {
   // A separate CLI in another project shares this actual desktop's engine.
   // It must not change the visible or remembered project/session selection.
   const cliProject = path.join(scratch, "cli-project"); await mkdir(cliProject);
-  const cliEnv = {...process.env}; delete cliEnv.DISPLAY; delete cliEnv.WAYLAND_DISPLAY;
+  const cliEnv = {...nativeEnv}; delete cliEnv.DISPLAY; delete cliEnv.WAYLAND_DISPLAY;
   const cli = async args => {
-    const result = await promisify(execFile)(binary, [...binaryArgs.filter(arg => arg !== "ui"), "--profile", profile, "--workspace", cliProject, "--json", ...args], {env: cliEnv, timeout: 20000, maxBuffer: 2_000_000});
+    const result = await promisify(execFile)(binary, [...binaryArgs.filter(arg => arg !== "ui"), ...profileArgs, "--workspace", cliProject, "--json", ...args], {env: cliEnv, timeout: 20000, maxBuffer: 2_000_000});
     return JSON.parse(result.stdout);
   };
-  const remembered = await readFile(path.join(profile, "state/last-workspace.txt"), "utf8");
+  const remembered = await readFile(path.join(stateDirectory, "last-workspace.txt"), "utf8");
   assert.equal((await cli(["health"])).workspace, cliProject);
   await cli(["trust"]);
   assert.ok((await cli(["command", "new"])).metadata.session_id);
@@ -353,7 +372,7 @@ try {
   await until("CLI logs through desktop owner", async () => (await cli(["background", "logs", cliProcess.id])).output.includes("cli-ready"));
   await cli(["background", "stop", cliProcess.id]);
   assert.equal((await api("GET", "/api/workspace/status")).workspace, project);
-  assert.equal(await readFile(path.join(profile, "state/last-workspace.txt"), "utf8"), remembered);
+  assert.equal(await readFile(path.join(stateDirectory, "last-workspace.txt"), "utf8"), remembered);
   const desktopProcesses = (await api("GET", "/api/background")).tasks;
   assert.ok(desktopProcesses.some(p => p.id === shutdownBackground.id && p.status === "RUNNING"));
   assert.ok(desktopProcesses.every(p => p.id !== cliProcess.id));
@@ -369,7 +388,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "shared CLI engine with independent project selection and background controls", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "shared CLI engine with independent project selection and background controls", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

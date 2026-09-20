@@ -50,6 +50,8 @@ from the repository root.
 
 ## Development packages
 
+Packaging also requires a working Docker engine (or Podman with
+`SHADOW_CONTAINER_ENGINE=podman`) for the pinned AppImage runtime build.
 From the repository root, build both package formats with:
 
 ```sh
@@ -57,12 +59,16 @@ node scripts/build-native.mjs
 node scripts/check-native-package.mjs \
   target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage \
   target/release/bundle/deb/ShadowCode_0.20.0_amd64.deb
+node scripts/test-native-runtime.mjs
 ```
 
 The build script collects [dependency notices](../licenses/native/README.md),
 restores the original executable before packaging each format because Tauri
 modifies its bundle-type marker, and repacks the AppImage with notices for its
-actual bundled system libraries. Build tools are cached in `target/.tauri/`.
+actual bundled system libraries. The [source-built runtime](../packaging/native-runtime/README.md)
+uses private extraction directories and forwards ordinary shutdown signals. Its
+recipe, notices, and source archive are verified with the package. Build tools
+are cached in `target/.tauri/` and `target/native-runtime/`.
 Unknown dependencies or a changed AppImage runtime stop packaging until their
 notices are supplied. The checker verifies FUSE-free
 startup, the legacy `shadow ui` launch form, native ELF code, package versions,
@@ -79,10 +85,11 @@ on the development machine. These remain development artifacts.
 Corresponding-source release artifacts, complete feature migration, and final
 release verification/installation are still required before publication as the
 supported download.
-Concurrent extraction-mode launches also need isolated temporary directories:
-the pinned AppImage runtime otherwise shares a directory and can remove files
-still needed by another instance. That lifetime issue remains a release blocker;
-use the unbundled executable or a distinct `TMPDIR` per development invocation.
+Concurrent extraction-mode launches use independent private temporary directories.
+One CLI exit or secondary activation cannot remove a running window's files.
+The runtime regression checks concurrent owners, deferred resources, signals,
+cleanup, `nohup`, and long paths. The packaged window test also checks repeated
+default-profile activation using isolated XDG storage and a private DBus session.
 
 If linuxdeploy aborts while scanning an inaccessible symlink in a PATH directory,
 remove that directory from PATH for the packaging command; the application does
@@ -175,3 +182,9 @@ follow-up, clicks Stop during actual model streaming, restores the checkpoint,
 and verifies native-process shutdown. Results and screenshots are saved under
 `artifacts/native-model/<model>/`. Ollama must already have the selected model;
 the probe does not download models or change the installed app's profile.
+
+For the packaged single-instance regression, set
+`SHADOW_NATIVE_DEFAULT_PROFILE=1` when running the window test under
+`dbus-run-session`. The harness redirects XDG settings/history to its disposable
+profile, then activates the existing window three times and reloads it before
+continuing the full workflow. Run this mode only on a private test DBus session.

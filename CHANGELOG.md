@@ -36,6 +36,11 @@
   metadata, include versioned dependency notices, and check startup, versions,
   matching compiled code, notice hashes, and absence of Python sidecars. The
   packaged AppImage runs the same real-window workflow as the debug executable.
+- Source-built AppImage runtime gives every extraction-mode launch a private
+  directory, forwards shutdown signals, and cleans up after payload exit.
+  Concurrent CLI/window launches preserve each other's resources. The build
+  retains runtime source archives, patches, notices, and compiler provenance;
+  verification checks the packaged runtime code and matching source artifact.
 - Manual native-window probes with installed Ollama models cover minimal coding
   edits, visible command approval, independent verification, saved continuation,
   cancellation during actual streaming, checkpoint rewind, and process shutdown.

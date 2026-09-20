@@ -140,14 +140,14 @@ The remaining orchestration/integrations, full desktop interaction/stress
 coverage, and release packaging are still in progress. The native
 branch is not yet a replacement for the 0.19 release.
 
-One identified packaging blocker is concurrent AppImage extraction. The pinned
-type2 runtime extracts identical images into a shared content-based directory,
-then removes that directory when one wrapper exits. The scripted CLI/desktop
-workflow passes because application code and UI are already loaded, but that
-does not prove resources needed later remain available. The release must provide
-isolated extraction lifetimes and test that one launch cannot remove another's
-files, including repeated default-profile activation. Until then, use the native
-executable or separate temporary extraction directories for simultaneous launches.
+AppImage extraction now uses a source-pinned runtime patch with private
+per-invocation directories, signal forwarding, and checked cleanup. A dedicated
+regression exercises concurrent owners/clients, deferred WebKit resources,
+process groups, `nohup`, and path limits. Packaged window automation also checks
+repeated default-profile activation under disposable XDG roots and private DBus.
+The runtime's notices, source archive, and compiled code are verified as part of
+packaging. Corresponding sources for all remaining redistributed dependencies
+and the broader release gates above still apply.
 
 See [native desktop development](NATIVE_DESKTOP.md) for prerequisites and isolated
 build/run instructions. Compile the interface before checks that include the

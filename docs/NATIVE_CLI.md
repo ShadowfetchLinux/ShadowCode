@@ -69,9 +69,10 @@ Exit codes are 0 for success, 1 for a failed task/command, 2 for approval needed
 or invalid command-line syntax, and 130 for interruption. A model's prose is
 not a guarantee of correctness; inspect recorded tool and verification results.
 The result of `exec` includes the subprocess's actual exit code.
-`serve` returns 0 after orderly shutdown. If a signal kills the AppImage's
-extraction wrapper, the shell reports that wrapper's signal status; the native
-child detects its loss, performs cleanup, and emits its final result.
+`serve` returns 0 after orderly shutdown. The source-built AppImage runtime
+forwards ordinary shutdown signals, waits for native cleanup, and preserves the
+payload's exit status. Force-killing the wrapper still reports its signal status;
+the native child observes wrapper loss and shuts down.
 
 ## Saved work and settings
 
@@ -113,11 +114,10 @@ desktop secret editor for credentials; never put secret values in shell history.
 
 ## One engine per profile
 
-For simultaneous development launches, use the native executable, or give each
-AppImage invocation its own `TMPDIR`. The pinned AppImage runtime's shared
-extraction directory can be removed by another invocation; isolating its lifetime
-is a [release blocker](NATIVE_MIGRATION.md). The functional shared-engine tests
-do not establish that every deferred webview resource survives that removal.
+The AppImage runtime extracts each invocation into a private temporary directory.
+Simultaneous desktop and CLI launches can use the same `TMPDIR`; finishing one
+launch does not remove another's application files. See the
+[runtime build and checks](../packaging/native-runtime/README.md).
 
 When the desktop is open, CLI requests share its task engine, queue, approvals,
 history, and background manager. Each request has its own project/session
@@ -147,12 +147,13 @@ daemon or automatically restart jobs. Opening the GUI while `serve` owns that
 profile is not supported yet: stop `serve` before opening the window. The desktop
 can already act as the shared owner for CLI clients.
 
-Ctrl-C/SIGTERM cancels a task started by that CLI, pauses a running goal, and
+Ctrl-C, SIGTERM, or SIGHUP cancels a task started by that CLI, pauses a running goal, and
 cancels an active manual command. During `jobs --watch` it only stops watching;
 the existing job continues. A disconnected manual-command client drops that
 operation and cleans its process group. As with the desktop, a user-level
 process runner cannot contain a subprocess that deliberately detaches into a
-different session.
+different session. An inherited ignored SIGHUP remains ignored, so `nohup`
+continues to work.
 Extraction mode also follows the AppImage wrapper's lifetime, so signalling only
 the wrapper PID does not leave native tasks or servers running as orphans.
 

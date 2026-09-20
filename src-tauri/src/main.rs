@@ -289,12 +289,8 @@ fn run() -> Result<()> {
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Ok(mut terminate) =
-                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    {
-                        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{},_=shadowcode_core::lifecycle::parent_exited(extraction_parent)=>{}}
-                        request_shutdown(&handle);
-                    }
+                    shadowcode_core::lifecycle::interrupted(extraction_parent).await;
+                    request_shutdown(&handle);
                 });
             }
             Ok(())

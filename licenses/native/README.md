@@ -30,3 +30,12 @@ The package checker verifies every listed notice's digest after extraction.
 This inventory is part of release preparation. Corresponding source archives
 for redistributed components and the remaining product verification gates must
 also be addressed before the supported native release is published.
+
+The final AppImage runtime is built from pinned source with ShadowCode's
+[private-extraction patch and container recipe](../../packaging/native-runtime/README.md).
+Its static dependency notices and build provenance live in the `runtime/`
+subdirectory of the packaged notices. The adjacent runtime source archive
+contains exact upstream sources and distribution patches; the package checker
+verifies its hashes and links it to the runtime's compiled code. This supplements
+the application/system inventories; it does not replace their release source
+requirements.

@@ -52,22 +52,15 @@ function launch(args, { workspace = project, tty = false } = {}) {
   return { child, output, done, args };
 }
 async function interrupt(run, signal = "SIGINT") {
-  run.expectedSignal = signal;
   run.child.kill(signal);
 }
 async function finish(run, code = 0, timeout = 20000) {
   let timer;
   const output = await Promise.race([run.done, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`CLI ${JSON.stringify(run.args)} timed out: ${JSON.stringify(run.output)}`)), timeout); })]).finally(() => clearTimeout(timer));
-  // AppImage's extraction wrapper can die by signal while the native child
-  // still performs orderly cleanup. Its outer signal status is preserved; the
-  // caller also checks the native child's JSON result and saved process state.
-  if (output.signal && binaryArgs.includes("--appimage-extract-and-run") && run.expectedSignal) {
-    assert.equal(output.signal, run.expectedSignal, JSON.stringify(output));
-    assert.equal(output.code, null);
-  } else {
-    assert.equal(output.code, code, JSON.stringify(output));
-    assert.equal(output.signal, null, JSON.stringify(output));
-  }
+  // The patched AppImage wrapper waits for cleanup and preserves the native
+  // process's exit status, including interruption and approval result codes.
+  assert.equal(output.code, code, JSON.stringify(output));
+  assert.equal(output.signal, null, JSON.stringify(output));
   if (modelError) throw modelError;
   return output;
 }
@@ -76,7 +69,8 @@ async function cli(args, code = 0, opts) {
   try { return JSON.parse(output.stdout); } catch { throw new Error(`Invalid CLI JSON: ${JSON.stringify(output)}`); }
 }
 async function dead(pid) {
-  try { return /\) [ZX] /.test(await readFile(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+  assert.ok(Number.isSafeInteger(Number(pid)) && Number(pid)>1, "Expected a recorded process PID");
+  try { return /\) [ZX] /.test(await readFile(`/proc/${pid}/stat`, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; return true; }
 }
 const model = createServer(async (req, res) => {
   try {
@@ -170,7 +164,7 @@ try {
   cancelPrompt.child.stdin.write("\x03"); await finish(cancelPrompt, 130);
   checks.push("noninteractive approval refusal, actual PTY approval/denial and Ctrl-C at prompt");
 
-  for (const signal of ["SIGINT", "SIGTERM"]) {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     const before = hungRequests;
     const hung = launch(["--json", "run", `HANG until ${signal}`]);
     await until("Stalled provider", () => hungRequests > before);
@@ -183,7 +177,7 @@ try {
     assert.equal(JSON.parse((await finish(hung, 130)).stdout).status, "cancelled");
     assert.ok((await cli(["jobs"])).jobs.every(j => !["running", "queued", "cancelling"].includes(j.status)));
   }
-  checks.push("SIGINT/SIGTERM cancellation, concurrent observation and temporary-owner mutation rejection");
+  checks.push("SIGINT/SIGTERM/SIGHUP cancellation, concurrent observation and temporary-owner mutation rejection");
 
   await cli(["sessions", task.session_id.slice(0, 12), "--rename", "CLI unique title % _"]);
   const found = await cli(["sessions", "CLI unique title % _"]);
@@ -221,7 +215,12 @@ try {
   const serverHealth = await cli(["health"]); assert.equal(serverHealth.workspace, project);
   const background = await cli(["background", "start", "--name", "cli-dev", "--command", "printf ready; sleep 60"]);
   assert.ok(background.id);
-  await until("Background logs", async () => (await cli(["background", "logs", background.id])).output.includes("ready"));
+  const runningBackground = await until("Background logs", async () => {
+    const task=await cli(["background", "logs", background.id]);
+    return task.output.includes("ready") && task;
+  });
+  assert.ok(runningBackground.pid > 1);
+  assert.equal(await dead(runningBackground.pid), false);
   assert.equal((await cli(["run", "READ while server runs"])).status, "completed");
   const brokenPipe = launch(["run", "PIPE until output closes", "--events"]);
   brokenPipe.child.stdout.once("data", () => brokenPipe.child.stdout.destroy());
@@ -232,7 +231,7 @@ try {
   await finish(brokenStatus, 1);
   assert.ok((await cli(["jobs"])).jobs.every(j => !["running", "queued", "cancelling"].includes(j.status)), "Closed status output must not panic or abandon the new task");
   await cli(["background", "stop", background.id.slice(0, 12)]);
-  await until("Stopped background process", () => dead(background.pid));
+  await until("Stopped background process", () => dead(runningBackground.pid));
   const before = hungRequests;
   const detached = await cli(["run", "HANG detached", "--detach"]);
   await until("Detached model request", () => hungRequests > before);
@@ -262,9 +261,12 @@ try {
   await until("Remote disconnect child cleanup", () => dead(remoteChild));
   const stubborn = await cli(["background", "start", "--name", "stubborn", "--command", "trap '' TERM; sleep 60 & echo $! > stubborn-child.pid; wait"]);
   const stubbornChild = await until("Stubborn child", async () => (await readFile(path.join(project, "stubborn-child.pid"), "utf8")).trim());
+  const runningStubborn = await cli(["background","logs",stubborn.id]);
+  assert.equal(await dead(runningStubborn.pid), false);
+  assert.equal(await dead(stubbornChild), false);
   await interrupt(server, "SIGTERM");
   assert.equal(JSON.parse((await finish(server)).stdout).status, "stopped");
-  await until("Persistent parent cleanup", () => dead(stubborn.pid));
+  await until("Persistent parent cleanup", () => dead(runningStubborn.pid));
   await until("Persistent child cleanup", () => dead(stubbornChild));
   assert.ok((await cli(["background", "list"])).tasks.every(t => !["RUNNING", "STARTING", "STOPPING"].includes(t.status)));
   assert.equal(await readFile(path.join(project, "unexpected")).then(() => true, () => false), false);

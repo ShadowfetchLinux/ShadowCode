@@ -81,7 +81,7 @@ prompt is waiting. Noninteractive requests never silently grant approval.
 
 The probe also hosts `serve`, starts and stops background commands, reads their
 logs, runs a task alongside them, observes and cancels detached work, and approves
-a waiting task from another CLI. SIGINT/SIGTERM, a closed stdout pipe, remote
+a waiting task from another CLI. SIGINT/SIGTERM/SIGHUP, a closed stdout pipe, remote
 manual-command disconnect, and owner shutdown are checked for task/process
 cleanup. Stopping an observer leaves the existing job running. Invalid
 interactive goal options create no goal. Reports go to `artifacts/native-cli/`;
@@ -160,13 +160,38 @@ AppImage passed the full scripted native-window workflow. The CI AppImage has
 system resources reflect the clean runner's environment. Artifacts and results
 for that download are retained locally in `artifacts/native-ci-package/`.
 
-OS dialog interaction, notification delivery, default-profile single-instance
-behavior, broader stress/accessibility coverage, corresponding-source artifacts,
+The extraction lifetime regression now passes against the rebuilt AppImage.
+Its source-built runtime gives simultaneous owners separate mode-0700 directories
+under the same `TMPDIR`. Eight short clients preserve both owners' executable and
+WebKit subprocess resources. SIGINT/SIGTERM/SIGHUP preserve native exit codes,
+stop the recorded background process groups, and remove only the exiting
+instance's directory. `nohup` remains effective in the wrapper and native child;
+environment-based extraction keeps arguments intact; overlong paths fail with
+cleanup. Process assertions fetch the running task's PID after asynchronous
+startup and check that it is alive before testing shutdown.
+
+The actual packaged window also passes three simultaneous default-profile
+activations, confirming the same native PID and successful reload while only
+that window's extraction directory remains. It uses disposable XDG storage and a
+private DBus session. All existing window/CLI-sharing checks then run on that
+window. This verifies repeated activation; broader window-state and desktop
+integration behavior still needs its remaining checks.
+
+The local runtime update passes 103 native integration tests, formatting/clippy,
+eight CLI scenario groups with 27 scripted model requests, the actual debug
+window, the packaged CLI, the packaged window, and package inspection. The
+runtime-specific test is separate from those CLI/window scenarios. The checked
+packages contain a 19,119,312-byte executable, an 84,429,304-byte AppImage, and an
+8,853,760-byte Debian package. A separate 104,163,721-byte runtime source archive
+contains the matching pinned source, patches, build recipes, and compiler
+provenance. Inspection checks runtime machine code, 26 runtime notice/provenance
+files, and the source archive hashes. Local results and checksums are under
+`artifacts/native-package/`; CI runs the same package, runtime, CLI, and window
+checks and uploads the matching source archive.
+
+OS dialog interaction, notification delivery, broader stress/accessibility
+coverage, corresponding sources for remaining redistributed components,
 and the final installed release still need their release-gate checks.
-An upstream-runtime source review also identified shared extraction-cache removal
-between concurrent AppImage invocations. Passing the current window workflow
-does not cover deferred resource access after a second launcher exits. Isolated
-extraction and a dedicated regression remain release requirements.
 
 ## Real local models
 
