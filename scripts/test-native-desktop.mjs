@@ -20,7 +20,7 @@ for (const name of ["result.json", "failure.txt", "failure.png", "workspace-ligh
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
-for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json", "inspection.png", "accessibility-inspection.json", "diagnostics.png", "accessibility-diagnostics.json"]) await rm(path.join(artifacts, name), { force: true });
+for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json", "inspection.png", "accessibility-inspection.json", "diagnostics.png", "accessibility-diagnostics.json", "plugins.png", "accessibility-plugins.json", "accessibility-plugins-dark.json", "accessibility-plugins-compact.json"]) await rm(path.join(artifacts, name), { force: true });
 for (const theme of ["light","dark","compact"]) for (const name of [`queue-${theme}.png`,`accessibility-queue-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
 for (const theme of ["light","dark","compact"]) for (const name of [`background-approval-${theme}.png`,`accessibility-background-approval-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
@@ -254,6 +254,11 @@ async function fill(selector, text) {
   await type(selector, text);
   assert.equal(await execute("return document.querySelector(arguments[0]).value", [selector]), text);
 }
+async function openSettings() {
+  if (await execute("return !!document.querySelector('button[aria-label=\"Show sidebar\"]')")) await click('button[aria-label="Show sidebar"]');
+  await until("Sidebar Settings available",()=>execute("return [...document.querySelectorAll('.sidebar button')].some(e=>e.querySelector('span')?.textContent==='Settings')"));
+  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+}
 async function screenshot(name) {
   await writeFile(path.join(artifacts, `${name}.png`), Buffer.from(await wd("GET", `/session/${session}/screenshot`), "base64"));
 }
@@ -322,7 +327,38 @@ try {
   await screenshot("background");
   await accessibility("background");
   await click('button.drawer-close');
-  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+  await openSettings();
+  await clickButton("Plugins");
+  await until("Native plugin catalog",()=>execute("return !!document.querySelector('.plugin-settings')"));
+  await clickButton("Review python-expert");
+  await until("Builtin plugin preview",()=>execute("return !!document.querySelector('.plugin-preview')?.textContent.includes('ruff-format')"));
+  await clickButton("Install python-expert");
+  await until("Builtin plugin installed",async()=>(await api("GET","/api/plugins")).installed.some(p=>p.name==="python-expert"));
+  assert.ok((await api("GET","/api/hooks")).hooks.filter(h=>h.name.startsWith("python-expert--")).every(h=>!h.enabled));
+  await clickButton("Remove python-expert");
+  await until("Builtin plugin removed",async()=>!(await api("GET","/api/plugins")).installed.length);
+  await click('.plugin-import summary');
+  const windowBundle={format:"shadowcode-plugin-v1",name:"window-bundle",version:"1.0.0",description:"Native window integration fixture",skills:{audit:{description:"Review the requested file",mode:"review",content:"WINDOW_SKILL: inspect $ARGUMENTS"}},hooks:[{name:"finished",events:["on_complete"],command:"printf plugin-window-ok"}]};
+  await fill('.plugin-import textarea',JSON.stringify(windowBundle));
+  await clickButton("Review imported bundle");
+  await until("Imported plugin preview",()=>execute("return !!document.querySelector('.plugin-preview')?.textContent.includes('window-bundle')"));
+  await until("Plugin review receives focus",()=>execute("return document.activeElement?.classList.contains('plugin-preview')"));
+  await click('.plugin-preview details summary');
+  await screenshot("plugins"); await accessibility("plugins");
+  await execute("document.documentElement.dataset.theme='dark'"); await accessibility("plugins-dark");
+  await execute("document.documentElement.dataset.theme='light'");
+  await wd("POST", `/session/${session}/window/rect`, { width: 620, height: 850 });
+  await accessibility("plugins-compact");
+  assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
+  await wd("POST", `/session/${session}/window/rect`, { width: 1380, height: 920 });
+  await clickButton("Install window-bundle");
+  await until("Custom plugin installed",async()=>(await api("GET","/api/plugins")).installed.some(p=>p.name==="window-bundle"));
+  await clickButton("Review plugin hooks");
+  await until("Plugin hook refreshed",()=>execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Enable window-bundle--finished')"));
+  await clickButton("Enable window-bundle--finished");
+  await until("Plugin hook enabled",async()=>(await api("GET","/api/hooks")).hooks.find(h=>h.name==="window-bundle--finished")?.enabled);
+  await clickButton("Disable window-bundle--finished");
+  await until("Plugin hook disabled",async()=>!(await api("GET","/api/hooks")).hooks.find(h=>h.name==="window-bundle--finished")?.enabled);
   await clickButton("Hooks");
   await until("Hook definition in Settings", () => execute("return !!document.querySelector('.hook-command')?.textContent.includes('native-hook-check-passed')"));
   await clickButton("Refresh hooks");
@@ -354,7 +390,7 @@ try {
   await until("Persisted conversation", () => execute("return document.querySelectorAll('.msg-user').length===1 && [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Created hello.txt and verified'));"));
   assert.equal(await execute("return [...document.querySelectorAll('.msg-note')].filter(e=>e.textContent.includes('native-build')).length"), 1);
   await until("One persisted hook result", () => execute("return [...document.querySelectorAll('.op-card')].filter(e=>e.textContent.includes('Hook · verify-result')).length===1"));
-  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+  await openSettings();
   await clickButton("Hooks");
   await until("Hook disable control", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable verify-result')"));
   await clickButton("Disable verify-result");
@@ -387,7 +423,7 @@ try {
   }
   assert.equal(mcpCalls,3);
   mcpMode = false;
-  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+  await openSettings();
   await clickButton("MCP");
   await until("MCP disable control", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable window-mcp' && !e.disabled)"));
   await clickButton("Disable window-mcp");
@@ -428,7 +464,7 @@ try {
   assert.equal((await httpRequests()).filter(r=>r.message?.method==="tools/call").length,1);
   await until("HTTP streams closed",async()=> (await (await fetch(httpUrl.replace("/mcp","/status"))).json()).streams===0);
   mcpMode=false;
-  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+  await openSettings();
   await clickButton("MCP");
   await until("HTTP removal ready",()=>execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Remove window-http' && !e.disabled)"));
   await clickButton("Remove window-http");
@@ -582,6 +618,25 @@ try {
   await until("Selected skill result", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Selected skill reviewed README.md.')) && !document.querySelector('button[aria-label=\"Stop task\"]')"));
   assert.equal(workflowCalls, 2);
   await until("Skill provenance", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('.shadow/skills/audit.md') && e.textContent.includes('review'))"));
+  workflowCalls = 0;
+  await click('button[aria-label="Terminal"]'); await clickButton("Skills");
+  await until("Installed plugin skill",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Use /window-bundle--audit')"));
+  await execute("[...document.querySelectorAll('.drawer-body details')].find(d=>d.querySelector('summary')?.textContent.includes('window-bundle--audit')).querySelector('summary').click()");
+  await clickButton("Use /window-bundle--audit");
+  await type('textarea[aria-label="Message ShadowCode"]',"README.md");
+  await click('button[aria-label="Send task"]');
+  await until("Installed plugin skill executed",()=>execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('.shadowcode/skills/window-bundle--audit/SKILL.md')) && !!document.querySelector('button[aria-label=\"Send task\"]')"));
+  assert.equal(workflowCalls,2);
+  // Uninstall preserves a user's edited workflow while removing the unchanged hook.
+  await writeFile(path.join(project,".shadowcode/skills/window-bundle--audit/SKILL.md"),"My retained plugin skill");
+  await openSettings();
+  await clickButton("Plugins");
+  await until("Plugin removal ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Remove window-bundle')"));
+  await clickButton("Remove window-bundle");
+  await until("Preserved plugin edits visible",()=>execute("return !!document.querySelector('.plugin-settings [role=status]')?.textContent.includes('SKILL.md')"));
+  assert.equal(await readFile(path.join(project,".shadowcode/skills/window-bundle--audit/SKILL.md"),"utf8"),"My retained plugin skill");
+  assert.ok(!(await api("GET","/api/hooks")).hooks.some(h=>h.name==="window-bundle--finished"));
+  await clickButton("Close");
   workflowMode = false;
   await type('textarea[aria-label="Message ShadowCode"]', "/status");
   await click('button[aria-label="Send task"]');
@@ -698,7 +753,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

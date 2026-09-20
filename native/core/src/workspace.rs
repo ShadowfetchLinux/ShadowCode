@@ -336,6 +336,10 @@ impl Workspace {
         self.dir.create_dir_all(self.writable(path)?)?;
         Ok(())
     }
+    pub(crate) fn remove_empty_dir(&self, path: &str) -> Result<()> {
+        self.dir.remove_dir(self.writable(path)?)?;
+        Ok(())
+    }
     pub fn set_mode(&self, path: &str, mode: u32) -> Result<()> {
         #[cfg(unix)]
         {

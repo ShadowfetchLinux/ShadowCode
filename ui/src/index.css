@@ -1501,3 +1501,44 @@ button.mini.primary-mini {
     --drawer-w: 320px;
   }
 }
+
+.plugin-settings .row {
+  gap: 8px;
+}
+.plugin-entry p {
+  margin: 6px 0;
+}
+.plugin-entry details,
+.plugin-preview details {
+  margin: 8px 0;
+}
+.plugin-settings summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.plugin-settings code,
+.plugin-settings li {
+  overflow-wrap: anywhere;
+}
+.plugin-settings ul {
+  padding-left: 20px;
+}
+.plugin-import,
+.plugin-preview {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.plugin-preview pre {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.plugin-settings .field input[type="file"] {
+  max-width: 100%;
+}
+.plugin-preview h4 {
+  margin-top: 0;
+}

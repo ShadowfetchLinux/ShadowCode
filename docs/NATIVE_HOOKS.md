@@ -5,6 +5,11 @@ agent task. They use the Rust process runner and need no Python interpreter or
 callback loader. This guide covers the native development branch; the
 [remaining release gates](NATIVE_MIGRATION.md) still apply.
 
+[Project plugins](NATIVE_PLUGINS.md) can supply native hook definitions.
+Installation leaves them disabled; review their exact commands here before
+activation. Removing a plugin revokes its project hook grants and preserves any
+locally edited definition files.
+
 ## Define and enable a check
 
 Create `.shadowcode/hooks/check.yaml` in your project:

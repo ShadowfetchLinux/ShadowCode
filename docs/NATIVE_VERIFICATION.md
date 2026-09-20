@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **195 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **202 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -17,6 +17,11 @@ integration tests** pass on the development machine. The suite covers:
   locks, directories and FIFOs without changing their targets or hanging startup.
 - 2,000 events from eight concurrent writers; 32 concurrent workspaces plus 24
   immediate follow-ups, then restart and exact completion/usage checks.
+- Native plugin schema/path/size validation, built-in and custom installs,
+  installed workflow instructions reaching a model, actual activated completion
+  hooks, inert MCP registration, revocation on removal, edited-file preservation,
+  interrupted-journal cleanup, legacy preservation, stale/project/hash/trust
+  checks, active-workspace exclusion, conflicting names and full catalogs.
 - Native tool execution, stale edits, ambiguous/malformed multi-file patches,
   CRLF and missing final newlines, partial-write checkpoint recovery, and rewind
   conflict preflight that preserves unrelated edits.
@@ -223,6 +228,23 @@ LD_LIBRARY_PATH=/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib cargo test --works
 
 The pinned CI toolchain does not require this host-specific workaround.
 
+## Native project plugins
+
+Seven Rust integration tests cover validation and the complete bundle lifecycle.
+The native window additionally installs/removes the Python built-in, reviews and
+imports a custom bundle, checks inactive hooks, enables/disables its hook through
+Settings, runs its installed review skill through the model and file tools, and
+removes it after a local edit. The edited skill remains visible in the removal
+report and on disk; the unchanged hook disappears. Preview receives keyboard
+focus, and light/dark/compact plugin screens pass Axe. The full window run now
+records **29 scripted model requests and 21 passing accessibility views**.
+
+The native CLI performs built-in and local-file installs with reviewed hashes,
+checks skill discovery and stale-hash refusal, and verifies edited-file retention.
+The [plugin guide](NATIVE_PLUGINS.md) documents the supported schema, example
+bundle, limits, separate executable activation and partial-install recovery.
+Legacy Python bundles remain on disk and are explicitly reported for conversion.
+
 ## Native CLI
 
 `scripts/test-native-cli.mjs` exercises the actual executable with `DISPLAY` and
@@ -259,6 +281,10 @@ can stop one of the earlier requests before it reaches the fixture. The
 executable MCP probe also queries and rejects a write
 through its default read-only server. Dependency notice collection resolves
 539 application dependencies with the updated SQLite library.
+
+The plugin update passes **15 CLI scenario groups with 30 scripted model
+requests**. It adds built-in and custom bundle preview/install, stale-hash refusal,
+installed skill discovery, clean removal, and removal that preserves user edits.
 
 The probe also hosts `serve`, starts and stops background commands, reads their
 logs, runs a task alongside them, observes and cancels detached work, and approves

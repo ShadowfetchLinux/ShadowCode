@@ -22,7 +22,7 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 pub use args::Options;
-use args::{Background, Command, Mcp, Run, TaskOptions};
+use args::{Background, Command, Mcp, Plugin, Run, TaskOptions};
 use backend::Backend;
 use clap::Parser;
 use serde_json::{json, Value};
@@ -577,6 +577,27 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 });
             }
         }
+        Command::Plugin { action } => match action {
+            None => backend.call("GET", "/api/plugins", Value::Null).await?,
+            Some(Plugin::Remove { name, hash }) => backend.call("POST", "/api/plugins/remove", json!({"workspace":workspace,"name":name,"hash":hash})).await?,
+            Some(Plugin::Inspect { name, file } | Plugin::Install { name, file, .. }) => {
+                let mut body = json!({"workspace":workspace,"name":name});
+                if let Some(path) = file {
+                    use std::io::Read;
+                    use std::os::unix::fs::OpenOptionsExt;
+                    let input = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path).context("Cannot open plugin bundle")?;
+                    ensure!(input.metadata()?.is_file(), "Plugin bundle must be a regular file");
+                    let mut text = String::new();
+                    input.take((crate::plugins::MAX_BYTES + 1) as u64).read_to_string(&mut text)?;
+                    ensure!(text.len() <= crate::plugins::MAX_BYTES, "Plugin bundle exceeds 256 KB");
+                    body["bundle"] = serde_json::from_str(&text).context("Invalid plugin JSON")?;
+                }
+                let path = if let Some(Plugin::Install { hash, .. }) = action {
+                    body["hash"] = json!(hash); "/api/plugins/install"
+                } else { "/api/plugins/preview" };
+                backend.call("POST", path, body).await?
+            }
+        },
         Command::Hooks {
             enable,
             disable,

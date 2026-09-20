@@ -2,6 +2,13 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Native project plugins install reviewed built-in or local JSON bundles into
+  real skills, slash commands, hooks and MCP definitions. Settings and CLI show
+  contents and require current project/content hashes; executable integrations
+  need separate activation. Private journals support interrupted-install cleanup,
+  uninstall preserves local edits, and legacy plugin directories remain intact.
+  Native Python/Linux/iOS workflows replace executable Python plugin loading.
+
 - MCP registration prints Codex, Claude Code and Cursor configuration for stdio
   or an existing authenticated HTTP gateway. Output references credential
   variables without exposing secrets; literal path encoding and option validation

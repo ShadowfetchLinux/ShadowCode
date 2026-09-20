@@ -79,7 +79,7 @@ pub struct Definition {
     pub timeout_sec: u64,
 }
 impl Definition {
-    fn parse(text: &str) -> Result<Self> {
+    pub(crate) fn parse(text: &str) -> Result<Self> {
         ensure!(text.len() <= 32000, "Hook definition exceeds 32 KB");
         let value: Self = serde_yaml_ng::from_str(text).context("Invalid hook YAML")?;
         ensure!(

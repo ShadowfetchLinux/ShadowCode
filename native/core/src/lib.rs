@@ -21,6 +21,8 @@ pub mod models;
 pub mod patch;
 pub mod paths;
 pub mod permissions;
+#[cfg(unix)]
+pub mod plugins;
 pub mod process;
 pub mod project;
 pub mod routing;

@@ -1,0 +1,25 @@
+{
+  "format": "shadowcode-plugin-v1",
+  "name": "review-kit",
+  "version": "1.0.0",
+  "description": "A project review skill and an optional completion check.",
+  "skills": {
+    "audit": {
+      "description": "Review a requested change using project evidence",
+      "mode": "review",
+      "content": "Inspect $ARGUMENTS and the relevant project instructions. Read checklist.md beside this skill. Report concrete findings with file locations and evidence. Do not modify files.",
+      "files": {
+        "checklist.md": "Check correctness, cancellation, error handling, compatibility and whether tests exercise the changed behavior. Distinguish verified findings from uncertainty."
+      }
+    }
+  },
+  "hooks": [
+    {
+      "name": "check-diff",
+      "description": "Check the Git diff for whitespace errors on completion. Enable only in Git projects.",
+      "events": ["on_complete"],
+      "command": "git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --no-ext-diff --check",
+      "timeout_sec": 15
+    }
+  ]
+}

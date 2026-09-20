@@ -1,4 +1,5 @@
 import { Dialog } from "./Dialog";
+import { PluginSettings } from "./PluginSettings";
 import { McpSettings } from "./McpSettings";
 import { isNative } from "../lib/transport";
 import { useEffect, useState } from "react";
@@ -9,6 +10,8 @@ import {
   type NativeMcpCatalog,
   type ProviderInfo,
   type HookCatalog,
+  type LegacyPluginCatalog,
+  type NativePluginCatalog,
 } from "../api";
 
 type Section =
@@ -84,10 +87,17 @@ export function Settings({
   const [nativeMcp, setNativeMcp] = useState<NativeMcpCatalog | null>(null);
   const [mcpError, setMcpError] = useState("");
   const [newServer, setNewServer] = useState({ name: "", target: "" });
-  const [plugins, setPlugins] = useState<{
-    installed: { name: string; version: string; description: string }[];
-    available: { name: string; installed: boolean }[];
-  }>({ installed: [], available: [] });
+  const [plugins, setPlugins] = useState<LegacyPluginCatalog>({
+    installed: [],
+    available: [],
+  });
+  const [nativePlugins, setNativePlugins] =
+    useState<NativePluginCatalog | null>(null);
+  const [pluginError, setPluginError] = useState("");
+  function updatePlugins(value: LegacyPluginCatalog | NativePluginCatalog) {
+    if (value.format === "native-plugins-v1") setNativePlugins(value);
+    else setPlugins(value);
+  }
 
   useEffect(() => {
     void api
@@ -110,8 +120,8 @@ export function Settings({
       .catch((error) => setMcpError(String(error)));
     void api
       .plugins()
-      .then(setPlugins)
-      .catch(() => undefined);
+      .then(updatePlugins)
+      .catch((error) => setPluginError(String(error)));
   }, []);
 
   async function activateHook(path: string, hash: string, enabled: boolean) {
@@ -657,9 +667,44 @@ export function Settings({
           </section>
         )}
 
-        {section === "plugins" && (
+        {section === "plugins" && nativePlugins && (
+          <PluginSettings
+            catalog={nativePlugins}
+            onChange={(value) => {
+              setNativePlugins(value);
+              void api
+                .hooks()
+                .then(setHookCatalog)
+                .catch((error) => setHookError(String(error)));
+              void api
+                .mcpServers()
+                .then((d) => {
+                  if (d.format === "native-mcp-v1") setNativeMcp(d);
+                })
+                .catch((error) => setMcpError(String(error)));
+            }}
+            onToast={onToast}
+            onNavigate={(next) => {
+              setSection(next);
+              if (next === "hooks") void refreshHooks();
+              else
+                void api
+                  .mcpServers()
+                  .then((d) => {
+                    if (d.format === "native-mcp-v1") setNativeMcp(d);
+                  })
+                  .catch((error) => setMcpError(String(error)));
+            }}
+          />
+        )}
+        {section === "plugins" && !nativePlugins && (
           <section>
             <h3>Plugins</h3>
+            {pluginError && (
+              <p role="alert" className="error">
+                {pluginError}
+              </p>
+            )}
             <div className="list">
               {plugins.available.map((p) => {
                 const meta = plugins.installed.find((m) => m.name === p.name);
@@ -679,7 +724,8 @@ export function Settings({
                         onClick={() =>
                           void api
                             .removePlugin(p.name)
-                            .then(() => api.plugins().then(setPlugins))
+                            .then(() => api.plugins().then(updatePlugins))
+                            .catch((err) => onToast(String(err), "err"))
                         }
                       >
                         Remove
@@ -691,7 +737,7 @@ export function Settings({
                         onClick={() =>
                           void api
                             .installPlugin(p.name)
-                            .then(() => api.plugins().then(setPlugins))
+                            .then(() => api.plugins().then(updatePlugins))
                             .catch((err) => onToast(String(err), "err"))
                         }
                       >
@@ -701,8 +747,12 @@ export function Settings({
                   </div>
                 );
               })}
-              {plugins.available.length === 0 && (
-                <p className="hint">No plugins in the registry.</p>
+              {plugins.available.length === 0 && !pluginError && (
+                <p className="hint">
+                  {isNative()
+                    ? "Loading project plugins…"
+                    : "No plugins in the registry."}
+                </p>
               )}
             </div>
           </section>

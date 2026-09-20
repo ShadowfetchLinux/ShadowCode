@@ -24,6 +24,10 @@ cannot widen a Plan or Review task into a writing task. A workflow declaring
 `mode: plan` or `mode: review` also restricts a Build invocation. Existing project
 trust, workspace permissions, approval rules, and queue limits still apply.
 
+[Project plugins](NATIVE_PLUGINS.md) can install skills and commands together.
+Their names use `plugin--component`, and they run through this same explicit
+invocation, routing and permission flow. Supporting text stays beside each skill.
+
 ## Create a skill
 
 Open **Skills & instructions**. Project instructions in

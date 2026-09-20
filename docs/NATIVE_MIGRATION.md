@@ -90,6 +90,11 @@ Implemented foundation:
   desktop project. Owned tasks cancel on interrupt/output failure; watching an
   existing task leaves it running. Full TUI, updater/automatic diagnostic repairs, and integration
   migration remain separate requirements.
+- [Native project plugins](NATIVE_PLUGINS.md) with built-in and custom bundle
+  review/import in Settings and CLI, namespaced usable workflows, separately
+  activated hooks/MCP, collision and stale-hash checks, private recovery journals,
+  and uninstall that preserves edits and legacy plugin contents. Bundles cannot
+  install dependencies, execute scripts or change permissions during installation.
 - [Native lifecycle hooks](NATIVE_HOOKS.md) with explicit project/content
   activation, bounded sequential command execution, gates before commands and
   commits, checks after edits/tests, completion repair, and error/compaction

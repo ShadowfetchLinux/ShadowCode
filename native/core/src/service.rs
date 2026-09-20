@@ -184,6 +184,50 @@ impl Service {
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
         match (request.method.as_str(), path) {
             #[cfg(unix)]
+            ("GET", "/api/plugins") => {
+                return crate::plugins::catalog(
+                    self.engine.paths(),
+                    &Workspace::open(&self.workspace()?)?,
+                );
+            }
+            #[cfg(unix)]
+            ("POST", "/api/plugins/preview") => {
+                return crate::plugins::preview(&crate::plugins::resolve(body)?);
+            }
+            #[cfg(unix)]
+            ("POST", "/api/plugins/install" | "/api/plugins/remove") => {
+                let workspace = self.mutable_workspace()?;
+                ensure!(
+                    text("workspace") == workspace.path.to_string_lossy(),
+                    "Project changed; refresh plugins before changing an installation"
+                );
+                let removing = path.ends_with("/remove");
+                let result = if removing {
+                    crate::plugins::remove(
+                        self.engine.paths(),
+                        &workspace,
+                        text("name"),
+                        text("hash"),
+                    )?
+                } else {
+                    crate::plugins::install(
+                        self.engine.paths(),
+                        &workspace,
+                        crate::plugins::resolve(body)?,
+                        text("hash"),
+                    )?
+                };
+                store.add_event(
+                    "plugin.installation",
+                    &json!({"workspace":workspace.path,"removed":removing,"result":result}),
+                    None,
+                    None,
+                )?;
+                return Ok(
+                    json!({"result":result,"catalog":crate::plugins::catalog(self.engine.paths(), &workspace)?}),
+                );
+            }
+            #[cfg(unix)]
             ("POST", "/api/sqlite") => {
                 return crate::sqlite::inspect(
                     Arc::new(Workspace::open(&self.workspace()?)?),

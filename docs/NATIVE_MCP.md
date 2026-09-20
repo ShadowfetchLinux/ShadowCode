@@ -7,6 +7,10 @@ HTTP servers expose tasks, goals, reviews, memory, SQLite inspection and checkpo
 to external clients. Registration output now supports Codex, Claude Code and Cursor. Verification
 uses independent official TypeScript clients as well as the Rust SDK. Neither direction launches Python.
 
+[Project plugins](NATIVE_PLUGINS.md) can install namespaced MCP definitions.
+They use credential references and remain inert until separately activated in
+Settings or the CLI. Removing a plugin revokes its project server grants.
+
 ## Connect another coding tool to ShadowCode
 
 The native executable can serve a single MCP client over stdio without a display:

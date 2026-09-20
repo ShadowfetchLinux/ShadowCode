@@ -453,11 +453,21 @@ export const api = {
       api_key: "",
       api_key_env: "",
     }),
-  plugins: () =>
-    get<{
-      installed: { name: string; version: string; description: string }[];
-      available: { name: string; installed: boolean }[];
-    }>("/api/plugins"),
+  plugins: () => get<LegacyPluginCatalog | NativePluginCatalog>("/api/plugins"),
+  previewPlugin: (source: { name: string } | { bundle: unknown }) =>
+    send<PluginPreview>("/api/plugins/preview", "POST", source),
+  installNativePlugin: (workspace: string, preview: PluginPreview) =>
+    send<PluginChange>("/api/plugins/install", "POST", {
+      workspace,
+      bundle: preview.bundle,
+      hash: preview.hash,
+    }),
+  removeNativePlugin: (workspace: string, name: string, hash: string) =>
+    send<PluginChange>("/api/plugins/remove", "POST", {
+      workspace,
+      name,
+      hash,
+    }),
   installPlugin: (name: string) =>
     send<{ name: string }>(`/api/plugins/${name}/install`, "POST", {}),
   removePlugin: (name: string) =>
@@ -696,4 +706,45 @@ export type CommandResult = {
   quit: boolean;
   passthrough: boolean;
   metadata: Record<string, unknown>;
+};
+
+export type LegacyPluginCatalog = {
+  format?: undefined;
+  installed: { name: string; version: string; description: string }[];
+  available: { name: string; installed: boolean }[];
+};
+export type PluginFile = {
+  path: string;
+  kind: string;
+  hash: string;
+  content?: string;
+  status?: "unchanged" | "modified" | "missing" | "unreadable";
+  error?: string | null;
+};
+export type PluginEntry = {
+  name: string;
+  version: string;
+  description: string;
+  hash: string;
+  state?: "prepared" | "installed" | "removing";
+  files: PluginFile[];
+};
+export type NativePluginCatalog = {
+  format: "native-plugins-v1";
+  workspace: string;
+  trusted: boolean;
+  read_only: boolean;
+  installed: PluginEntry[];
+  available: PluginEntry[];
+  issues: string[];
+  legacy: string[];
+};
+export type PluginPreview = {
+  bundle: { name: string; version: string; description: string };
+  hash: string;
+  files: PluginFile[];
+};
+export type PluginChange = {
+  catalog: NativePluginCatalog;
+  result: { name: string; retained?: { path: string; reason: string }[] };
 };

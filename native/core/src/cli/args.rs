@@ -129,6 +129,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<Mcp>,
     },
+    /// Review, install or remove declarative plugins in the selected project.
+    Plugin {
+        #[command(subcommand)]
+        action: Option<Plugin>,
+    },
     /// List/search saved conversations, or rename/delete a unique ID prefix.
     Sessions {
         query: Option<String>,
@@ -200,6 +205,34 @@ pub enum Command {
     },
     /// Run the shared engine without a window until Ctrl-C or SIGTERM.
     Serve,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Plugin {
+    /// Show all generated files before installation.
+    Inspect {
+        #[arg(required_unless_present = "file", conflicts_with = "file")]
+        name: Option<String>,
+        /// Read a local JSON bundle; no network download or code execution.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Install a bundle whose hash was returned by inspect.
+    Install {
+        #[arg(required_unless_present = "file", conflicts_with = "file")]
+        name: Option<String>,
+        #[arg(long)]
+        file: Option<PathBuf>,
+        #[arg(long)]
+        hash: String,
+    },
+    /// Remove unchanged owned files and preserve local edits.
+    Remove {
+        name: String,
+        /// Current installation hash from the plugin catalog.
+        #[arg(long)]
+        hash: String,
+    },
 }
 #[derive(Debug, Subcommand)]
 pub enum Mcp {

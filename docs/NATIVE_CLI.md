@@ -236,7 +236,7 @@ clients and idle reads are bounded. The connection exposes no TCP port and
 accepts no browser HTTP requests. Different application versions refuse to share
 an engine. Existing non-socket files and active endpoints are never overwritten.
 
-The native full-screen TUI, updater/automatic diagnostic repairs, plugins, and MCP migration
+The native full-screen TUI, updater/automatic diagnostic repairs, and remaining integration migration
 remain in progress; their 0.19 commands are not silently emulated here.
 
 ## Verification
@@ -253,3 +253,14 @@ Set `SHADOW_DESKTOP_BINARY` to an AppImage,
 `SHADOW_CLI_ARTIFACTS` to a separate directory to test that exact package.
 The real-window test also invokes the CLI in another project while the desktop
 owns the engine and verifies isolation and shared background controls.
+
+
+## Project plugins
+
+`plugin` lists available and installed native bundles for the selected project.
+`plugin inspect NAME` previews all files; `plugin install NAME --hash HASH`
+requires the reviewed bundle hash. Both accept `--file bundle.json` for custom
+bundles. `plugin remove NAME --hash HASH` uses the current installation hash
+from `plugin --json` and reports modified files it preserved. Installation never
+runs commands or activates hooks/MCP. See [native plugins](NATIVE_PLUGINS.md)
+for schema, examples, recovery and legacy migration.
