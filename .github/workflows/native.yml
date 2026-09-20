@@ -30,6 +30,13 @@ jobs:
       - run: cargo +1.95.0 build -p shadowcode-desktop --locked
       - name: Exercise the native CLI without a display
         run: node scripts/test-native-cli.mjs
+      - name: Stress repeated native tasks, cancellation, output and cleanup
+        run: node scripts/test-native-stress.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: native-stress-diagnostics
+          path: artifacts/native-stress
       - name: Exercise the native terminal through a real PTY
         run: node scripts/test-native-tui.mjs
       - name: Exercise the native MCP server without a display

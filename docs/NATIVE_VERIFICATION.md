@@ -251,6 +251,32 @@ The [plugin guide](NATIVE_PLUGINS.md) documents the supported schema, example
 bundle, limits, separate executable activation and partial-install recovery.
 Legacy Python bundles remain on disk and are explicitly reported for conversion.
 
+## Sustained native-engine stress
+
+`node scripts/test-native-stress.mjs` runs the native executable without a display
+against a disposable profile and scripted compatible provider. Fifty batches
+submit one task to each of four projects: **200 completed tasks / 405 provider
+requests**, including actual bounded reads of 105 KB files and roughly 32 KB
+assistant answers. Five deliberately stalled provider requests are cancelled.
+Ten manual subprocesses each produce 1 MiB of output; each must exit successfully
+and report truncated, nonempty bounded output.
+
+The final local run sampled engine RSS at 83,464–85,352 KiB, with 84,908 KiB after
+the subprocess phase: 828 KiB above the 40-task warm-up sample. All samples had
+14 descriptors and 21 threads; no engine-owned child processes remained at the
+sample points. SQLite integrity passes, exactly 200 completed and five cancelled
+jobs persist with no active jobs, and an early job remains readable after clean
+shutdown and reopening the profile. CI runs the same probe and uploads its JSON
+measurements or failure diagnostics under `native-stress-diagnostics`.
+
+The regression allows less than 64 MiB RSS growth after warm-up, sampled RSS below
+384 MiB, and at most twelve additional descriptors. These are regression bounds,
+not a general memory guarantee. Samples measure the engine process, not WebKit,
+model-server memory, or transient peaks between samples. Large repository maps,
+long individual conversations, desktop memory and longer-duration soaks remain
+separate release checks. `SHADOW_STRESS_BINARY` must point directly to the native
+ELF executable; an AppImage launcher is deliberately rejected for RSS attribution.
+
 ## Native terminal interface
 
 The initial `shadowcode tui` frontend passes a real-PTY probe with **8 scripted

@@ -2,6 +2,9 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- CI now exercises 200 native tasks, stalled-provider cancellations and output
+  floods while checking memory, descriptors, child cleanup and history integrity.
+
 - Native development: reviewed CLI and desktop rescue for missing worktrees restores retained
   commits into a new checkout while preserving the original branch, index and
   registration; missing uncommitted files are not reconstructed.

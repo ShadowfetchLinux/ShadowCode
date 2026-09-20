@@ -123,6 +123,11 @@ Implemented foundation:
   use scoped shell/start and stop approvals, command hooks, bounded status/log
   reads and durable task attribution. These project processes intentionally
   survive coding-task completion or cancellation until explicitly stopped.
+- Sustained native-engine verification covers 200 tasks across four projects,
+  stalled-provider cancellation, repeated subprocess output floods, sampled
+  memory/descriptors, process cleanup and persisted history after restart.
+  Desktop memory, long individual conversations and larger repository stress
+  remain separate checks.
 - A persisted native task loop, per-workspace FIFO follow-ups, four concurrent
   workspaces, scoped approvals, cancellation that waits for cleanup, restart
   recovery, and atomic completion/usage/event commits. Continuation and branching
