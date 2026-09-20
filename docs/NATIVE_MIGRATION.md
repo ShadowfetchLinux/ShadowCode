@@ -73,6 +73,10 @@ Implemented foundation:
 - Native Ollama and compatible streaming transports with incremental UTF-8/SSE
   parsing, parallel tool-call assembly, usage accounting, bounded responses,
   cancellation, and rejection of incomplete tool arguments.
+- [Provider-aware model registration and routing](NATIVE_ROUTING.md), with
+  editable Plan/Build/Review/Test selections, preserved custom credentials and
+  context limits, queued configuration snapshots, explicit per-task overrides,
+  persisted model/fallback notices, and goal verification routed to Test.
 - A persisted native task loop, per-workspace FIFO follow-ups, four concurrent
   workspaces, scoped approvals, cancellation that waits for cleanup, restart
   recovery, and atomic completion/usage/event commits. Continuation and branching

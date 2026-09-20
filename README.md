@@ -13,7 +13,8 @@ context, tools, permissions, checkpoints, plans, and verification.
 **Native 0.20 development:** the `native-0.20` branch now builds a Rust/Tauri
 desktop window with the interface embedded in the executable. It needs no Python
 runtime or browser launcher. See the [native development guide](docs/NATIVE_DESKTOP.md)
-and [goals workflow](docs/NATIVE_GOALS.md). Development AppImage and Debian
+and the [goals](docs/NATIVE_GOALS.md) and [model routing](docs/NATIVE_ROUTING.md)
+workflows. Development AppImage and Debian
 packages include [dependency inventories and notices](licenses/native/README.md).
 Integrations and release checks are
 still in progress under the [migration gates](docs/NATIVE_MIGRATION.md);

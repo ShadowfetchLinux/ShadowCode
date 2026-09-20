@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **69 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **78 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -36,6 +36,12 @@ integration tests** pass on the development machine. The suite covers:
   runs and cross-goal milestone edits, pause and resume without repeating done
   milestones, missing/failed verification, required inspection, shutdown, and
   recovery that preserves completed work without replaying interrupted commands.
+- Provider/endpoint-scoped model discovery, preserved credential references and
+  context limits, ambiguous name rejection, alias collision protection, queued
+  routing snapshots, explicit overrides, visible missing-model fallback, unchanged
+  planning permissions, and goal verification through the Test model. A provider
+  failure is checked to never send the task to the default endpoint; invalid
+  settings are checked before writing secrets.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:
@@ -61,7 +67,7 @@ The first window run exposed a SQLite LIKE escape bug that appeared only after
 sessions existed. A regression now covers real session listing and literal
 search. Visual inspection also found a cancellation transcript race and an open
 sidebar obscuring a resized compact window; the window test checks both.
-Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, compact, and Goals workspace
+Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, compact, Goals, and Router workspace
 views. The compact check caught the Review button losing its accessible name
 when its text was hidden; the control now retains an explicit label.
 The native test also creates a goal through the drawer, completes all three
@@ -69,8 +75,14 @@ milestones, approves its verification command, checks the resulting file and
 live transcript, and pauses a second goal during a stalled model request.
 It also resumes that goal after deleting its old conversation, checking that a
 fresh conversation is created and remains cancellable.
-Eleven interface unit tests cover ordered replay, pagination, stream finalization,
-listener cleanup, interruption, and native tool cards. The seven existing browser
+The native window test saves and enables a Build route through the drawer,
+confirms the chosen model in actual requests and the conversation, reloads its
+notice without duplication, and checks a visible default-model fallback for a
+missing saved route. The Router screenshot is inspected alongside the existing
+workspace views.
+Fourteen interface unit tests cover ordered replay, pagination, stream finalization,
+listener cleanup, interruption, native tool cards, routing/fallback replay, and
+disambiguated model labels that omit URL credentials. The seven existing browser
 tests continue to pass through the legacy transport.
 
 The same native window workflow also passes when launched from the local optimized

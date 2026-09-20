@@ -2,6 +2,7 @@ import type { Approval, CommandResult } from "../api";
 
 export type ChatItem =
   | { kind: "user"; text: string; taskId?: string }
+  | { kind: "note"; text: string; taskId?: string; warning?: boolean }
   | {
       kind: "agent";
       text: string;

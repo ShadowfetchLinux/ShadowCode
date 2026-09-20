@@ -10,11 +10,16 @@ milestones: inspect the project and define acceptance checks, implement the
 change, and run the checks. The inspection milestone uses read-only Plan mode.
 This initial checklist is deterministic; it is not a model-generated estimate.
 
-Each milestone runs as a normal native task with the configured model, workspace
+Each milestone runs as a normal native task with the selected model, workspace
 permissions, approvals, token/step limits, durable events, and checkpoints. Tasks
 share the workspace queue with ordinary work. The conversation follows newly
 started milestones; **Open task** returns to the goal's saved conversation.
 Expand **Result** under a milestone to inspect its saved summary.
+
+When [model routing](NATIVE_ROUTING.md) is enabled, the default inspection uses
+the Plan model, implementation uses Build, and required command verification uses
+Test. Selection happens when each milestone enters the task queue and is recorded
+in its conversation. Otherwise milestones use the configured default model.
 
 ## Completion and evidence
 

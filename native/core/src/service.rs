@@ -3,10 +3,12 @@ use crate::{
     checkpoint,
     config::{self, Config, ModelConfig, PermissionLevel},
     engine::{Engine, StartRequest, WorkspaceReservation},
+    model_registry,
     models::{self, ModelClient},
     paths::AppPaths,
     permissions::{self, Decision},
     process::{self, ProcessSpec},
+    routing,
     store::MilestoneSpec,
     tools::truncate,
     workspace::Workspace,
@@ -135,7 +137,7 @@ impl Service {
             ("GET", "/api/workspace/status") => {
                 let cfg = self.config()?;
                 return Ok(
-                    json!({"workspace":self.workspace()?,"model":cfg.model,"permissions":cfg.permissions,"onboarding":cfg.onboarding}),
+                    json!({"workspace":self.workspace()?,"model":cfg.model,"permissions":cfg.permissions,"onboarding":cfg.onboarding,"routing":cfg.routing}),
                 );
             }
             ("GET", "/api/config") => return Ok(json!(self.config()?)),
@@ -145,6 +147,25 @@ impl Service {
                 if let Some(object) = values.as_object_mut() {
                     object.remove("api_key");
                 }
+                // Settings use the provider's model name as `default`. Give
+                // that configuration a stable identity before saving it.
+                if values["model"].is_object() {
+                    let old = Config::load(self.engine.paths(), None)?.model;
+                    let mut merged = serde_json::to_value(&old)?;
+                    config::merge(&mut merged, values["model"].clone());
+                    let mut model: ModelConfig = serde_json::from_value(merged)?;
+                    if model.default == model.name || !model_registry::same_target(&old, &model) {
+                        model.default =
+                            model_registry::model_id(&model.provider, &model.endpoint, &model.name);
+                    }
+                    model_registry::validate(&model)?;
+                    self.check_model_identity(&model)?;
+                    self.register(&old)?;
+                    values["model"] = json!(model);
+                }
+                let mut preview = serde_json::to_value(Config::load(self.engine.paths(), None)?)?;
+                config::merge(&mut preview, values.clone());
+                serde_json::from_value::<Config>(preview)?.validate()?;
                 if !text("api_key").is_empty() {
                     let cfg = self.config()?;
                     let key = if text("api_key_env").is_empty() {
@@ -157,7 +178,32 @@ impl Service {
                     };
                     config::set_secret(self.engine.paths(), key, text("api_key"))?;
                 }
-                return Ok(json!(Config::patch(self.engine.paths(), values)?));
+                let cfg = Config::patch(self.engine.paths(), values)?;
+                self.register(&cfg.model)?;
+                return Ok(json!(cfg));
+            }
+            ("GET", "/api/routing") => {
+                let cfg = self.config()?;
+                self.register(&cfg.model)?;
+                return routing::view(&store, &cfg);
+            }
+            ("PUT", "/api/routing") => {
+                let values = &body["values"];
+                routing::validate(values)?;
+                let cfg = self.config()?;
+                // An explicit edit must name a known model. Missing models in
+                // previously saved configurations are handled as visible fallbacks.
+                for role in routing::PURPOSES {
+                    if let Some(id) = values[role]
+                        .as_str()
+                        .filter(|id| !matches!(*id, "" | "default" | "mock"))
+                    {
+                        let model = model_registry::resolve(&store, id, &cfg.model)?;
+                        ensure!(model.provider != "mock", "Choose a coding model for {role}");
+                    }
+                }
+                let cfg = Config::patch(self.engine.paths(), json!({"routing":values}))?;
+                return routing::view(&store, &cfg);
             }
             ("GET", "/api/onboarding") => {
                 let cfg = self.config()?;
@@ -233,15 +279,10 @@ impl Service {
                 return Ok(json!({"providers":presets}));
             }
             ("GET", "/api/models") => {
-                for provider in self.detected(q("refresh") == "1").await {
-                    for model in provider["models"].as_array().into_iter().flatten() {
-                        let id = model["id"].as_str().unwrap_or("");
-                        store.upsert_model(&json!({"id":id,"name":id,"provider":provider["provider"],"endpoint":provider["endpoint"],"context_limit":recommended_context(&provider["provider"],model["context_limit"].as_u64()),"metadata":{"detected":true,"capabilities":model["capabilities"]}}))?;
-                    }
-                }
+                model_registry::record_detected(&store, &self.detected(q("refresh") == "1").await)?;
                 let cfg = self.config()?;
                 self.register(&cfg.model)?;
-                return Ok(json!({"models":store.models()?}));
+                return Ok(json!({"models":model_registry::catalog(&store,&cfg.model)?}));
             }
             ("POST", "/api/models/test") => {
                 let cfg = self.config()?;
@@ -274,6 +315,8 @@ impl Service {
                 } else {
                     self.resolve_model(text("id"), &cfg.model)?
                 };
+                self.check_model_identity(&model)?;
+                self.register(&cfg.model)?;
                 self.register(&model)?;
                 if path.ends_with("select") {
                     Config::patch(self.engine.paths(), json!({"model":model}))?;
@@ -390,7 +433,7 @@ impl Service {
                 );
                 let purpose = text("purpose");
                 let mode = match purpose {
-                    "planner" | "plan" | "researcher" => "plan",
+                    "planner" | "plan" | "planning" | "researcher" | "architecture" => "plan",
                     "reviewer" | "review" => "review",
                     _ => "code",
                 };
@@ -401,24 +444,27 @@ impl Service {
                 };
                 let job = self
                     .engine
-                    .start(StartRequest {
-                        workspace: workspace.clone(),
-                        task: text("task").into(),
-                        session_id: body["session_id"]
-                            .as_str()
-                            .filter(|s| !s.is_empty())
-                            .map(str::to_owned)
-                            .or_else(|| {
-                                if workspace == selection.workspace {
-                                    selection.session
-                                } else {
-                                    None
-                                }
-                            }),
-                        model,
-                        mode: mode.into(),
-                        queue: body["queue"].as_bool().unwrap_or(false),
-                    })
+                    .start_for_purpose(
+                        StartRequest {
+                            workspace: workspace.clone(),
+                            task: text("task").into(),
+                            session_id: body["session_id"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_owned)
+                                .or_else(|| {
+                                    if workspace == selection.workspace {
+                                        selection.session
+                                    } else {
+                                        None
+                                    }
+                                }),
+                            model,
+                            mode: mode.into(),
+                            queue: body["queue"].as_bool().unwrap_or(false),
+                        },
+                        purpose,
+                    )
                     .await?;
                 self.select(&job.workspace, Some(job.session_id.clone()))?;
                 return Ok(json!(job));
@@ -803,12 +849,17 @@ impl Service {
                     &fallback.endpoint
                 }
             });
+        let target_changed = provider_changed
+            || endpoint.trim_end_matches('/') != fallback.endpoint.trim_end_matches('/');
         ModelConfig {
-            default: body["id"]
+            default: if body["id"]
                 .as_str()
-                .filter(|v| !v.is_empty())
-                .unwrap_or(name)
-                .into(),
+                .is_some_and(|id| !id.is_empty() && id != name)
+            {
+                body["id"].as_str().unwrap().into()
+            } else {
+                model_registry::model_id(provider, endpoint, name)
+            },
             provider: provider.into(),
             name: name.into(),
             endpoint: endpoint.into(),
@@ -816,7 +867,7 @@ impl Service {
                 .as_str()
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| {
-                    if provider_changed {
+                    if target_changed {
                         preset["api_key_env"].as_str().unwrap_or("OPENAI_API_KEY")
                     } else {
                         &fallback.api_key_env
@@ -827,7 +878,7 @@ impl Service {
                 .as_u64()
                 .map(|v| v as usize)
                 .unwrap_or_else(|| {
-                    if provider_changed {
+                    if target_changed {
                         recommended_context(&json!(provider), None)
                     } else {
                         fallback.context_limit
@@ -836,11 +887,7 @@ impl Service {
         }
     }
     fn register(&self, model: &ModelConfig) -> Result<()> {
-        let validation = Config {
-            model: model.clone(),
-            ..Default::default()
-        };
-        validation.validate()?;
+        model_registry::validate(model)?;
         let store = self.engine.store();
         let mut metadata = store
             .models()?
@@ -856,20 +903,24 @@ impl Service {
         metadata["api_key_env"] = json!(model.api_key_env);
         store.upsert_model(&json!({"id":model.default,"name":model.name,"provider":model.provider,"endpoint":model.endpoint,"context_limit":model.context_limit,"metadata":metadata}))
     }
-    fn resolve_model(&self, id: &str, fallback: &ModelConfig) -> Result<ModelConfig> {
-        if id == fallback.default || id == fallback.name {
-            return Ok(fallback.clone());
+    fn check_model_identity(&self, model: &ModelConfig) -> Result<()> {
+        let current = self.config()?.model;
+        if current.default == model.default {
+            ensure!(model_registry::same_target(&current, model), "Model ID already belongs to a different provider, endpoint, or model; choose a unique ID");
         }
-        let row = self
+        if let Some(row) = self
             .engine
             .store()
             .models()?
-            .into_iter()
-            .find(|m| m["id"] == id)
-            .context("Model is not registered; add its provider and endpoint first")?;
-        let mut row = row;
-        row["api_key_env"] = row["metadata"]["api_key_env"].clone();
-        Ok(self.model_from_body(&row, fallback))
+            .iter()
+            .find(|row| row["id"] == model.default)
+        {
+            ensure!(model_registry::same_target(&model_registry::from_row(row)?, model), "Model ID already belongs to a different provider, endpoint, or model; choose a unique ID");
+        }
+        Ok(())
+    }
+    fn resolve_model(&self, id: &str, fallback: &ModelConfig) -> Result<ModelConfig> {
+        model_registry::resolve(&self.engine.store(), id, fallback)
     }
     fn session(&self, id: &str) -> Result<Value> {
         let store = self.engine.store();
@@ -1187,18 +1238,7 @@ fn expand_path(path: &str) -> Result<PathBuf> {
     })
 }
 fn recommended_context(provider: &Value, reported: Option<u64>) -> usize {
-    let cap = if matches!(
-        provider.as_str(),
-        Some("ollama" | "local" | "llamacpp" | "vllm")
-    ) {
-        16384
-    } else {
-        128000
-    };
-    reported
-        .filter(|v| *v >= 2048)
-        .map(|v| (v as usize).min(cap))
-        .unwrap_or(cap)
+    model_registry::recommended_context(provider.as_str().unwrap_or(""), reported)
 }
 pub fn parse_hunks(diff: &str) -> Vec<Value> {
     let mut hunks = Vec::new();

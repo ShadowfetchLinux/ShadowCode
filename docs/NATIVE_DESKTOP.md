@@ -93,6 +93,9 @@ not require that tool. No global PATH change is needed.
   missed notifications; streamed messages are replaced by their final text.
 - [Goals](NATIVE_GOALS.md) run persisted milestones through the same task engine,
   with visible results, command verification, pause/resume, and safe recovery.
+- [Model routing](NATIVE_ROUTING.md) selects a registered model for Plan, Build,
+  Review, and Test. Provider-scoped IDs keep identical model names on different
+  servers distinct; conversations retain the actual selection and fallback notices.
 
 ## Checks
 
@@ -117,8 +120,9 @@ Optional environment variables `SHADOW_DESKTOP_BINARY`, `SHADOW_TAURI_DRIVER`,
 and `SHADOW_WEBKIT_DRIVER` select explicit executable paths. Logs, screenshots,
 and a machine-readable result are written to `artifacts/native/`. This test
 checks the real embedded window, Rust IPC, approval, file and terminal tools,
-reload, cancellation, compact layout, goals and their live transcript, pause,
-light/dark/compact/goals accessibility, and managed shutdown. It also verifies
+reload, cancellation, compact layout, model routing/fallback notices, goals and
+their live transcript, pause, light/dark/compact/goals/routing accessibility,
+and managed shutdown. It also verifies
 that the executable embeds the current compiled interface and does not load
 `libpython`.
 

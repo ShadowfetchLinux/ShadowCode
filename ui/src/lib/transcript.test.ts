@@ -8,6 +8,47 @@ const event = (
   task_id = "one",
 ): EventRow => ({ id, ts: id, type, payload, task_id });
 describe("durable transcript", () => {
+  it("retains readable fallback notices from legacy conversations", () => {
+    const state = replay([
+      event(1, "routing.fallback", {
+        purpose: "coder",
+        requested: "missing",
+        fallback: "local-model",
+      }),
+    ]);
+    expect(state.items[0].text).toBe(
+      "Using default: local-model · coder. The saved model is unavailable.",
+    );
+    expect(state.routing).toBeUndefined();
+  });
+  it("replays routing and fallback notices separately from model answers", () => {
+    const rows = [
+      event(1, "agent.started", { task: "Review the changes" }),
+      event(2, "routing.fallback", {
+        purpose: "reviewer",
+        source: "fallback",
+        model_id: "default",
+        model_name: "local-coder",
+        provider: "ollama",
+        context_limit: 4096,
+        fallback_reason: "Saved model is not registered",
+      }),
+      event(3, "model.delta", { text: "Review complete" }),
+    ];
+    const state = replay(rows);
+    expect(state.items[1]).toMatchObject({ kind: "note", warning: true });
+    expect(state.items[1].text).toContain(
+      "Using default: local-coder · ollama · reviewer",
+    );
+    expect(state.items[1].text).toContain("not registered");
+    expect(state.items.filter((item) => item.kind === "agent")).toHaveLength(1);
+    expect(state.routing?.context_limit).toBe(4096);
+    expect(rows.reduce(applyEvent, state)).toEqual(state);
+    expect(
+      applyEvent(state, event(4, "agent.started", { task: "Next task" }, "two"))
+        .routing,
+    ).toBeUndefined();
+  });
   it("joins native stream chunks and replaces them with one complete response", () => {
     const state = replay([
       event(1, "user.message", { text: "Read the project" }),

@@ -5,6 +5,7 @@ export type ModelInfo = {
   name: string;
   provider: string;
   endpoint: string;
+  context_limit?: number;
   detected?: boolean;
   metadata?: Record<string, unknown> & {
     capabilities?: Record<string, boolean>;
@@ -85,6 +86,8 @@ export type Job = {
   summary?: string;
   task?: string;
   usage?: Record<string, number>;
+  model?: string;
+  routing?: RoutingDecision | null;
   result?: {
     success: boolean;
     summary: string;
@@ -164,11 +167,24 @@ export type BackgroundTask = {
   exit_code: number | null;
   output: string;
 };
+export type RoutingDecision = {
+  purpose: string;
+  source: string;
+  requested: string;
+  model_id: string;
+  model_name: string;
+  provider: string;
+  context_limit: number;
+  fallback_reason?: string | null;
+};
 export type RoutingView = {
   enabled: boolean;
   default: string;
   table: Record<string, string>;
   config: Record<string, string | boolean>;
+  default_name?: string;
+  decisions?: Record<string, RoutingDecision>;
+  models?: ModelInfo[];
 };
 export type DoctorReport = {
   ok: boolean;
@@ -448,6 +464,7 @@ export const api = {
       };
       permissions: { level: string; network?: boolean };
       onboarding?: { completed: boolean };
+      routing?: Record<string, string | boolean>;
     }>("/api/workspace/status"),
   startJob: (
     task: string,

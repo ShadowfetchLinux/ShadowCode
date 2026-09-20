@@ -13,6 +13,7 @@ import {
 } from "../api";
 import { Empty } from "./cards";
 import { exportSession, isNative } from "../lib/transport";
+import { modelLabel } from "../lib/models";
 
 export type DrawerTab =
   | "terminal"
@@ -124,7 +125,13 @@ export function Drawer({
             toast={toast}
           />
         )}
-        {tab === "health" && <HealthTab health={health} toast={toast} />}
+        {tab === "health" && (
+          <HealthTab
+            health={health}
+            toast={toast}
+            onRoutingChanged={onRefreshSessions}
+          />
+        )}
         {tab === "background" && <BackgroundTab toast={toast} />}
       </div>
     </aside>
@@ -964,11 +971,21 @@ function GoalsTab({
 
 // --- Health: provider · tools · doctor · router · update ----------------------
 
-function HealthTab({ health, toast }: { health: Health | null; toast: Toast }) {
+function HealthTab({
+  health,
+  toast,
+  onRoutingChanged,
+}: {
+  health: Health | null;
+  toast: Toast;
+  onRoutingChanged: () => Promise<void>;
+}) {
   const [report, setReport] = useState<DoctorReport | null>(null);
   const [routing, setRouting] = useState<RoutingView | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [fixing, setFixing] = useState(false);
+  const [savingRouting, setSavingRouting] = useState(false);
+  const [routingError, setRoutingError] = useState("");
   const load = useCallback(async () => {
     void api
       .doctor()
@@ -976,8 +993,11 @@ function HealthTab({ health, toast }: { health: Health | null; toast: Toast }) {
       .catch(() => setReport(null));
     void api
       .routing()
-      .then(setRouting)
-      .catch(() => setRouting(null));
+      .then((value) => {
+        setRouting(value);
+        setRoutingError("");
+      })
+      .catch((error) => setRoutingError(String(error)));
     void api
       .updateCheck()
       .then(setUpdate)
@@ -986,6 +1006,18 @@ function HealthTab({ health, toast }: { health: Health | null; toast: Toast }) {
   useEffect(() => {
     void load();
   }, [load]);
+  const saveRouting = async (values: Record<string, string | boolean>) => {
+    setSavingRouting(true);
+    setRoutingError("");
+    try {
+      setRouting(await api.saveRouting(values));
+      await onRoutingChanged();
+    } catch (error) {
+      setRoutingError(String(error));
+    } finally {
+      setSavingRouting(false);
+    }
+  };
 
   return (
     <>
@@ -1061,29 +1093,91 @@ function HealthTab({ health, toast }: { health: Health | null; toast: Toast }) {
         </button>
       </div>
       <h4>Router</h4>
+      {routingError && (
+        <p className="health-bad" role="alert">
+          {routingError}
+        </p>
+      )}
       {routing && (
         <>
           <p className="hint">
             {routing.enabled
-              ? "Per-purpose routing is on."
-              : `Routing off — every purpose uses ${routing.default}.`}
+              ? "Each task mode uses its saved model. Selecting a model in the composer overrides routing for that task."
+              : `Routing is off. Automatic tasks use ${routing.default_name || routing.default}.`}
           </p>
-          <div className="kv">
-            {Object.entries(routing.table).map(([purpose, model]) => (
-              <div key={purpose}>
-                <span>{purpose}</span>
-                <code>{model}</code>
-              </div>
-            ))}
-          </div>
+          {routing.models ? (
+            <div className="routing-fields">
+              {(
+                [
+                  ["planner", "Plan"],
+                  ["coder", "Build"],
+                  ["reviewer", "Review"],
+                  ["tester", "Test"],
+                ] as const
+              ).map(([purpose, label]) => {
+                const saved = String(routing.config[purpose] || "");
+                const value = ["default", "mock"].includes(saved) ? "" : saved;
+                const decision = routing.decisions?.[purpose];
+                return (
+                  <div key={purpose} className="routing-field">
+                    <label htmlFor={`routing-${purpose}`}>{label} model</label>
+                    <select
+                      id={`routing-${purpose}`}
+                      value={value}
+                      disabled={savingRouting}
+                      onChange={(event) =>
+                        void saveRouting({ [purpose]: event.target.value })
+                      }
+                    >
+                      <option value="">
+                        Default · {routing.default_name || routing.default}
+                      </option>
+                      {value &&
+                        !routing.models?.some(
+                          (model) => model.id === value,
+                        ) && (
+                          <option value={value}>
+                            Saved selection · {value}
+                          </option>
+                        )}
+                      {routing.models
+                        ?.filter((model) => model.provider !== "mock")
+                        .map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {modelLabel(model, routing.models || [])} ·{" "}
+                            {model.provider}
+                          </option>
+                        ))}
+                    </select>
+                    {decision?.fallback_reason && (
+                      <p className="health-bad">
+                        Using {decision.model_name}: {decision.fallback_reason}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+              <p className="hint">
+                Changes apply to newly queued tasks. Goal verification uses the
+                Test model. A missing saved model uses the default and adds a
+                notice to the conversation.
+              </p>
+            </div>
+          ) : (
+            <div className="kv">
+              {Object.entries(routing.table).map(([purpose, model]) => (
+                <div key={purpose}>
+                  <span>{purpose}</span>
+                  <code>{model}</code>
+                </div>
+              ))}
+            </div>
+          )}
           <button
             type="button"
             className="mini"
-            onClick={() =>
-              void api
-                .saveRouting({ enabled: !routing.enabled })
-                .then(setRouting)
-            }
+            disabled={savingRouting}
+            onClick={() => void saveRouting({ enabled: !routing.enabled })}
           >
             {routing.enabled ? "Disable routing" : "Enable routing"}
           </button>

@@ -12,6 +12,10 @@
   inspection/verification for the default checklist, and stop on failed checks.
   Goal tasks appear live in the conversation; results and progress are accessible
   from the drawer.
+- Native model routing adds editable Plan/Build/Review/Test selections, explicit
+  task overrides, and recorded selection/fallback notices. Model registration
+  distinguishes identical names on different endpoints and preserves saved
+  credential references and context limits during discovery.
 - Native window automation covers actual tool execution, approvals, reload,
   cancellation, goal progression/pause, accessibility, and subprocess cleanup.
 - Native AppImage and Debian build scripts preserve per-format executable

@@ -15,7 +15,7 @@ const binaryArgs = JSON.parse(process.env.SHADOW_DESKTOP_ARGS || "[]");
 assert.ok(Array.isArray(binaryArgs) && binaryArgs.every(arg => typeof arg === "string"), "SHADOW_DESKTOP_ARGS must be a JSON array of strings");
 const artifacts = process.env.SHADOW_NATIVE_ARTIFACTS || path.join(root, "artifacts/native");
 await mkdir(artifacts, { recursive: true });
-for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json"]) {
+for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "routing.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json", "accessibility-routing.json"]) {
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
@@ -42,6 +42,7 @@ async function unusedPort() {
   return port;
 }
 let requests = 0;
+const requestedModels = [];
 let goalMode = false;
 const milestoneCalls = new Map();
 const sockets = new Set();
@@ -49,7 +50,8 @@ const model = createServer(async (req, res) => {
   let body = "";
   for await (const chunk of req) body += chunk;
   const payload = JSON.parse(body);
-  assert.equal(payload.model, "native-fixture");
+  assert.ok(["native-fixture", "native-build"].includes(payload.model));
+  requestedModels.push(payload.model);
   const index = requests++;
   const tool = (name, args) => ({ id: `call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
   if (goalMode) {
@@ -150,6 +152,19 @@ try {
   await execute("document.documentElement.dataset.theme='dark'"); await screenshot("workspace-dark");
   await accessibility("dark");
   await execute("document.documentElement.dataset.theme='light'");
+  const registered = await api("POST", "/api/models/register", { provider: "local", endpoint: `http://127.0.0.1:${model.address().port}/v1`, name: "native-build" });
+  await click('button[aria-label="Terminal"]');
+  await clickButton("Health");
+  await until("Native routing controls", () => execute("return !!document.querySelector('#routing-coder')"));
+  await execute("const select=document.querySelector('#routing-coder');select.value=arguments[0];select.dispatchEvent(new Event('change',{bubbles:true}));", [registered.model.default]);
+  await until("Build route saved", async () => (await api("GET", "/api/routing")).config.coder === registered.model.default);
+  await until("Router ready", () => execute("return !document.querySelector('#routing-coder').disabled"));
+  await clickButton("Enable routing");
+  await until("Routing enabled", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable routing' && !e.disabled)"));
+  await screenshot("routing");
+  await accessibility("routing");
+  await click('button.drawer-close');
+  assert.match(await execute("return document.querySelector('select[aria-label=\"Model for this task\"]').selectedOptions[0].textContent"), /Automatic/);
   await type('textarea[aria-label="Message ShadowCode"]', "Create hello.txt containing native-window-ok and verify its contents with the terminal.");
   await click('button[aria-label="Send task"]');
   await until("Command approval", () => execute("return !!document.querySelector('.approval button.primary')"));
@@ -161,18 +176,27 @@ try {
     return jobs[0]?.status === "completed";
   });
   assert.equal(await readFile(path.join(project, "hello.txt"), "utf8"), "native-window-ok\n");
+  assert.deepEqual(requestedModels, ["native-build", "native-build", "native-build"]);
+  await until("Selected model visible", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('native-build · local · coder'))"));
   await until("Completion in transcript", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Created hello.txt and verified')) && !document.querySelector('button[aria-label=\"Stop task\"]');"));
   assert.equal(await execute("return document.querySelectorAll('.msg-user').length"), 1);
   assert.equal(await execute("return [...document.querySelectorAll('.msg-agent')].filter(e=>e.textContent.includes('Created hello.txt and verified')).length"), 1);
   await screenshot("task-complete");
   await wd("POST", `/session/${session}/refresh`, {});
   await until("Persisted conversation", () => execute("return document.querySelectorAll('.msg-user').length===1 && [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Created hello.txt and verified'));"));
+  assert.equal(await execute("return [...document.querySelectorAll('.msg-note')].filter(e=>e.textContent.includes('native-build')).length"), 1);
+  // A missing model in an older saved configuration must be visible when the
+  // engine chooses the default, including after the conversation is reloaded.
+  await api("PUT", "/api/config", { values: { routing: { coder: "removed-native-model" } } });
   await type('textarea[aria-label="Message ShadowCode"]', "Explain the result again.");
   await click('button[aria-label="Send task"]');
   await until("Second model request", () => requests >= 4);
+  await until("Fallback visible", () => execute("return [...document.querySelectorAll('.msg-note.warning')].some(e=>e.textContent.includes('Using default: native-fixture'))"));
+  assert.equal(requestedModels.at(-1), "native-fixture");
   await click('button[aria-label="Stop task"]');
   await until("Cancellation persisted", async () => (await api("GET", "/api/jobs")).jobs[0].status === "cancelled");
   await until("Cancellation visible", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>/cancelled/i.test(e.textContent));"));
+  await api("PUT", "/api/routing", { values: { enabled: false } });
   await wd("POST", `/session/${session}/window/rect`, { width: 620, height: 850 });
   await until("Compact sidebar collapsed", () => execute("return !document.querySelector('.sidebar')"));
   await screenshot("compact");
@@ -233,8 +257,8 @@ try {
   };
   await until("Native shutdown", () => dead(version.pid));
   await until("Terminal cleanup", () => dead(child));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "cancellation", "compact layout", "native light/dark/compact/goals accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
-  console.log("Native desktop window passed: IPC, approval, file/terminal tools, replay, cancellation, layout, goals, accessibility, shutdown.");
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "cancellation", "compact layout", "native light/dark/compact/goals/routing accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {
     await screenshot("failure").catch(() => {});

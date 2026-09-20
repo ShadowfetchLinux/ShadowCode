@@ -47,6 +47,7 @@ import {
 } from "./components/overlays";
 import { Settings } from "./components/Settings";
 import { useConversation } from "./hooks/useConversation";
+import { modelLabel } from "./lib/models";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -731,17 +732,25 @@ export default function App() {
 
   const current = sessions.find((s) => s.id === sessionId);
   const title = current?.title || "New task";
+  const selectedModel = models.find(
+    (candidate) => candidate.id === modelChoice,
+  );
+  const activeModel = job?.routing || transcript.routing;
   const model =
-    modelChoice ||
-    status?.model.name ||
-    status?.model.default ||
-    "Choose model";
-  const ctx = status?.model.context_limit
+    busy && activeModel
+      ? activeModel.model_name
+      : selectedModel
+        ? modelLabel(selectedModel, models)
+        : status?.routing?.enabled
+          ? "Automatic by task mode"
+          : status?.model.name || status?.model.default || "Choose model";
+  const contextLimit =
+    activeModel?.context_limit || status?.model.context_limit;
+  const ctx = contextLimit
     ? Math.min(
         100,
         Math.round(
-          ((transcript.usage.prompt_tokens || 0) / status.model.context_limit) *
-            100,
+          ((transcript.usage.prompt_tokens || 0) / contextLimit) * 100,
         ),
       )
     : 0;
@@ -1020,6 +1029,13 @@ export default function App() {
                         setPanel("changes");
                       }}
                     />
+                  ) : item.kind === "note" ? (
+                    <div
+                      key={i}
+                      className={`msg-note ${item.warning ? "warning" : ""}`}
+                    >
+                      {item.text}
+                    </div>
                   ) : item.kind === "user" ? (
                     <div key={i} className="msg-user">
                       <div className="user-pill">
@@ -1250,9 +1266,11 @@ export default function App() {
                 }}
               >
                 <option value="">
-                  {status?.model.name ||
-                    status?.model.default ||
-                    "Choose model"}
+                  {status?.routing?.enabled
+                    ? "Automatic by task mode"
+                    : status?.model.name ||
+                      status?.model.default ||
+                      "Choose model"}
                 </option>
                 {[...new Set(models.map((m) => m.provider))].map((p) => (
                   <optgroup key={p} label={p}>
@@ -1260,7 +1278,7 @@ export default function App() {
                       .filter((m) => m.provider === p)
                       .map((m) => (
                         <option key={m.id} value={m.id}>
-                          {m.name || m.id}
+                          {modelLabel(m, models)}
                           {m.detected ? " · local" : ""}
                         </option>
                       ))}
@@ -1337,7 +1355,7 @@ export default function App() {
           <span className="sep">/</span>
           <span title={model}>{model}</span>
           <span className="grow" />
-          <span title="Input tokens as a percentage of the configured context limit">
+          <span title="Input tokens as a percentage of this task's model context limit">
             Context {ctx}%
           </span>
           <span className="sep">·</span>

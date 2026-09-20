@@ -505,6 +505,41 @@ kbd {
   background: var(--surface-3);
   overflow-wrap: anywhere;
 }
+.msg-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0 0 16px;
+  overflow-wrap: anywhere;
+}
+.msg-note.warning {
+  color: var(--text);
+  border-left: 2px solid var(--muted);
+  padding-left: 12px;
+}
+.routing-fields {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0;
+}
+.routing-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.routing-field label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.routing-field select {
+  width: 100%;
+  min-width: 0;
+}
+.routing-field p {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .msg-agent {
   font-size: 14px;
   line-height: 1.8;
@@ -1137,6 +1172,15 @@ kbd {
   }
 }
 
-.input-action { display: flex; align-items: center; gap: 8px; }
-.input-action input { flex: 1; min-width: 0; }
-.input-action button { flex-shrink: 0; }
+.input-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.input-action input {
+  flex: 1;
+  min-width: 0;
+}
+.input-action button {
+  flex-shrink: 0;
+}

@@ -113,7 +113,7 @@ impl Default for Config {
             agent: AgentConfig::default(),
             ui: json!({"theme":"light","notify":true,"notify_after_sec":4,"ability":"none","host":"127.0.0.1","port":7430}),
             onboarding: json!({"completed":false,"workspace":""}),
-            routing: json!({"enabled":false,"planner":"mock","coder":"mock","reviewer":"mock","tester":"mock"}),
+            routing: json!({"enabled":false,"planner":"","coder":"","reviewer":"","tester":""}),
             mcp: json!({"servers":[]}),
             git: json!({"auto_commit":false,"allow_destructive":false}),
             logging: json!({"level":"info"}),
@@ -221,6 +221,7 @@ impl Config {
             self.mcp.get("servers").is_some_and(Value::is_array),
             "MCP servers must be an array"
         );
+        crate::routing::validate(&self.routing)?;
         Ok(())
     }
     pub fn is_trusted(&self, workspace: &Path) -> bool {

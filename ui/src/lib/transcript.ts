@@ -1,4 +1,4 @@
-import type { EventRow, PlanStep } from "../api";
+import type { EventRow, PlanStep, RoutingDecision } from "../api";
 import type { ChatItem } from "../components/cards";
 
 export type Transcript = {
@@ -7,6 +7,7 @@ export type Transcript = {
   stage: string;
   usage: Record<string, number>;
   plan: PlanStep[];
+  routing?: RoutingDecision;
 };
 export const emptyTranscript = (): Transcript => ({
   items: [],
@@ -25,6 +26,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let stage = state.stage;
   let usage = state.usage;
   let plan = state.plan;
+  let routing = state.routing;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
   if (event.type === "user.message") {
@@ -40,6 +42,31 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     stage = "UNDERSTAND";
     plan = [];
     usage = {};
+    routing = undefined;
+  }
+  if (event.type === "routing.selected" || event.type === "routing.fallback") {
+    if (p.model_id && p.model_name && p.provider)
+      routing = p as unknown as RoutingDecision;
+    const selected = [
+      p.model_name || p.model_id || p.fallback || "configured model",
+      p.provider,
+      p.purpose,
+    ]
+      .filter(Boolean)
+      .map(String)
+      .join(" · ");
+    const warning = event.type === "routing.fallback";
+    items = [
+      ...items,
+      {
+        kind: "note",
+        taskId,
+        warning,
+        text: warning
+          ? `Using default: ${selected}. ${String(p.fallback_reason || "The saved model is unavailable.")}`
+          : `Using ${selected}${p.source === "explicit" ? " · selected for this task" : ""}`,
+      },
+    ];
   }
   if (
     ["model.stream", "model.delta", "model.stream_end"].includes(event.type)
@@ -156,7 +183,14 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     stage = p.cancelled ? "CANCELLED" : p.success ? "DONE" : "FAILED";
     usage = (p.usage as Record<string, number>) || {};
   }
-  return { items, stage, usage, plan, cursor: event.id || state.cursor };
+  return {
+    items,
+    stage,
+    usage,
+    plan,
+    routing,
+    cursor: event.id || state.cursor,
+  };
 }
 
 export function replay(events: EventRow[]): Transcript {

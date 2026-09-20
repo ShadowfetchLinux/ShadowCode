@@ -6,7 +6,7 @@ use crate::{
     events::TaskEvents,
     models::{ModelClient, Usage},
     paths::AppPaths,
-    permissions,
+    permissions, routing,
     store::Store,
     tools::{self, ToolExecutor},
     workspace::Workspace,
@@ -57,6 +57,7 @@ pub struct Job {
     pub status: String,
     pub mode: String,
     pub model: String,
+    pub routing: Option<routing::Decision>,
     pub started_at: f64,
     pub finished_at: Option<f64>,
     pub event_cursor: i64,
@@ -219,12 +220,16 @@ impl Engine {
         })
     }
     pub async fn start(&self, request: StartRequest) -> Result<Job> {
-        self.start_with_context(request, None).await
+        self.start_for_purpose(request, "").await
+    }
+    pub async fn start_for_purpose(&self, request: StartRequest, purpose: &str) -> Result<Job> {
+        self.start_with_context(request, None, purpose).await
     }
     async fn start_with_context(
         &self,
         request: StartRequest,
         system_context: Option<String>,
+        purpose: &str,
     ) -> Result<Job> {
         ensure!(
             !self.0.closing.load(Ordering::Acquire),
@@ -240,9 +245,9 @@ impl Engine {
         );
         let workspace = Arc::new(Workspace::open(&request.workspace)?);
         let mut config = Config::load(&self.0.paths, Some(&workspace.path))?;
-        if let Some(model) = request.model {
-            config.model = model;
-        }
+        let purpose = routing::purpose(purpose, &request.mode)?;
+        let (model, decision) = routing::select(&self.0.store, &config, request.model, purpose)?;
+        config.model = model;
         if request.mode != "code" {
             config.permissions.level = PermissionLevel::ReadOnly;
         }
@@ -303,6 +308,7 @@ impl Engine {
             status: "queued".into(),
             mode: request.mode,
             model: config.model.name.clone(),
+            routing: Some(decision),
             started_at: crate::now(),
             finished_at: None,
             event_cursor,
@@ -681,6 +687,16 @@ impl Engine {
         messages.push(json!({"role":"user","content":job.task}));
         self.0.store.save_messages(&job.id, &messages)?;
         events.emit("agent.started",json!({"job_id":job.id,"task":job.task,"mode":job.mode,"model":job.model,"native":true}))?;
+        if let Some(decision) = &job.routing {
+            events.emit(
+                if decision.fallback_reason.is_some() {
+                    "routing.fallback"
+                } else {
+                    "routing.selected"
+                },
+                json!(decision),
+            )?;
+        }
         let mut repeated = HashMap::new();
         let mut commands = Vec::new();
         let requires_inspection = regex::Regex::new(r"(?i)^(?:please\s+)?(?:read|inspect|open)\b")?
