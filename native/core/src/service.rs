@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 mod commands;
 #[cfg(unix)]
 mod inspection;
+mod memory;
 
 #[derive(Clone)]
 struct Selection {
@@ -284,6 +285,7 @@ impl Service {
                 return Ok(crate::hooks::catalog(&workspace, &config));
             }
             ("GET", "/api/commands") => return self.command_catalog(),
+            ("POST", "/api/memory") => return self.memory(body),
             ("POST", "/api/commands/run") => return self.run_command(body).await,
             ("GET", "/api/version") => {
                 return Ok(
@@ -990,7 +992,16 @@ impl Service {
                     )?;
                     return self.session(sid);
                 }
-                ("POST", Some("branch")) => return store.branch_session(sid, text("title")),
+                ("POST", Some("branch")) => {
+                    let workspace = PathBuf::from(
+                        store.session(sid)?.context("Conversation does not exist")?["workspace"]
+                            .as_str()
+                            .context("Conversation has no workspace")?,
+                    );
+                    let memory =
+                        crate::memory::archive(self.engine.paths(), &store, &workspace, sid)?;
+                    return store.branch_session_with_memory(sid, text("title"), &memory);
+                }
                 ("GET", Some("events")) => {
                     return Ok(
                         json!({"events":store.events_after(sid,q("after").parse().unwrap_or(0),None,query_limit(&query,512,10000))?}),
@@ -1244,8 +1255,13 @@ impl Service {
         session["event_cursor"] = json!(cursor);
         session["tasks"] = json!(store.tasks(id, 10000)?);
         if format == "json" {
+            let content = serde_json::to_string_pretty(&self.export_memory(session)?)?;
+            ensure!(
+                content.len() <= 32_000_000,
+                "This conversation exceeds the 32 MB export limit"
+            );
             return Ok(
-                json!({"filename":format!("shadowcode-{id}.json"),"content":serde_json::to_string_pretty(&session)?,"mime":"application/json"}),
+                json!({"filename":format!("shadowcode-{id}.json"),"content":content,"mime":"application/json"}),
             );
         }
         let mut text = format!(
@@ -1275,7 +1291,56 @@ impl Service {
                 _ => {}
             }
         }
+        let session = self.export_memory(session)?;
+        if let Some(notes) = session["inherited_notes"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+        {
+            text.push_str(&format!("\n## Inherited task notes\n\n{notes}\n"));
+        }
+        for (id, notes) in session["task_notes"].as_object().into_iter().flatten() {
+            text.push_str(&format!(
+                "\n## Task notes · {id}\n\n{}\n",
+                notes.as_str().unwrap_or("")
+            ));
+        }
+        ensure!(
+            text.len() <= 32_000_000,
+            "This conversation exceeds the 32 MB export limit"
+        );
         Ok(json!({"filename":format!("shadowcode-{id}.md"),"content":text,"mime":"text/markdown"}))
+    }
+    fn export_memory(&self, mut session: Value) -> Result<Value> {
+        let store = self.engine.store();
+        let workspace = Path::new(
+            session["workspace"]
+                .as_str()
+                .context("Conversation has no workspace")?,
+        );
+        let sid = session["id"].as_str().context("Conversation has no ID")?;
+        let seed = store
+            .query(
+                "SELECT value FROM session_meta WHERE session_id=? AND key='memory_seed'",
+                [sid],
+            )?
+            .pop();
+        let mut notes = serde_json::Map::new();
+        let mut bytes = session.to_string().len();
+        for task in session["tasks"].as_array().into_iter().flatten() {
+            let id = task["id"].as_str().context("Task has no ID")?;
+            let note = crate::memory::task_notes(self.engine.paths(), &store, workspace, id)?;
+            if !note.is_empty() {
+                bytes += note.len();
+                ensure!(
+                    bytes <= 32_000_000,
+                    "This conversation exceeds the 32 MB export limit"
+                );
+                notes.insert(id.to_owned(), json!(note));
+            }
+        }
+        session["task_notes"] = json!(notes);
+        session["inherited_notes"] = seed.map(|v| v["value"].clone()).unwrap_or(Value::Null);
+        Ok(session)
     }
     async fn git_in(
         workspace: &Path,

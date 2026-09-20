@@ -154,7 +154,7 @@ retries, and supports modern and legacy Streamable HTTP negotiation. The native
 stdio server exposes sixteen tools, four resources and two prompts through
 the shared engine, with a fixed project, reduced per-task permissions, explicit
 approval delegation and connection-owned jobs. Built-in SQLite compatibility,
-task-memory compatibility, HTTP serving and broader interoperability/real-model
+HTTP serving and broader interoperability/real-model
 verification remain open requirements. Private engine-side ownership now cancels
 MCP jobs after gateway SIGKILL, including unread submission replies, queued tasks
 and active command children; unrelated work continues.
@@ -164,6 +164,11 @@ note sections that preserve user text, native runtime/profile/project diagnostic
 and literal-path Git history. CLI and desktop commands use the same service.
 MCP test jobs run actual commands without a model, with exact approvals, hooks,
 queue ownership, real output/exit status, and timeout/process cleanup.
+
+[Native task notes](NATIVE_MEMORY.md) extend project memory with scoped persistent
+notes, legacy-file preservation, atomic edits with stale-hash rejection, bounded
+continuation context, independent branch archives and complete note exports.
+The desktop, CLI and MCP server share this service.
 
 AppImage extraction now uses a source-pinned runtime patch with private
 per-invocation directories, signal forwarding, and checked cleanup. A dedicated

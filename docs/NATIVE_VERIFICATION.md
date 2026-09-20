@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **164 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **170 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -107,6 +107,13 @@ integration tests** pass on the development machine. The suite covers:
   children. A failed completion hook retains the successful command's output
   while correctly failing the overall task. MCP read-only access cannot save maps,
   start test jobs or approve another connection's task.
+- Task-note persistence across restart, migration backup, legacy-file preservation,
+  concurrent appends without lost notes, stale replacement rejection, explicit
+  clearing without resurrecting legacy text, cross-project/read-only/busy-workspace
+  rejection, UTF-8 limits and symlink/special-file exclusion. Branches retain full
+  notes independently after source deletion; continuation sees labelled excerpts,
+  and JSON/Markdown exports retain the complete saved notes. MCP tests verify
+  fixed-project task IDs and write grants for append/replacement.
 
 `scripts/test-native-mcp-server.mjs` exercises the real executable without a
 display or Python. Its first four scripted model requests perform a read, file
@@ -153,6 +160,12 @@ expected result and its recorded process group is stopped before CLI exit.
 The inspection update passes 12 CLI scenario groups with the same 30 model
 requests. It adds read-only/saved project maps, structured and readable native
 diagnostics, durable command responses and history argument validation.
+
+The task-memory update passes 13 CLI scenario groups with the same 30 model
+requests. It checks persistent task notes, readable output, parser validation,
+stale replacement rejection and actual note inclusion in a continued model
+request. The MCP executable probe also saves and reads notes for its completed
+native test task, without additional model calls.
 
 The probe also hosts `serve`, starts and stops background commands, reads their
 logs, runs a task alongside them, observes and cancels detached work, and approves
@@ -224,6 +237,12 @@ passes, warnings, failures and unperformed checks with readable details. The
 unsupported native Auto-fix control is absent; automatic repair remains a release
 requirement. Project maps render as Markdown, and command details wrap when the
 Health panel narrows the conversation.
+The window now saves task notes through `/memory --task` and verifies the durable
+card. The inspection milestone's clean-runner CI found a goal stalled at a pending
+approval. Desktop decisions now carry the displayed approval's conversation ID;
+an explicit regression changes the backend selection before clicking Allow and
+checks that the correct goal approval resolves and all milestones finish. A
+late approval refresh cannot replace another selected conversation's approvals.
 Seventeen interface unit tests cover ordered replay, pagination, stream finalization,
 listener cleanup, interruption, native tool cards, routing/fallback replay,
 workflow provenance, durable command/hook cards, completion checks between

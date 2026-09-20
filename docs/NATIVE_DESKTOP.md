@@ -50,6 +50,11 @@ separate warning, failure and not-checked labels and readable repair suggestions
 Model connectivity is tested only when explicitly requested. Automatic native
 diagnostic repairs remain a migration requirement.
 
+[Project and task notes](NATIVE_MEMORY.md) persist through native commands and
+the CLI/MCP server, with bounded continuation context, independent branch copies
+and note exports. Approval decisions carry the displayed prompt's conversation
+ID so a navigation change cannot send the decision to another task.
+
 Project [lifecycle commands](NATIVE_HOOKS.md) can be reviewed and enabled in
 Settings → Hooks or through the same native CLI. Their command gates and
 completion checks run inside the native task lifecycle without Python callbacks.

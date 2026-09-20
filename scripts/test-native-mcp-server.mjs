@@ -386,6 +386,10 @@ try {
   assert.equal(testResult.status, "completed");
   assert.equal(testResult.result.command.stdout, "standalone-test-ok");
   assert.equal(testResult.result.command.exit_code, 0);
+  const savedNotes = await testClient.call("shadow_memory", {action:"append", scope:"task", task_id:testJob.task_id, note:"Preserve the exact standalone test result."});
+  assert.equal(savedNotes.isError, false);
+  const taskNotes = await testClient.call("shadow_memory", {action:"read", scope:"task", task_id:testJob.task_id});
+  assert.match(taskNotes.structuredContent.task, /exact standalone test result/);
   await testClient.close();
   // The owning server closed its profile cleanly; another invocation can reopen.
   const reopened = await finish(launch(["--json", "status"]));
@@ -483,7 +487,7 @@ try {
           "native task with exact approval",
           "real write, terminal verification, checkpoint and rollback",
           "resource reads",
-          "native project inspection, diagnostics, and approved test execution without model calls",
+          "native project inspection, diagnostics, approved test execution and task notes without model calls",
           "EOF cleanup and profile restart",
           "SIGKILL gateway cleanup on a shared engine, including queued tasks and an active command child",
           "unrelated detached task survives gateway death",

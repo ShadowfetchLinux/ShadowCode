@@ -28,7 +28,7 @@ directories, and does not traverse symlinks. Limits are 20,000 entries, depth 16
 64 manifests/modules, 128 KB per manifest, 64 KB per source-file prefix, and
 8 MB of total content reads. The report includes counts, warnings and a partial
 scan flag. Special files such as FIFOs are skipped; capability-relative,
-nonblocking inspection reads cannot follow a final symlink outside the project.
+nonblocking inspection reads open each path component without following symlinks.
 The map is a live inspection, not an atomic snapshot of a changing repository.
 
 Saving requires project trust and write permission, and reserves the workspace

@@ -35,6 +35,12 @@ catalog. `skill --list` lists project skills and
 navigation commands describe their requested panel/action in CLI output; they
 do not remotely open desktop panels. See [workflows](NATIVE_WORKFLOWS.md).
 
+`memory [note]` reads or appends project notes; `memory --task TASK_ID [note]`
+uses an exact task in the current project. `--json` exposes content hashes;
+`--replace --expected-hash HASH "text"` edits that exact version, with an empty
+string clearing it. See [native memory](NATIVE_MEMORY.md) for persistence,
+legacy notes, continuation, branching and export.
+
 `hooks` lists project lifecycle command definitions. Review the command and its
 hash, then use `hooks --enable PATH --hash HASH` to enable those exact contents
 or `hooks --disable PATH` to remove the registration. Hooks remain inactive in

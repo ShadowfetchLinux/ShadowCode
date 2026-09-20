@@ -97,7 +97,10 @@ const model = createServer(async (req, res) => {
     } else if (!hadTool) {
       message = { role: "assistant", content: "Inspecting this project.", tool_calls: [tool("read_file", { path: "README.md" })] };
     } else {
-      if (prompt.includes("CONTINUE")) assert.ok(payload.messages.some(m => m.role === "assistant" && m.content?.includes("CLI completed")), "Continuation must preserve prior assistant history");
+      if (prompt.includes("CONTINUE")) {
+        assert.ok(payload.messages.some(m => m.role === "assistant" && m.content?.includes("CLI completed")), "Continuation must preserve prior assistant history");
+        assert.ok(payload.messages[0].content.includes("Prefer the saved offline fixture."), "Continuation must include saved task notes");
+      }
       if (prompt.includes("MCP")) {
         const result = JSON.parse(current.filter(m=>m.role==="tool").at(-1).content);
         assert.equal(result.success,true);
@@ -189,6 +192,14 @@ try {
   const task = await cli(["run", "READ this project\r \u001b[31m"]);
   assert.equal(task.status, "completed"); assert.equal(task.usage.total_tokens, 80);
   assert.equal(await readFile(path.join(project, "hook-result.txt"), "utf8"), "native-cli-hook");
+  const notes = await cli(["memory", "--task", task.task_id, "Prefer the saved offline fixture."]);
+  assert.match(notes.task, /saved offline fixture/);
+  assert.equal((await cli(["memory", "--task", task.task_id])).task, notes.task);
+  assert.match((await finish(launch(["memory", "--task", task.task_id]))).stdout, /## Task notes/);
+  assert.equal((await cli(["command", "memory", "--", `--task ${task.task_id}`])).metadata.task, notes.task);
+  assert.match((await cli(["memory", "--task", task.task_id, "--replace", "--expected-hash", "stale", "overwrite"], 1)).error, /changed|hash/i);
+  await finish(launch(["memory", "--task", task.task_id, "--replace", "overwrite"]), 2);
+  checks.push("persistent task notes, stale replacement rejection and continuation context");
   const continued = await cli(["run", "CONTINUE this inspection", "--session", task.session_id.slice(0, 12)]);
   assert.equal(continued.status, "completed"); assert.equal(continued.session_id, task.session_id);
   const replay = await finish(launch(["jobs", task.id, "--watch"]));

@@ -478,6 +478,68 @@ fn active_status(job: &Value) -> bool {
 }
 
 #[tokio::test]
+async fn native_server_task_notes_use_exact_project_tasks_and_write_grants() {
+    let f = Fixture::new("http://127.0.0.1:1/v1");
+    let store = f.service.engine.store();
+    let session = store.create_session(&f.project, "fixture", "").unwrap();
+    let tid = store
+        .create_task(session["id"].as_str().unwrap(), "Earlier task")
+        .unwrap();
+    let outside = store.create_session(&f.other, "fixture", "").unwrap();
+    let other_tid = store
+        .create_task(outside["id"].as_str().unwrap(), "Other project")
+        .unwrap();
+    let readonly = f.connect(Access::default()).await;
+    let writer = f
+        .connect(Access {
+            allow_write: true,
+            allow_approvals: false,
+        })
+        .await;
+    for action in ["append", "replace"] {
+        assert_eq!(
+            readonly
+                .call(
+                    "shadow_memory",
+                    json!({"action":action,"scope":"task","task_id":tid,"note":"not allowed"})
+                )
+                .await["error"],
+            true
+        );
+    }
+    assert_eq!(
+        writer
+            .call(
+                "shadow_memory",
+                json!({"action":"read","scope":"task","task_id":other_tid})
+            )
+            .await["error"],
+        true
+    );
+    assert_eq!(
+        writer
+            .call(
+                "shadow_memory",
+                json!({"action":"append","scope":"task","note":"missing ID"})
+            )
+            .await["error"],
+        true
+    );
+    let saved=writer.call("shadow_memory",json!({"action":"append","scope":"task","task_id":tid,"note":"Keep the offline fixture."})).await;
+    assert_eq!(saved["error"], false, "{saved}");
+    let read = readonly
+        .call("shadow_memory", json!({"action":"read","task_id":tid}))
+        .await;
+    assert_eq!(read["value"]["task"], "- Keep the offline fixture.\n");
+    assert_eq!(writer.call("shadow_memory",json!({"action":"replace","scope":"task","task_id":tid,"note":"New note","expected_hash":"stale"})).await["error"],true);
+    let edited=writer.call("shadow_memory",json!({"action":"replace","scope":"task","task_id":tid,"note":"New note","expected_hash":read["value"]["task_hash"]})).await;
+    assert_eq!(edited["value"]["task"], "New note");
+    writer.close().await;
+    readonly.close().await;
+    f.close().await;
+}
+
+#[tokio::test]
 async fn native_mcp_inspection_and_test_jobs_use_real_permissions_without_a_model() {
     let f = Fixture::new("http://127.0.0.1:1/v1");
     fs::write(

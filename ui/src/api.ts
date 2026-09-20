@@ -79,6 +79,7 @@ export type PlanStep = {
 };
 export type Approval = {
   id: string;
+  session_id?: string;
   command?: string;
   reason?: string;
   tool?: string;
@@ -576,8 +577,11 @@ export const api = {
     get<{ approvals: Approval[] }>(
       `/api/approvals${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
     ),
-  decide: (id: string, decision: "approve" | "deny") =>
-    send<Approval>(`/api/approvals/${id}`, "POST", { decision }),
+  decide: (id: string, decision: "approve" | "deny", sessionId?: string) =>
+    send<Approval>(`/api/approvals/${id}`, "POST", {
+      decision,
+      session_id: sessionId,
+    }),
   instructions: () =>
     get<{ content: string; exists: boolean }>("/api/workspace/instructions"),
   saveInstructions: (content: string) =>

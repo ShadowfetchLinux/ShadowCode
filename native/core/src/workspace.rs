@@ -195,7 +195,7 @@ impl Workspace {
         })
     }
     /// A bounded inspection read. Nonblocking/no-follow open avoids hanging on
-    /// a FIFO or following a final symlink swapped in after directory discovery.
+    /// a FIFO or following a symlink swapped in after directory discovery.
     pub(crate) fn inspect(&self, path: &str, limit: usize) -> Result<(Vec<u8>, u64)> {
         let mut options = OpenOptions::new();
         options.read(true);
@@ -204,7 +204,29 @@ impl Workspace {
             use cap_std::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
         }
-        let file = self.dir.open_with(self.relative(path)?, &options)?;
+        let relative = self.relative(path)?;
+        #[cfg(unix)]
+        let file = {
+            use cap_std::fs::OpenOptionsExt;
+            let mut parent = self.dir.try_clone()?;
+            let mut directory = OpenOptions::new();
+            directory
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+            for part in relative.parent().unwrap_or(Path::new(".")).components() {
+                if let Component::Normal(name) = part {
+                    parent = Dir::from_std_file(parent.open_with(name, &directory)?.into_std());
+                }
+            }
+            parent.open_with(
+                relative
+                    .file_name()
+                    .context("Inspection requires a file path")?,
+                &options,
+            )?
+        };
+        #[cfg(not(unix))]
+        let file = self.dir.open_with(relative, &options)?;
         let meta = file.metadata()?;
         ensure!(meta.is_file(), "Inspection requires a regular file");
         let mut bytes = Vec::new();

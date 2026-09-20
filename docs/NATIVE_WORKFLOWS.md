@@ -109,6 +109,10 @@ specific listed checkpoint. Conflict checks preserve unrelated edits.
 future tasks; the append command limits the file to 16 KB so it fits the project
 guidance excerpt. These are user-written project notes, not a generated summary
 of hidden model reasoning.
+`/memory --task <TASK_ID> [note]` targets notes for an existing task in this
+project. `/memory` also shows the selected conversation's latest task notes.
+See [native memory](NATIVE_MEMORY.md) for continuation, branches, exports and
+replacement with stale-content protection.
 
 `/background` opens process controls; `list`, `start <name> <command>`, and
 `stop <id>` manage the current project’s processes. `/sessions`, `/skills`,

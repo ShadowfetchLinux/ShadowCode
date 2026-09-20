@@ -459,10 +459,16 @@ export default function App() {
       toast(String(e), "err");
     }
   }
-  async function decide(id: string, decision: "approve" | "deny") {
+  async function decide(
+    id: string,
+    decision: "approve" | "deny",
+    approvalSession?: string,
+  ) {
     try {
-      await api.decide(id, decision);
-      setApprovals((await api.approvals(sessionId)).approvals);
+      await api.decide(id, decision, approvalSession);
+      const selected = selectedRef.current;
+      const next = await api.approvals(selected);
+      if (selectedRef.current === selected) setApprovals(next.approvals);
     } catch (e) {
       toast(String(e), "err");
     }
@@ -1134,7 +1140,9 @@ export default function App() {
               <ApprovalCard
                 key={a.id}
                 approval={a}
-                onDecide={(id, decision) => void decide(id, decision)}
+                onDecide={(id, decision) =>
+                  void decide(id, decision, a.session_id)
+                }
               />
             ))}
             {(busy || submitting) && !switching && (

@@ -58,6 +58,17 @@ pub enum Command {
         #[arg(long)]
         test_model: bool,
     },
+    /// Read or append project notes, or select an exact task's notes.
+    Memory {
+        note: Option<String>,
+        #[arg(long)]
+        task: Option<String>,
+        /// Replace notes (an empty string clears them) after reading their hash.
+        #[arg(long, requires_all = ["note", "expected_hash"])]
+        replace: bool,
+        #[arg(long, requires = "replace")]
+        expected_hash: Option<String>,
+    },
     /// Inspect the project without running code or a model.
     Understand {
         #[arg(long)]

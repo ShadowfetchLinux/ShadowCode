@@ -430,6 +430,11 @@ try {
   await type('textarea[aria-label="Message ShadowCode"]', "/status");
   await click('button[aria-label="Send task"]');
   await until("Durable command card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Permission mode'))"));
+  const selectedMemory = (await api("POST", "/api/commands/run", {name:"memory", args:""})).metadata;
+  assert.ok(selectedMemory.task_id, "The selected conversation has an exact task for notes");
+  await type('textarea[aria-label="Message ShadowCode"]', `/memory --task ${selectedMemory.task_id} Keep the desktop fixture local.`);
+  await click('button[aria-label="Send task"]');
+  await until("Task memory card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Note saved') && e.textContent.includes('Keep the desktop fixture local.'))"));
   await type('textarea[aria-label="Message ShadowCode"]', "/understand");
   await click('button[aria-label="Send task"]');
   await until("Native project map card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Project map') && e.textContent.includes('Test candidates'))"));
@@ -455,7 +460,13 @@ try {
   await type('textarea[aria-label="Goal instruction"]', "Create goal.txt containing goal-native-ok and verify its contents.");
   await clickButton("Plan & run");
   await until("Goal command approval", () => execute("return !!document.querySelector('.approval button.primary')"));
-  await click(".approval button.primary");
+  const goalApproval = (await api("GET", "/api/approvals")).approvals.find(a=>a.command.includes("goal-native-ok"));
+  assert.ok(goalApproval, "The displayed goal has an exact pending command approval");
+  const otherSelection = await api("POST", "/api/sessions", {workspace:project,title:"Approval selection regression"});
+  await api("POST", `/api/sessions/${otherSelection.id}/activate`);
+  await click(`.approval[data-approval-id="${goalApproval.id}"] button.primary`);
+  await until("Goal approval resolved for its own conversation", async () => !(await api("GET", "/api/approvals")).approvals.some(a=>a.id===goalApproval.id));
+  await api("POST", `/api/sessions/${goalApproval.session_id}/activate`);
   await until("Goal completion", async () => {
     const goal = (await api("GET", "/api/goals")).goals[0];
     assert.notEqual(goal?.status, "blocked", goal?.run_detail);
@@ -534,7 +545,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

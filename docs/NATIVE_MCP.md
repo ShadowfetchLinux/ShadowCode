@@ -54,7 +54,9 @@ The current server exposes sixteen tools:
   maps, native diagnostics and recorded change history. See
   [inspection and diagnostics](NATIVE_INSPECTION.md) for their limits and optional
   saving/model-probe behavior.
-- `shadow_memory` reads or appends project notes. Append requires write access.
+- `shadow_memory` reads, appends or replaces project/task notes. Task scope uses
+  an exact existing task ID in this project; replacement requires the current
+  content hash. Changes require write access. See [native memory](NATIVE_MEMORY.md).
 - `shadow_goal` creates, lists, inspects, advances or abandons durable goals.
   Creating or advancing a goal here does not start an agent automatically.
 - `shadow_run` creates a fresh conversation and returns its job ID. `shadow_jobs`
@@ -98,7 +100,7 @@ engine's own limits. Tool/resource results are capped at 2 MB and response write
 have a five-second deadline. Reconnect after a connection limit is reached.
 
 This is a development server, not full compatibility with the earlier Python
-server. Task memory, HTTP serving, and client-specific registration formats
+server. HTTP serving and client-specific registration formats
 remain unimplemented. Tools use the fixed project and asynchronous owned jobs;
 map saving is explicit, and diagnostics do not perform automatic repairs.
 The current tests use the official
@@ -328,7 +330,7 @@ responses, private discovery errors, initialization/call deadlines, cancellation
 client drop, and abandoned initialization. The desktop probe also registers an
 HTTP endpoint in Settings and completes an approved, authenticated streaming call.
 
-Seven server regressions use the official SDK to check discovery, resources/prompts,
+Eight server regressions use the official SDK to check discovery, resources/prompts,
 project isolation, session filtering before limits, write/trust restrictions,
 per-task permission reduction, owned-job and approval isolation, real approved
 execution, EOF/drop cleanup, malformed/oversized/truncated frames, and floods.

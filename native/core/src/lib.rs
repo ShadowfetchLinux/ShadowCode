@@ -15,6 +15,7 @@ pub mod hooks;
 pub mod lifecycle;
 #[cfg(unix)]
 pub mod mcp;
+pub mod memory;
 pub mod model_registry;
 pub mod models;
 pub mod patch;

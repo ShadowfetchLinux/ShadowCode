@@ -11,6 +11,7 @@ use std::{
 
 mod background;
 mod goals;
+mod memory;
 pub use goals::MilestoneSpec;
 
 const SCHEMA: &str = r#"
@@ -79,6 +80,10 @@ CREATE TABLE IF NOT EXISTS queued_tasks (
  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, workspace TEXT NOT NULL,
  payload TEXT NOT NULL, status TEXT NOT NULL, created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS task_notes (
+ task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+ content TEXT NOT NULL, updated_at REAL NOT NULL
+);
 "#;
 
 pub struct Store {
@@ -102,10 +107,10 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", true)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 23,
+            version <= 24,
             "This database was created by a newer ShadowCode version"
         );
-        if version < 23 {
+        if version < 24 {
             if existed {
                 let backup_path = path.with_extension(format!("pre-native-{}.sqlite", id()));
                 let mut backup = Connection::open(&backup_path)?;
@@ -144,7 +149,7 @@ impl Store {
                     tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
                 }
             }
-            tx.pragma_update(None, "user_version", 23)?;
+            tx.pragma_update(None, "user_version", 24)?;
             tx.commit()?;
         }
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -251,6 +256,18 @@ impl Store {
         Ok(())
     }
     pub fn branch_session(&self, sid: &str, title: &str) -> Result<Value> {
+        self.branch_session_with_memory(sid, title, "")
+    }
+    pub fn branch_session_with_memory(
+        &self,
+        sid: &str,
+        title: &str,
+        memory: &str,
+    ) -> Result<Value> {
+        ensure!(
+            memory.len() <= 32_000_000,
+            "Branch memory exceeds its limit"
+        );
         let mut db = self.lock()?;
         let tx = db.transaction()?;
         let parent = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [sid])?
@@ -276,6 +293,12 @@ impl Store {
             )?;
         } else {
             tx.execute("INSERT INTO session_meta(session_id,key,value) SELECT ?,key,value FROM session_meta WHERE session_id=? AND key='message_seed'",params![branch,sid])?;
+        }
+        if !memory.is_empty() {
+            tx.execute(
+                "INSERT INTO session_meta(session_id,key,value) VALUES(?,'memory_seed',?)",
+                params![branch, memory],
+            )?;
         }
         let result = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [&branch])?
             .pop()

@@ -320,18 +320,10 @@ impl Handler {
                 Ok(json!({"ok":true,"status":status,"diff":diff}))
             }
             "shadow_memory" => {
-                if text(args, "action") == "append" {
+                if text(args, "action") != "read" {
                     self.write()?;
-                    ensure!(!text(args, "note").trim().is_empty(), "A note is required");
                 }
-                self.command(
-                    "memory",
-                    if text(args, "action") == "append" {
-                        text(args, "note")
-                    } else {
-                        ""
-                    },
-                )
+                self.call("POST","/api/memory",json!({"action":args["action"],"scope":args["scope"],"task_id":args["task_id"],"note":args["note"],"expected_hash":args["expected_hash"]}))
                 .await
             }
             "shadow_goal" => {

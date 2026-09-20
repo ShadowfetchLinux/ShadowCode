@@ -66,7 +66,11 @@ const BUILTINS: &[(&str, &str, &str)] = &[
         "Manage project servers and watchers",
         "[list|start <name> <command>|stop <id>]",
     ),
-    ("memory", "Read or append project notes", "[note]"),
+    (
+        "memory",
+        "Read or append project notes; --task selects task notes",
+        "[--task <id>] [note]",
+    ),
     (
         "checkpoints",
         "List file-tool checkpoints in this conversation",
@@ -470,40 +474,24 @@ impl Service {
                 }
             }
             "memory" => {
-                let path = ".shadow/memory/project.md";
-                if args.trim().is_empty() {
-                    let ws = Workspace::open(&workspace)?;
-                    let memory = ws.snapshot(path)?;
-                    card(
-                        "Project notes",
-                        memory
-                            .bytes
-                            .map(String::from_utf8)
-                            .transpose()?
-                            .unwrap_or_else(|| {
-                                "No notes saved. Use /memory <note> to append one.".into()
-                            }),
-                    )
+                let (scope, task_id, note) = if let Some(rest) = args.trim().strip_prefix("--task ")
+                {
+                    let (id, note) = split(rest);
+                    ("task", Some(id), note)
                 } else {
-                    let ws = self.mutable_workspace_at(&workspace)?;
-                    let before = ws.snapshot(path)?;
-                    let old = before
-                        .bytes
-                        .map(String::from_utf8)
-                        .transpose()?
-                        .unwrap_or_default();
-                    let next = format!("{old}\n- {}\n", args.trim());
-                    ensure!(
-                        next.len() <= 16000,
-                        "Project notes exceed 16 KB; edit the notes file to shorten it"
-                    );
-                    ws.write(
-                        path,
-                        next.as_bytes(),
-                        before.hash.as_deref().or(Some("missing")),
-                    )?;
-                    card("Project note saved", args)
-                }
+                    ("project", None, args.trim())
+                };
+                let report=self.memory(&json!({"scope":scope,"task_id":task_id,"session_id":sid,"action":if note.is_empty(){"read"}else{"append"},"note":note}))?;
+                let mut result = card(
+                    if note.is_empty() {
+                        "Project and task notes"
+                    } else {
+                        "Note saved"
+                    },
+                    report["text"].as_str().unwrap_or(""),
+                );
+                result["metadata"] = report;
+                result
             }
             "checkpoints" | "undo" | "rollback" => {
                 let sid = sid

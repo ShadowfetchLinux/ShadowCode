@@ -334,6 +334,8 @@ fn display(value: &Value) -> Result<()> {
                 watch::plain(&value["metadata"].to_string())
             );
         }
+    } else if value["project_hash"].is_string() && value["text"].is_string() {
+        outln!("{}", watch::plain(value["text"].as_str().unwrap_or("")));
     } else if let Some(checks) = value["checks"].as_array() {
         outln!("Native diagnostics");
         for check in checks {
@@ -380,6 +382,7 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
         .context("No CLI command selected")?;
     let value = match command {
         Command::Ui => bail!("Desktop startup must use the native window"),
+        Command::Memory {note,task,replace,expected_hash}=>backend.call("POST","/api/memory",json!({"action":if *replace{"replace"}else if note.is_some(){"append"}else{"read"},"scope":if task.is_some(){"task"}else{"project"},"task_id":task,"note":note,"expected_hash":expected_hash})).await?,
         Command::Doctor { test_model } => {
             backend
                 .call(
