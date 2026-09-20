@@ -213,6 +213,30 @@ impl Service {
                     .await?
                 ));
             }
+            ("POST", "/api/worktrees/review-changes") => {
+                let workspace = self.workspace()?;
+                ensure!(
+                    Config::load(self.engine.paths(), Some(&workspace))?.is_trusted(&workspace),
+                    "Trust the source project before reviewing its changes"
+                );
+                return Ok(json!(
+                    crate::worktrees::changes::review(&workspace, CancellationToken::new()).await?
+                ));
+            }
+            ("POST", "/api/worktrees/copy-changes") => {
+                let ws = self.mutable_workspace()?;
+                let _background = self.engine.background().reserve_idle_workspace(&ws.path)?;
+                let record = crate::worktrees::changes::copy(
+                    self.engine.paths(),
+                    &ws.path,
+                    text("hash"),
+                    ws.reservation.cancellation(),
+                    |path| self.engine.reserve_workspace(path),
+                )
+                .await?;
+                store.add_event("worktree.changes_copied", &json!(record), None, None)?;
+                return Ok(json!(record));
+            }
             ("POST", "/api/worktrees/review-return") => {
                 let workspace = self.workspace()?;
                 ensure!(

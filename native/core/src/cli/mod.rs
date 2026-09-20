@@ -870,8 +870,10 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 });
             }
         }
-        Command::Worktree {create,reference,inspect,remove,hash,recovery,restore,recovery_hash,review_return,return_changes,return_hash}=>{
-            if let Some(id)=return_changes {
+        Command::Worktree {create,reference,inspect,remove,hash,recovery,restore,recovery_hash,review_return,return_changes,return_hash,review_changes,copy_changes,copy_hash}=>{
+            if *review_changes {backend.call("POST","/api/worktrees/review-changes",Value::Null).await?}
+            else if *copy_changes {backend.call("POST","/api/worktrees/copy-changes",json!({"hash":copy_hash})).await?}
+            else if let Some(id)=return_changes {
                 let value=backend.call("POST","/api/worktrees/return",json!({"id":id,"hash":return_hash})).await?;
                 return Ok(Outcome{code:if value["state"]=="merge_pending" {0}else{1},value,raw:None});
             }

@@ -95,7 +95,10 @@ payload's exit status. Force-killing the wrapper still reports its signal status
 the native child observes wrapper loss and shuts down.
 
 See [native worktrees](NATIVE_WORKTREES.md) for creation, reviewed removal,
-missing-checkout recovery and reviewed return of committed work.
+missing-checkout recovery, reviewed copying of uncommitted edits, and reviewed
+return of committed work. `worktree --review-changes` followed by
+`worktree --copy-changes --copy-hash HASH` preserves the source staging split
+and copies reviewed edits into a new checkout.
 `worktree --review-return ID` inspects incoming changes;
 `worktree --return-changes ID --return-hash HASH` prepares them in the source
 index without committing. Conflicts return a nonzero exit status and preserve

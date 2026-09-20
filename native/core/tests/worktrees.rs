@@ -739,3 +739,165 @@ async fn reviewed_return_does_not_overwrite_ignored_source_files() {
     .contains("root changed"));
     service.engine.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn copied_source_changes_preserve_staging_binary_untracked_modes_and_source() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths, json!({"trusted_workspaces":[project]})).unwrap();
+    let service = Service::open(paths.clone(), Some(project.clone())).unwrap();
+    fs::write(project.join("tracked.txt"), "staged\n").unwrap();
+    git(&project, &["add", "tracked.txt"]);
+    fs::write(project.join("tracked.txt"), "unstaged\n").unwrap();
+    fs::write(project.join("binary.dat"), [0, 1, 2, 255]).unwrap();
+    git(&project, &["add", "binary.dat"]);
+    fs::write(project.join("binary.dat"), [0, 1, 4, 254]).unwrap();
+    fs::write(project.join("intent.txt"), "intent-to-add contents\n").unwrap();
+    git(&project, &["add", "--intent-to-add", "intent.txt"]);
+    fs::create_dir(project.join("nested")).unwrap();
+    fs::write(project.join("nested/tool"), "#!/bin/sh\necho original\n").unwrap();
+    fs::set_permissions(
+        project.join("nested/tool"),
+        fs::Permissions::from_mode(0o750),
+    )
+    .unwrap();
+    fs::write(project.join(".git/info/exclude"), "ignored.txt\n").unwrap();
+    fs::write(project.join("ignored.txt"), "private ignored contents").unwrap();
+    let status = git(&project, &["status", "--porcelain"]);
+    let index = git(&project, &["show", ":tracked.txt"]);
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    let review = operation(&service, "/api/worktrees/review-changes", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(review["untracked"].as_array().unwrap().len(), 1);
+    assert!(operation(
+        &service,
+        "/api/worktrees/copy-changes",
+        json!({"hash":"stale"})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("changed"));
+    assert!(worktrees::list(&paths, &project).unwrap().is_empty());
+    let copied = operation(
+        &service,
+        "/api/worktrees/copy-changes",
+        json!({"hash":review["hash"]}),
+    )
+    .await
+    .unwrap();
+    let checkout = Path::new(copied["path"].as_str().unwrap());
+    assert_eq!(copied["state"], "ready");
+    assert_eq!(git(checkout, &["status", "--porcelain"]), status);
+    assert_eq!(git(checkout, &["show", ":tracked.txt"]), index);
+    assert_eq!(
+        fs::read(checkout.join("binary.dat")).unwrap(),
+        [0, 1, 4, 254]
+    );
+    assert_eq!(
+        fs::read(checkout.join("nested/tool")).unwrap(),
+        fs::read(project.join("nested/tool")).unwrap()
+    );
+    assert_eq!(
+        fs::metadata(checkout.join("nested/tool"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o750
+    );
+    assert!(!checkout.join("ignored.txt").exists());
+    assert_eq!(git(&project, &["status", "--porcelain"]), status);
+    assert_eq!(git(&project, &["show", ":tracked.txt"]), index);
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        fs::read_to_string(project.join("tracked.txt")).unwrap(),
+        "unstaged\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("ignored.txt")).unwrap(),
+        "private ignored contents"
+    );
+    service.engine.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn copy_review_rejects_symlinks_changed_contents_and_excludes_non_git_files() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths, json!({"trusted_workspaces":[project]})).unwrap();
+    let service = Service::open(paths.clone(), Some(project.clone())).unwrap();
+    fs::write(project.join("new.txt"), "reviewed").unwrap();
+    let review = operation(&service, "/api/worktrees/review-changes", json!({}))
+        .await
+        .unwrap();
+    fs::write(project.join("new.txt"), "changed").unwrap();
+    assert!(operation(
+        &service,
+        "/api/worktrees/copy-changes",
+        json!({"hash":review["hash"]})
+    )
+    .await
+    .is_err());
+    assert!(worktrees::list(&paths, &project).unwrap().is_empty());
+    symlink("new.txt", project.join("link")).unwrap();
+    assert!(
+        operation(&service, "/api/worktrees/review-changes", json!({}))
+            .await
+            .is_err()
+    );
+    fs::remove_file(project.join("link")).unwrap();
+    let fifo = std::ffi::CString::new(project.join("pipe").to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let inspected = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        operation(&service, "/api/worktrees/review-changes", json!({})),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(inspected["untracked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["path"] != "pipe"));
+    assert!(project.join("pipe").exists());
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn interrupted_copy_retains_destination_record_and_never_resets_source() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    fs::write(project.join("tracked.txt"), "keep these edits\n").unwrap();
+    let review = worktrees::changes::review(&project, CancellationToken::new())
+        .await
+        .unwrap();
+    let error = worktrees::changes::copy(
+        &paths,
+        &project,
+        &review.hash,
+        CancellationToken::new(),
+        |_| Err::<(), _>(anyhow::anyhow!("Destination reservation refused")),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("Partial copy retained"));
+    let records = worktrees::list(&paths, &project).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].state, "needs_attention");
+    assert!(records[0].path.exists());
+    assert_eq!(
+        fs::read_to_string(project.join("tracked.txt")).unwrap(),
+        "keep these edits\n"
+    );
+    assert_eq!(git(&project, &["show", ":tracked.txt"]), "committed");
+}

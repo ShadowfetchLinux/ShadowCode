@@ -59,7 +59,9 @@ the existing React visual design. This document tracks engineering acceptance;
   branches and commits.
   CLI and desktop rescue restore a missing checkout’s retained commit into a
   separate checkout while preserving original recovery metadata. Dirty-state
-  transfer and damaged-path repair remain open.
+  desktop transfer controls and damaged-path repair remain open. CLI copy
+  preserves reviewed staged/unstaged patches and regular untracked files in a
+  new checkout without resetting the source.
   Reviewed CLI and desktop return prepare a merge without committing, preserving source
   branch work and leaving conflicts for explicit resolution or Git merge abort.
 

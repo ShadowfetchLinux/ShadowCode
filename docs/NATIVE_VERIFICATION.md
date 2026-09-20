@@ -304,6 +304,20 @@ these transitions. Assertions inspect fresh complete frames because incremental
 ANSI updates can split words. This covers resize recovery; broader picker
 navigation, visual review and sustained terminal stress remain open.
 
+## Reviewed copy of uncommitted work
+
+Twelve real-Git worktree tests pass. Copy scenarios verify distinct staged and
+unstaged text and binary changes, intent-to-add entries, untracked executable
+permissions, ignored-file exclusion, unchanged source contents/index semantics,
+stale untracked-content rejection, untracked symlink rejection and prompt
+handling of a FIFO excluded by Git. A refused destination reservation retains a
+`needs_attention` record and the partial checkout without resetting source edits.
+The native executable passes 20 CLI scenario groups / 32 scripted model requests,
+including separate patch review, stale-hash refusal, copied file contents and
+source/destination staging checks. Workspace Clippy and the native build pass.
+Desktop copy controls and damaged-checkout repair remain open; bounded Git-visible
+copy coverage does not claim arbitrary filesystem or submodule replication.
+
 ## Terminal input after resize
 
 CI run `35544397210` failed the terminal probe after Help stayed open and the

@@ -77,6 +77,14 @@ pub enum Command {
         return_changes: Option<String>,
         #[arg(long, requires = "return_changes")]
         return_hash: Option<String>,
+        /// Review source edits, staging split and untracked files for an isolated copy.
+        #[arg(long, conflicts_with_all=["create","inspect","remove","recovery","restore","review_return","return_changes","copy_changes"])]
+        review_changes: bool,
+        /// Copy reviewed source edits into a new worktree without altering the source.
+        #[arg(long, requires="copy_hash", conflicts_with_all=["create","inspect","remove","recovery","restore","review_return","return_changes"])]
+        copy_changes: bool,
+        #[arg(long, requires = "copy_changes")]
+        copy_hash: Option<String>,
         #[arg(long, default_value = "HEAD", requires = "create")]
         reference: String,
     },

@@ -1,4 +1,5 @@
 //! Managed Git worktree creation. The source checkout is never reset or stashed.
+pub mod changes;
 use crate::{
     paths::{self, AppPaths},
     process::{self, ProcessSpec},
@@ -101,6 +102,14 @@ pub async fn create(
     cancel: CancellationToken,
 ) -> Result<Record> {
     let _guard = tokio::select! {guard=CREATION.lock()=>guard,_=cancel.cancelled()=>anyhow::bail!("Worktree creation cancelled")};
+    create_unlocked(paths, source, reference, cancel).await
+}
+async fn create_unlocked(
+    paths: &AppPaths,
+    source: &Path,
+    reference: &str,
+    cancel: CancellationToken,
+) -> Result<Record> {
     let source = Workspace::open(source)?.path;
     ensure!(
         !reference.is_empty() && reference.len() <= 256 && !reference.chars().any(char::is_control),

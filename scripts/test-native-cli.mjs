@@ -417,6 +417,21 @@ try {
   fixtureGit(["commit","-qm","Reviewed integration"]);
   checks.push("reviewed worktree return preserves divergent source work and requires a separate commit");
 
+  await writeFile(path.join(isolatedSource,"README.md"),"staged source snapshot\n");fixtureGit(["add","README.md"]);
+  await writeFile(path.join(isolatedSource,"README.md"),"unstaged source snapshot\n");
+  await writeFile(path.join(isolatedSource,"untracked-copy.txt"),"untracked snapshot\n");
+  const changesReview=await cli(["worktree","--review-changes"],0,{workspace:isolatedSource});
+  assert.ok(changesReview.staged_diff.includes("staged source snapshot"));
+  assert.ok(changesReview.unstaged_diff.includes("unstaged source snapshot"));
+  assert.match((await cli(["worktree","--copy-changes","--copy-hash","stale"],1,{workspace:isolatedSource})).error,/changed/);
+  const copiedChanges=await cli(["worktree","--copy-changes","--copy-hash",changesReview.hash],0,{workspace:isolatedSource});
+  assert.equal(await readFile(path.join(copiedChanges.path,"README.md"),"utf8"),"unstaged source snapshot\n");
+  assert.equal(execFileSync("git",["show",":README.md"],{cwd:copiedChanges.path,encoding:"utf8"}),"staged source snapshot\n");
+  assert.equal(await readFile(path.join(copiedChanges.path,"untracked-copy.txt"),"utf8"),"untracked snapshot\n");
+  assert.equal(await readFile(path.join(isolatedSource,"README.md"),"utf8"),"unstaged source snapshot\n");
+  assert.equal(fixtureGit(["show",":README.md"]),"staged source snapshot\n");
+  checks.push("reviewed dirty-worktree copy preserves staged, unstaged and untracked source changes");
+
   // Seed only this disposable, stopped profile. Recent-list limits must not hide
   // older IDs or force fetching multi-megabyte job results to resolve a prefix.
   const historyDb = new DatabaseSync(path.join(profile, "state/shadow-agent.db"));

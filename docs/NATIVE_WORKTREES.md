@@ -64,7 +64,7 @@ removal, just as with ordinary Git operations. Damaged checkout paths or missing
 inspection; the recovery record remains. For a missing path whose Git
 registration survives, use the reviewed rescue below.
 
-Carrying uncommitted changes into an isolated checkout and repair of damaged
+Desktop controls for copying uncommitted changes and repair of damaged
 checkouts remain part of the
 [native migration gates](NATIVE_MIGRATION.md).
 
@@ -142,3 +142,34 @@ whether the merge is pending or needs attention; **Open source project** takes
 you to the checkout where you can review, resolve conflicts and commit. A failed
 or stale action clears the review and displays an error rather than a success
 notice.
+
+## Copy reviewed uncommitted changes
+
+```sh
+shadowcode --workspace /source/project worktree --review-changes
+shadowcode --workspace /source/project worktree --copy-changes --copy-hash REVIEW_HASH
+```
+
+The review contains separate staged and unstaged patches, the exact base commit,
+and untracked file names, sizes, hashes and permissions. Copying rechecks the
+review and reads a stable snapshot before creating a new branch at that commit.
+It reproduces staged versus unstaged edits, binary patches, intent-to-add entries,
+and Git-visible regular untracked files, including their ordinary permissions.
+It verifies the destination's patches and untracked contents against the review.
+The original checkout, index and files are not stashed, reset or removed.
+Open and trust the new checkout explicitly before using it for tasks.
+
+Ignored files and non-Git filesystem objects such as FIFOs are not copied.
+Git-visible untracked symlinks and changed submodules are rejected; preserve those
+separately. Existing Git operations/conflicts must be resolved first. Each patch
+and Git listing must fit the 64 KB command-output limit; at most 256 untracked
+files, 4 MB per file and 32 MB total are supported. The source must be trusted,
+writable and idle, with no managed background process. The destination is
+reserved while patches/files are applied. Keep external writers idle during
+inspection, as with ordinary Git snapshot operations.
+
+A stale hash fails before creation. If checkout/application is interrupted or
+verification fails, the source remains intact and the partial destination stays
+recorded for inspection; no automatic deletion hides evidence. Temporary patches
+use private files and are removed on ordinary completion/error. Desktop copy
+controls remain in development.
