@@ -6,11 +6,17 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **202 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **208 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
   legacy SQLite backups and goal import, session branching, and durable replay.
+- Configuration concurrency: twelve synchronized writers previously lost
+  independent settings and secret entries; the regression now preserves all of
+  them. Eight service clients concurrently retain project trust, settings,
+  credential entries, MCP registrations/grants and unrelated hooks through
+  plugin install/activation/removal. Rejected edits preserve exact saved bytes;
+  oversized writes do not brick the profile, and named pipes fail without waiting.
 - Private native profile directories and lock permissions, migration of permissive
   existing directories without changing their contents or parent permissions,
   relocated profile parents, and rejection of symlink leaves, symlink/hard-linked

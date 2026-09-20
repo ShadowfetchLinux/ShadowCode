@@ -2,7 +2,14 @@ use crate::paths::{atomic_write, AppPaths};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, fs, io::Read, path::Path, sync::Mutex};
+
+// A profile has one owning engine; desktop/CLI requests can still run on
+// different threads. Atomic rename alone does not protect read–modify–write.
+// These guards cover synchronous local I/O only, never model/network requests.
+static CONFIG_UPDATES: Mutex<()> = Mutex::new(());
+static SECRET_UPDATES: Mutex<()> = Mutex::new(());
+const MAX_CONFIG_BYTES: usize = 1_000_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -172,6 +179,7 @@ impl Config {
         Ok(config)
     }
     pub fn validate(&self) -> Result<()> {
+        ensure!(self.ui.is_object(), "UI configuration must be an object");
         ensure!(
             (1024..=4_000_000).contains(&self.model.context_limit),
             "Context limit must be between 1024 and 4000000"
@@ -237,6 +245,10 @@ impl Config {
         crate::mcp::registry::validate_config(&self.mcp)?;
         crate::routing::validate(&self.routing)?;
         self.hooks.validate()?;
+        ensure!(
+            serde_yaml_ng::to_string(self)?.len() <= MAX_CONFIG_BYTES,
+            "Configuration exceeds 1 MB"
+        );
         Ok(())
     }
     pub fn is_trusted(&self, workspace: &Path) -> bool {
@@ -244,7 +256,15 @@ impl Config {
             .iter()
             .any(|p| Path::new(p).canonicalize().ok().as_deref() == Some(workspace))
     }
+    /// Replace the entire configuration. Use update/patch for edits to an
+    /// existing profile, so unrelated concurrent changes remain intact.
     pub fn save(&self, paths: &AppPaths) -> Result<()> {
+        let _guard = CONFIG_UPDATES
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Configuration update lock poisoned"))?;
+        self.write(paths)
+    }
+    fn write(&self, paths: &AppPaths) -> Result<()> {
         self.validate()?;
         atomic_write(
             &paths.config_file(),
@@ -254,26 +274,57 @@ impl Config {
     }
     pub fn patch(paths: &AppPaths, values: Value) -> Result<Self> {
         ensure!(values.is_object(), "Configuration patch must be an object");
-        let mut current = serde_json::to_value(Self::load(paths, None)?)?;
-        merge(&mut current, values);
-        let config: Self = serde_json::from_value(current)?;
-        config.save(paths)?;
+        Self::update(paths, |config| {
+            let mut current = serde_json::to_value(&*config)?;
+            merge(&mut current, values);
+            *config = serde_json::from_value(current)?;
+            Ok(())
+        })
+    }
+    /// Reload, edit, validate and persist without another native writer
+    /// intervening. The callback must not call update, patch or save recursively.
+    pub fn update(paths: &AppPaths, edit: impl FnOnce(&mut Self) -> Result<()>) -> Result<Self> {
+        let _guard = CONFIG_UPDATES
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Configuration update lock poisoned"))?;
+        let mut config = Self::load(paths, None)?;
+        edit(&mut config)?;
+        config.write(paths)?;
         Ok(config)
     }
 }
 
 fn read_yaml(path: &Path) -> Result<Value> {
-    ensure!(
-        fs::metadata(path)?.len() <= 1_000_000,
-        "Configuration is too large"
-    );
-    let value: Value = serde_yaml_ng::from_str(&fs::read_to_string(path)?)
+    let value: Value = serde_yaml_ng::from_str(&read_text(path)?)
         .with_context(|| format!("Invalid YAML in {}", path.display()))?;
     if value.is_null() {
         return Ok(json!({}));
     }
     ensure!(value.is_object(), "Configuration must be a mapping");
     Ok(value)
+}
+
+fn read_text(path: &Path) -> Result<String> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    ensure!(
+        file.metadata()?.is_file(),
+        "Configuration and secrets must be regular files"
+    );
+    let mut text = String::new();
+    file.take((MAX_CONFIG_BYTES + 1) as u64)
+        .read_to_string(&mut text)?;
+    ensure!(
+        text.len() <= MAX_CONFIG_BYTES,
+        "Configuration or secret file exceeds 1 MB"
+    );
+    Ok(text)
 }
 
 pub fn merge(base: &mut Value, overlay: Value) {
@@ -298,8 +349,7 @@ pub fn secrets(paths: &AppPaths) -> Result<BTreeMap<String, String>> {
     if !paths.secrets_file().exists() {
         return Ok(result);
     }
-    let text = fs::read_to_string(paths.secrets_file())?;
-    ensure!(text.len() <= 1_000_000, "Secret file is too large");
+    let text = read_text(&paths.secrets_file())?;
     for line in text.lines().map(str::trim).filter(|l| !l.starts_with('#')) {
         if let Some((key, value)) = line.split_once('=') {
             let key = key.trim();
@@ -330,6 +380,9 @@ pub fn set_secret(paths: &AppPaths, name: &str, value: &str) -> Result<()> {
     if value.contains(['\n', '\r', '\0']) || value.len() > 16_384 {
         bail!("Invalid API key");
     }
+    let _guard = SECRET_UPDATES
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Secret update lock poisoned"))?;
     let mut values = secrets(paths)?;
     if value.is_empty() {
         values.remove(name);
@@ -340,5 +393,9 @@ pub fn set_secret(paths: &AppPaths, name: &str, value: &str) -> Result<()> {
     for (name, value) in values {
         out.push_str(&format!("{name}={}\n", serde_json::to_string(&value)?));
     }
+    ensure!(
+        out.len() <= MAX_CONFIG_BYTES,
+        "Secret file would exceed 1 MB"
+    );
     atomic_write(&paths.secrets_file(), out.as_bytes(), true)
 }

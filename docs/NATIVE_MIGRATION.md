@@ -62,8 +62,11 @@ Implemented foundation:
 - SQLite migration with a consistent backup, legacy goal import, session
   branching/search/pins, stable event cursors, persisted jobs and message history,
   interrupted-job recovery, and idempotent token accounting.
-- Validated configuration and private atomic secret storage. Project overlays
-  can tune bounded agent settings or reduce permissions; they cannot redirect
+- Validated configuration and private atomic secret storage. Synchronous
+  read–modify–write operations serialize concurrent desktop/CLI changes, retaining
+  independent settings, trust, hook/MCP grants and credential entries. Reads
+  require bounded regular files; writes cannot exceed the restart read limit.
+  Project overlays can tune bounded agent settings or reduce permissions; they cannot redirect
   credentials, grant permissions, or register executable integrations.
   Native profile directories use mode 700, preserving legacy contents and
   existing parent permissions; unsafe directory leaves and lock files fail closed.

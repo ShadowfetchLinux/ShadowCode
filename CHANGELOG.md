@@ -2,6 +2,12 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Concurrent desktop/CLI settings changes preserve unrelated fields, project
+  trust, integration grants and secret entries. Read–modify–write operations are
+  serialized through the owning native engine. Rejected updates preserve the
+  saved file; configuration/secret reads reject special files and remain bounded,
+  and writes cannot exceed the size accepted on restart.
+
 - Native project plugins install reviewed built-in or local JSON bundles into
   real skills, slash commands, hooks and MCP definitions. Settings and CLI show
   contents and require current project/content hashes; executable integrations

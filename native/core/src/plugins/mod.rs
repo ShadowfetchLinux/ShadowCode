@@ -333,22 +333,24 @@ pub fn catalog(paths: &AppPaths, workspace: &Workspace) -> Result<Value> {
     )
 }
 fn revoke(paths: &AppPaths, workspace: &Workspace, files: &[File]) -> Result<()> {
-    let mut config = Config::load(paths, None)?;
-    for file in files {
-        if file.kind == "hook" {
-            crate::hooks::activate(workspace, &mut config, &file.path, "", false)?;
+    Config::update(paths, |config| {
+        for file in files {
+            if file.kind == "hook" {
+                crate::hooks::activate(workspace, config, &file.path, "", false)?;
+            }
+            if file.kind == "mcp" {
+                crate::mcp::registry::activate(
+                    workspace,
+                    config,
+                    &format!("project:{}", file.path),
+                    "",
+                    false,
+                )?;
+            }
         }
-        if file.kind == "mcp" {
-            crate::mcp::registry::activate(
-                workspace,
-                &mut config,
-                &format!("project:{}", file.path),
-                "",
-                false,
-            )?;
-        }
-    }
-    config.save(paths)
+        Ok(())
+    })?;
+    Ok(())
 }
 /// The service holds a trusted mutable-workspace reservation throughout.
 pub fn install(

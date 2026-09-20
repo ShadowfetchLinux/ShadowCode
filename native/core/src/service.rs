@@ -262,17 +262,18 @@ impl Service {
             #[cfg(unix)]
             ("POST", "/api/mcp/servers" | "/api/mcp/servers/delete") => {
                 let workspace = Workspace::open(&self.workspace()?)?;
-                let mut config = Config::load(self.engine.paths(), None)?;
-                if path.ends_with("/delete") {
-                    crate::mcp::registry::remove_server(&mut config, text("server"), text("hash"))?;
-                } else {
-                    crate::mcp::registry::save_server(
-                        &mut config,
-                        body["definition"].clone(),
-                        text("hash"),
-                    )?;
-                }
-                config.save(self.engine.paths())?;
+                let config = Config::update(self.engine.paths(), |config| {
+                    if path.ends_with("/delete") {
+                        crate::mcp::registry::remove_server(config, text("server"), text("hash"))?;
+                    } else {
+                        crate::mcp::registry::save_server(
+                            config,
+                            body["definition"].clone(),
+                            text("hash"),
+                        )?;
+                    }
+                    Ok(())
+                })?;
                 store.add_event("mcp.registration", &json!({"workspace":workspace.path,"server":if path.ends_with("/delete") { text("server").to_owned() } else { format!("config:{}",body["definition"]["name"].as_str().unwrap_or("")) },"removed":path.ends_with("/delete")}), None, None)?;
                 return crate::mcp::registry::catalog(&workspace, &config);
             }
@@ -286,20 +287,22 @@ impl Service {
                 let enabled = body["enabled"]
                     .as_bool()
                     .context("Choose whether to enable this MCP server")?;
-                let effective = Config::load(self.engine.paths(), Some(&workspace.path))?;
-                if enabled {
-                    let entry = crate::mcp::registry::read(&workspace, &effective, text("server"))?;
-                    crate::mcp::registry::authorize_start(&workspace, &effective, &entry)?;
-                }
-                let mut config = Config::load(self.engine.paths(), None)?;
-                crate::mcp::registry::activate(
-                    &workspace,
-                    &mut config,
-                    text("server"),
-                    text("hash"),
-                    enabled,
-                )?;
-                config.save(self.engine.paths())?;
+                let config = Config::update(self.engine.paths(), |config| {
+                    let effective = Config::load(self.engine.paths(), Some(&workspace.path))?;
+                    if enabled {
+                        let entry =
+                            crate::mcp::registry::read(&workspace, &effective, text("server"))?;
+                        crate::mcp::registry::authorize_start(&workspace, &effective, &entry)?;
+                    }
+                    crate::mcp::registry::activate(
+                        &workspace,
+                        config,
+                        text("server"),
+                        text("hash"),
+                        enabled,
+                    )?;
+                    Ok(())
+                })?;
                 store.add_event("mcp.activation", &json!({"workspace":workspace.path,"server":text("server"),"hash":text("hash"),"enabled":enabled}), None, None)?;
                 return crate::mcp::registry::catalog(&workspace, &config);
             }
@@ -317,23 +320,24 @@ impl Service {
                 let enabled = body["enabled"]
                     .as_bool()
                     .context("Choose whether to enable this hook")?;
-                let effective = Config::load(self.engine.paths(), Some(&workspace.path))?;
-                let mut config = Config::load(self.engine.paths(), None)?;
-                // A project read-only overlay remains authoritative at activation.
-                if enabled {
-                    ensure!(
-                        effective.permissions.level != PermissionLevel::ReadOnly,
-                        "Lifecycle commands cannot be enabled in read-only mode"
-                    );
-                }
-                crate::hooks::activate(
-                    &workspace,
-                    &mut config,
-                    text("path"),
-                    text("hash"),
-                    enabled,
-                )?;
-                config.save(self.engine.paths())?;
+                let config = Config::update(self.engine.paths(), |config| {
+                    let effective = Config::load(self.engine.paths(), Some(&workspace.path))?;
+                    // A project read-only overlay remains authoritative at activation.
+                    if enabled {
+                        ensure!(
+                            effective.permissions.level != PermissionLevel::ReadOnly,
+                            "Lifecycle commands cannot be enabled in read-only mode"
+                        );
+                    }
+                    crate::hooks::activate(
+                        &workspace,
+                        config,
+                        text("path"),
+                        text("hash"),
+                        enabled,
+                    )?;
+                    Ok(())
+                })?;
                 store.add_event("hook.activation",&json!({"workspace":workspace.path,"path":text("path"),"hash":text("hash"),"enabled":enabled}),None,None)?;
                 return Ok(crate::hooks::catalog(&workspace, &config));
             }
@@ -404,38 +408,45 @@ impl Service {
                 if let Some(object) = values.as_object_mut() {
                     object.remove("api_key");
                 }
-                // Settings use the provider's model name as `default`. Give
-                // that configuration a stable identity before saving it.
-                if values["model"].is_object() {
-                    let old = Config::load(self.engine.paths(), None)?.model;
-                    let mut merged = serde_json::to_value(&old)?;
-                    config::merge(&mut merged, values["model"].clone());
-                    let mut model: ModelConfig = serde_json::from_value(merged)?;
-                    if model.default == model.name || !model_registry::same_target(&old, &model) {
-                        model.default =
-                            model_registry::model_id(&model.provider, &model.endpoint, &model.name);
+                let cfg = Config::update(self.engine.paths(), |cfg| {
+                    // Settings use the provider's model name as `default`. Give
+                    // that configuration a stable identity before saving it.
+                    if values["model"].is_object() {
+                        let old = cfg.model.clone();
+                        let mut merged = serde_json::to_value(&old)?;
+                        config::merge(&mut merged, values["model"].clone());
+                        let mut model: ModelConfig = serde_json::from_value(merged)?;
+                        if model.default == model.name || !model_registry::same_target(&old, &model)
+                        {
+                            model.default = model_registry::model_id(
+                                &model.provider,
+                                &model.endpoint,
+                                &model.name,
+                            );
+                        }
+                        model_registry::validate(&model)?;
+                        self.check_model_identity(&model)?;
+                        self.register(&old)?;
+                        values["model"] = json!(model);
                     }
-                    model_registry::validate(&model)?;
-                    self.check_model_identity(&model)?;
-                    self.register(&old)?;
-                    values["model"] = json!(model);
-                }
-                let mut preview = serde_json::to_value(Config::load(self.engine.paths(), None)?)?;
-                config::merge(&mut preview, values.clone());
-                serde_json::from_value::<Config>(preview)?.validate()?;
-                if !text("api_key").is_empty() {
-                    let cfg = self.config()?;
-                    let key = if text("api_key_env").is_empty() {
-                        values
-                            .pointer("/model/api_key_env")
-                            .and_then(Value::as_str)
-                            .unwrap_or(&cfg.model.api_key_env)
-                    } else {
-                        text("api_key_env")
-                    };
-                    config::set_secret(self.engine.paths(), key, text("api_key"))?;
-                }
-                let cfg = Config::patch(self.engine.paths(), values)?;
+                    let mut preview = serde_json::to_value(&*cfg)?;
+                    config::merge(&mut preview, values.clone());
+                    let updated: Config = serde_json::from_value(preview)?;
+                    updated.validate()?;
+                    if !text("api_key").is_empty() {
+                        let key = if text("api_key_env").is_empty() {
+                            values
+                                .pointer("/model/api_key_env")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&cfg.model.api_key_env)
+                        } else {
+                            text("api_key_env")
+                        };
+                        config::set_secret(self.engine.paths(), key, text("api_key"))?;
+                    }
+                    *cfg = updated;
+                    Ok(())
+                })?;
                 self.register(&cfg.model)?;
                 return Ok(json!(cfg));
             }
@@ -482,34 +493,35 @@ impl Service {
             ("POST", "/api/onboarding") => {
                 let workspace = expand_path(text("workspace"))?;
                 let workspace = Workspace::open(&workspace)?.path;
-                let mut cfg = Config::load(self.engine.paths(), None)?;
-                cfg.model = self.model_from_body(body, &cfg.model);
-                cfg.permissions.level =
-                    serde_json::from_value(json!(if text("permission_level").is_empty() {
-                        "workspace"
+                let cfg = Config::update(self.engine.paths(), |cfg| {
+                    cfg.model = self.model_from_body(body, &cfg.model);
+                    cfg.permissions.level =
+                        serde_json::from_value(json!(if text("permission_level").is_empty() {
+                            "workspace"
+                        } else {
+                            text("permission_level")
+                        }))?;
+                    cfg.permissions.network = body["network"].as_bool().unwrap_or(false);
+                    cfg.ui["theme"] = json!(if text("theme").is_empty() {
+                        "light"
                     } else {
-                        text("permission_level")
-                    }))?;
-                cfg.permissions.network = body["network"].as_bool().unwrap_or(false);
-                cfg.ui["theme"] = json!(if text("theme").is_empty() {
-                    "light"
-                } else {
-                    text("theme")
-                });
-                cfg.onboarding = json!({"completed":true,"workspace":workspace});
-                if !cfg.is_trusted(&workspace) {
-                    cfg.trusted_workspaces
-                        .push(workspace.to_string_lossy().into_owned());
-                }
-                cfg.validate()?;
-                if !text("api_key").is_empty() {
-                    config::set_secret(
-                        self.engine.paths(),
-                        &cfg.model.api_key_env,
-                        text("api_key"),
-                    )?;
-                }
-                cfg.save(self.engine.paths())?;
+                        text("theme")
+                    });
+                    cfg.onboarding = json!({"completed":true,"workspace":workspace});
+                    if !cfg.is_trusted(&workspace) {
+                        cfg.trusted_workspaces
+                            .push(workspace.to_string_lossy().into_owned());
+                    }
+                    cfg.validate()?;
+                    if !text("api_key").is_empty() {
+                        config::set_secret(
+                            self.engine.paths(),
+                            &cfg.model.api_key_env,
+                            text("api_key"),
+                        )?;
+                    }
+                    Ok(())
+                })?;
                 let session = store.create_session(&workspace, &cfg.model.default, "Welcome")?;
                 let sid = session["id"]
                     .as_str()
@@ -588,16 +600,21 @@ impl Service {
             ("GET", "/api/projects") => return Ok(json!({"projects":store.projects()?})),
             ("POST", "/api/projects" | "/api/projects/trust") => {
                 let workspace = Workspace::open(&expand_path(text("path"))?)?.path;
-                let mut cfg = Config::load(self.engine.paths(), None)?;
-                if !cfg.is_trusted(&workspace) && !path.ends_with("trust") {
+                let cfg = if path.ends_with("trust") {
+                    Config::update(self.engine.paths(), |cfg| {
+                        if !cfg.is_trusted(&workspace) {
+                            cfg.trusted_workspaces
+                                .push(workspace.to_string_lossy().into_owned());
+                        }
+                        Ok(())
+                    })?
+                } else {
+                    Config::load(self.engine.paths(), None)?
+                };
+                if !cfg.is_trusted(&workspace) {
                     return Ok(
                         json!({"needs_trust":true,"path":workspace,"name":workspace.file_name(),"permissions":cfg.permissions}),
                     );
-                }
-                if !cfg.is_trusted(&workspace) {
-                    cfg.trusted_workspaces
-                        .push(workspace.to_string_lossy().into_owned());
-                    cfg.save(self.engine.paths())?;
                 }
                 let session = store.create_session(
                     &workspace,
