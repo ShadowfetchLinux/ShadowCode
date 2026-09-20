@@ -55,6 +55,8 @@ const formatTokens = (n: number) =>
   n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 const draftKey = (id: string, workspace: string) =>
   `shadow:draft:${id || workspace}`;
+const isSessionCommand = (text: string) =>
+  ["/new", "/clear"].includes(text.trim());
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -111,6 +113,7 @@ export default function App() {
   const selectedRef = useRef("");
   const selection = useRef(0);
   const submittingRef = useRef(false);
+  const taskRef = useRef("");
   const toastSeq = useRef(0);
   const booted = useRef(false);
   const activationQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -156,6 +159,7 @@ export default function App() {
   });
   const { transcript, setTranscript, job, busy, connection } = conversation;
   const locked = busy || submitting || switching;
+  taskRef.current = task;
 
   async function reloadConfig() {
     const [config, state, modelData, providerData] = await Promise.all([
@@ -173,9 +177,11 @@ export default function App() {
   async function openSession(id: string) {
     if (submittingRef.current) return;
     if (selectedRef.current) {
-      if (task)
-        localStorage.setItem(draftKey(selectedRef.current, workspace), task);
-      else localStorage.removeItem(draftKey(selectedRef.current, workspace));
+      const draft = taskRef.current;
+      if (draft && !isSessionCommand(draft))
+        localStorage.setItem(draftKey(selectedRef.current, workspace), draft);
+      else if (!draft)
+        localStorage.removeItem(draftKey(selectedRef.current, workspace));
     }
     const ticket = ++selection.current;
     setSwitching(true);
@@ -255,6 +261,7 @@ export default function App() {
   useEffect(() => {
     const key = draftKey(sessionId, workspace);
     const timer = setTimeout(() => {
+      if (isSessionCommand(task)) return;
       if (task) localStorage.setItem(key, task);
       else localStorage.removeItem(key);
     }, 200);
@@ -303,14 +310,15 @@ export default function App() {
     return () => clearInterval(timer);
   }, [job?.id, busy]);
 
-  async function newSession() {
-    if (submitting || switching) return;
+  async function newSession(opts?: { force?: boolean }) {
+    if (!opts?.force && (submitting || switching)) return;
     if (!workspace) {
       setOverlay("project");
       return;
     }
     try {
       const created = await api.createSession(workspace, "New task");
+      localStorage.setItem("shadow:selected", created.id);
       await openSession(created.id);
       promptRef.current?.focus();
     } catch (e) {
@@ -369,7 +377,7 @@ export default function App() {
     const [name, ...rest] = text.slice(1).split(" ");
     const args = rest.join(" ");
     if (name === "new" || name === "clear") {
-      await newSession();
+      await newSession({ force: true });
       return;
     }
     const panels: Record<string, DrawerTab> = {
@@ -397,9 +405,8 @@ export default function App() {
   async function submit() {
     if (locked || submittingRef.current || (!task.trim() && !chips.length))
       return;
-    if (["/new", "/clear"].includes(task.trim())) {
-      setTask("");
-      await newSession();
+    if (isSessionCommand(task)) {
+      await newSession({ force: true });
       return;
     }
     const original = task;
