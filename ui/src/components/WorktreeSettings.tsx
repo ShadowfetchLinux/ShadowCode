@@ -1,5 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, type ManagedWorktree, type WorktreeInspection } from "../api";
+import {
+  api,
+  type ManagedWorktree,
+  type WorktreeInspection,
+  type WorktreeRecovery,
+} from "../api";
 export function WorktreeSettings({
   onOpen,
   onToast,
@@ -14,6 +19,7 @@ export function WorktreeSettings({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [review, setReview] = useState<WorktreeInspection | null>(null);
+  const [recovery, setRecovery] = useState<WorktreeRecovery | null>(null);
   const reviewRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let live = true;
@@ -36,16 +42,17 @@ export function WorktreeSettings({
     };
   }, []);
   useLayoutEffect(() => {
-    if (review) {
+    if (review || recovery) {
       reviewRef.current?.scrollIntoView({ block: "nearest" });
       reviewRef.current?.focus({ preventScroll: true });
     }
-  }, [review]);
+  }, [review, recovery]);
   async function refresh() {
     const data = await api.worktrees();
     setWorkspace(data.workspace);
     setRecords(data.worktrees);
     setReview(null);
+    setRecovery(null);
   }
   async function perform(action: () => Promise<void>) {
     setBusy(true);
@@ -55,6 +62,7 @@ export function WorktreeSettings({
     } catch (e) {
       setError(String(e));
       setReview(null);
+      setRecovery(null);
     } finally {
       setBusy(false);
     }
@@ -139,17 +147,90 @@ export function WorktreeSettings({
                 className="ghost"
                 disabled={busy}
                 onClick={() =>
-                  void perform(async () =>
-                    setReview(await api.inspectWorktree(workspace, record.id)),
-                  )
+                  void perform(async () => {
+                    setRecovery(null);
+                    setReview(await api.inspectWorktree(workspace, record.id));
+                  })
                 }
               >
                 Inspect removal
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy}
+                onClick={() =>
+                  void perform(async () => {
+                    setReview(null);
+                    setRecovery(
+                      await api.worktreeRecovery(workspace, record.id),
+                    );
+                  })
+                }
+              >
+                Review missing checkout
               </button>
             </div>
           </article>
         ))}
       </div>
+      {recovery && (
+        <div
+          className="worktree-review"
+          ref={reviewRef}
+          tabIndex={-1}
+          role="region"
+          aria-label="Review worktree recovery"
+        >
+          <h4>Recover committed work</h4>
+          <p className="hint">Missing checkout</p>
+          <code className="worktree-path">{recovery.record.path}</code>
+          <p>
+            Retained branch:{" "}
+            <strong>{recovery.branch || "Detached HEAD"}</strong>
+          </p>
+          <p>
+            Commit to restore:{" "}
+            <code className="worktree-path">{recovery.commit}</code>
+          </p>
+          <p>{recovery.warning}</p>
+          <p className="hint">
+            The new checkout will appear in this list. Open and trust it before
+            running tasks.
+          </p>
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={() => setRecovery(null)}
+            >
+              Cancel recovery
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void perform(async () => {
+                  const restored = await api.restoreWorktree(
+                    workspace,
+                    recovery.record.id,
+                    recovery.hash,
+                  );
+                  await refresh();
+                  onToast(
+                    `Recovered committed work in ${restored.branch}`,
+                    "ok",
+                  );
+                })
+              }
+            >
+              Restore in new worktree
+            </button>
+          </div>
+        </div>
+      )}
       {review && (
         <div
           className="worktree-review"

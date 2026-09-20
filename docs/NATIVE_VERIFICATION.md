@@ -288,8 +288,21 @@ are byte-for-byte unchanged, and the original branch, registration and moved
 files remain. The native executable passes 18 CLI scenario groups / 32 scripted
 model requests, including recovery preview, stale-hash rejection and restoration.
 Clippy and the native build pass. This restores committed work only; automatic
-reconstruction of missing uncommitted files is not claimed. Desktop rescue and
-damaged-path repair remain open.
+reconstruction of missing uncommitted files is not claimed. Damaged-path repair
+remains open; desktop rescue is verified separately below.
+
+## Desktop recovery review
+
+Settings exposes the missing-checkout recovery review and an explicit restore
+button. The UI regression verifies displayed-source binding, focused review,
+visible uncommitted-file limitations, exact hash submission and review clearing
+after stale-state rejection. All 24 UI tests and seven browser scenarios pass.
+The real native-window probe moves a disposable checkout away, reviews recovery,
+restores into a new checkout, verifies committed file contents and checks the
+original record and branch remain intact. Light, dark and compact accessibility
+reports have zero violations, and the captured recovery screen is inspected.
+The test waits for the persisted `ready` state before inspecting checkout files;
+a `creating` recovery record intentionally precedes Git's filesystem writes.
 
 ## Desktop worktree controls
 

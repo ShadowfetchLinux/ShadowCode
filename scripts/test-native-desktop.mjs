@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createWriteStream } from "node:fs";
-import { mkdtemp, mkdir, readFile, writeFile, readlink, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, readlink, readdir, rm, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,7 @@ const profile = path.join(scratch, "profile");
 const defaultProfile = process.env.SHADOW_NATIVE_DEFAULT_PROFILE === "1";
 const profileArgs = defaultProfile ? [] : ["--profile",profile];
 const configDirectory = path.join(profile,defaultProfile ? "config/shadow-agent" : "config");
+const dataDirectory = path.join(profile,defaultProfile ? "data/shadow-agent" : "data");
 const stateDirectory = path.join(profile,defaultProfile ? "state/shadow-agent" : "state");
 const nativeEnv = {...process.env, TMPDIR: path.join(scratch,"images"), ...(defaultProfile ? {
   XDG_CONFIG_HOME: path.join(profile,"config"), XDG_DATA_HOME: path.join(profile,"data"), XDG_STATE_HOME: path.join(profile,"state"),
@@ -332,7 +333,7 @@ try {
   await clickButton("Worktrees");
   await until("Worktree creation ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Create worktree' && !b.disabled)"));
   await clickButton("Create worktree");
-  const worktree=await until("Managed worktree created",async()=>(await api("GET","/api/worktrees")).worktrees[0]);
+  const worktree=await until("Managed worktree created",async()=>(await api("GET","/api/worktrees")).worktrees.find(w=>w.state==="ready"));
   assert.equal(await readFile(path.join(worktree.path,"README.md"),"utf8"),"# Native desktop test\nA disposable workspace.\n");
   await until("Worktree open button",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Open worktree'&&!b.disabled)"));await clickButton("Open worktree");
   await until("Explicit worktree trust",()=>execute("return [...document.querySelectorAll('h2')].some(e=>e.textContent==='Trust this folder?')"));await clickButton("Cancel");
@@ -344,6 +345,25 @@ try {
   await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
   await clickButton("Remove clean worktree");await until("Managed worktree removed",async()=>!(await api("GET","/api/worktrees")).worktrees.length);
   assert.equal((await promisify(execFile)("git",["rev-parse",worktree.branch],{cwd:project})).stdout.trim(),worktree.base_commit);
+  await until("Recovery fixture creation ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Create worktree'&&!b.disabled)"));
+  await clickButton("Create worktree");
+  const missingWorktree=await until("Recovery fixture created",async()=>(await api("GET","/api/worktrees")).worktrees.find(w=>w.state==="ready"));
+  const originalRecord=path.join(dataDirectory,"managed-worktrees/records",`${missingWorktree.id}.json`);
+  const originalRecordBytes=await readFile(originalRecord,"utf8");
+  await rename(missingWorktree.path,path.join(scratch,"saved-recovery-checkout"));
+  await until("Recovery review ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Review missing checkout'&&!b.disabled)"));
+  await clickButton("Review missing checkout");
+  await until("Recovery review focused",()=>execute("return document.activeElement?.getAttribute('aria-label')==='Review worktree recovery'"));
+  assert.ok(await execute("return document.querySelector('[aria-label=\"Review worktree recovery\"]').textContent.includes('Missing uncommitted files are not reconstructed')"));
+  await screenshot("worktree-recovery");await accessibility("worktree-recovery");
+  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktree-recovery-dark");await execute("document.documentElement.dataset.theme='light'");
+  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktree-recovery-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
+  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
+  await clickButton("Restore in new worktree");
+  const restoredWorktree=await until("Committed work restored",async()=>(await api("GET","/api/worktrees")).worktrees.find(w=>w.id!==missingWorktree.id&&w.state==="ready"));
+  assert.equal(await readFile(path.join(restoredWorktree.path,"README.md"),"utf8"),"# Native desktop test\nA disposable workspace.\n");
+  assert.equal(await readFile(originalRecord,"utf8"),originalRecordBytes);
+  assert.equal((await promisify(execFile)("git",["rev-parse",missingWorktree.branch],{cwd:project})).stdout.trim(),missingWorktree.base_commit);
   await clickButton("Plugins");
   await until("Native plugin catalog",()=>execute("return !!document.querySelector('.plugin-settings')"));
   await clickButton("Review python-expert");
@@ -769,7 +789,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, retained branch and light/dark/compact accessibility",
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, missing checkout rescue, preserved original metadata and light/dark/compact accessibility",
     "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {

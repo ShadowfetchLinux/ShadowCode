@@ -2,7 +2,7 @@
 
 ## 0.20.0 — native development (unreleased)
 
-- Native development: reviewed CLI rescue for missing worktrees restores retained
+- Native development: reviewed CLI and desktop rescue for missing worktrees restores retained
   commits into a new checkout while preserving the original branch, index and
   registration; missing uncommitted files are not reconstructed.
 

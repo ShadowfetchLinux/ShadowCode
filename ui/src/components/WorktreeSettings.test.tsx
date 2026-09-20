@@ -15,6 +15,8 @@ vi.mock("../api", () => ({
     createWorktree: vi.fn(),
     inspectWorktree: vi.fn(),
     removeWorktree: vi.fn(),
+    worktreeRecovery: vi.fn(),
+    restoreWorktree: vi.fn(),
   },
 }));
 const record: ManagedWorktree = {
@@ -111,4 +113,37 @@ it("blocks dirty removal and clears a stale review after server rejection", asyn
   expect(
     screen.queryByRole("region", { name: "Review worktree removal" }),
   ).toBeNull();
+});
+
+it("reviews recovery explicitly and rejects stale recovery without reuse", async () => {
+  vi.mocked(api.worktreeRecovery).mockResolvedValue({
+    record,
+    commit: "retained-commit",
+    branch: record.branch,
+    warning: "Missing uncommitted files are not reconstructed.",
+    hash: "recovery-hash",
+  });
+  vi.mocked(api.restoreWorktree).mockRejectedValue(
+    new Error("Recovery state changed"),
+  );
+  render(<WorktreeSettings onToast={vi.fn()} />);
+  fireEvent.click(await screen.findByText("Review missing checkout"));
+  const region = await screen.findByRole("region", {
+    name: "Review worktree recovery",
+  });
+  expect(document.activeElement).toBe(region);
+  expect(api.worktreeRecovery).toHaveBeenCalledWith("/source", "managed");
+  expect(api.restoreWorktree).not.toHaveBeenCalled();
+  await screen.findByText("Missing uncommitted files are not reconstructed.");
+  fireEvent.click(screen.getByText("Restore in new worktree"));
+  await screen.findByRole("alert");
+  expect(api.restoreWorktree).toHaveBeenCalledWith(
+    "/source",
+    "managed",
+    "recovery-hash",
+  );
+  expect(
+    screen.queryByRole("region", { name: "Review worktree recovery" }),
+  ).toBeNull();
+  expect(api.removeWorktree).not.toHaveBeenCalled();
 });

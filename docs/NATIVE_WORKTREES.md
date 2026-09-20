@@ -91,5 +91,11 @@ missing commit, unavailable registration or stale review blocks rescue. A locked
 worktree may be on an unavailable device; inspect its location before unlocking.
 Trust and writable/idle source requirements also apply. Open and trust the new
 checkout explicitly. The original record remains in the active inventory until
-its underlying checkout is repaired and reviewed for removal. Dedicated desktop
-rescue controls and automatic repair of damaged paths remain open.
+its underlying checkout is repaired and reviewed for removal. Automatic repair of damaged paths remains open.
+
+In **Settings → Worktrees**, choose **Review missing checkout** for the affected
+record. The focused review shows its missing path, retained branch and exact
+commit, together with the uncommitted-file limitation. **Restore in new worktree**
+creates the separate checkout; **Cancel recovery** closes the review without
+changes. Errors clear stale reviews. Use **Open worktree** on the newly listed
+checkout to enter the usual project trust flow.

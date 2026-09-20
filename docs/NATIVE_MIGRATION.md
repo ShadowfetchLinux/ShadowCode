@@ -57,9 +57,9 @@ the existing React visual design. This document tracks engineering acceptance;
   separate managed branch, preserved source edits, private recovery records and
   CLI inventory, desktop Settings controls and reviewed clean removal that retains
   branches and commits.
-  CLI rescue restores a missing checkout’s retained commit into a separate
-  checkout while preserving original recovery metadata. Dirty-state transfer,
-  desktop recovery, damaged-path repair and reviewed return of changes remain open.
+  CLI and desktop rescue restore a missing checkout’s retained commit into a
+  separate checkout while preserving original recovery metadata. Dirty-state
+  transfer, damaged-path repair and reviewed return of changes remain open.
 
 The Rust workspace is being introduced alongside the Python release. Existing
 features remain acceptance requirements; an unimplemented native feature must

@@ -117,6 +117,13 @@ export type ManagedWorktree = {
   created_at: number;
   detail: string;
 };
+export type WorktreeRecovery = {
+  record: ManagedWorktree;
+  commit: string;
+  branch: string;
+  warning: string;
+  hash: string;
+};
 export type WorktreeInspection = {
   record: ManagedWorktree;
   head: string;
@@ -483,6 +490,17 @@ export const api = {
     send<WorktreeInspection>("/api/worktrees/inspect", "POST", {
       workspace,
       id,
+    }),
+  worktreeRecovery: (workspace: string, id: string) =>
+    send<WorktreeRecovery>("/api/worktrees/recovery", "POST", {
+      workspace,
+      id,
+    }),
+  restoreWorktree: (workspace: string, id: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/restore", "POST", {
+      workspace,
+      id,
+      hash,
     }),
   removeWorktree: (workspace: string, id: string, hash: string) =>
     send<ManagedWorktree>("/api/worktrees/remove", "POST", {
