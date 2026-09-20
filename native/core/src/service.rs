@@ -188,6 +188,22 @@ impl Service {
                     json!({"worktrees":crate::worktrees::list(self.engine.paths(),&self.workspace()?)?}),
                 )
             }
+            ("POST", "/api/worktrees/inspect") => {
+                let workspace = self.workspace()?;
+                ensure!(
+                    Config::load(self.engine.paths(), Some(&workspace))?.is_trusted(&workspace),
+                    "Trust the source project before inspecting its worktrees"
+                );
+                return Ok(json!(
+                    crate::worktrees::inspect(
+                        self.engine.paths(),
+                        &workspace,
+                        text("id"),
+                        CancellationToken::new()
+                    )
+                    .await?
+                ));
+            }
             ("POST", "/api/worktrees") => {
                 let ws = self.mutable_workspace()?;
                 let reference = body["reference"].as_str().unwrap_or("HEAD");
@@ -202,6 +218,31 @@ impl Service {
                 return Ok(json!(record));
             }
 
+            ("POST", "/api/worktrees/remove") => {
+                let ws = self.mutable_workspace()?;
+                let inspected = crate::worktrees::inspect(
+                    self.engine.paths(),
+                    &ws.path,
+                    text("id"),
+                    ws.reservation.cancellation(),
+                )
+                .await?;
+                let _target = self.engine.reserve_workspace(&inspected.record.path)?;
+                let _background = self
+                    .engine
+                    .background()
+                    .reserve_idle_workspace(&inspected.record.path)?;
+                let record = crate::worktrees::remove(
+                    self.engine.paths(),
+                    &ws.path,
+                    text("id"),
+                    text("hash"),
+                    ws.reservation.cancellation(),
+                )
+                .await?;
+                store.add_event("worktree.removed", &json!(record), None, None)?;
+                return Ok(json!(record));
+            }
             ("GET", "/api/resolve") => {
                 return Ok(json!({"id":store.resolve_id(q("kind"),q("prefix"))?}))
             }

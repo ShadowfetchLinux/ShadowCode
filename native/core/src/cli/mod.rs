@@ -870,7 +870,11 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 });
             }
         }
-        Command::Worktree {create,reference}=>backend.call(if *create {"POST"}else{"GET"},"/api/worktrees",json!({"reference":reference})).await?,
+        Command::Worktree {create,reference,inspect,remove,hash}=>{
+            if let Some(id)=remove {backend.call("POST","/api/worktrees/remove",json!({"id":id,"hash":hash})).await?}
+            else if let Some(id)=inspect {backend.call("POST","/api/worktrees/inspect",json!({"id":id})).await?}
+            else {backend.call(if *create {"POST"}else{"GET"},"/api/worktrees",json!({"reference":reference})).await?}
+        },
         Command::Jobs {
             id,
             watch: watch_job,

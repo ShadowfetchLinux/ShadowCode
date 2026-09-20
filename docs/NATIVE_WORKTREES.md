@@ -1,4 +1,4 @@
-# Native isolated worktrees — development foundation
+# Native isolated worktrees — development
 
 The native engine can create a Git worktree on a separate `shadowcode/<ID>` branch
 from an existing local commit or branch. Staged, unstaged and untracked changes
@@ -31,10 +31,30 @@ Private records and checkouts live under the profile's
 A recovery record is saved before Git starts creating the checkout. An interrupted
 or failed operation is recorded as `needs_attention`; an abruptly killed process
 may leave `creating`. Partial files and branches are retained for inspection.
-The inventory currently permits at most 64 records. Git's normal worktree and branch
+The active inventory currently permits at most 64 records. Successful removal
+archives its record under `records/archive`, freeing an active slot. Git's normal worktree and branch
 commands remain available for inspecting the repository metadata.
 
-This is the creation foundation, not the completed worktree workflow. Carrying
-uncommitted changes into an isolated checkout, reviewed return/merge operations,
-safe removal and recovery controls, and dedicated desktop controls remain part
-of the [native migration gates](NATIVE_MIGRATION.md).
+## Inspect and remove a clean checkout
+
+```sh
+shadowcode --workspace /path/to/repository worktree --inspect FULL_WORKTREE_ID
+shadowcode --workspace /path/to/repository worktree --remove FULL_WORKTREE_ID --hash REVIEW_HASH
+```
+
+Inspection returns the exact path, current branch and commit, status including
+ignored files, eligibility and a review hash. Removal requires that current hash
+and checks the Git repository identity and registration again. It refuses dirty,
+untracked or ignored files, detached HEADs, locked worktrees, active tasks/manual
+operations and background processes. A reservation prevents a new managed task
+or background process from starting during removal. Git performs its own final
+checks; removal never uses `--force` or deletes branches. Unmerged commits remain
+on the preserved branch. Source files and selection remain unchanged.
+
+Files deliberately changed by external programs should be preserved before
+removal, just as with ordinary Git operations. Missing or damaged checkout
+registrations still require manual inspection; the recovery record remains.
+
+Carrying uncommitted changes into an isolated checkout, reviewed return/merge
+operations, recovery controls for missing/damaged checkouts, and dedicated desktop
+controls remain part of the [native migration gates](NATIVE_MIGRATION.md).

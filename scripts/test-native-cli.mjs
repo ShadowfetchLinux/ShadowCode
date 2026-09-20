@@ -385,7 +385,12 @@ try {
   await cli(["trust"],0,{workspace:isolated.path});
   assert.equal((await cli(["run","READ isolated checkout"],0,{workspace:isolated.path})).status,"completed");
   assert.equal(await readFile(path.join(isolatedSource,"README.md"),"utf8"),"source local edits\n");
-  checks.push("native isolated worktree creation, inventory, explicit trust and model task without modifying source edits");
+  const removal = await cli(["worktree","--inspect",isolated.id],0,{workspace:isolatedSource});assert.equal(removal.can_remove,true);
+  assert.match((await cli(["worktree","--remove",isolated.id,"--hash","stale"],1,{workspace:isolatedSource})).error,/changed/);
+  assert.equal((await cli(["worktree","--remove",isolated.id,"--hash",removal.hash],0,{workspace:isolatedSource})).state,"removed");
+  assert.equal((await cli(["worktree"],0,{workspace:isolatedSource})).worktrees.length,0);
+  assert.equal(fixtureGit(["rev-parse",isolated.branch]).trim(),isolated.base_commit);
+  checks.push("native worktree creation, inventory, trust, isolated model task, reviewed clean removal and preserved branch");
 
   // Seed only this disposable, stopped profile. Recent-list limits must not hide
   // older IDs or force fetching multi-megabyte job results to resolve a prefix.

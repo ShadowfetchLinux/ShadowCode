@@ -12,8 +12,8 @@ use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::HashMap,
-    path::Path,
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -77,6 +77,7 @@ impl Running {
 #[derive(Default)]
 struct State {
     closing: bool,
+    reserved_workspaces: HashSet<PathBuf>,
     tasks: HashMap<String, Arc<Running>>,
     workers: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -90,7 +91,45 @@ impl Drop for BackgroundManager {
         let _ = self.begin_shutdown();
     }
 }
+pub(crate) struct IdleWorkspace {
+    manager: Arc<BackgroundManager>,
+    path: PathBuf,
+}
+impl Drop for IdleWorkspace {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.manager.state.lock() {
+            state.reserved_workspaces.remove(&self.path);
+        }
+    }
+}
 impl BackgroundManager {
+    pub(crate) fn reserve_idle_workspace(self: &Arc<Self>, path: &Path) -> Result<IdleWorkspace> {
+        let path = path.canonicalize()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("Background registry lock poisoned"))?;
+        ensure!(
+            !state
+                .tasks
+                .values()
+                .any(|task| !task.finished.load(Ordering::Acquire)
+                    && task
+                        .record
+                        .lock()
+                        .map(|record| Path::new(&record.cwd) == path)
+                        .unwrap_or(true)),
+            "Stop background processes before removing this worktree"
+        );
+        ensure!(
+            state.reserved_workspaces.insert(path.clone()),
+            "This workspace is being removed"
+        );
+        Ok(IdleWorkspace {
+            manager: self.clone(),
+            path,
+        })
+    }
     pub(crate) fn new(store: Arc<Store>, profile_lock: Arc<crate::paths::ProfileLock>) -> Self {
         Self {
             store,
@@ -159,6 +198,10 @@ impl BackgroundManager {
             .lock()
             .map_err(|_| anyhow!("Background registry lock poisoned"))?;
         ensure!(!state.closing, "Application is shutting down");
+        ensure!(
+            !state.reserved_workspaces.contains(&workspace.path),
+            "This workspace is being removed"
+        );
         state
             .tasks
             .retain(|_, task| !task.finished.load(Ordering::Acquire));
@@ -400,5 +443,36 @@ impl BackgroundManager {
             worker.await.context("Background worker did not finish")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::*;
+    #[tokio::test]
+    async fn idle_workspace_reservation_blocks_new_processes_and_releases_on_drop() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let paths = crate::paths::AppPaths::isolated(&root.path().join("profile")).unwrap();
+        Config::patch(&paths, json!({"trusted_workspaces":[project]})).unwrap();
+        let config = Config::load(&paths, Some(&project)).unwrap();
+        let service = crate::service::Service::open(paths, Some(project.clone())).unwrap();
+        let manager = service.engine.background();
+        let reservation = manager.reserve_idle_workspace(&project).unwrap();
+        assert!(manager
+            .start(&project, &config, None, "blocked", "sleep 60")
+            .unwrap_err()
+            .to_string()
+            .contains("being removed"));
+        assert!(manager.list(&project).unwrap().is_empty());
+        drop(reservation);
+        let process = manager
+            .start(&project, &config, None, "allowed", "sleep 60")
+            .unwrap();
+        assert!(manager.reserve_idle_workspace(&project).is_err());
+        manager.stop(&process.id).await.unwrap();
+        drop(manager.reserve_idle_workspace(&project).unwrap());
+        service.engine.shutdown().await.unwrap();
     }
 }

@@ -53,8 +53,14 @@ pub enum Command {
     },
     /// List managed worktrees, or create an isolated branch at a local commit.
     Worktree {
-        #[arg(long)]
+        #[arg(long,conflicts_with_all=["inspect","remove"])]
         create: bool,
+        #[arg(long, conflicts_with = "remove")]
+        inspect: Option<String>,
+        #[arg(long, requires = "hash")]
+        remove: Option<String>,
+        #[arg(long, requires = "remove")]
+        hash: Option<String>,
         #[arg(long, default_value = "HEAD", requires = "create")]
         reference: String,
     },

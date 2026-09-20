@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Managed worktrees support inspection and reviewed clean removal. Dirty/ignored
+  files, detached or locked checkouts, active tasks and background servers block
+  removal. Branches and commits remain; private records are archived after success.
+
 - Native worktree creation starts an isolated branch from a local commit while
   preserving source checkout edits. CLI inventory and private recovery records
   retain visibility into interrupted creation. The complete worktree workflow
