@@ -31,12 +31,25 @@ async fn timeout_kills_shell_and_grandchildren() {
     assert!(!result.ok);
     assert!(start.elapsed() < Duration::from_secs(3));
     let pid = std::fs::read_to_string(root.path().join("child.pid")).unwrap();
-    let status =
-        std::fs::read_to_string(format!("/proc/{}/status", pid.trim())).unwrap_or_default();
+    // SIGKILL reaches the entire group, but the kernel need not schedule every
+    // member's exit before wait() returns for the leader. Observe bounded
+    // termination rather than sampling that scheduler race once.
+    let exited = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let status =
+                std::fs::read_to_string(format!("/proc/{}/status", pid.trim())).unwrap_or_default();
+            if status.is_empty() || status.contains("State:\tZ") || status.contains("State:\tX") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
     assert!(
-        status.is_empty() || status.contains("State:\tZ"),
-        "Grandchild remained running"
+        exited.is_ok(),
+        "Grandchild remained alive after the process-group kill deadline"
     );
+    assert!(start.elapsed() < Duration::from_secs(3));
 }
 
 #[tokio::test]
