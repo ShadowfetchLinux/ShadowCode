@@ -3883,6 +3883,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml 0.9.12+spec-1.1.0",
  "tower-service",
  "tracing",
  "uuid",

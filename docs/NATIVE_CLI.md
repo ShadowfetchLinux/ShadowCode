@@ -154,7 +154,9 @@ To expose ShadowCode itself to another MCP client, use `mcp serve` over stdio, o
 `mcp serve --http 127.0.0.1:8765 --token-env SHADOW_MCP_HTTP_TOKEN` for authenticated
 loopback HTTP. Set that environment/profile secret before starting the gateway.
 `mcp register` prints generic JSON for that executable, project and explicit
-profile. Both default to read-only access. `--allow-write` delegates changes
+profile. `--client claude|cursor|codex` selects a client-specific format; Codex
+uses TOML. For a running gateway, add `--url URL --token-env NAME` to emit the
+client's credential-variable reference without reading its value. Both default to read-only access. `--allow-write` delegates changes
 within the trusted project's configured permissions; adding `--allow-approvals`
 also delegates individual approvals for that MCP owner's tasks. HTTP reconnects
 share the same gateway owner; separate gateways keep clients independent. Run

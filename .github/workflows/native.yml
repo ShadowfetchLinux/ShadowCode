@@ -3,7 +3,7 @@ on:
   push:
     branches: [native-0.20]
   pull_request:
-    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'scripts/*native*.mjs', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml']
+    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'scripts/*native*.mjs', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml']
 permissions:
   contents: read
 jobs:
@@ -34,11 +34,17 @@ jobs:
         run: node scripts/test-native-mcp-server.mjs
       - name: Exercise the authenticated native MCP HTTP server
         run: SHADOW_MCP_TRANSPORT=http node scripts/test-native-mcp-server.mjs
+      - name: Install independent MCP test clients
+        run: npm --prefix scripts/native-mcp-peer ci --ignore-scripts --no-audit --no-fund
+      - name: Verify MCP interoperability with official TypeScript clients
+        run: node scripts/test-native-mcp-peer.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: native-mcp-server-diagnostics
-          path: artifacts/native-mcp-server*
+          path: |
+            artifacts/native-mcp-server*
+            artifacts/native-mcp-peer
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -89,6 +95,12 @@ jobs:
           SHADOW_MCP_ARTIFACTS: artifacts/native-package/mcp-server-http
           SHADOW_MCP_TRANSPORT: http
         run: node scripts/test-native-mcp-server.mjs
+      - name: Verify packaged MCP interoperability with official TypeScript clients
+        env:
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage
+          SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
+          SHADOW_MCP_PEER_ARTIFACTS: artifacts/native-package/mcp-peer
+        run: node scripts/test-native-mcp-peer.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

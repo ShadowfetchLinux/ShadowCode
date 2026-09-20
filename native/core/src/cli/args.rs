@@ -208,7 +208,7 @@ pub enum Mcp {
         /// Delegate changes within the configured project permissions.
         #[arg(long)]
         allow_write: bool,
-        /// Delegate approval decisions for this connection's own tasks.
+        /// Delegate approval decisions for this MCP owner's tasks.
         #[arg(long, requires = "allow_write")]
         allow_approvals: bool,
         /// Bind a loopback IP:port for Streamable HTTP instead of stdin/stdout.
@@ -218,12 +218,21 @@ pub enum Mcp {
         #[arg(long, requires = "http")]
         token_env: Option<String>,
     },
-    /// Print a generic MCP stdio registration using this executable and project.
+    /// Print MCP client configuration without editing another application's settings.
     Register {
-        #[arg(long)]
+        #[arg(long, conflicts_with = "url")]
         allow_write: bool,
         #[arg(long, requires = "allow_write")]
         allow_approvals: bool,
+        /// Output format: generic JSON, Claude Code, Cursor, or Codex TOML.
+        #[arg(long, value_enum, default_value = "generic")]
+        client: McpClient,
+        /// An already-running local HTTP gateway's /mcp URL (otherwise use stdio).
+        #[arg(long, requires = "token_env")]
+        url: Option<String>,
+        /// Credential variable name for the calling application; never reads its value.
+        #[arg(long, requires = "url")]
+        token_env: Option<String>,
     },
 
     /// Register a JSON/YAML definition; does not launch or enable it.
@@ -247,6 +256,13 @@ pub enum Mcp {
         #[arg(long)]
         hash: String,
     },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum McpClient {
+    Generic,
+    Claude,
+    Cursor,
+    Codex,
 }
 #[derive(Debug, Args)]
 pub struct Run {

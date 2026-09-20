@@ -164,8 +164,11 @@ retries, and supports modern and legacy Streamable HTTP negotiation. The native
 stdio and authenticated loopback HTTP servers expose seventeen tools, four resources and two prompts through
 the shared engine, with a fixed project, reduced per-task permissions, explicit
 approval delegation and owned jobs. HTTP uses a gateway owner across stateless
-requests, with mandatory bearer authentication and bounded traffic. Client-specific
-registration and broader interoperability/real-model verification remain open requirements. Private engine-side ownership now cancels
+requests, with mandatory bearer authentication and bounded traffic. Registration
+prints Codex TOML or Claude Code/Cursor JSON with client-specific credential
+references. Independent TypeScript SDK 1.x and 2.x probes exercise both transports
+against the actual executable; host-application coverage remains explicitly scoped
+in the verification record. Private engine-side ownership now cancels
 MCP jobs after gateway SIGKILL, including unread submission replies, queued tasks
 and active command children; unrelated work continues.
 

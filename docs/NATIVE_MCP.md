@@ -4,8 +4,8 @@ MCP remains an open [native release gate](NATIVE_MIGRATION.md). The Rust stdio a
 clients now connect to native Settings, CLI registration, project activation,
 and individually approved agent tool calls. Native stdio and authenticated loopback
 HTTP servers expose tasks, goals, reviews, memory, SQLite inspection and checkpoints
-to external clients. Client-specific registration and broader interoperability/real-model
-verification remain release requirements. Neither direction launches Python.
+to external clients. Registration output now supports Codex, Claude Code and Cursor. Verification
+uses independent official TypeScript clients as well as the Rust SDK. Neither direction launches Python.
 
 ## Connect another coding tool to ShadowCode
 
@@ -23,6 +23,55 @@ AppImage path and `--appimage-extract-and-run`, not a temporary extracted binary
 Keep the registered executable in that location. The server's stdout contains only
 newline-delimited JSON-RPC; errors go to stderr. Do not combine `mcp serve` with
 the CLI's `--json` option.
+
+### Client configuration
+
+Choose an output format; the command prints configuration for review and never
+edits the calling application's settings:
+
+```sh
+shadowcode --workspace /absolute/project mcp register --client codex
+shadowcode --workspace /absolute/project mcp register --client claude
+shadowcode --workspace /absolute/project mcp register --client cursor
+```
+
+Codex output is a `[mcp_servers.shadowcode]` TOML section for its `config.toml`;
+omit `--json` with this format. Claude Code output is JSON for the project's
+`.mcp.json`; Cursor output is JSON for `.cursor/mcp.json` or `~/.cursor/mcp.json`.
+Merge the emitted entry into an existing configuration rather than overwriting
+other servers. The default `--client generic` retains the original JSON format.
+Paths and arguments are encoded as literal values, including spaces and quotes.
+Claude/Cursor paths containing `${` are rejected because those clients expand
+that sequence; use a location without it.
+
+For an already-running HTTP gateway, select the client explicitly:
+
+```sh
+shadowcode mcp register --client codex \
+  --url http://127.0.0.1:8765/mcp --token-env SHADOW_MCP_HTTP_TOKEN
+```
+
+The same options work with `--client claude` or `--client cursor`. Output contains
+only the credential variable's name: Codex uses `bearer_token_env_var`, Claude
+uses `${NAME}`, and Cursor uses `${env:NAME}`. Set the value in the calling app's
+environment. A secret stored only in ShadowCode's profile is not automatically
+available to another app. The command neither looks up nor prints the value,
+contacts the endpoint, nor starts a gateway. Use a dedicated variable such as
+`SHADOW_MCP_HTTP_TOKEN`; Claude Code deliberately withholds certain provider
+credential names from HTTP header expansion.
+
+HTTP registrations cannot change a running gateway's permissions; use its startup
+flags instead. `--allow-write` and `--allow-approvals` apply only to the generated
+stdio launch command. Generic HTTP output is rejected because credential-variable
+syntax differs across clients. HTTP URLs must identify the native loopback `/mcp`
+endpoint, without embedded credentials, query parameters or fragments.
+
+Formats follow the official [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+[Claude Code MCP configuration](https://code.claude.com/docs/en/mcp#environment-variable-expansion-in-mcpjson),
+and [Cursor MCP configuration](https://cursor.com/docs/mcp#config-interpolation).
+These snippets do not bypass either application's tool-approval policy.
+
+### Project access and ownership
 
 The server uses the active desktop/headless engine for the selected profile, or
 opens its own temporary engine. Its project selection does not navigate the
@@ -125,7 +174,8 @@ Configure the calling application's Streamable HTTP transport with
 announces its ready address on stderr; stdout stays empty. Port `0` selects an
 available port, which is reported after the engine is ready. Stdin EOF does not
 stop HTTP serving. SIGINT/SIGTERM stop the gateway and wait for owned cleanup.
-`mcp register` still emits only generic stdio configuration.
+`mcp register --client CLIENT --url URL --token-env NAME` emits HTTP client
+configuration for this running endpoint; it does not start or enable the gateway.
 
 The same read-only default, trust requirements and optional
 `--allow-write --allow-approvals` flags apply. A gateway is one fixed-project owner
@@ -160,13 +210,13 @@ result limits still apply. Model/test jobs return an ID and continue asynchronou
 a closed HTTP request is not a request to cancel an already submitted job. Use
 `shadow_jobs` cancellation or stop its gateway.
 
-This is a development server, not full compatibility with the earlier Python
-server. Client-specific registration formats remain unimplemented.
-Tools use the fixed project and asynchronous owned jobs;
+This development server uses the fixed project and asynchronous owned jobs;
 map saving is explicit, and diagnostics do not perform automatic repairs.
-The current tests use the official
-Rust SDK and a real executable protocol probe; broader client interoperability
-and real local-model server tasks remain release checks.
+The protocol is exercised with the official Rust SDK, the independent TypeScript
+SDKs 1.30.0 and 2.0.0, and real executable probes. See the
+[recorded verification](NATIVE_VERIFICATION.md) for the tested scope. Named-app
+registration syntax is checked against their documentation; it is not a claim
+that every release of those host applications has been exercised.
 
 ## Enable external tools
 
@@ -411,7 +461,11 @@ control access, recovery after rejected task submissions, deleted completed
 history, immediate queued cancellation behind unrelated work, aborted transport
 handlers, unread submission replies, malformed frames and cross-project attempts.
 
-These checks do not stand in for the remaining server features, interoperability,
-and real local-model checks required for the full MCP migration. The standalone
-application does not bundle runtimes for third-party servers: install whatever
+Independent TypeScript SDK 1.x and 2.x probes now repeat discovery, exact
+approvals and native test execution over both transports. Actual GPT-OSS/HTTP
+and Qwen/stdio coding tasks also pass edits, independent verification and
+checkpoint restoration; see the [verification record](NATIVE_VERIFICATION.md).
+This coverage does not establish compatibility with every external host release.
+The broader [native application gates](NATIVE_MIGRATION.md) remain in progress.
+ShadowCode does not bundle runtimes for third-party servers: install whatever
 an explicitly selected external command requires separately.

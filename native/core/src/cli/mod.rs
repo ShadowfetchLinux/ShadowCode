@@ -14,6 +14,7 @@ macro_rules! err {
 }
 pub mod args;
 pub(crate) mod backend;
+mod registration;
 mod watch;
 use crate::{
     paths::{self, AppPaths},
@@ -191,10 +192,34 @@ pub async fn run(options: Options) -> Result<i32> {
             | Mcp::Register {
                 allow_write,
                 allow_approvals,
+                ..
             } => (*allow_write, *allow_approvals),
             _ => unreachable!(),
         };
-        if matches!(action, Mcp::Register { .. }) {
+        if let Mcp::Register {
+            client,
+            url,
+            token_env,
+            ..
+        } = action
+        {
+            ensure!(
+                !options.json || *client != args::McpClient::Codex,
+                "Codex registration is TOML; omit --json"
+            );
+            if let Some(url) = url {
+                outln!(
+                    "{}",
+                    registration::http(
+                        *client,
+                        url,
+                        token_env
+                            .as_deref()
+                            .context("HTTP registration requires --token-env")?
+                    )?
+                );
+                return Ok(0);
+            }
             let current = std::env::current_exe()?;
             let appimage = std::env::var_os("APPIMAGE")
                 .map(PathBuf::from)
@@ -211,15 +236,19 @@ pub async fn run(options: Options) -> Result<i32> {
             let executable = appimage.unwrap_or(current);
             args.extend([
                 "--workspace".to_owned(),
-                workspace.to_string_lossy().into_owned(),
+                workspace
+                    .to_str()
+                    .context("MCP project path must be UTF-8")?
+                    .to_owned(),
             ]);
             if let Some(profile) = &options.profile {
                 args.extend([
                     "--profile".into(),
                     expand(profile)?
                         .canonicalize()?
-                        .to_string_lossy()
-                        .into_owned(),
+                        .to_str()
+                        .context("MCP profile path must be UTF-8")?
+                        .to_owned(),
                 ]);
             }
             args.extend(["mcp".into(), "serve".into()]);
@@ -229,12 +258,7 @@ pub async fn run(options: Options) -> Result<i32> {
             if allow_approvals {
                 args.push("--allow-approvals".into());
             }
-            outln!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &json!({"mcpServers":{"shadowcode":{"command":executable,"args":args}}})
-                )?
-            );
+            outln!("{}", registration::stdio(*client, &executable, &args)?);
             return Ok(0);
         }
         ensure!(

@@ -2,6 +2,12 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- MCP registration prints Codex, Claude Code and Cursor configuration for stdio
+  or an existing authenticated HTTP gateway. Output references credential
+  variables without exposing secrets; literal path encoding and option validation
+  prevent accidental configuration changes. Independent official TypeScript SDK
+  1.x/2.x probes exercise both transports with real native approvals and test jobs.
+
 - Native MCP serving supports authenticated loopback Streamable HTTP alongside
   stdio. Both expose the same project-scoped tools, approvals and owned tasks.
   HTTP reconnects preserve the gateway's jobs; gateway shutdown cancels unfinished

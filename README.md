@@ -22,7 +22,8 @@ workflows, [managed background processes and model tools](docs/NATIVE_BACKGROUND
 [native SQLite inspection](docs/NATIVE_SQLITE.md),
 [queued follow-ups](docs/NATIVE_QUEUE.md),
 [approved MCP stdio and HTTP tools](docs/NATIVE_MCP.md), a
-[native MCP stdio and authenticated HTTP server](docs/NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode), and a
+[native MCP stdio and authenticated HTTP server](docs/NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode)
+with Codex/Claude Code/Cursor registration output, and a
 [native CLI](docs/NATIVE_CLI.md) that shares the active desktop engine or runs
 headlessly with its own profile.
 Development AppImage and Debian

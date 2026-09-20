@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **193 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **195 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -172,6 +172,47 @@ browser origins and hosts, malformed and oversized bodies, slow partial requests
 reconnects, queued cancellation, child cleanup, and abandoned-future profile/socket
 release. Dependency-notice generation passes with 540 application dependencies,
 including the HTTP server's newly resolved `httpdate` dependency.
+
+Client registration is checked through the executable for generic, Claude Code,
+Cursor and Codex output, both transports, permission flags, incompatible options
+and credential non-disclosure. Rust tests parse emitted JSON/TOML to round-trip
+paths containing quotes, newlines, backslashes and Unicode, reject client-side
+path interpolation, and reject ambiguous or nonlocal gateway URLs.
+
+`scripts/test-native-mcp-peer.mjs` uses the independently installed official
+TypeScript SDKs **1.30.0** and **2.0.0**. All four SDK/transport combinations pass
+catalog/resource/prompt discovery, structured tool results, approved native test
+execution, actual stdout/exit status, shutdown and profile reopening. The packages
+are pinned under `scripts/native-mcp-peer/` and used only for development tests;
+Node and these clients are not included in the application. CI repeats the matrix
+against the source executable and AppImage.
+
+```sh
+npm --prefix scripts/native-mcp-peer ci --ignore-scripts --no-audit --no-fund
+node scripts/test-native-mcp-peer.mjs
+```
+
+Real Ollama coding tasks also pass through the external SDK: **gpt-oss:20b** over
+v2 HTTP and **qwen3:14b** over v1 stdio. Each inspected a broken JavaScript total,
+changed only the implementation, requested the exact `node --test totals.test.mjs`
+approval, and completed successfully. The probe independently reran all three
+tests, checked that the tests were unchanged, and restored the original source
+byte for byte through the MCP checkpoint API. GPT-OSS used four steps and 8,066
+reported tokens; Qwen used four steps and 9,365. These are bounded functionality
+checks, not a general model-quality or performance benchmark.
+
+```sh
+SHADOW_MCP_MODEL=gpt-oss:20b SHADOW_MCP_PAIR=v2-http \
+  SHADOW_MCP_PEER_ARTIFACTS=artifacts/native-mcp-peer-gpt-oss \
+  node scripts/test-native-mcp-peer.mjs
+SHADOW_MCP_MODEL=qwen3:14b SHADOW_MCP_PAIR=v1-stdio \
+  SHADOW_MCP_PEER_ARTIFACTS=artifacts/native-mcp-peer-qwen \
+  node scripts/test-native-mcp-peer.mjs
+```
+
+Each run uses a disposable project/profile and closes its native owner. Per-pair
+reports retain job outcomes, approvals and paginated durable events. The final
+matrix additionally verifies that the SDK's stdio owner process has exited.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:

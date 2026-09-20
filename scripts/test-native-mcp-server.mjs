@@ -397,6 +397,72 @@ try {
   assert.ok(spec.args.includes(project));
   assert.ok(spec.args.includes(profile));
   assert.ok(!spec.args.includes("--allow-write"));
+  for (const client of ["claude", "cursor", "codex"]) {
+    const result = await finish(
+      launch(["mcp", "register", "--client", client]),
+    );
+    assert.equal(result.code, 0, result.stderr);
+    if (client === "codex") {
+      assert.ok(result.stdout.startsWith("[mcp_servers.shadowcode]\n"));
+      assert.ok(result.stdout.includes(JSON.stringify(path.resolve(binary))));
+      assert.ok(result.stdout.includes(JSON.stringify(project)));
+    } else {
+      const server = JSON.parse(result.stdout).mcpServers.shadowcode;
+      assert.equal(server.type, "stdio");
+      assert.deepEqual(server.args, spec.args);
+      assert.equal(server.command, spec.command);
+    }
+    const http = await finish(
+      launch([
+        "mcp",
+        "register",
+        "--client",
+        client,
+        "--url",
+        "http://127.0.0.1:8765/mcp",
+        "--token-env",
+        "SHADOW_MCP_PROBE_TOKEN",
+      ]),
+    );
+    assert.equal(http.code, 0, http.stderr);
+    assert.ok(!http.stdout.includes(token));
+    assert.ok(!http.stderr.includes(token));
+    if (client === "codex") {
+      assert.ok(
+        http.stdout.includes('bearer_token_env_var = "SHADOW_MCP_PROBE_TOKEN"'),
+      );
+    } else {
+      const server = JSON.parse(http.stdout).mcpServers.shadowcode;
+      assert.equal(server.url, "http://127.0.0.1:8765/mcp");
+      assert.equal(
+        server.headers.Authorization,
+        client === "claude"
+          ? "Bearer ${SHADOW_MCP_PROBE_TOKEN}"
+          : "Bearer ${env:SHADOW_MCP_PROBE_TOKEN}",
+      );
+    }
+  }
+  for (const args of [
+    ["--client", "codex", "--json"],
+    ["--url", "http://127.0.0.1:8765/mcp"],
+    ["--token-env", "TOKEN"],
+    [
+      "--client",
+      "claude",
+      "--url",
+      "http://127.0.0.1:8765/mcp",
+      "--token-env",
+      "TOKEN",
+      "--allow-write",
+    ],
+  ]) {
+    const rejected = await finish(launch(["mcp", "register", ...args]));
+    assert.notEqual(rejected.code, 0);
+    if (args.includes("--json")) {
+      assert.equal(JSON.parse(rejected.stdout).ok, false);
+      assert.match(JSON.parse(rejected.stdout).error, /TOML/);
+    } else assert.equal(rejected.stdout, "");
+  }
   const malformed = launch(["--json", "mcp", "serve"]);
   malformed.child.stdin.end();
   const rejected = await finish(malformed);
@@ -657,6 +723,7 @@ try {
             ? "authenticated loopback HTTP; modern and legacy protocol; empty stdout"
             : "JSON-RPC-only stdout",
           "registration uses stable executable/project/profile",
+          "Claude Code, Cursor and Codex configuration preserves arguments and references credentials without reading their values",
           "read-only default",
           "native SQLite table discovery, bound queries and denied SQL writes",
           "native task with exact approval",

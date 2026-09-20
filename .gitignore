@@ -10,6 +10,7 @@ build/
 .venv/
 venv/
 ui/node_modules/
+scripts/native-mcp-peer/node_modules/
 ui/dist/
 *.log
 .env
