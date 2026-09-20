@@ -71,6 +71,12 @@ current task streams. The project queue shows waiting messages across
 conversations, retains their model/mode choices and supports cancellation.
 Reloads return to the running task before waiting follow-ups.
 
+[Background tools](NATIVE_BACKGROUND.md#asking-a-model-to-manage-a-server) let
+models start and inspect project servers under shell permissions and stop them
+with explicit approval. The same processes appear in the Background panel;
+they continue across coding tasks until stopped or the owning application closes.
+Plan and Review tasks can inspect them without process control.
+
 Project [lifecycle commands](NATIVE_HOOKS.md) can be reviewed and enabled in
 Settings → Hooks or through the same native CLI. Their command gates and
 completion checks run inside the native task lifecycle without Python callbacks.
@@ -189,10 +195,11 @@ and `SHADOW_WEBKIT_DRIVER` select explicit executable paths. Logs, screenshots,
 and a machine-readable result are written to `artifacts/native/`. This test
 checks the real embedded window, Rust IPC, approval, file and terminal tools,
 reload, cancellation, compact layout, model routing/fallback notices, goals and
-their live transcript, pause, managed background processes,
+their live transcript, pause, manual and model-managed background processes,
 CLI coexistence and project isolation,
 project inspection and diagnostic status presentation,
 light/dark/compact/goals/routing/background/skills/hooks/MCP/inspection/diagnostics accessibility,
+background start/stop approval and shared panel state,
 and managed shutdown. It also verifies
 that the executable embeds the current compiled interface and does not load
 `libpython`.

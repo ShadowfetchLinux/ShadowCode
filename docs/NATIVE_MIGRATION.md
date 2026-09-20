@@ -99,7 +99,10 @@ Implemented foundation:
 - [Managed background processes](NATIVE_BACKGROUND.md) for project servers and
   watchers, with permission checks, bounded live log tails, durable status and
   audit events, project-scoped controls, bounded concurrency, legacy history
-  import, and cancellation/shutdown that waits for process-group cleanup.
+  import, and stop/shutdown that waits for process-group cleanup. Model tools
+  use scoped shell/start and stop approvals, command hooks, bounded status/log
+  reads and durable task attribution. These project processes intentionally
+  survive coding-task completion or cancellation until explicitly stopped.
 - A persisted native task loop, per-workspace FIFO follow-ups, four concurrent
   workspaces, scoped approvals, cancellation that waits for cleanup, restart
   recovery, and atomic completion/usage/event commits. Continuation and branching

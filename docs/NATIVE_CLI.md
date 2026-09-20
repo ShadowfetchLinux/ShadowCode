@@ -207,6 +207,12 @@ daemon or automatically restart jobs. Opening the GUI while `serve` owns that
 profile is not supported yet: stop `serve` before opening the window. The desktop
 can already act as the shared owner for CLI clients.
 
+Model [background tools](NATIVE_BACKGROUND.md#asking-a-model-to-manage-a-server)
+use this same process list. On a persistent owner, a started project server
+survives coding-task completion or cancellation; stop it through the panel,
+`background stop`, or an approved model stop request. A temporary CLI owner
+stops its project processes when the command exits.
+
 Ctrl-C, SIGTERM, or SIGHUP cancels a task started by that CLI, pauses a running goal, and
 cancels an active manual command. During `jobs --watch` it only stops watching;
 the existing job continues. A disconnected manual-command client drops that

@@ -12,8 +12,8 @@ impl Store {
         let tx = db.transaction()?;
         tx.execute("INSERT INTO background_processes(id,workspace,started_at,status,payload) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload=excluded.payload", params![task.id,task.cwd,task.started_at,task.status,serde_json::to_string(task)?])?;
         tx.execute(
-            "INSERT INTO events(ts,type,session_id,task_id,payload) VALUES(?,?,?,NULL,?)",
-            params![now(), event, task.session_id, payload.to_string()],
+            "INSERT INTO events(ts,type,session_id,task_id,payload) VALUES(?,?,(SELECT id FROM sessions WHERE id=?),(SELECT id FROM tasks WHERE id=?),?)",
+            params![now(), event, task.session_id, task.origin_task_id, payload.to_string()],
         )?;
         tx.commit()?;
         Ok(())

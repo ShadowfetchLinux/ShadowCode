@@ -250,18 +250,20 @@ async fn shutdown_cancels_manual_terminal_and_audits_its_original_session() {
             .unwrap()
         }
     });
-    tokio::time::timeout(Duration::from_secs(4), async {
-        while !workspace.join("child.pid").exists() {
+    let pid = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            // Shell redirection creates the file before echo writes the PID.
+            if let Some(pid) = fs::read_to_string(workspace.join("child.pid"))
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+            {
+                break pid;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .unwrap();
-    let pid = fs::read_to_string(workspace.join("child.pid"))
-        .unwrap()
-        .trim()
-        .parse::<u32>()
-        .unwrap();
     assert!(call(
         &service,
         "PUT",

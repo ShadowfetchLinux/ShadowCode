@@ -88,6 +88,12 @@ cancels that owner's running and queued tasks, including active command children
 Queued cancellations do not wait for unrelated work ahead of them. Ordinary
 detached CLI jobs remain independent of this ownership connection.
 
+Approved model [background tools](NATIVE_BACKGROUND.md#asking-a-model-to-manage-a-server)
+create project processes with an explicitly independent lifetime. They remain
+in the shared Background manager after task or connection cancellation, until
+stopped or the owning application closes. Closing a temporary engine stops them;
+read-only delegated tasks cannot start or stop them.
+
 At most eight ownership sockets may be active per profile, reserving room for
 ordinary control requests. Each accepts at most 64 jobs over its lifetime and
 stays confined to its selected project. Invalid or abandoned protocol exchanges

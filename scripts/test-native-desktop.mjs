@@ -22,6 +22,7 @@ for (const name of ["result.json", "failure.txt", "failure.png", "workspace-ligh
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
 for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json", "inspection.png", "accessibility-inspection.json", "diagnostics.png", "accessibility-diagnostics.json"]) await rm(path.join(artifacts, name), { force: true });
 for (const theme of ["light","dark","compact"]) for (const name of [`queue-${theme}.png`,`accessibility-queue-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
+for (const theme of ["light","dark","compact"]) for (const name of [`background-approval-${theme}.png`,`accessibility-background-approval-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
@@ -68,6 +69,9 @@ async function unusedPort() {
   await new Promise(resolve => server.close(resolve));
   return port;
 }
+async function dead(pid) {
+  try { return /\) [ZX] /.test(await readFile(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+}
 let requests = 0;
 const requestedModels = [];
 let goalMode = false;
@@ -76,6 +80,8 @@ let workflowCalls = 0;
 let mcpMode = false, mcpCalls = 0, mcpHttpCalls = 0;
 let queueMode = false;
 const queueRequests = [], queueReplies = new Map();
+let backgroundToolMode = false, backgroundToolCalls = 0, modelBackgroundId;
+const modelBackgroundCommand = "sleep 60 & echo $! > model-background-child.pid; printf model-background-ready; wait";
 const milestoneCalls = new Map();
 const sockets = new Set();
 const model = createServer(async (req, res) => {
@@ -87,6 +93,38 @@ const model = createServer(async (req, res) => {
   requestedModels.push(payload.model);
   const index = requests++;
   const tool = (name, args) => ({ id: `call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
+  if (backgroundToolMode) {
+    const call = backgroundToolCalls++;
+    let message;
+    if (backgroundToolMode === "start") {
+      assert.ok(payload.tools.some(item=>item.function.name==="background_start"));
+      if (call === 0) message = {role:"assistant",content:"Starting a managed project watcher.",tool_calls:[tool("background_start",{name:"model-watcher",command:modelBackgroundCommand})]};
+      else if (call === 1) {
+        const result = JSON.parse(payload.messages.filter(item=>item.role==="tool").at(-1).content);
+        assert.equal(result.success,true);
+        assert.equal(result.output.lifetime,"project");
+        modelBackgroundId=result.output.id;
+        await until("Model watcher child exists",async()=>Number((await readFile(path.join(project,"model-background-child.pid"),"utf8")).trim())>0);
+        message={role:"assistant",content:"Reading the watcher log.",tool_calls:[tool("background_output",{id:modelBackgroundId})]};
+      } else {
+        assert.equal(call,2);
+        const result = JSON.parse(payload.messages.filter(item=>item.role==="tool").at(-1).content);
+        assert.equal(result.success,true);
+        assert.ok(result.output.output.includes("model-background-ready"));
+        message={role:"assistant",content:"The managed watcher reports model-background-ready and remains running."};
+      }
+    } else if (call === 0) message={role:"assistant",content:"Stopping the recorded project watcher.",tool_calls:[tool("background_stop",{id:modelBackgroundId})]};
+    else {
+      assert.equal(call,1);
+      const result = JSON.parse(payload.messages.filter(item=>item.role==="tool").at(-1).content);
+      assert.equal(result.success,true);
+      assert.equal(result.output.status,"CANCELLED");
+      message={role:"assistant",content:"The managed watcher stopped and cleanup finished."};
+    }
+    res.writeHead(200,{"Content-Type":"application/json"});
+    res.end(JSON.stringify({choices:[{message,finish_reason:message.tool_calls?"tool_calls":"stop"}],usage:{prompt_tokens:30,completion_tokens:10,total_tokens:40}}));
+    return;
+  }
   if (queueMode) {
     const task = payload.messages.filter(message => message.role === "user").at(-1).content;
     assert.ok(["Queue probe: first", "Queue probe: second"].includes(task), "Cancelled queued tasks must not contact the model");
@@ -478,6 +516,48 @@ try {
   });
   await until("Background cancellation visible", () => execute("return !!document.querySelector('.bg-task .st-cancelled')"));
   await click('button.drawer-close');
+  backgroundToolMode="start";
+  await type('textarea[aria-label="Message ShadowCode"]', "Start the managed project watcher and read its log.");
+  await click('button[aria-label="Send task"]');
+  await until("Model background start approval",()=>execute("return !!document.querySelector('.approval')?.textContent.includes('Start background process: model-watcher')"));
+  assert.ok((await execute("return document.querySelector('.approval .code').textContent")).includes(modelBackgroundCommand));
+  assert.ok((await execute("return document.querySelector('.approval').textContent")).includes("including cancellation"));
+  assert.ok(!(await api("GET","/api/background")).tasks.some(task=>task.name==="model-watcher"));
+  await until("New approval remains visible",()=>execute("const card=document.querySelector('.approval').getBoundingClientRect();const stream=document.querySelector('.chat-stream').getBoundingClientRect();return card.top>=stream.top && card.bottom<=stream.bottom"));
+  for (const theme of ["light","dark"]) {
+    await execute("document.documentElement.dataset.theme=arguments[0]",[theme]);
+    await screenshot(`background-approval-${theme}`);
+    await accessibility(`background-approval-${theme}`);
+  }
+  await execute("document.documentElement.dataset.theme='light'");
+  await wd("POST",`/session/${session}/window/rect`,{width:620,height:850});
+  if(await execute("return !!document.querySelector('.jump-latest')")) await click('.jump-latest');
+  await until("Compact approval visible",()=>execute("const card=document.querySelector('.approval').getBoundingClientRect();const stream=document.querySelector('.chat-stream').getBoundingClientRect();return card.top>=stream.top && card.bottom<=stream.bottom"));
+  await screenshot("background-approval-compact");
+  await accessibility("background-approval-compact");
+  assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
+  await wd("POST",`/session/${session}/window/rect`,{width:1380,height:920});
+  await click(".approval button.primary");
+  await until("Model watcher task complete",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('reports model-background-ready')) && !!document.querySelector('button[aria-label=\"Send task\"]')"));
+  const modelBackground=await api("GET",`/api/background/${modelBackgroundId}`);
+  assert.equal(modelBackground.status,"RUNNING");
+  assert.ok(modelBackground.origin_task_id);
+  await click('button[aria-label="Terminal"]');
+  await clickButton("Background");
+  await until("Model watcher shared with Background panel",()=>execute("return [...document.querySelectorAll('.bg-task')].some(item=>item.textContent.includes('model-watcher') && item.textContent.includes('model-background-ready'))"));
+  await click('button.drawer-close');
+  backgroundToolMode="stop"; backgroundToolCalls=0;
+  await type('textarea[aria-label="Message ShadowCode"]', "Stop the managed project watcher.");
+  await click('button[aria-label="Send task"]');
+  await until("Model background stop approval",()=>execute("return !!document.querySelector('.approval')?.textContent.includes('Stop background process: model-watcher')"));
+  const stopPrompt=await execute("return document.querySelector('.approval .code').textContent");
+  assert.ok(stopPrompt.includes(modelBackgroundId) && stopPrompt.includes(modelBackgroundCommand));
+  await click(".approval button.primary");
+  await until("Model watcher stopped",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('watcher stopped and cleanup finished')) && !!document.querySelector('button[aria-label=\"Send task\"]')"));
+  assert.equal((await api("GET",`/api/background/${modelBackgroundId}`)).status,"CANCELLED");
+  await until("Model-started watcher child cleanup",async()=>dead((await readFile(path.join(project,"model-background-child.pid"),"utf8")).trim()));
+  await until("Model-started watcher parent cleanup",()=>dead(modelBackground.pid));
+  backgroundToolMode=false;
   await wd("POST", `/session/${session}/window/rect`, { width: 620, height: 850 });
   await until("Compact sidebar collapsed", () => execute("return !document.querySelector('.sidebar')"));
   await screenshot("compact");
@@ -614,14 +694,11 @@ try {
   await execute("window.__TAURI_INTERNALS__.invoke('api',{request:{method:'POST',path:'/api/workspace/exec',body:{command:'sleep 60 & echo $! > child.pid; wait',timeout:120}}}).catch(()=>{});return true;");
   const child = await until("Terminal child", async () => (await readFile(path.join(project, "child.pid"), "utf8")).trim());
   await execute("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('desktop_quit'),30);return true;");
-  const dead = async (pid) => {
-    try { return /\) [ZX] /.test(await readFile(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
-  };
   await until("Native shutdown", () => dead(version.pid));
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

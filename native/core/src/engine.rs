@@ -136,7 +136,7 @@ struct Inner {
     goals: Mutex<HashMap<String, Arc<GoalRun>>>,
     slots: Semaphore,
     closing: AtomicBool,
-    background: BackgroundManager,
+    background: Arc<BackgroundManager>,
     _profile_lock: Arc<crate::paths::ProfileLock>,
 }
 #[derive(Clone)]
@@ -148,7 +148,7 @@ impl Engine {
         store.recover_jobs()?;
         store.recover_goals()?;
         store.recover_background()?;
-        let background = BackgroundManager::new(store.clone(), profile_lock.clone());
+        let background = Arc::new(BackgroundManager::new(store.clone(), profile_lock.clone()));
         let (sender, _) = broadcast::channel(1024);
         Ok(Self(Arc::new(Inner {
             paths,
@@ -176,7 +176,7 @@ impl Engine {
     pub fn paths(&self) -> &AppPaths {
         &self.0.paths
     }
-    pub fn background(&self) -> &BackgroundManager {
+    pub fn background(&self) -> &Arc<BackgroundManager> {
         &self.0.background
     }
     pub fn delete_session(&self, id: &str) -> Result<bool> {
@@ -787,7 +787,8 @@ impl Engine {
             events.clone(),
             running.cancel.clone(),
         )?
-        .with_profile(self.0.paths.clone());
+        .with_profile(self.0.paths.clone())
+        .with_background(self.0.background.clone());
         let result = if let Some(command) = &running.command {
             self.run_command_job(running, &job, &events, &tools, command)
                 .await
@@ -1144,6 +1145,8 @@ impl Engine {
                                 | "git_log"
                                 | "mcp_sqlite_tables"
                                 | "mcp_sqlite_query"
+                                | "background_list"
+                                | "background_output"
                         )
                     {
                         inspected = true;

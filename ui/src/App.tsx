@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -347,13 +353,14 @@ export default function App() {
       el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
     }
   }, [task]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (ready && !switching && stick.current)
       streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
   }, [
     transcript.items,
     commandCards,
     busy,
+    submitting,
     approvals,
     ready,
     switching,

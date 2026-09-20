@@ -33,9 +33,9 @@ original database; legacy active entries become interrupted history.
 
 ## Permissions and lifecycle
 
-Starting a process is an explicit user command, like the Terminal Run button.
-The project must be trusted, read-only mode denies execution, and configured
-command restrictions still apply. The manager permits up to four active
+Starting from the panel or CLI is an explicit user command, like the Terminal
+Run button. The project must be trusted, read-only mode denies execution, and
+configured command restrictions still apply. The manager permits up to four active
 processes per project and sixteen per application profile. Background commands
 deliberately run alongside coding tasks; their shell side effects are not file
 tool checkpoints and are not undone by task rewind.
@@ -53,12 +53,42 @@ After an abrupt crash or forced termination, previously active records are marke
 persisted PID, which could now belong to an unrelated process. An interrupted
 record does not prove that an independently detached process has exited.
 
+## Asking a model to manage a server
+
+Build tasks expose `background_start`, `background_list`, `background_output`,
+and `background_stop`. Ask the model to start a named server or watcher, inspect
+its logs, and verify that it responds. Registration or a live PID alone does not
+prove readiness. The process appears in the same Background panel and CLI list
+as a manually started process.
+
+`background_start` follows the task's shell permissions, including command
+restrictions and shell approval settings. Its approval shows the actual command,
+project and name, and explains its independent lifetime. Enabled `before_command`
+hooks can block startup. Starting or stopping a process invalidates the task's
+previous file observations; subsequent edits still require current hashes.
+
+These are **project processes**: once started, they continue after the coding
+task completes, fails or is cancelled. Use the panel, CLI, or `background_stop`
+to end them; closing the owning application also stops them. Cancelling an
+unanswered start approval does not start anything. Process history retains the
+originating task ID even if that conversation is later deleted.
+
+`background_stop` requires a scoped approval showing the recorded process name,
+exact ID, project and command, and waits for managed cleanup. A model must use
+the ID returned by a background tool, never a PID. Every lookup and control is
+restricted to the task's current project. Plan and Review tasks expose only
+list/output, and cannot start or stop processes.
+
+Model listings include every active process and up to twelve recent finished
+entries, with 512-byte log previews. Output reads default to an 8 KB tail and
+accept `max_bytes` up to 64 KB. Responses identify omitted output/history and
+clip command previews to 1 KB; approval prompts retain the complete command.
+
 The desktop uses Rust IPC routes `GET/POST /api/background`,
 `GET /api/background/<id>`, and `POST /api/background/<id>/stop`.
 The [native CLI](NATIVE_CLI.md) exposes `background start`, `list`, `logs`, and
 `stop`; starting requires an open desktop or persistent `shadowcode serve`
-owner. Agent-facing background tools remain part of the broader integration
-work.
+owner. Both share the same manager used by model tools.
 
 See [verification](NATIVE_VERIFICATION.md) and the remaining
 [release gates](NATIVE_MIGRATION.md).

@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **183 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **188 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -75,6 +75,13 @@ integration tests** pass on the development machine. The suite covers:
   original legacy database and verify that an unrelated process with a stored PID
   is never signalled. Active processes remain visible past 100 newer history
   entries; failed audit storage prevents spawning an unrecorded command.
+- Agent background tools verify scoped start/stop approval and denial, cancelled
+  pending starts, project isolation before log disclosure, root/network/read-only
+  restrictions, strict arguments, command hooks and invalidated file observations.
+  UTF-8 previews and recent history are bounded while retaining every active
+  process. Deleted origin conversations do not break process cleanup or history.
+  Scripted model loops verify shared panel state, read-only inspection, continued
+  project-process lifetime after task completion/cancellation, and shutdown cleanup.
 
 - Project workflow discovery and ambiguous/invalid metadata, confined paths,
   literal bounded argument expansion, selected-only model context, read-only
@@ -297,6 +304,17 @@ reports cover light, dark and compact layouts; the sidebar returns to idle after
 completion. UI unit tests also cover interleaved queue cancellation without
 resetting the running task's plan/usage, and prompt ordering without duplication.
 
+The model-background update extends that workflow to **27 scripted requests and
+18 passing Axe views**. The actual window displays the exact start command and
+independent process lifetime before approval, shows the model's process in the
+shared Background panel after its task completes, reads its log, and requires
+another exact-process approval to stop it. Parent and child exit are checked
+immediately after Stop. Approval screenshots cover light, dark and compact
+windows. The probe exposed a light-theme warning-label contrast failure and a
+scroll timing issue that could leave new approvals below the viewport; both are
+fixed, and the final test checks that the complete approval remains visible.
+All 20 interface unit tests and seven browser tests pass with these changes.
+
 The earlier twenty-request window workflow also passed from the local optimized
 AppImage in FUSE-free extraction mode with the legacy `ui` argument. The package
 checker confirms that AppImage and Debian packages contain native ELF application
@@ -404,6 +422,26 @@ is pinned to the SDK's tested version; its omitted upstream license texts are
 retained at the exact source commit, with digests verified by the notice builder.
 
 ## Real local models
+
+`native/core/examples/probe_background.rs` asks an installed model to start a
+disposable Node HTTP server through the native background tool, then read its
+retained log and report a unique readiness marker. The harness grants only the
+exact requested start command, independently verifies the HTTP response after
+the coding task completes, and verifies that shutdown closes the listener.
+
+Both **gpt-oss:20b** and **qwen3:14b** passed: one scoped start approval, the
+correct live-log marker, a running server after task completion, matching HTTP
+content, and stopped server on shutdown. GPT-OSS used four model steps and 6,632
+reported tokens; Qwen used three steps and 6,702 tokens. These isolated results
+verify tool interoperability, not general model reliability or performance.
+
+```sh
+cargo run -p shadowcode-core --example probe_background --locked -- gpt-oss:20b background-probe.json
+```
+
+Node is infrastructure for this disposable test server and is not bundled with
+the application. The optional JSON report records approvals, tool events,
+actual model/usage, independent HTTP verification and shutdown outcome.
 
 `native/core/examples/probe_sqlite.rs` creates an isolated profile and disposable
 invoice database. The model must discover its schema and use the native SQLite

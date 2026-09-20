@@ -40,6 +40,13 @@ export function isMutatingTool(tool: string): boolean {
   return MUTATING.has(tool);
 }
 
+const BACKGROUND_LABELS = new Map([
+  ["background_start", "Start background process"],
+  ["background_list", "List background processes"],
+  ["background_output", "Read process output"],
+  ["background_stop", "Stop background process"],
+]);
+
 /** Codex-style collapsed one-liner. Click to expand; expanded cards expose
  *  Rewind (per-task file undo) and Review diff (jump to the Changes tab). */
 export function OpCard({
@@ -84,7 +91,9 @@ export function OpCard({
           {item.icon || (item.ok === false ? "✗" : item.ok ? "✓" : "●")}
         </span>
         <span className="op-headline">
-          {item.headline || item.tool}
+          {item.headline && item.headline !== item.tool
+            ? item.headline
+            : BACKGROUND_LABELS.get(item.tool) || item.tool}
           {item.live ? " · running" : ""}
         </span>
         <span className="op-chev">{open ? "▾" : "▸"}</span>
@@ -138,8 +147,18 @@ export function ApprovalCard({
   return (
     <div className="approval" data-approval-id={approval.id}>
       <div className="approval-head">
-        <span className="approval-kind">{approval.tool || "permission"}</span>
-        <span className="approval-title">Allow ShadowCode to run this?</span>
+        <span className="approval-kind">
+          {BACKGROUND_LABELS.has(approval.tool || "")
+            ? "Background process"
+            : approval.tool || "permission"}
+        </span>
+        <span className="approval-title">
+          {approval.tool === "background_stop"
+            ? "Allow ShadowCode to stop this process?"
+            : approval.tool === "background_start"
+              ? "Allow ShadowCode to start this process?"
+              : "Allow ShadowCode to run this?"}
+        </span>
       </div>
       <pre className="code">{approval.command || approval.reason}</pre>
       {approval.command && approval.reason && (

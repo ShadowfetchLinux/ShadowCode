@@ -14,7 +14,7 @@ context, tools, permissions, checkpoints, plans, and verification.
 desktop window with the interface embedded in the executable. It needs no Python
 runtime or browser launcher. See the [native development guide](docs/NATIVE_DESKTOP.md)
 and the [goals](docs/NATIVE_GOALS.md) and [model routing](docs/NATIVE_ROUTING.md)
-workflows, [managed background processes](docs/NATIVE_BACKGROUND.md), and
+workflows, [managed background processes and model tools](docs/NATIVE_BACKGROUND.md), and
 [native slash commands and project skills](docs/NATIVE_WORKFLOWS.md),
 [reviewed lifecycle commands](docs/NATIVE_HOOKS.md),
 [project inspection and diagnostics](docs/NATIVE_INSPECTION.md),

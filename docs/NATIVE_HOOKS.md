@@ -65,8 +65,9 @@ to 16 KB per invocation while both streams continue draining.
 
 ## Events and failure behavior
 
-- `before_command`: before an agent `exec` action, after its normal permission
-  decision. A failed check blocks the action and later checks for that event.
+- `before_command`: before an agent `exec` or `background_start` action, after
+  its normal permission decision. A failed check blocks the action and later
+  checks for that event. An `exec`-only tool filter does not match background starts.
 - `before_commit`: before the agent's `git_commit` tool, with the same blocking
   behavior. It does not intercept arbitrary Git commands in a shell.
 - `after_edit`: after a successful `write_file`, `edit_file`, or `apply_patch`.
@@ -97,8 +98,10 @@ these command and completion checks. They call no model: a failed completion
 check leaves the job failed with the original command output and exit status
 retained, without attempting an automatic repair.
 
-Hooks belong to agent and native test tasks. Manual terminal commands, background processes,
-UI Git actions, and commands launched inside another hook do not invoke them.
+Hooks belong to agent and native test tasks. Manual terminal commands, background
+starts from the panel/CLI, UI Git actions, and commands launched inside another
+hook do not invoke them. A managed background process finishing later does not
+trigger the originating task's `after_test` or `on_complete` hooks.
 They are not an operating-system policy or repository-wide Git hook mechanism.
 
 Each invocation records `hook.started` and `hook.completed` events with its

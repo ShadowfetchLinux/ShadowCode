@@ -1,4 +1,4 @@
-//! User-started project servers and watchers. Only live handles are cancelled;
+//! Managed project servers and watchers. Only live handles are cancelled;
 //! persisted PIDs are informational and are never used to signal a process.
 use crate::{
     config::Config,
@@ -39,6 +39,7 @@ pub struct BackgroundTask {
     pub error: String,
     pub truncated: bool,
     pub session_id: Option<String>,
+    pub origin_task_id: Option<String>,
 }
 struct Running {
     record: Mutex<BackgroundTask>,
@@ -105,6 +106,34 @@ impl BackgroundManager {
         name: &str,
         command: &str,
     ) -> Result<BackgroundTask> {
+        self.start_inner(workspace, config, session_id, name, command, None)
+    }
+    pub(crate) fn start_for_task(
+        &self,
+        workspace: &Path,
+        config: &Config,
+        events: &crate::events::TaskEvents,
+        name: &str,
+        command: &str,
+    ) -> Result<BackgroundTask> {
+        self.start_inner(
+            workspace,
+            config,
+            Some(events.session_id.clone()),
+            name,
+            command,
+            Some(events.task_id.clone()),
+        )
+    }
+    fn start_inner(
+        &self,
+        workspace: &Path,
+        config: &Config,
+        session_id: Option<String>,
+        name: &str,
+        command: &str,
+        origin_task_id: Option<String>,
+    ) -> Result<BackgroundTask> {
         ensure!(
             !name.trim().is_empty() && name.len() <= 80,
             "Process name must contain 1–80 bytes"
@@ -162,6 +191,7 @@ impl BackgroundManager {
             status: "STARTING".into(),
             started_at: crate::now(),
             session_id,
+            origin_task_id,
             ..Default::default()
         };
         self.store.save_background_event(

@@ -21,6 +21,8 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+mod background;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolResult {
     pub id: String,
@@ -49,6 +51,7 @@ pub struct ToolExecutor {
     observed: Arc<Mutex<HashMap<String, String>>>,
     plan: Arc<Mutex<Value>>,
     hooks: hooks::Runner,
+    background: Option<Arc<crate::background::BackgroundManager>>,
     #[cfg(unix)]
     mcp: crate::mcp::runner::Runner,
 }
@@ -88,6 +91,7 @@ impl ToolExecutor {
             observed: Arc::new(Mutex::new(HashMap::new())),
             plan: Arc::new(Mutex::new(json!({"goal":"","steps":[]}))),
             hooks,
+            background: None,
             #[cfg(unix)]
             mcp,
         })
@@ -97,8 +101,20 @@ impl ToolExecutor {
         self.mcp.set_profile(paths);
         self
     }
+    pub fn with_background(mut self, manager: Arc<crate::background::BackgroundManager>) -> Self {
+        self.background = Some(manager);
+        self
+    }
     pub fn schemas(&self) -> Vec<Value> {
         let mut schemas = schemas();
+        if self.background.is_none() {
+            schemas.retain(|schema| {
+                !schema["function"]["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with("background_")
+            });
+        }
         #[cfg(unix)]
         if !self.mcp.is_empty() {
             schemas.extend(crate::mcp::runner::schemas());
@@ -256,6 +272,7 @@ impl ToolExecutor {
             call.arguments.to_string().len() <= 8_000_000,
             "Tool arguments exceed the limit"
         );
+        let background_prompt = self.background_prompt(call)?;
         let decision = permissions::check(&self.config.permissions, &call.name, &call.arguments);
         #[cfg(unix)]
         let decision = if matches!(call.name.as_str(), "mcp_tools" | "mcp_call") {
@@ -274,7 +291,9 @@ impl ToolExecutor {
                     task_id: self.events.task_id.clone(),
                     tool: call.name.clone(),
                     arguments: call.arguments.clone(),
-                    command: if call.name == "mcp_call" {
+                    command: if let Some(prompt) = background_prompt {
+                        prompt
+                    } else if call.name == "mcp_call" {
                         format!(
                             "MCP {} / {}\n{}",
                             call.arguments["server"].as_str().unwrap_or(""),
@@ -343,7 +362,7 @@ impl ToolExecutor {
                 .await;
         }
         let before = match call.name.as_str() {
-            "exec" => Some("before_command"),
+            "exec" | "background_start" => Some("before_command"),
             "git_commit" => Some("before_commit"),
             _ => None,
         };
@@ -367,6 +386,12 @@ impl ToolExecutor {
         }
         if call.name == "exec" {
             return self.shell(&call.arguments).await;
+        }
+        if matches!(
+            call.name.as_str(),
+            "background_start" | "background_list" | "background_output" | "background_stop"
+        ) {
+            return self.background_call(call).await;
         }
         if call.name.starts_with("git_") {
             return self.git(&call.name, &call.arguments).await;
@@ -897,6 +922,10 @@ pub fn schemas() -> Vec<Value> {
         ("search_symbol","Find likely symbol definitions by name.",json!({"query":s,"path":s}),vec!["query"]),
         ("mcp_sqlite_tables","List tables and CREATE TABLE definitions in a project SQLite file. Native read-only tool; no registration. SQLite may maintain WAL sidecars.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_query","Read a project SQLite file with SELECT/WITH or schema PRAGMA (table_info etc). Bind ? placeholders with params; check truncated. Unique column aliases required. SQLite may maintain WAL sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]}},"limit":n}),vec!["path","sql"]),
+        ("background_start","Start a named project server/watcher under shell permissions. Continues independently after the task, including cancellation; stop it when no longer wanted. Inspect status/output before claiming readiness.",json!({"name":s,"command":s}),vec!["name","command"]),
+        ("background_list","List this project's active processes and recent results with bounded log previews.",json!({}),vec![]),
+        ("background_output","Read a project process's status and retained log tail; max_bytes defaults to 8000, maximum 64000.",json!({"id":s,"max_bytes":n}),vec!["id"]),
+        ("background_stop","Stop a managed project process after approval; waits for process-group cleanup. Use its exact listed ID, never a PID.",json!({"id":s}),vec!["id"]),
         ("write_file","Create/replace text. Read existing files first. Optional expected_hash: 'missing' for new files or read_file's SHA-256; omit when unused, never empty.",json!({"path":s,"content":s,"expected_hash":s}),vec!["path","content"]),
         ("edit_file","Replace exact unique text. Set replace_all explicitly for repeated matches.",json!({"path":s,"old_string":s,"new_string":s,"replace_all":b,"expected_hash":s}),vec!["path","old_string","new_string"]),
         ("apply_patch","Apply a unified diff or complete *** Begin Patch block. All file contexts are preflighted; changes are checkpointed.",json!({"patch":s,"path":s}),vec!["patch"]),

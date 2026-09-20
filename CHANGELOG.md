@@ -36,6 +36,15 @@
   tasks, retain bounded live logs and durable history, honor project permissions,
   and stop managed child processes when the application closes. Legacy history
   is imported without signalling stored PIDs or replaying old commands.
+- Models can start project servers under shell permissions and command hooks,
+  inspect bounded status/logs, and request scoped approval to stop them. Plan
+  and Review retain read-only access. Background servers appear in the shared
+  panel and survive coding-task completion or cancellation until explicitly
+  stopped or the owning application closes, with durable task attribution.
+  Background cards use readable labels and explicit start/stop prompts; approval
+  headings wrap on compact windows and warning labels meet light-theme contrast.
+  Following new activity now scrolls before paint, including task submission,
+  so a newly added approval remains in view.
 - Native slash commands run real tasks and terminal actions, persist command
   cards, and support explicit project skills with source/hash provenance. Skills
   preserve Plan/Review restrictions and queued instructions; the editor validates

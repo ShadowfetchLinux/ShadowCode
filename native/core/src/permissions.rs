@@ -18,6 +18,8 @@ pub fn read_only(tool: &str) -> bool {
             | "search_symbol"
             | "mcp_sqlite_tables"
             | "mcp_sqlite_query"
+            | "background_list"
+            | "background_output"
             | "git_status"
             | "git_diff"
             | "git_log"
@@ -53,7 +55,8 @@ pub fn check(config: &PermissionsConfig, tool: &str, args: &Value) -> Decision {
                 Ask("Destructive Git operation".into())
             }
         }
-        "exec" => {
+        "background_stop" => Ask("Stop a managed background process in this project".into()),
+        "exec" | "background_start" => {
             let command = args["command"].as_str().unwrap_or("");
             let words: Vec<_> = command
                 .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
@@ -96,6 +99,9 @@ pub fn check(config: &PermissionsConfig, tool: &str, args: &Value) -> Decision {
                 );
             }
             if config.approve_shell {
+                if tool == "background_start" {
+                    return Ask("Start a project background process. It continues independently after this coding task, including cancellation, until stopped or the application closes. Its shell effects are not undone by rewind.".into());
+                }
                 return Ask("Run a shell command as your user; it can affect files and services beyond this project".into());
             }
             if config.require_approval_for_dangerous
