@@ -7,6 +7,7 @@ use crate::{
     paths::AppPaths,
     permissions::{self, Decision},
     process::{self, ProcessSpec},
+    store::MilestoneSpec,
     tools::truncate,
     workspace::Workspace,
 };
@@ -315,6 +316,41 @@ impl Service {
                     json!({"sessions":store.sessions(q("q"),query_limit(&query,100,10000))?}),
                 )
             }
+            ("GET", "/api/goals") => {
+                let workspace = self.workspace()?;
+                return Ok(
+                    json!({"goals":store.goals(if matches!(q("all"),"true"|"1"){None}else{Some(&workspace)})?}),
+                );
+            }
+            ("POST", "/api/goals") => {
+                let workspace = if text("workspace").is_empty() {
+                    self.workspace()?
+                } else {
+                    Workspace::open(&expand_path(text("workspace"))?)?.path
+                };
+                if let Some(sid) = body["session_id"].as_str().filter(|s| !s.is_empty()) {
+                    ensure!(
+                        store.session(sid)?.context("Session not found")?["workspace"].as_str()
+                            == workspace.to_str(),
+                        "Session belongs to a different workspace"
+                    );
+                }
+                let milestones = if body.get("milestones").is_some() {
+                    serde_json::from_value::<Vec<MilestoneSpec>>(body["milestones"].clone())?
+                } else {
+                    MilestoneSpec::default_plan()
+                };
+                let goal = store.create_goal(&workspace, text("instruction"), &milestones)?;
+                if body["run"].as_bool().unwrap_or(false) {
+                    let goal = self.engine.start_goal(
+                        goal["id"].as_str().context("Goal ID missing")?,
+                        body["session_id"].as_str().filter(|s| !s.is_empty()),
+                    )?;
+                    self.select(&workspace, goal["session_id"].as_str().map(str::to_owned))?;
+                    return Ok(goal);
+                }
+                return Ok(goal);
+            }
             ("POST", "/api/sessions") => {
                 let workspace = if text("workspace").is_empty() {
                     self.workspace()?
@@ -559,6 +595,42 @@ impl Service {
                 return Ok(json!({"ok":true}));
             }
             _ => {}
+        }
+        if parts.get(1) == Some(&"goals") && parts.len() >= 3 {
+            let gid = parts[2];
+            match (request.method.as_str(), parts.get(3).copied(), parts.len()) {
+                ("GET", None, 3) => return store.goal(gid),
+                ("DELETE", None, 3) => {
+                    self.engine.delete_goal(gid)?;
+                    return Ok(json!({"ok":true}));
+                }
+                ("POST", Some("run"), 4) => {
+                    let goal = self
+                        .engine
+                        .start_goal(gid, body["session_id"].as_str().filter(|s| !s.is_empty()))?;
+                    self.select(
+                        Path::new(
+                            goal["workspace"]
+                                .as_str()
+                                .context("Goal workspace missing")?,
+                        ),
+                        goal["session_id"].as_str().map(str::to_owned),
+                    )?;
+                    return Ok(goal);
+                }
+                ("POST", Some("pause" | "abandon"), 4) => {
+                    return self.engine.stop_goal(gid, parts[3] == "abandon").await
+                }
+                ("POST", Some("milestones"), 5) => {
+                    return self.engine.update_goal_milestone(
+                        gid,
+                        parts[4],
+                        text("status"),
+                        text("detail"),
+                    )
+                }
+                _ => {}
+            }
         }
         if parts.get(1) == Some(&"sessions") && parts.len() >= 3 {
             let sid = parts[2];

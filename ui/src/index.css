@@ -1096,7 +1096,16 @@ button.mini.primary-mini {
 }
 .milestones li.done {
   color: var(--muted);
+}
+.milestones li.done > div > span {
   text-decoration: line-through;
+}
+.milestones li > div {
+  min-width: 0;
+}
+.milestone-detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .milestones li.in_progress {
   color: var(--text);

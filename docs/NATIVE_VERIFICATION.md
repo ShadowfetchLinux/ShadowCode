@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **61 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **69 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -32,6 +32,10 @@ integration tests** pass on the development machine. The suite covers:
   untracked and binary previews, and files without a final newline.
 - Export of 10,005 events without silently truncating history, ordered pagination,
   and snapshot cursors that cannot skip an event arriving during session loading.
+- Goal task execution and actual file/command verification, prevention of duplicate
+  runs and cross-goal milestone edits, pause and resume without repeating done
+  milestones, missing/failed verification, required inspection, shutdown, and
+  recovery that preserves completed work without replaying interrupted commands.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:
@@ -57,9 +61,14 @@ The first window run exposed a SQLite LIKE escape bug that appeared only after
 sessions existed. A regression now covers real session listing and literal
 search. Visual inspection also found a cancellation transcript race and an open
 sidebar obscuring a resized compact window; the window test checks both.
-Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, and compact workspace
+Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, compact, and Goals workspace
 views. The compact check caught the Review button losing its accessible name
 when its text was hidden; the control now retains an explicit label.
+The native test also creates a goal through the drawer, completes all three
+milestones, approves its verification command, checks the resulting file and
+live transcript, and pauses a second goal during a stalled model request.
+It also resumes that goal after deleting its old conversation, checking that a
+fresh conversation is created and remains cancellable.
 Eleven interface unit tests cover ordered replay, pagination, stream finalization,
 listener cleanup, interruption, and native tool cards. The seven existing browser
 tests continue to pass through the legacy transport.

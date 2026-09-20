@@ -97,6 +97,12 @@ Implemented foundation:
   persisted window state, notifications, and managed close/termination handling.
   Native UI replay preserves streaming message IDs, tool paths, and durable
   completion. The actual window is exercised through WebKit WebDriver.
+- [Native goals and milestones](NATIVE_GOALS.md) with persisted task attribution,
+  sequential execution through the shared workspace queue, pause/cancellation,
+  resume that skips completed work, and conservative recovery after interruption.
+  The default inspection requires current reads; final verification requires a
+  recorded successful command. Failed verification blocks further progression.
+  Manual checklist edits are labelled and disallowed while the goal is running.
 
 The remaining orchestration/integrations, full desktop interaction/stress
 coverage, and release packaging are still in progress. The native

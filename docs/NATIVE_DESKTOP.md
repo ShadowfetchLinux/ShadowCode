@@ -53,6 +53,8 @@ repository root. The Tauri configuration starts Vite and builds the native app.
   wait for cleanup, and retain a visible error if shutdown needs attention.
 - Live events are wakeups for ordered SQLite replay. A periodic read recovers
   missed notifications; streamed messages are replaced by their final text.
+- [Goals](NATIVE_GOALS.md) run persisted milestones through the same task engine,
+  with visible results, command verification, pause/resume, and safe recovery.
 
 ## Checks
 
@@ -77,8 +79,8 @@ Optional environment variables `SHADOW_DESKTOP_BINARY`, `SHADOW_TAURI_DRIVER`,
 and `SHADOW_WEBKIT_DRIVER` select explicit executable paths. Logs, screenshots,
 and a machine-readable result are written to `artifacts/native/`. This test
 checks the real embedded window, Rust IPC, approval, file and terminal tools,
-reload, cancellation, compact layout, light/dark/compact accessibility, and
-managed shutdown. It also verifies
+reload, cancellation, compact layout, goals and their live transcript, pause,
+light/dark/compact/goals accessibility, and managed shutdown. It also verifies
 that the executable embeds the current compiled interface and does not load
 `libpython`.
 

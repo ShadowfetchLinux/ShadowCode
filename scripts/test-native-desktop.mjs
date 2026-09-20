@@ -13,7 +13,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const binary = process.env.SHADOW_DESKTOP_BINARY || path.join(root, "target/debug/shadowcode");
 const artifacts = path.join(root, "artifacts/native");
 await mkdir(artifacts, { recursive: true });
-for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json"]) {
+for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json"]) {
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
@@ -40,6 +40,8 @@ async function unusedPort() {
   return port;
 }
 let requests = 0;
+let goalMode = false;
+const milestoneCalls = new Map();
 const sockets = new Set();
 const model = createServer(async (req, res) => {
   let body = "";
@@ -47,8 +49,22 @@ const model = createServer(async (req, res) => {
   const payload = JSON.parse(body);
   assert.equal(payload.model, "native-fixture");
   const index = requests++;
-  if (index >= 3) { res.writeHead(200, { "Content-Type": "application/json" }); res.flushHeaders(); return; }
   const tool = (name, args) => ({ id: `call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
+  if (goalMode) {
+    const task = payload.messages.filter(m => m.role === "user").at(-1).content;
+    const milestone = task.split("\n")[0];
+    const count = milestoneCalls.get(milestone) || 0;
+    milestoneCalls.set(milestone, count + 1);
+    const call = milestone.startsWith("Inspect") ? tool("read_file", { path: "README.md" })
+      : milestone.startsWith("Implement") ? tool("write_file", { path: "goal.txt", content: "goal-native-ok\n", expected_hash: "missing" })
+      : tool("exec", { command: "test \"$(cat goal.txt)\" = goal-native-ok" });
+    const message = count === 0 ? { role: "assistant", content: milestone, tool_calls: [call] }
+      : { role: "assistant", content: `Milestone complete: ${milestone}.` };
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ choices: [{ message, finish_reason: count === 0 ? "tool_calls" : "stop" }], usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 } }));
+    return;
+  }
+  if (index >= 3) { res.writeHead(200, { "Content-Type": "application/json" }); res.flushHeaders(); return; }
   const message = index === 0
     ? { role: "assistant", content: "Writing the file.", tool_calls: [tool("write_file", { path: "hello.txt", content: "native-window-ok\n", expected_hash: "missing" })] }
     : index === 1
@@ -95,6 +111,10 @@ async function element(selector) {
 }
 async function click(selector) {
   await wd("POST", `/session/${session}/element/${await element(selector)}/click`, {});
+}
+async function clickButton(text) {
+  const found = await wd("POST", `/session/${session}/element`, { using: "xpath", value: `//button[normalize-space(.)='${text}']` });
+  await wd("POST", `/session/${session}/element/${found["element-6066-11e4-a52e-4f735466cecf"]}/click`, {});
 }
 async function type(selector, text) {
   await wd("POST", `/session/${session}/element/${await element(selector)}/value`, { text });
@@ -156,6 +176,51 @@ try {
   await screenshot("compact");
   await accessibility("compact");
   assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"), true);
+  await wd("POST", `/session/${session}/window/rect`, { width: 1380, height: 920 });
+  goalMode = true;
+  await click('button[aria-label="Terminal"]');
+  await clickButton("Goals");
+  await type('textarea[aria-label="Goal instruction"]', "Create goal.txt containing goal-native-ok and verify its contents.");
+  await clickButton("Plan & run");
+  await until("Goal command approval", () => execute("return !!document.querySelector('.approval button.primary')"));
+  await click(".approval button.primary");
+  await until("Goal completion", async () => {
+    const goal = (await api("GET", "/api/goals")).goals[0];
+    assert.notEqual(goal?.status, "blocked", goal?.run_detail);
+    return goal?.status === "completed" && !goal.running;
+  });
+  await until("Goal checklist and transcript", () => execute("return document.querySelectorAll('.milestones li.done').length===3 && [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Milestone complete: Run the acceptance checks'));"));
+  assert.equal(await readFile(path.join(project, "goal.txt"), "utf8"), "goal-native-ok\n");
+  assert.equal(milestoneCalls.size, 3);
+  assert.deepEqual([...milestoneCalls.values()], [2, 2, 2]);
+  await until("Goal progress bar", () => execute("const bar=document.querySelector('.goal.completed .bar');return bar && bar.querySelector('i').getBoundingClientRect().width >= bar.getBoundingClientRect().width*0.99;"));
+  await screenshot("goals");
+  await accessibility("goals");
+  goalMode = false;
+  const beforePause = requests;
+  await type('textarea[aria-label="Goal instruction"]', "Explain how this project is organized.");
+  await clickButton("Plan & run");
+  await until("Running goal to pause", () => requests > beforePause);
+  await until("Pause control", () => execute("return [...document.querySelectorAll('.goal button')].some(e=>e.textContent.trim()==='Pause' && !e.disabled);"));
+  await clickButton("Pause");
+  await until("Goal paused", async () => {
+    const goal = (await api("GET", "/api/goals")).goals[0];
+    return goal?.status === "paused" && !goal.running && goal.milestones.every(m => m.status === "pending");
+  });
+  const pausedGoal = (await api("GET", "/api/goals")).goals[0];
+  await api("DELETE", `/api/sessions/${pausedGoal.session_id}`);
+  await until("Resume control", () => execute("return [...document.querySelectorAll('.goal button')].some(e=>e.textContent.trim()==='Run' && !e.disabled);"));
+  await clickButton("Run");
+  await until("Goal resumed in a fresh conversation", async () => {
+    const goal = (await api("GET", `/api/goals/${pausedGoal.id}`));
+    return requests > beforePause + 1 && goal.running && goal.session_id !== pausedGoal.session_id;
+  });
+  await until("Resumed pause control", () => execute("return [...document.querySelectorAll('.goal button')].some(e=>e.textContent.trim()==='Pause' && !e.disabled);"));
+  await clickButton("Pause");
+  await until("Resumed goal paused", async () => {
+    const goal = (await api("GET", `/api/goals/${pausedGoal.id}`));
+    return goal.status === "paused" && !goal.running;
+  });
   // A terminal command is still running when the actual native quit command is
   // invoked. The process and its child must be gone before shutdown completes.
   await execute("window.__TAURI_INTERNALS__.invoke('api',{request:{method:'POST',path:'/api/workspace/exec',body:{command:'sleep 60 & echo $! > child.pid; wait',timeout:120}}}).catch(()=>{});return true;");
@@ -166,8 +231,8 @@ try {
   };
   await until("Native shutdown", () => dead(version.pid));
   await until("Terminal cleanup", () => dead(child));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "cancellation", "compact layout", "native light/dark/compact accessibility", "managed native shutdown"] }, null, 2));
-  console.log("Native desktop window passed: IPC, approval, file/terminal tools, replay, cancellation, layout, shutdown.");
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "cancellation", "compact layout", "native light/dark/compact/goals accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  console.log("Native desktop window passed: IPC, approval, file/terminal tools, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {
     await screenshot("failure").catch(() => {});

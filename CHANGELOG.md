@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.20.0 — native development (unreleased)
+
+- Rust task engine with confined file tools, bounded processes, streaming local
+  and compatible models, scoped approvals, checkpoints, persisted queues, and
+  recovery. Settings and legacy history are migrated with backups.
+- Tauri desktop window embeds the compiled interface and communicates through
+  IPC, without a Python runtime or browser launcher. Native dialogs, external
+  links, window state, notifications, and managed shutdown are implemented.
+- Native goals preserve milestone results, pause and resume, require recorded
+  inspection/verification for the default checklist, and stop on failed checks.
+  Goal tasks appear live in the conversation; results and progress are accessible
+  from the drawer.
+- Native window automation covers actual tool execution, approvals, reload,
+  cancellation, goal progression/pause, accessibility, and subprocess cleanup.
+
+This development branch is not yet the replacement release. Remaining
+integrations, broader stress checks, packaging, and installation are tracked in
+[the migration gates](docs/NATIVE_MIGRATION.md).
+
 ## 0.19.0 — 2026-09-19
 
 ### Workspace

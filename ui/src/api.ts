@@ -137,6 +137,8 @@ export type Milestone = {
   status: string;
   detail?: string;
   task_id?: string;
+  require_verification?: boolean;
+  mode?: string;
 };
 export type Goal = {
   id: string;
@@ -149,6 +151,9 @@ export type Goal = {
   running: boolean;
   milestones: Milestone[];
   updated_at: number;
+  session_id?: string;
+  job_id?: string;
+  run_detail?: string;
 };
 export type BackgroundTask = {
   id: string;
@@ -320,6 +325,7 @@ export const api = {
     }),
   abandonGoal: (id: string) =>
     send<Goal>(`/api/goals/${id}/abandon`, "POST", {}),
+  pauseGoal: (id: string) => send<Goal>(`/api/goals/${id}/pause`, "POST", {}),
   deleteGoal: (id: string) =>
     send<{ ok: boolean }>(`/api/goals/${id}`, "DELETE"),
   setMilestone: (goalId: string, milestoneId: string, status: string) =>

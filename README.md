@@ -13,8 +13,9 @@ context, tools, permissions, checkpoints, plans, and verification.
 **Native 0.20 development:** the `native-0.20` branch now builds a Rust/Tauri
 desktop window with the interface embedded in the executable. It needs no Python
 runtime or browser launcher. See the [native development guide](docs/NATIVE_DESKTOP.md)
-and [migration gates](docs/NATIVE_MIGRATION.md). The remaining integrations and
-release checks are still in progress; 0.19 remains the supported download below.
+and [goals workflow](docs/NATIVE_GOALS.md). Integrations and release checks are
+still in progress under the [migration gates](docs/NATIVE_MIGRATION.md);
+0.19 remains the supported download below.
 
 ## Get the app
 

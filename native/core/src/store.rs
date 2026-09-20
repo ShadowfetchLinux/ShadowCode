@@ -9,6 +9,9 @@ use std::{
     time::Duration,
 };
 
+mod goals;
+pub use goals::MilestoneSpec;
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
  id TEXT PRIMARY KEY, workspace TEXT NOT NULL, created_at REAL NOT NULL,
@@ -52,6 +55,10 @@ CREATE TABLE IF NOT EXISTS milestones (
  title TEXT NOT NULL, status TEXT NOT NULL, order_index INTEGER NOT NULL,
  detail TEXT, task_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS goal_runs (
+ goal_id TEXT PRIMARY KEY REFERENCES goals(id), session_id TEXT NOT NULL,
+ job_id TEXT, status TEXT NOT NULL, detail TEXT NOT NULL, updated_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS file_changes (
  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
  workspace TEXT NOT NULL, path TEXT NOT NULL, before_bytes BLOB,
@@ -89,10 +96,10 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", true)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 21,
+            version <= 22,
             "This database was created by a newer ShadowCode version"
         );
-        if version < 21 {
+        if version < 22 {
             if existed {
                 let backup_path = path.with_extension(format!("pre-native-{}.sqlite", id()));
                 let mut backup = Connection::open(&backup_path)?;
@@ -116,6 +123,12 @@ impl Store {
                 ("sessions", "branched_at", "REAL"),
                 ("tasks", "usage_json", "TEXT"),
                 ("file_changes", "observed_hash", "TEXT"),
+                ("milestones", "mode", "TEXT NOT NULL DEFAULT 'code'"),
+                (
+                    "milestones",
+                    "require_verification",
+                    "INTEGER NOT NULL DEFAULT 0",
+                ),
             ] {
                 let columns: Vec<String> = tx
                     .prepare(&format!("PRAGMA table_info({table})"))?
@@ -125,7 +138,7 @@ impl Store {
                     tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
                 }
             }
-            tx.pragma_update(None, "user_version", 21)?;
+            tx.pragma_update(None, "user_version", 22)?;
             tx.commit()?;
         }
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -163,7 +176,8 @@ impl Store {
             let tx = db.transaction()?;
             tx.execute_batch(
                 "INSERT OR IGNORE INTO goals SELECT * FROM legacy_goals.goals;
-                INSERT OR IGNORE INTO milestones SELECT * FROM legacy_goals.milestones;
+                INSERT OR IGNORE INTO milestones(id,goal_id,title,status,order_index,detail,task_id,created_at,updated_at)
+                    SELECT id,goal_id,title,status,order_index,detail,task_id,created_at,updated_at FROM legacy_goals.milestones;
                 INSERT INTO native_meta(key,value) VALUES('legacy_goals_imported','true');",
             )?;
             tx.commit()?;

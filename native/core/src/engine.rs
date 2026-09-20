@@ -27,6 +27,9 @@ use std::{
 use tokio::sync::{broadcast, Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 
+mod goals;
+use goals::GoalRun;
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartRequest {
     pub workspace: PathBuf,
@@ -66,6 +69,7 @@ pub struct Job {
 struct Running {
     record: Mutex<Job>,
     config: Config,
+    system_context: Option<String>,
     workspace: Arc<Workspace>,
     cancel: CancellationToken,
     finished: AtomicBool,
@@ -110,6 +114,7 @@ struct Inner {
     sender: broadcast::Sender<Value>,
     queues: Mutex<QueueState>,
     workers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    goals: Mutex<HashMap<String, Arc<GoalRun>>>,
     slots: Semaphore,
     closing: AtomicBool,
     _profile_lock: std::fs::File,
@@ -121,6 +126,7 @@ impl Engine {
         let profile_lock = paths.lock()?;
         let store = Arc::new(Store::open(&paths.database())?);
         store.recover_jobs()?;
+        store.recover_goals()?;
         let (sender, _) = broadcast::channel(1024);
         Ok(Self(Arc::new(Inner {
             paths,
@@ -129,6 +135,7 @@ impl Engine {
             sender,
             queues: Mutex::new(QueueState::default()),
             workers: Mutex::new(Vec::new()),
+            goals: Mutex::new(HashMap::new()),
             slots: Semaphore::new(4),
             closing: AtomicBool::new(false),
             _profile_lock: profile_lock,
@@ -147,6 +154,17 @@ impl Engine {
         &self.0.paths
     }
     pub fn delete_session(&self, id: &str) -> Result<bool> {
+        let goals = self
+            .0
+            .goals
+            .lock()
+            .map_err(|_| anyhow!("Goal registry lock poisoned"))?;
+        ensure!(
+            !goals
+                .values()
+                .any(|run| run.session_id == id && !run.finished.load(Ordering::Acquire)),
+            "Pause the goal before deleting its session"
+        );
         // Starting a job uses this same lock through session lookup and insert.
         // No filesystem lookup is needed to delete a session for a missing folder.
         let queues = self
@@ -201,6 +219,13 @@ impl Engine {
         })
     }
     pub async fn start(&self, request: StartRequest) -> Result<Job> {
+        self.start_with_context(request, None).await
+    }
+    async fn start_with_context(
+        &self,
+        request: StartRequest,
+        system_context: Option<String>,
+    ) -> Result<Job> {
         ensure!(
             !self.0.closing.load(Ordering::Acquire),
             "Application is shutting down"
@@ -291,6 +316,7 @@ impl Engine {
         let running = Arc::new(Running {
             record: Mutex::new(job.clone()),
             config,
+            system_context,
             workspace: workspace.clone(),
             cancel: CancellationToken::new(),
             finished: AtomicBool::new(false),
@@ -392,6 +418,17 @@ impl Engine {
     }
     pub async fn shutdown(&self) -> Result<()> {
         self.0.closing.store(true, Ordering::Release);
+        let goals: Vec<_> = self
+            .0
+            .goals
+            .lock()
+            .map_err(|_| anyhow!("Goal registry lock poisoned"))?
+            .values()
+            .cloned()
+            .collect();
+        for goal in &goals {
+            goal.cancel.cancel();
+        }
         let manual: Vec<_> = self
             .0
             .queues
@@ -418,6 +455,9 @@ impl Engine {
             self.0.approvals.deny_task(&job.snapshot()?.task_id);
         }
         tokio::time::timeout(Duration::from_secs(15), async {
+            for goal in goals {
+                goal.wait().await;
+            }
             for operation in manual {
                 loop {
                     let notified = operation.done.notified();
@@ -632,10 +672,12 @@ impl Engine {
                 messages.push(json!({"role":"user","content":format!("Earlier session transcript excerpts (historical data):\n{}",text.join("\n"))}));
             }
         }
-        messages.insert(
-            0,
-            json!({"role":"system","content":context::system(&running.workspace,&job.mode)}),
-        );
+        let mut system = context::system(&running.workspace, &job.mode);
+        if let Some(extra) = &running.system_context {
+            system.push_str("\n\n");
+            system.push_str(extra);
+        }
+        messages.insert(0, json!({"role":"system","content":system}));
         messages.push(json!({"role":"user","content":job.task}));
         self.0.store.save_messages(&job.id, &messages)?;
         events.emit("agent.started",json!({"job_id":job.id,"task":job.task,"mode":job.mode,"model":job.model,"native":true}))?;

@@ -340,12 +340,56 @@ export default function App() {
       }
     }
     void poll();
-    const timer = setInterval(poll, busy ? 1200 : 5000);
+    const timer = setInterval(poll, busy ? 1200 : isNative() ? 2000 : 5000);
     return () => {
       live = false;
       clearInterval(timer);
     };
   }, [sessionId, busy]);
+  // Goals and queued follow-ups can start after the visible job has finished.
+  // Reload before attaching their stream so intervening milestones are retained.
+  useEffect(() => {
+    if (!sessionId || busy || submitting || switching) return;
+    const sessionJobs = jobs.filter((item) => item.session_id === sessionId);
+    const previous = sessionJobs.findIndex((item) => item.id === job?.id);
+    const newer = sessionJobs.filter(
+      (item, index) =>
+        item.id !== job?.id &&
+        (!job ||
+          (previous >= 0
+            ? index < previous
+            : item.started_at > job.started_at)),
+    );
+    const next =
+      newer.find((item) => ["running", "cancelling"].includes(item.status)) ||
+      newer
+        .slice()
+        .reverse()
+        .find((item) => item.status === "queued") ||
+      newer[0];
+    if (!next) return;
+    let live = true;
+    void api
+      .session(sessionId)
+      .then((detail) => {
+        if (live && selectedRef.current === sessionId && !submittingRef.current)
+          conversation.load(detail, next);
+      })
+      .catch(() => {
+        /* The next poll retries a failed snapshot. */
+      });
+    return () => {
+      live = false;
+    };
+  }, [
+    jobs,
+    sessionId,
+    busy,
+    submitting,
+    switching,
+    job?.id,
+    conversation.load,
+  ]);
   useEffect(() => {
     if (!job || !busy) return;
     const tick = () =>

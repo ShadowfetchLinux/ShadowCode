@@ -12,7 +12,7 @@ import {
   type UpdateInfo,
 } from "../api";
 import { Empty } from "./cards";
-import { exportSession } from "../lib/transport";
+import { exportSession, isNative } from "../lib/transport";
 
 export type DrawerTab =
   | "terminal"
@@ -116,7 +116,14 @@ export function Drawer({
           <ChangesTab path={diffPath} busy={busy} toast={toast} />
         )}
         {tab === "skills" && <SkillsTab toast={toast} />}
-        {tab === "goals" && <GoalsTab sessionId={sessionId} toast={toast} />}
+        {tab === "goals" && (
+          <GoalsTab
+            key={workspace}
+            sessionId={sessionId}
+            onOpen={onOpenSession}
+            toast={toast}
+          />
+        )}
         {tab === "health" && <HealthTab health={health} toast={toast} />}
         {tab === "background" && <BackgroundTab toast={toast} />}
       </div>
@@ -728,14 +735,25 @@ function SkillsTab({ toast }: { toast: Toast }) {
 
 // --- Goals: milestone checklist · resume · progress ----------------------------
 
-function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
+function GoalsTab({
+  sessionId,
+  onOpen,
+  toast,
+}: {
+  sessionId: string;
+  onOpen: (id: string) => void;
+  toast: Toast;
+}) {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [text, setText] = useState("");
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState("");
   const load = useCallback(async () => {
     try {
       setGoals((await api.goals()).goals);
-    } catch {
-      setGoals([]);
+      setError("");
+    } catch (err) {
+      setError(String(err));
     }
   }, []);
   useEffect(() => {
@@ -745,14 +763,34 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
   }, [load]);
 
   async function create(run: boolean) {
-    if (!text.trim()) return;
+    if (!text.trim() || pending) return;
+    setPending("create");
     try {
-      await api.createGoal(text.trim(), run, sessionId || undefined);
+      const goal = await api.createGoal(
+        text.trim(),
+        run,
+        sessionId || undefined,
+      );
       setText("");
       await load();
+      if (run && goal.session_id) onOpen(goal.session_id);
       toast(run ? "Goal started" : "Goal created", "ok");
     } catch (err) {
       toast(String(err), "err");
+    } finally {
+      setPending("");
+    }
+  }
+  async function action(id: string, run: () => Promise<unknown>) {
+    if (pending) return;
+    setPending(id);
+    try {
+      await run();
+      await load();
+    } catch (err) {
+      toast(String(err), "err");
+    } finally {
+      setPending("");
     }
   }
 
@@ -760,6 +798,7 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
     <>
       <div className="field">
         <textarea
+          aria-label="Goal instruction"
           rows={2}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -769,6 +808,7 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
           <button
             type="button"
             className="mini"
+            disabled={Boolean(pending) || !text.trim()}
             onClick={() => void create(false)}
           >
             Plan
@@ -776,16 +816,22 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
           <button
             type="button"
             className="mini primary-mini"
+            disabled={Boolean(pending) || !text.trim()}
             onClick={() => void create(true)}
           >
             Plan & run
           </button>
         </div>
       </div>
-      {goals.length === 0 && (
+      {error && (
+        <p className="notice bad" role="alert">
+          {error}
+        </p>
+      )}
+      {!error && goals.length === 0 && (
         <Empty
           title="No goals yet"
-          body="A goal is a checklist of milestones the agent works through, one verified task at a time."
+          body="Create a checklist, then run its milestones in order. Saved task results show what was done and checked."
         />
       )}
       {goals.map((g) => (
@@ -794,7 +840,14 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
             <strong>{g.title || g.instruction}</strong>
             <span className="goal-pct">{g.progress_pct}%</span>
           </header>
-          <div className="bar">
+          <div
+            className="bar"
+            role="progressbar"
+            aria-label={`Goal progress: ${g.title || g.instruction}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={g.progress_pct}
+          >
             <i style={{ width: `${g.progress_pct}%` }} />
           </div>
           <ul className="milestones">
@@ -803,15 +856,21 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
                 <button
                   type="button"
                   className="tick"
-                  title="Toggle done"
+                  title={
+                    m.status === "done"
+                      ? "Mark pending"
+                      : "Mark complete manually"
+                  }
+                  aria-label={`${m.status === "done" ? "Mark pending" : "Mark complete manually"}: ${m.title}`}
+                  disabled={g.running || Boolean(pending)}
                   onClick={() =>
-                    void api
-                      .setMilestone(
+                    void action(g.id, () =>
+                      api.setMilestone(
                         g.id,
                         m.id,
                         m.status === "done" ? "pending" : "done",
-                      )
-                      .then(load)
+                      ),
+                    )
                   }
                 >
                   {m.status === "done"
@@ -822,7 +881,15 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
                         ? "✗"
                         : "○"}
                 </button>
-                <span>{m.title}</span>
+                <div>
+                  <span>{m.title}</span>
+                  {m.detail && (
+                    <details>
+                      <summary>Result</summary>
+                      <p className="milestone-detail">{m.detail}</p>
+                    </details>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
@@ -832,21 +899,45 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
               <button
                 type="button"
                 className="mini"
+                disabled={Boolean(pending)}
                 onClick={() =>
-                  void api
-                    .runGoal(g.id, sessionId || undefined)
-                    .then(load)
-                    .catch((err) => toast(String(err), "err"))
+                  void action(g.id, async () => {
+                    const next = await api.runGoal(
+                      g.id,
+                      isNative() ? undefined : sessionId || undefined,
+                    );
+                    if (next.session_id) onOpen(next.session_id);
+                  })
                 }
               >
                 {g.progress > 0 ? "Resume" : "Run"}
               </button>
             )}
-            {!g.running && g.status === "active" && (
+            {g.running && isNative() && (
               <button
                 type="button"
                 className="mini"
-                onClick={() => void api.abandonGoal(g.id).then(load)}
+                disabled={Boolean(pending)}
+                onClick={() => void action(g.id, () => api.pauseGoal(g.id))}
+              >
+                Pause
+              </button>
+            )}
+            {g.session_id && (
+              <button
+                type="button"
+                className="mini"
+                onClick={() => onOpen(g.session_id!)}
+              >
+                Open task
+              </button>
+            )}
+            {!g.running && !["completed", "abandoned"].includes(g.status) && (
+              <button
+                type="button"
+                className="mini"
+                disabled={Boolean(pending)}
+                onClick={() => void action(g.id, () => api.abandonGoal(g.id))}
               >
                 Abandon
               </button>
@@ -855,17 +946,16 @@ function GoalsTab({ sessionId, toast }: { sessionId: string; toast: Toast }) {
               <button
                 type="button"
                 className="mini danger-text"
-                onClick={() =>
-                  void api
-                    .deleteGoal(g.id)
-                    .then(load)
-                    .catch((err) => toast(String(err), "err"))
-                }
+                disabled={Boolean(pending)}
+                onClick={() => void action(g.id, () => api.deleteGoal(g.id))}
               >
                 Delete
               </button>
             )}
           </div>
+          {g.run_detail && (
+            <p className="dim milestone-detail">{g.run_detail}</p>
+          )}
         </div>
       ))}
     </>
