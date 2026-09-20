@@ -88,6 +88,12 @@ Implemented foundation:
   desktop project. Owned tasks cancel on interrupt/output failure; watching an
   existing task leaves it running. Full TUI, updater/doctor, and integration
   migration remain separate requirements.
+- [Native lifecycle hooks](NATIVE_HOOKS.md) with explicit project/content
+  activation, bounded sequential command execution, gates before commands and
+  commits, checks after edits/tests, completion repair, and error/compaction
+  events. Settings and CLI expose review/activation; durable cards expose results.
+  Changed definitions fail closed, read-only tasks stay inert, and cancellation
+  cleans up owned subprocesses. Legacy Python callbacks require conversion.
 - [Managed background processes](NATIVE_BACKGROUND.md) for project servers and
   watchers, with permission checks, bounded live log tails, durable status and
   audit events, project-scoped controls, bounded concurrency, legacy history

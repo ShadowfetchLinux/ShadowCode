@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **103 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **117 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -22,6 +22,10 @@ integration tests** pass on the development machine. The suite covers:
   verification retries, token limits, and labelled estimates for absent usage.
 - Streaming UTF-8/SSE/NDJSON, malformed/truncated provider responses, large frame
   batches, bounded process output, concurrent commands, and process-group cleanup.
+- Ollama templates receive later runtime repair/compaction guidance in their
+  leading system block, with original positions labelled; user/tool data keeps
+  its original role, tool arguments retain Ollama's native representation, and
+  stored conversation history remains chronological.
 - Application commands for onboarding, trusted/read-only projects, credentials,
   sessions, fresh-task approvals, and deletion after a project folder is removed.
 - Nonempty session listing and literal search across titles and saved prompts,
@@ -59,6 +63,14 @@ integration tests** pass on the development machine. The suite covers:
   preservation of existing files and live endpoints, per-client project/session
   isolation, cleanup after a manual-command client disconnects, bounded idle
   connection shutdown, and temporary-owner restrictions with profile-lock release.
+- Lifecycle commands: inert discovery, explicit workspace/hash activation,
+  symlink rejection, changed/missing definitions, root/network/read-only checks,
+  command/commit gates, literal filenames, one formatter invocation per patch
+  path, invalidated file observations and checkpoint conflicts. Real task loops
+  cover completion repair/exhaustion, bounded repair context from multiple noisy
+  checks, queued manifest changes, compaction and
+  provider failure. Output floods, timeouts, cancellation and engine shutdown
+  assert that recorded parent/child processes actually stop.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:
@@ -76,6 +88,9 @@ The pinned CI toolchain does not require this host-specific workaround.
 It checks project trust, invalid options before mutation, model registration,
 task completion/usage, saved continuation, ordered event JSON, session search,
 exact redirected and atomic file exports, checkpoint rewind, skills and goals.
+It also enables a reviewed hook by its current hash, rejects missing/stale hashes,
+checks its actual completion side effect, replays human/structured hook events,
+and disables it. There are nine scenario groups with 27 scripted model requests.
 Actual pseudo-terminal sessions cover approval, denial, and Ctrl-C while a
 prompt is waiting. Noninteractive requests never silently grant approval.
 
@@ -107,7 +122,7 @@ sessions existed. A regression now covers real session listing and literal
 search. Visual inspection also found a cancellation transcript race and an open
 sidebar obscuring a resized compact window; the window test checks both.
 Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, compact, Goals, Router,
-Background, and Skills workspace views. The compact check caught the Review button losing its accessible name
+Background, Skills, and Hooks workspace views. The compact check caught the Review button losing its accessible name
 when its text was hidden; the control now retains an explicit label.
 The native test also creates a goal through the drawer, completes all three
 milestones, approves its verification command, checks the resulting file and
@@ -134,9 +149,15 @@ It invokes a headless CLI in a second project while that real desktop owns the
 engine, creates a conversation, starts/reads/stops a background process, and
 checks that the desktop's project, remembered project and original background
 process remain unchanged.
-Fifteen interface unit tests cover ordered replay, pagination, stream finalization,
+The window enables a reviewed completion hook in Settings, checks the actual
+command side effect, reloads its result once, and disables it. This exposed a
+duplicate final answer when a hook card followed the model's response; completion
+now matches the last answer within the same task while retaining failure notices.
+The hook Settings screenshot was inspected for command readability and spacing.
+Seventeen interface unit tests cover ordered replay, pagination, stream finalization,
 listener cleanup, interruption, native tool cards, routing/fallback replay,
-workflow provenance, durable command cards, and disambiguated model labels that omit URL credentials. The seven existing browser
+workflow provenance, durable command/hook cards, completion checks between
+answers and task results, and disambiguated model labels that omit URL credentials. The seven existing browser
 tests continue to pass through the legacy transport.
 
 The same native window workflow also passes when launched from the local optimized
@@ -189,11 +210,55 @@ files, and the source archive hashes. Local results and checksums are under
 `artifacts/native-package/`; CI runs the same package, runtime, CLI, and window
 checks and uploads the matching source archive.
 
+The source-built runtime milestone also passed the complete clean-runner
+[CI run for a5c6b88](https://github.com/ShadowfetchLinux/ShadowCode/actions/runs/35518558352),
+including both package formats, runtime regressions, packaged CLI, and the
+packaged native window.
+
 OS dialog interaction, notification delivery, broader stress/accessibility
 coverage, corresponding sources for remaining redistributed components,
 and the final installed release still need their release-gate checks.
 
 ## Real local models
+
+`scripts/probe-native-hooks.mjs` tests an installed Ollama model through the
+headless executable with a disposable project/profile and an explicitly enabled
+completion check. It independently reads the two required output files, verifies
+that the hook definition did not change, and records hook exit codes and whether
+repair was observed. Arbitrary shell requests still require approval. Run it
+after building the debug executable:
+
+```sh
+node scripts/probe-native-hooks.mjs
+SHADOW_HOOK_PROBE_MODEL=qwen3:14b node scripts/probe-native-hooks.mjs
+```
+
+An initial gpt-oss probe exhausted a 12-step budget after supplying empty file
+hashes and malformed patches. File tools now describe `missing` for a new file
+and return actionable errors for invalid hashes without weakening stale-write
+checks. With this guidance and a 20-step cap, the subsequent gpt-oss run created
+both files and passed its completion check with 11,142 reported tokens. It had
+inspected the hook and met its requirements before completing, so this run did
+not exercise a failed-check repair. Its prose incorrectly claimed a commit;
+the evidence here establishes file contents and the hook result, not a Git
+commit. Model summaries still need to be checked against recorded operations.
+Detailed local reports are in `artifacts/native-hooks-local/`.
+
+The final gpt-oss probe with shell approval enabled attempted to execute a copy
+of the check itself, despite being asked to use file tools. The CLI returned
+`needs_approval` with exit code 2 and did not run that model-requested command.
+Enabling a lifecycle hook does not grant unrelated agent shell calls approval.
+This later run was not counted as a passing completion probe; model behavior
+remains variable even when command permissions and recorded outcomes are correct.
+
+The Qwen probe initially repeated its answer through all failed-check retries.
+Inspection of the installed Qwen3 Ollama template showed that it renders the
+leading system block but skips later system-role messages. The transport now
+includes those runtime notes in the leading block with their original positions
+labelled, while keeping tool/user data in their original roles. The rerun passed
+in four model steps with 6,247 reported tokens: the hook failed with exit 2,
+Qwen created the missing file, and the hook passed with exit 0. Both files and
+the unchanged hook definition were independently verified.
 
 `native/core/examples/probe_task.rs` creates a disposable Rust package and an
 isolated ShadowCode profile. Each model must inspect a broken addition function,

@@ -15,7 +15,8 @@ desktop window with the interface embedded in the executable. It needs no Python
 runtime or browser launcher. See the [native development guide](docs/NATIVE_DESKTOP.md)
 and the [goals](docs/NATIVE_GOALS.md) and [model routing](docs/NATIVE_ROUTING.md)
 workflows, [managed background processes](docs/NATIVE_BACKGROUND.md), and
-[native slash commands and project skills](docs/NATIVE_WORKFLOWS.md), and a
+[native slash commands and project skills](docs/NATIVE_WORKFLOWS.md),
+[reviewed lifecycle commands](docs/NATIVE_HOOKS.md), and a
 [native CLI](docs/NATIVE_CLI.md) that shares the active desktop engine or runs
 headlessly with its own profile.
 Development AppImage and Debian

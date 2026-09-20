@@ -5,6 +5,7 @@ import {
   type DetectedProvider,
   type McpServer,
   type ProviderInfo,
+  type HookCatalog,
 } from "../api";
 
 type Section =
@@ -70,10 +71,12 @@ export function Settings({
     Number(ui.notify_after_sec ?? 4),
   );
   // Hooks / MCP / plugins
-  const [hooks, setHooks] = useState<
-    { name: string; events: string[]; builtin: boolean }[]
-  >([]);
-  const [hookDirs, setHookDirs] = useState<string[]>([]);
+  const [hookCatalog, setHookCatalog] = useState<HookCatalog>({
+    hooks: [],
+    dirs: [],
+  });
+  const [hookError, setHookError] = useState("");
+  const [hookBusy, setHookBusy] = useState(false);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [newServer, setNewServer] = useState({ name: "", target: "" });
   const [plugins, setPlugins] = useState<{
@@ -92,11 +95,8 @@ export function Settings({
       .catch(() => setDetected([]));
     void api
       .hooks()
-      .then((d) => {
-        setHooks(d.hooks);
-        setHookDirs(d.dirs);
-      })
-      .catch(() => undefined);
+      .then(setHookCatalog)
+      .catch((error) => setHookError(String(error)));
     void api
       .mcpServers()
       .then((d) => setServers(d.servers))
@@ -106,6 +106,43 @@ export function Settings({
       .then(setPlugins)
       .catch(() => undefined);
   }, []);
+
+  async function activateHook(path: string, hash: string, enabled: boolean) {
+    setHookBusy(true);
+    setHookError("");
+    try {
+      setHookCatalog(
+        await api.activateHook(
+          hookCatalog.workspace || "",
+          path,
+          hash,
+          enabled,
+        ),
+      );
+      onToast(
+        enabled
+          ? "Hook enabled for new tasks in this project"
+          : "Hook disabled for new tasks",
+        "ok",
+      );
+    } catch (error) {
+      setHookError(String(error));
+    } finally {
+      setHookBusy(false);
+    }
+  }
+
+  async function refreshHooks() {
+    setHookBusy(true);
+    setHookError("");
+    try {
+      setHookCatalog(await api.hooks());
+    } catch (error) {
+      setHookError(String(error));
+    } finally {
+      setHookBusy(false);
+    }
+  }
 
   const preset = providers.find((p) => p.id === provider);
   const detectedFor = detected.find(
@@ -440,15 +477,43 @@ export function Settings({
         {section === "hooks" && (
           <section>
             <h3>Hooks</h3>
-            <p className="hint">
-              Deterministic lifecycle hooks fire at fixed points in the loop.
-              Project hooks go in{" "}
-              <code>{hookDirs[0] || ".shadowcode/hooks/"}</code> as{" "}
-              <code>*.py</code> files exporting <code>register(registry)</code>.
-            </p>
+            <button
+              type="button"
+              className="ghost hook-refresh"
+              disabled={hookBusy}
+              onClick={() => void refreshHooks()}
+            >
+              Refresh hooks
+            </button>
+            {hookCatalog.format === "command-v1" ? (
+              <p className="hint">
+                Review a command before enabling it for new tasks in this
+                project. Hooks run as your user with a timeout and can change
+                files. Plan and Review modes keep them inactive. Definitions
+                live in <code>.shadowcode/hooks/*.yaml</code>.
+              </p>
+            ) : (
+              <p className="hint">
+                Deterministic lifecycle hooks fire at fixed points in the loop.
+                Project hooks go in{" "}
+                <code>{hookCatalog.dirs[0] || ".shadowcode/hooks/"}</code> as{" "}
+                <code>*.py</code> files exporting{" "}
+                <code>register(registry)</code>.
+              </p>
+            )}
+            {hookError && (
+              <p className="hint error" role="alert">
+                {hookError}
+              </p>
+            )}
+            {hookCatalog.format === "command-v1" && !hookCatalog.trusted && (
+              <p className="hint">
+                Trust this project before enabling a command.
+              </p>
+            )}
             <div className="list">
-              {hooks.map((h) => (
-                <div className="item static" key={h.name}>
+              {hookCatalog.hooks.map((h) => (
+                <div className="item static hook-entry" key={h.path || h.name}>
                   <strong>
                     {h.name}
                     {h.builtin ? (
@@ -456,11 +521,65 @@ export function Settings({
                     ) : null}
                   </strong>
                   <span>{h.events.join(", ")}</span>
+                  {h.command !== undefined && (
+                    <>
+                      <span className="dim">
+                        {h.description || h.path} · {h.timeout_sec}s
+                        {h.path_suffix
+                          ? ` · paths ending in ${h.path_suffix}`
+                          : ""}
+                      </span>
+                      <pre className="hook-command">{h.command}</pre>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={
+                          hookBusy || (!h.enabled && !hookCatalog.trusted)
+                        }
+                        onClick={() =>
+                          void activateHook(h.path!, h.hash!, !h.enabled)
+                        }
+                      >
+                        {h.enabled ? `Disable ${h.name}` : `Enable ${h.name}`}
+                      </button>
+                    </>
+                  )}
                 </div>
               ))}
-              {hooks.length === 0 && (
-                <p className="hint">No hooks registered.</p>
+              {hookCatalog.hooks.length === 0 && (
+                <p className="hint">No hook definitions found.</p>
               )}
+              {hookCatalog.issues?.map((issue) => (
+                <p className="hint" key={issue}>
+                  {issue}
+                </p>
+              ))}
+              {hookCatalog.approved
+                ?.filter(
+                  (a) =>
+                    !hookCatalog.hooks.some(
+                      (h) => h.path === a.path && h.enabled,
+                    ),
+                )
+                .map((a) => (
+                  <div className="item static hook-entry" key={a.path}>
+                    <strong>Review required: {a.path}</strong>
+                    <span>
+                      The enabled definition changed or is unavailable. Restore
+                      it, review and enable its current contents, or disable it
+                      before starting another Build task.
+                    </span>
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={hookBusy}
+                      aria-label={`Disable unavailable hook ${a.path}`}
+                      onClick={() => void activateHook(a.path, a.hash, false)}
+                    >
+                      Disable unavailable hook
+                    </button>
+                  </div>
+                ))}
             </div>
           </section>
         )}

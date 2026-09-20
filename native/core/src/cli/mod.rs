@@ -347,6 +347,17 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 });
             }
         }
+        Command::Hooks {
+            enable,
+            disable,
+            hash,
+        } => {
+            if let Some(path) = enable.as_ref().or(disable.as_ref()) {
+                backend.call("POST","/api/hooks/activation",json!({"workspace":workspace,"path":path,"hash":hash.as_deref().unwrap_or(""),"enabled":enable.is_some()})).await?
+            } else {
+                backend.call("GET", "/api/hooks", Value::Null).await?
+            }
+        }
         Command::Status => {
             let mut status = backend
                 .call("GET", "/api/workspace/status", Value::Null)

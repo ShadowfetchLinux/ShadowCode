@@ -84,6 +84,27 @@ export type Approval = {
   tool?: string;
   pending?: boolean;
 };
+export type LifecycleHook = {
+  name: string;
+  events: string[];
+  builtin: boolean;
+  command?: string;
+  description?: string;
+  path?: string;
+  hash?: string;
+  enabled?: boolean;
+  timeout_sec?: number;
+  path_suffix?: string;
+};
+export type HookCatalog = {
+  hooks: LifecycleHook[];
+  dirs: string[];
+  issues?: string[];
+  format?: string;
+  workspace?: string;
+  trusted?: boolean;
+  approved?: { path: string; hash: string }[];
+};
 export type Job = {
   id: string;
   workspace: string;
@@ -370,11 +391,19 @@ export const api = {
     send<BackgroundTask>("/api/background", "POST", { name, command }),
   stopBackground: (id: string) =>
     send<BackgroundTask>(`/api/background/${id}/stop`, "POST", {}),
-  hooks: () =>
-    get<{
-      hooks: { name: string; events: string[]; builtin: boolean }[];
-      dirs: string[];
-    }>("/api/hooks"),
+  hooks: () => get<HookCatalog>("/api/hooks"),
+  activateHook: (
+    workspace: string,
+    path: string,
+    hash: string,
+    enabled: boolean,
+  ) =>
+    send<HookCatalog>("/api/hooks/activation", "POST", {
+      workspace,
+      path,
+      hash,
+      enabled,
+    }),
   mcpServers: () => get<{ servers: McpServer[] }>("/api/mcp/servers"),
   saveMcpServers: (servers: McpServer[]) =>
     send<{ servers: McpServer[] }>("/api/mcp/servers", "PUT", {

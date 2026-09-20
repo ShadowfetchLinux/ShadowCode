@@ -89,33 +89,44 @@ impl ModelClient {
             })
             .collect();
         if self.config.provider == "ollama" {
-            let messages: Vec<_> = messages
-                .iter()
-                .map(|m| {
-                    let mut m = m.clone();
-                    if m["role"] == "tool" {
-                        if let Some(name) = m.get("name").cloned() {
-                            m["tool_name"] = name;
-                        }
-                        if let Some(obj) = m.as_object_mut() {
-                            obj.remove("tool_call_id");
-                        }
+            // Common installed Ollama templates (including Qwen3) render only
+            // the leading system block and skip later system-role messages.
+            // Preserve runtime repair/compaction notes there, with their original
+            // position labelled so historical failures do not look newly issued.
+            let guidance: Vec<_> = messages.iter().enumerate().filter(|(_, m)| m["role"] == "system").map(|(index, m)| {
+                let text = m["content"].as_str().unwrap_or("");
+                if index == 0 { text.to_owned() } else {
+                    format!("[Runtime note at conversation position {index}; later messages may resolve it.]\n{text}")
+                }
+            }).collect();
+            let mut converted = Vec::new();
+            if !guidance.is_empty() {
+                converted.push(json!({"role":"system", "content":guidance.join("\n\n")}));
+            }
+            converted.extend(messages.iter().filter(|m| m["role"] != "system").map(|m| {
+                let mut m = m.clone();
+                if m["role"] == "tool" {
+                    if let Some(name) = m.get("name").cloned() {
+                        m["tool_name"] = name;
                     }
-                    if let Some(calls) = m.get_mut("tool_calls").and_then(Value::as_array_mut) {
-                        for call in calls {
-                            if let Some(args) =
-                                call.pointer("/function/arguments").and_then(Value::as_str)
-                            {
-                                if let Ok(args) = serde_json::from_str::<Value>(args) {
-                                    call["function"]["arguments"] = args;
-                                }
+                    if let Some(obj) = m.as_object_mut() {
+                        obj.remove("tool_call_id");
+                    }
+                }
+                if let Some(calls) = m.get_mut("tool_calls").and_then(Value::as_array_mut) {
+                    for call in calls {
+                        if let Some(args) =
+                            call.pointer("/function/arguments").and_then(Value::as_str)
+                        {
+                            if let Ok(args) = serde_json::from_str::<Value>(args) {
+                                call["function"]["arguments"] = args;
                             }
                         }
                     }
-                    m
-                })
-                .collect();
-            let mut body = json!({"model":self.config.name,"messages":messages,"stream":true,"think":false,
+                }
+                m
+            }));
+            let mut body = json!({"model":self.config.name,"messages":converted,"stream":true,"think":false,
                 "options":{"num_predict":max_tokens,"num_ctx":self.config.context_limit}});
             if !tools.is_empty() {
                 body["tools"] = json!(tools);

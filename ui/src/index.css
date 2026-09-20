@@ -821,6 +821,32 @@ button.mini.primary-mini {
 .item.static {
   cursor: default;
 }
+.hook-command {
+  padding: 10px;
+  margin: 8px 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.hook-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+.hook-entry .hook-command {
+  align-self: stretch;
+  margin: 2px 0;
+}
+.hook-refresh {
+  margin: 6px 0;
+}
 .item strong {
   display: block;
   color: var(--text);

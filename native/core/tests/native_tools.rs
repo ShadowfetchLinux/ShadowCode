@@ -54,6 +54,15 @@ async fn call(tools: &ToolExecutor, name: &str, args: Value) -> shadowcode_core:
 #[tokio::test]
 async fn tool_edits_reject_stale_reads_and_rewind_moves_and_new_files() {
     let (_root, tools) = fixture(Config::default());
+    let invalid = call(
+        &tools,
+        "write_file",
+        json!({"path":"new", "content":"must not appear", "expected_hash":""}),
+    )
+    .await;
+    assert!(!invalid.success);
+    assert!(invalid.error.contains("'missing' for a new file"));
+    assert!(tools.workspace.snapshot("new").unwrap().bytes.is_none());
     tools.workspace.write("file", b"original", None).unwrap();
     assert!(
         !call(

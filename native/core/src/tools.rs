@@ -4,6 +4,7 @@ use crate::{
     checkpoint,
     config::Config,
     events::TaskEvents,
+    hooks,
     models::ToolCall,
     patch::{self, Change},
     permissions::{self, Decision},
@@ -47,6 +48,7 @@ pub struct ToolExecutor {
     pub cancel: CancellationToken,
     observed: Arc<Mutex<HashMap<String, String>>>,
     plan: Arc<Mutex<Value>>,
+    hooks: hooks::Runner,
 }
 impl ToolExecutor {
     pub fn new(
@@ -72,6 +74,7 @@ impl ToolExecutor {
             session["workspace"].as_str() == workspace.path.to_str(),
             "Task workspace does not match its session"
         );
+        let hooks = hooks::Runner::load(&workspace, &config)?;
         Ok(Self {
             workspace,
             config,
@@ -80,6 +83,7 @@ impl ToolExecutor {
             cancel,
             observed: Arc::new(Mutex::new(HashMap::new())),
             plan: Arc::new(Mutex::new(json!({"goal":"","steps":[]}))),
+            hooks,
         })
     }
     pub fn plan(&self) -> Value {
@@ -88,13 +92,35 @@ impl ToolExecutor {
             .map(|v| v.clone())
             .unwrap_or_else(|_| json!({"steps":[]}))
     }
+    pub fn has_hooks(&self) -> bool {
+        !self.hooks.is_empty()
+    }
+    pub async fn fire_hooks(&self, context: Value) -> Result<Vec<hooks::Outcome>> {
+        let outcomes = self
+            .hooks
+            .fire(
+                context,
+                &self.workspace,
+                &self.config,
+                &self.events,
+                self.cancel.clone(),
+            )
+            .await?;
+        if outcomes.iter().any(|o| o.process.is_some()) {
+            self.observed
+                .lock()
+                .map_err(|_| anyhow::anyhow!("File observations lock poisoned"))?
+                .clear();
+        }
+        Ok(outcomes)
+    }
     pub async fn execute(&self, call: ToolCall) -> Result<ToolResult> {
         ensure!(!self.cancel.is_cancelled(), "Task cancelled");
         self.events.emit(
             "tool.started",
             json!({"tool":call.name,"arguments":call.arguments,"call_id":call.id}),
         )?;
-        let result = match self.execute_inner(&call).await {
+        let mut result = match self.execute_inner(&call).await {
             Ok(output) => {
                 let success = output.get("ok").and_then(Value::as_bool).unwrap_or(true);
                 ToolResult {
@@ -125,6 +151,66 @@ impl ToolExecutor {
                 error: format!("{error:#}"),
             },
         };
+        let mut outcomes = Vec::new();
+        if result.success
+            && matches!(
+                call.name.as_str(),
+                "write_file" | "edit_file" | "apply_patch"
+            )
+        {
+            // A multi-file patch fires once per changed path, so a formatter
+            // receives one literal path and suffix filters cannot select the
+            // wrong file. All patch changes have already been applied.
+            for path in result.output["paths"].as_array().into_iter().flatten() {
+                outcomes.extend(
+                    self.fire_hooks(hooks::context(
+                        "after_edit",
+                        &call.name,
+                        &call.arguments,
+                        &json!({"paths":[path]}),
+                        "",
+                    ))
+                    .await?,
+                );
+            }
+        }
+        if call.name == "exec"
+            && result.output.get("exit_code").is_some()
+            && hooks::is_test(call.arguments["command"].as_str().unwrap_or(""))
+        {
+            outcomes.extend(
+                self.fire_hooks(hooks::context(
+                    "after_test",
+                    &call.name,
+                    &call.arguments,
+                    &result.output,
+                    &result.error,
+                ))
+                .await?,
+            );
+        }
+        if !result.success {
+            outcomes.extend(
+                self.fire_hooks(hooks::context(
+                    "on_error",
+                    &call.name,
+                    &call.arguments,
+                    &result.output,
+                    &result.error,
+                ))
+                .await?,
+            );
+        }
+        if let Some(failure) = hooks::failure(&outcomes) {
+            result.success = false;
+            result.error=format!("{}\nLifecycle command failed after the tool action; completed changes remain applied:\n{failure}",result.error).trim().into();
+        }
+        if !outcomes.is_empty() {
+            if !result.output.is_object() {
+                result.output = json!({"tool_output":result.output});
+            }
+            result.output["hooks"] = json!(outcomes);
+        }
         self.events.emit("tool.completed",json!({"tool":call.name,"call_id":call.id,"success":result.success,"output":result.output,"output_preview":truncate(&result.output.to_string(),2000),"error":result.error}))?;
         Ok(result)
     }
@@ -187,6 +273,29 @@ impl ToolExecutor {
             !self.cancel.is_cancelled(),
             "Task cancelled before executing tool"
         );
+        let before = match call.name.as_str() {
+            "exec" => Some("before_command"),
+            "git_commit" => Some("before_commit"),
+            _ => None,
+        };
+        if let Some(event) = before {
+            let outcomes = self
+                .fire_hooks(hooks::context(
+                    event,
+                    &call.name,
+                    &call.arguments,
+                    &Value::Null,
+                    "",
+                ))
+                .await?;
+            if let Some(failure) = hooks::failure(&outcomes) {
+                bail!("Action blocked by lifecycle command:\n{failure}");
+            }
+            ensure!(
+                !self.cancel.is_cancelled(),
+                "Task cancelled before executing tool"
+            );
+        }
         if call.name == "exec" {
             return self.shell(&call.arguments).await;
         }
@@ -521,6 +630,12 @@ impl ToolExecutor {
         explicit: Option<&str>,
         required: bool,
     ) -> Result<()> {
+        if let Some(hash) = explicit {
+            ensure!(
+                hash == "missing" || (hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())),
+                "expected_hash must be 'missing' for a new file or the current SHA-256 hash returned by read_file. Omit it to use this task's recorded read; do not pass an empty string"
+            );
+        }
         let path = self
             .workspace
             .relative(path)?
@@ -697,7 +812,7 @@ pub fn schemas() -> Vec<Value> {
         ("search_files","Find filenames by substring; respects ignore rules.",json!({"query":s,"path":s}),vec!["query"]),
         ("search_text","Search text; literal by default, optional regex and file glob.",json!({"query":s,"path":s,"regex":b,"glob":s,"max_hits":n}),vec!["query"]),
         ("search_symbol","Find likely symbol definitions by name.",json!({"query":s,"path":s}),vec!["query"]),
-        ("write_file","Create a text file or replace a file already read in this task. Existing files require a current read or expected_hash.",json!({"path":s,"content":s,"expected_hash":s}),vec!["path","content"]),
+        ("write_file","Create/replace text. Read existing files first. Optional expected_hash: 'missing' for new files or read_file's SHA-256; omit when unused, never empty.",json!({"path":s,"content":s,"expected_hash":s}),vec!["path","content"]),
         ("edit_file","Replace exact unique text. Set replace_all explicitly for repeated matches.",json!({"path":s,"old_string":s,"new_string":s,"replace_all":b,"expected_hash":s}),vec!["path","old_string","new_string"]),
         ("apply_patch","Apply a unified diff or complete *** Begin Patch block. All file contexts are preflighted; changes are checkpointed.",json!({"patch":s,"path":s}),vec!["patch"]),
         ("create_directory","Create a workspace directory and parents.",json!({"path":s}),vec!["path"]),

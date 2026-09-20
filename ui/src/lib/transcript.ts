@@ -34,6 +34,49 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let routing = state.routing;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
+  if (event.type === "hook.started" || event.type === "hook.completed") {
+    const callId = `hook-${String(p.id)}`;
+    const index = items.findIndex(
+      (item) =>
+        item.kind === "tool" &&
+        item.taskId === taskId &&
+        item.callId === callId,
+    );
+    const previous = index < 0 ? undefined : items[index];
+    const process = p.process as {
+      stdout?: string;
+      stderr?: string;
+      truncated?: boolean;
+    } | null;
+    const card: ChatItem = {
+      kind: "tool",
+      tool: "hook",
+      taskId,
+      callId,
+      headline: `Hook · ${String(p.name)}`,
+      path: String(p.path || ""),
+      text:
+        event.type === "hook.started"
+          ? `Running ${String(p.event)}`
+          : `${String(p.status)} · ${String(p.detail || "")}`,
+      fullOutput: [
+        String(p.event),
+        String(p.command || ""),
+        String(p.detail || ""),
+        process?.stdout || "",
+        process?.stderr || "",
+        process?.truncated ? "[Output truncated]" : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      live: event.type === "hook.started",
+      ok: event.type === "hook.completed" ? Boolean(p.success) : undefined,
+      collapsed: previous?.kind === "tool" ? previous.collapsed : true,
+    };
+    items = [...items];
+    if (index < 0) items.push(card);
+    else items[index] = card;
+  }
   if (
     event.type === "command.completed" &&
     p.result &&
@@ -196,12 +239,30 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   if (p.stage) stage = String(p.stage);
   if (p.plan) plan = (p.plan as { steps?: PlanStep[] }).steps || plan;
   if (event.type === "agent.completed") {
-    const last = items.at(-1);
-    if (text && !(last?.kind === "agent" && last.text.trim() === text.trim()))
+    // Completion checks can appear after the final model response. Match the
+    // latest answer within this task, rather than whichever card is last.
+    let last: ChatItem | undefined;
+    for (let index = items.length - 1; index >= 0; index--) {
+      if (items[index].kind === "agent" && items[index].taskId === taskId) {
+        last = items[index];
+        break;
+      }
+    }
+    if (
+      text &&
+      !(
+        last?.kind === "agent" &&
+        !last.live &&
+        last.text.trim() === text.trim() &&
+        p.success &&
+        !p.cancelled
+      )
+    )
       items = [
         ...items,
         {
           kind: "agent",
+          taskId,
           text,
           who: p.cancelled
             ? "Stopped"

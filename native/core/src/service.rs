@@ -173,6 +173,40 @@ impl Service {
         let text = |key: &str| body[key].as_str().unwrap_or("");
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
         match (request.method.as_str(), path) {
+            ("GET", "/api/hooks") => {
+                let workspace = Workspace::open(&self.workspace()?)?;
+                let config = Config::load(self.engine.paths(), Some(&workspace.path))?;
+                return Ok(crate::hooks::catalog(&workspace, &config));
+            }
+            ("POST", "/api/hooks/activation") => {
+                let workspace = Workspace::open(&self.workspace()?)?;
+                ensure!(
+                    text("workspace") == workspace.path.to_string_lossy(),
+                    "Project changed; reload hooks before enabling a command"
+                );
+                let enabled = body["enabled"]
+                    .as_bool()
+                    .context("Choose whether to enable this hook")?;
+                let effective = Config::load(self.engine.paths(), Some(&workspace.path))?;
+                let mut config = Config::load(self.engine.paths(), None)?;
+                // A project read-only overlay remains authoritative at activation.
+                if enabled {
+                    ensure!(
+                        effective.permissions.level != PermissionLevel::ReadOnly,
+                        "Lifecycle commands cannot be enabled in read-only mode"
+                    );
+                }
+                crate::hooks::activate(
+                    &workspace,
+                    &mut config,
+                    text("path"),
+                    text("hash"),
+                    enabled,
+                )?;
+                config.save(self.engine.paths())?;
+                store.add_event("hook.activation",&json!({"workspace":workspace.path,"path":text("path"),"hash":text("hash"),"enabled":enabled}),None,None)?;
+                return Ok(crate::hooks::catalog(&workspace, &config));
+            }
             ("GET", "/api/commands") => return self.command_catalog(),
             ("POST", "/api/commands/run") => return self.run_command(body).await,
             ("GET", "/api/version") => {

@@ -185,6 +185,22 @@ pub async fn job(
                             plain(payload["name"].as_str().unwrap_or("")),
                             plain(payload["path"].as_str().unwrap_or(""))
                         ),
+                        "hook.started" | "hook.completed" => errln!(
+                            "Hook: {} · {} · {}{}",
+                            plain(payload["name"].as_str().unwrap_or("")),
+                            plain(payload["event"].as_str().unwrap_or("")),
+                            plain(payload["status"].as_str().unwrap_or("")),
+                            if payload["success"] == false {
+                                format!(
+                                    "\n{}\n{}{}",
+                                    plain(payload["detail"].as_str().unwrap_or("")),
+                                    plain(payload["process"]["stdout"].as_str().unwrap_or("")),
+                                    plain(payload["process"]["stderr"].as_str().unwrap_or(""))
+                                )
+                            } else {
+                                String::new()
+                            }
+                        ),
                         _ => {}
                     }
                 }

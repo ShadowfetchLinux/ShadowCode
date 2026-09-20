@@ -8,6 +8,89 @@ const event = (
   task_id = "one",
 ): EventRow => ({ id, ts: id, type, payload, task_id });
 describe("durable transcript", () => {
+  it("keeps a final answer once when completion hooks follow it, without hiding a later task or failure", () => {
+    const rows = [
+      event(1, "model.delta", { text: "Done", message_id: "final" }),
+      event(2, "hook.completed", {
+        id: "completion",
+        name: "verify",
+        event: "on_complete",
+        status: "passed",
+        success: true,
+      }),
+      event(3, "agent.completed", { summary: "Done", success: true }),
+    ];
+    const first = replay(rows);
+    expect(first.items.filter((item) => item.kind === "agent")).toHaveLength(1);
+    expect(rows.reduce(applyEvent, first)).toEqual(first);
+    const second = applyEvent(
+      first,
+      event(4, "agent.completed", { summary: "Done", success: true }, "two"),
+    );
+    expect(second.items.filter((item) => item.kind === "agent")).toHaveLength(
+      2,
+    );
+    const failed = replay([
+      rows[0],
+      rows[1],
+      event(3, "agent.completed", { summary: "Done", success: false }),
+    ]);
+    expect(failed.items.at(-1)).toMatchObject({
+      kind: "agent",
+      who: "Needs attention",
+      taskId: "one",
+    });
+  });
+  it("keeps interleaved hook checks separate from the tool they gate and replays their result once", () => {
+    const rows = [
+      event(1, "tool.started", { tool: "exec", call_id: "exec-one" }),
+      event(2, "hook.started", {
+        id: "check-one",
+        name: "lint",
+        event: "before_command",
+        command: "lint",
+        path: ".shadowcode/hooks/lint.yaml",
+      }),
+      event(3, "hook.completed", {
+        id: "check-one",
+        name: "lint",
+        event: "before_command",
+        command: "lint",
+        path: ".shadowcode/hooks/lint.yaml",
+        status: "failed",
+        success: false,
+        detail: "Exited with status 2",
+        process: { stderr: "Fix this error", truncated: true },
+      }),
+      event(4, "tool.completed", {
+        tool: "exec",
+        call_id: "exec-one",
+        success: false,
+        error: "Action blocked by lifecycle command",
+      }),
+    ];
+    const state = replay(rows);
+    expect(state.items).toHaveLength(2);
+    expect(state.items[0]).toMatchObject({
+      kind: "tool",
+      tool: "exec",
+      ok: false,
+      live: false,
+    });
+    expect(state.items[1]).toMatchObject({
+      kind: "tool",
+      tool: "hook",
+      ok: false,
+      live: false,
+      headline: "Hook · lint",
+      path: ".shadowcode/hooks/lint.yaml",
+    });
+    expect(state.items[1]).toHaveProperty(
+      "fullOutput",
+      "before_command\nlint\nExited with status 2\nFix this error\n[Output truncated]",
+    );
+    expect(rows.reduce(applyEvent, state)).toEqual(state);
+  });
   it("replays selected workflow provenance and command cards without duplicates", () => {
     const rows = [
       event(1, "workflow.selected", {

@@ -10,6 +10,7 @@ pub mod context;
 pub mod control;
 pub mod engine;
 pub mod events;
+pub mod hooks;
 #[cfg(unix)]
 pub mod lifecycle;
 pub mod model_registry;

@@ -35,6 +35,13 @@ catalog. `skill --list` lists project skills and
 navigation commands describe their requested panel/action in CLI output; they
 do not remotely open desktop panels. See [workflows](NATIVE_WORKFLOWS.md).
 
+`hooks` lists project lifecycle command definitions. Review the command and its
+hash, then use `hooks --enable PATH --hash HASH` to enable those exact contents
+or `hooks --disable PATH` to remove the registration. Hooks remain inactive in
+Plan/Review. Running tasks keep their configuration snapshot; cancel the task
+to interrupt an active command. See [native hooks](NATIVE_HOOKS.md) for events,
+failure handling, migration and trust boundaries.
+
 ## Approvals and output
 
 Tool approval is explicit. An interactive terminal asks whether to allow the
@@ -165,7 +172,7 @@ clients and idle reads are bounded. The connection exposes no TCP port and
 accepts no browser HTTP requests. Different application versions refuse to share
 an engine. Existing non-socket files and active endpoints are never overwritten.
 
-The native full-screen TUI, updater/doctor, hooks/plugins, and MCP migration
+The native full-screen TUI, updater/doctor, plugins, and MCP migration
 remain in progress; their 0.19 commands are not silently emulated here.
 
 ## Verification

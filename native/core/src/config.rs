@@ -99,6 +99,7 @@ pub struct Config {
     pub onboarding: Value,
     pub routing: Value,
     pub mcp: Value,
+    pub hooks: crate::hooks::HookConfig,
     pub git: Value,
     pub logging: Value,
     pub trusted_workspaces: Vec<String>,
@@ -115,6 +116,7 @@ impl Default for Config {
             onboarding: json!({"completed":false,"workspace":""}),
             routing: json!({"enabled":false,"planner":"","coder":"","reviewer":"","tester":""}),
             mcp: json!({"servers":[]}),
+            hooks: crate::hooks::HookConfig::default(),
             git: json!({"auto_commit":false,"allow_destructive":false}),
             logging: json!({"level":"info"}),
             trusted_workspaces: Vec::new(),
@@ -222,6 +224,7 @@ impl Config {
             "MCP servers must be an array"
         );
         crate::routing::validate(&self.routing)?;
+        self.hooks.validate()?;
         Ok(())
     }
     pub fn is_trusted(&self, workspace: &Path) -> bool {

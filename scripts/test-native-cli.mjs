@@ -131,20 +131,35 @@ try {
   assert.equal(await cli(["config", "model.context_limit"]), 32768);
   checks.push("headless startup, arguments, project trust and lifecycle validation");
 
+  const hookPath = ".shadowcode/hooks/cli-check.json";
+  await mkdir(path.join(project, ".shadowcode/hooks"), { recursive: true });
+  await writeFile(path.join(project, hookPath), JSON.stringify({ name: "cli-check", events: ["on_complete"], command: "printf native-cli-hook > hook-result.txt", timeout_sec: 10 }));
+  const hook = (await cli(["hooks"])).hooks[0];
+  assert.equal(hook.enabled, false);
+  await finish(launch(["hooks", "--enable", hookPath]), 2);
+  assert.match((await cli(["hooks", "--enable", hookPath, "--hash", "0".repeat(64)], 1)).error, /changed|review/i);
+  assert.equal((await cli(["hooks", "--enable", hookPath, "--hash", hook.hash])).hooks[0].enabled, true);
+
   const task = await cli(["run", "READ this project\r \u001b[31m"]);
   assert.equal(task.status, "completed"); assert.equal(task.usage.total_tokens, 80);
+  assert.equal(await readFile(path.join(project, "hook-result.txt"), "utf8"), "native-cli-hook");
   const continued = await cli(["run", "CONTINUE this inspection", "--session", task.session_id.slice(0, 12)]);
   assert.equal(continued.status, "completed"); assert.equal(continued.session_id, task.session_id);
-  const replayed = (await finish(launch(["jobs", task.id, "--watch"]))).stdout;
+  const replay = await finish(launch(["jobs", task.id, "--watch"]));
+  assert.match(replay.stderr, /Hook: cli-check/);
+  const replayed = replay.stdout;
   assert.equal(replayed.split("CLI completed the requested inspection.").length - 1, 1, "Completed jobs replay their own saved response once");
   const events = (await finish(launch(["run", "EVENTS inspect project", "--events"]))).stdout.trim().split("\n").map(line => JSON.parse(line));
   assert.ok(events.some(e => e.type === "event" && e.event.type === "tool.completed"));
+  assert.ok(events.some(e => e.type === "event" && e.event.type === "hook.completed" && e.event.payload.success));
   const cursors = events.filter(e => e.type === "event").map(e => e.event.id);
   assert.ok(cursors.every((id, index) => index === 0 || id > cursors[index - 1]), "Events must be emitted once in saved cursor order");
   assert.equal(events.at(-1).type, "result"); assert.equal(events.at(-1).exit_code, 0);
   const badEvents = (await finish(launch(["run", "EVENTS invalid", "--events", "--interactive"]), 1)).stdout.trim().split("\n").map(line => JSON.parse(line));
   assert.equal(badEvents.at(-1).exit_code, 1);
   checks.push("real native tool loop, structured results, ordered events and saved continuation");
+  assert.equal((await cli(["hooks", "--disable", hookPath])).hooks[0].enabled, false);
+  checks.push("reviewed hook activation, exact content checks, completion execution, event replay and disable");
 
   const denied = await cli(["run", "APPROVE this command"], 2);
   assert.equal(denied.status, "needs_approval");

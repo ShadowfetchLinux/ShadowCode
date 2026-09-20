@@ -20,6 +20,7 @@ for (const name of ["result.json", "failure.txt", "failure.png", "workspace-ligh
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
+for (const name of ["hooks.png", "accessibility-hooks.json"]) await rm(path.join(artifacts, name), { force: true });
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
@@ -34,6 +35,12 @@ delete nativeEnv.NO_CLEANUP;
 await mkdir(nativeEnv.TMPDIR);
 await mkdir(project); await mkdir(configDirectory, { recursive: true });
 await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
+await mkdir(path.join(project, ".shadowcode/hooks"), { recursive: true });
+await writeFile(path.join(project, ".shadowcode/hooks/verify.json"), JSON.stringify({
+  name: "verify-result", events: ["on_complete"], timeout_sec: 10,
+  description: "Verify the completed change before the task succeeds.",
+  command: "test \"$(cat hello.txt)\" = native-window-ok && printf native-hook-ok > hook-result.txt && printf native-hook-check-passed",
+}));
 let modelError;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function until(label, fn, timeout = 15000) {
@@ -230,6 +237,16 @@ try {
   await screenshot("background");
   await accessibility("background");
   await click('button.drawer-close');
+  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+  await clickButton("Hooks");
+  await until("Hook definition in Settings", () => execute("return !!document.querySelector('.hook-command')?.textContent.includes('native-hook-check-passed')"));
+  await clickButton("Refresh hooks");
+  await until("Hook refresh completed", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Enable verify-result' && !e.disabled)"));
+  await clickButton("Enable verify-result");
+  await until("Reviewed hook enabled", async () => (await api("GET", "/api/hooks")).hooks[0].enabled);
+  await screenshot("hooks");
+  await accessibility("hooks");
+  await clickButton("Close");
   await type('textarea[aria-label="Message ShadowCode"]', "Create hello.txt containing native-window-ok and verify its contents with the terminal.");
   await click('button[aria-label="Send task"]');
   await until("Command approval", () => execute("return !!document.querySelector('.approval button.primary')"));
@@ -241,6 +258,7 @@ try {
     return jobs[0]?.status === "completed";
   });
   assert.equal(await readFile(path.join(project, "hello.txt"), "utf8"), "native-window-ok\n");
+  assert.equal(await readFile(path.join(project, "hook-result.txt"), "utf8"), "native-hook-ok");
   assert.deepEqual(requestedModels, ["native-build", "native-build", "native-build"]);
   await until("Selected model visible", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('native-build · local · coder'))"));
   await until("Completion in transcript", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Created hello.txt and verified')) && !document.querySelector('button[aria-label=\"Stop task\"]');"));
@@ -250,6 +268,13 @@ try {
   await wd("POST", `/session/${session}/refresh`, {});
   await until("Persisted conversation", () => execute("return document.querySelectorAll('.msg-user').length===1 && [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Created hello.txt and verified'));"));
   assert.equal(await execute("return [...document.querySelectorAll('.msg-note')].filter(e=>e.textContent.includes('native-build')).length"), 1);
+  await until("One persisted hook result", () => execute("return [...document.querySelectorAll('.op-card')].filter(e=>e.textContent.includes('Hook · verify-result')).length===1"));
+  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+  await clickButton("Hooks");
+  await until("Hook disable control", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable verify-result')"));
+  await clickButton("Disable verify-result");
+  await until("Hook disabled", async () => !(await api("GET", "/api/hooks")).hooks[0].enabled);
+  await clickButton("Close");
   // A missing model in an older saved configuration must be visible when the
   // engine chooses the default, including after the conversation is reloaded.
   await api("PUT", "/api/config", { values: { routing: { coder: "removed-native-model" } } });
@@ -388,7 +413,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "shared CLI engine with independent project selection and background controls", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

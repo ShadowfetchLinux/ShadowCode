@@ -32,6 +32,18 @@
   and disconnected manual commands clean up their owned work.
 - Native window automation covers actual tool execution, approvals, reload,
   cancellation, goal progression/pause, accessibility, and subprocess cleanup.
+- Native lifecycle hooks use reviewed YAML/JSON command definitions with explicit
+  project/content approval in Settings or the CLI. Command/commit gates block
+  failed actions, completion checks drive bounded repair, and persisted results
+  survive reload. Changed definitions require review; read-only tasks keep hooks
+  inactive, and cancellation/shutdown wait for command cleanup. Legacy Python
+  callbacks are surfaced for migration without importing them.
+- File tools explain how to create files with `expected_hash: missing` and reject
+  malformed hashes with actionable guidance. Existing read/stale-hash protections
+  remain in force. Completion-check diagnostics are bounded before model repair.
+- Ollama requests preserve runtime repair and compaction instructions for model
+  templates that ignore later system messages. Original positions remain labelled,
+  user/tool data retains its role, and saved conversation order is unchanged.
 - Native AppImage and Debian build scripts preserve per-format executable
   metadata, include versioned dependency notices, and check startup, versions,
   matching compiled code, notice hashes, and absence of Python sidecars. The

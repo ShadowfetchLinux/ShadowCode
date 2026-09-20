@@ -14,8 +14,18 @@ Unix socket for CLI clients. The socket directory must be owned by the OS user
 and private; both peers check user credentials, protocol and profile identity.
 Requests use bounded frames and independent project/session selection. It opens
 no TCP listener. See [native CLI lifecycle and trust](docs/NATIVE_CLI.md).
-These boundaries trust processes running as the same user. Full native hooks,
-plugins and MCP migration remain in progress.
+These boundaries trust processes running as the same user. Plugins and MCP
+migration remain in progress.
+
+[Native lifecycle hooks](docs/NATIVE_HOOKS.md) require explicit activation for a
+trusted workspace and exact definition hash. Discovery never imports repository
+code. The approval pins the command definition, not the scripts or dependencies
+it invokes. Enabled commands run as the user, inherit their environment, and can
+have effects outside the project; lexical root/network checks are not a sandbox.
+Changed manifests fail closed. Read-only tasks keep hooks inactive. Running and
+queued tasks keep their configuration snapshot; cancellation stops active hook
+processes. Hook shell edits are outside file-tool checkpoints. Python callbacks
+remain inactive until converted and reviewed.
 
 The supported 0.19 desktop API defaults to `127.0.0.1:7430`. It validates loopback Host values,
 rejects cross-origin and cross-site browser requests, and sends framing, MIME,

@@ -75,6 +75,16 @@ pub enum Command {
     },
     /// Explicitly trust the current project for task execution.
     Trust,
+    /// List lifecycle commands, or explicitly activate an unchanged project hook.
+    Hooks {
+        #[arg(long, conflicts_with = "disable", requires = "hash")]
+        enable: Option<String>,
+        #[arg(long, conflicts_with = "enable")]
+        disable: Option<String>,
+        /// Content hash shown by `hooks --json`; required when enabling.
+        #[arg(long, requires = "enable")]
+        hash: Option<String>,
+    },
     /// List/search saved conversations, or rename/delete a unique ID prefix.
     Sessions {
         query: Option<String>,

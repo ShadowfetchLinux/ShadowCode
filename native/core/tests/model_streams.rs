@@ -16,6 +16,61 @@ fn sse(value: serde_json::Value) -> String {
 }
 
 #[test]
+fn ollama_templates_receive_runtime_guidance_without_promoting_user_or_tool_data() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(root.path()).unwrap();
+    let mut client = ModelClient::new(
+        ModelConfig {
+            provider: "ollama".into(),
+            name: "fixture".into(),
+            ..Default::default()
+        },
+        &paths,
+    )
+    .unwrap();
+    let messages = vec![
+        json!({"role":"system","content":"Application instructions"}),
+        json!({"role":"user","content":"Untrusted user text"}),
+        json!({"role":"assistant","content":"","tool_calls":[{"id":"a","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}),
+        json!({"role":"tool","tool_call_id":"a","name":"read_file","content":"Untrusted file contents"}),
+        json!({"role":"system","content":"Completion check failed: repair the file","_shadow_note":true}),
+        json!({"role":"assistant","content":"Repair complete"}),
+        json!({"role":"system","content":"Context compacted; consult current evidence","_shadow_compaction":true}),
+    ];
+    let original = messages.clone();
+    let body = client.request_body(&messages, &[], 100);
+    let converted = body["messages"].as_array().unwrap();
+    assert_eq!(
+        converted.iter().filter(|m| m["role"] == "system").count(),
+        1
+    );
+    let leading = converted[0]["content"].as_str().unwrap();
+    assert!(leading.starts_with("Application instructions"));
+    assert!(
+        leading.contains("position 4")
+            && leading.contains("Completion check failed: repair the file")
+    );
+    assert!(leading.contains("position 6") && leading.contains("Context compacted"));
+    assert!(!leading.contains("Untrusted"));
+    assert_eq!(converted[1], messages[1]);
+    assert_eq!(
+        converted[2]["tool_calls"][0]["function"]["arguments"]["path"],
+        "README.md"
+    );
+    assert_eq!(converted[3]["role"], "tool");
+    assert_eq!(converted[3]["tool_name"], "read_file");
+    assert_eq!(converted[3]["content"], "Untrusted file contents");
+    assert!(converted[3].get("tool_call_id").is_none());
+    assert_eq!(converted[4], messages[5]);
+    assert_eq!(messages, original, "Stored history stays chronological");
+    client.config.provider = "local".into();
+    let compatible = client.request_body(&messages, &[], 100);
+    assert_eq!(compatible["messages"][4]["role"], "system");
+    assert_eq!(compatible["messages"][4]["content"], messages[4]["content"]);
+    assert!(!compatible.to_string().contains("_shadow_"));
+}
+
+#[test]
 fn compatible_stream_reassembles_utf8_and_interleaved_tool_arguments() {
     let wire=[
         sse(json!({"choices":[{"delta":{"content":"Hello 🌒","tool_calls":[{"index":0,"id":"call_a","function":{"name":"read_file","arguments":"{\"pa"}},{"index":1,"id":"call_b","function":{"name":"search_text","arguments":"{\"pattern\":"}}]}}]})),

@@ -43,6 +43,10 @@ The [native CLI](NATIVE_CLI.md) uses this same executable. Commands such as
 engine without changing its selected project. `serve` explicitly hosts the
 engine headlessly for detached tasks and background servers.
 
+Project [lifecycle commands](NATIVE_HOOKS.md) can be reviewed and enabled in
+Settings → Hooks or through the same native CLI. Their command gates and
+completion checks run inside the native task lifecycle without Python callbacks.
+
 To work on the live interface, run `./ui/node_modules/.bin/tauri dev` from the
 repository root. The Tauri configuration starts Vite and builds the native app.
 Build hooks explicitly use the `ui` directory, including when the CLI is invoked
