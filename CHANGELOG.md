@@ -2,6 +2,11 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Native worktree creation starts an isolated branch from a local commit while
+  preserving source checkout edits. CLI inventory and private recovery records
+  retain visibility into interrupted creation. The complete worktree workflow
+  remains in development.
+
 - Desktop polling uses compact recent/active job records instead of repeatedly
   transferring full saved results. Older active jobs remain visible; expanding
   queued prompts and opening conversations fetch their complete records on demand.

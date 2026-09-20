@@ -1,6 +1,6 @@
 // Exercise the shipped executable without DISPLAY, Python, or a browser.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -373,6 +373,20 @@ try {
   assert.ok((await cli(["background", "list"])).tasks.every(t => !["RUNNING", "STARTING", "STOPPING"].includes(t.status)));
   assert.equal(await readFile(path.join(project, "unexpected")).then(() => true, () => false), false);
   checks.push("remote command disconnect and persistent-owner shutdown clean process groups and release the profile");
+  const isolatedSource=path.join(scratch,"worktree-source");await mkdir(isolatedSource);
+  const fixtureGit=args=>execFileSync("git",["-c","core.hooksPath=/dev/null","-c","user.name=Worktree Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd:isolatedSource,encoding:"utf8"});
+  fixtureGit(["init","-q"]);await writeFile(path.join(isolatedSource,"README.md"),"fixture-read-value committed\n");fixtureGit(["add","README.md"]);fixtureGit(["commit","-qm","Base"]);
+  await writeFile(path.join(isolatedSource,"README.md"),"source local edits\n");
+  await cli(["trust"],0,{workspace:isolatedSource});
+  assert.equal((await cli(["worktree"],0,{workspace:isolatedSource})).worktrees.length,0);
+  const isolated=await cli(["worktree","--create","--reference","HEAD"],0,{workspace:isolatedSource});
+  assert.equal(isolated.state,"ready");assert.equal(await readFile(path.join(isolated.path,"README.md"),"utf8"),"fixture-read-value committed\n");
+  assert.equal((await cli(["worktree"],0,{workspace:isolatedSource})).worktrees[0].id,isolated.id);
+  await cli(["trust"],0,{workspace:isolated.path});
+  assert.equal((await cli(["run","READ isolated checkout"],0,{workspace:isolated.path})).status,"completed");
+  assert.equal(await readFile(path.join(isolatedSource,"README.md"),"utf8"),"source local edits\n");
+  checks.push("native isolated worktree creation, inventory, explicit trust and model task without modifying source edits");
+
   // Seed only this disposable, stopped profile. Recent-list limits must not hide
   // older IDs or force fetching multi-megabyte job results to resolve a prefix.
   const historyDb = new DatabaseSync(path.join(profile, "state/shadow-agent.db"));

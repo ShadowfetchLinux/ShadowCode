@@ -51,6 +51,13 @@ pub enum Command {
         #[command(flatten)]
         task: TaskOptions,
     },
+    /// List managed worktrees, or create an isolated branch at a local commit.
+    Worktree {
+        #[arg(long)]
+        create: bool,
+        #[arg(long, default_value = "HEAD", requires = "create")]
+        reference: String,
+    },
     /// Show the selected project and active work.
     Status,
     /// List tables or run one read-only query against an existing project database.

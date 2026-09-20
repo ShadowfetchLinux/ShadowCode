@@ -273,6 +273,19 @@ regression tests verify compact-dialog scrolling/resizing and trust confirmation
 bound to the displayed project; all ten library tests pass after that fix. Broader
 real-terminal resize coverage remains open.
 
+## Isolated worktree creation foundation
+
+Three real-Git service tests verify creation at a selected commit, an independent
+branch, unchanged staged/unstaged/untracked source content, disabled checkout
+hooks, unchanged project selection, and rejection of untrusted/read-only/busy or
+nested workspaces and invalid references. A deliberately blocked checkout filter
+is cancelled; its process exits and a `needs_attention` recovery record survives
+with source contents intact. The native CLI passes **17 scenario groups with
+32 scripted model requests**, including creation, inventory, explicit trust and a
+model file-inspection task inside the isolated checkout. Clippy and the executable
+build pass. This proves the creation foundation; dirty-state transfer, removal,
+recovery controls and dedicated desktop workflows remain open.
+
 ## Compact desktop job polling
 
 A 150-job stress fixture stores long Unicode prompts and large saved results. The

@@ -129,7 +129,7 @@ impl AppPaths {
 /// Restrict only application-owned leaves, not the user's XDG base or an
 /// existing --profile parent. Use the opened directory for validation/chmod so
 /// a final symlink cannot redirect a permission change to another directory.
-fn private_directory(path: &Path) -> Result<()> {
+pub(crate) fn private_directory(path: &Path) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]

@@ -53,6 +53,11 @@ the existing React visual design. This document tracks engineering acceptance;
 
 ## Current implementation
 
+- [Isolated worktree creation](NATIVE_WORKTREES.md) from local commits, with a
+  separate managed branch, preserved source edits, private recovery records and
+  CLI inventory. Dirty-state transfer, safe removal/recovery, reviewed return of
+  changes and dedicated desktop controls remain open.
+
 The Rust workspace is being introduced alongside the Python release. Existing
 features remain acceptance requirements; an unimplemented native feature must
 not be silently replaced with a stub or removed from the release claims.

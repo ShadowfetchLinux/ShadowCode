@@ -33,6 +33,7 @@ pub mod store;
 pub mod tools;
 pub mod workflows;
 pub mod workspace;
+pub mod worktrees;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

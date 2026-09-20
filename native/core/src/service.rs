@@ -183,6 +183,25 @@ impl Service {
         let text = |key: &str| body[key].as_str().unwrap_or("");
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
         match (request.method.as_str(), path) {
+            ("GET", "/api/worktrees") => {
+                return Ok(
+                    json!({"worktrees":crate::worktrees::list(self.engine.paths(),&self.workspace()?)?}),
+                )
+            }
+            ("POST", "/api/worktrees") => {
+                let ws = self.mutable_workspace()?;
+                let reference = body["reference"].as_str().unwrap_or("HEAD");
+                let record = crate::worktrees::create(
+                    self.engine.paths(),
+                    &ws.path,
+                    reference,
+                    ws.reservation.cancellation(),
+                )
+                .await?;
+                store.add_event("worktree.created", &json!(record), None, None)?;
+                return Ok(json!(record));
+            }
+
             ("GET", "/api/resolve") => {
                 return Ok(json!({"id":store.resolve_id(q("kind"),q("prefix"))?}))
             }
