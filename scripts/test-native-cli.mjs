@@ -373,6 +373,25 @@ try {
   assert.ok((await cli(["background", "list"])).tasks.every(t => !["RUNNING", "STARTING", "STOPPING"].includes(t.status)));
   assert.equal(await readFile(path.join(project, "unexpected")).then(() => true, () => false), false);
   checks.push("remote command disconnect and persistent-owner shutdown clean process groups and release the profile");
+  // Seed only this disposable, stopped profile. Recent-list limits must not hide
+  // older IDs or force fetching multi-megabyte job results to resolve a prefix.
+  const historyDb = new DatabaseSync(path.join(profile, "state/shadow-agent.db"));
+  const oldProject=path.join(scratch,"old-project"); await mkdir(oldProject);
+  historyDb.exec("BEGIN");
+  historyDb.prepare("INSERT INTO sessions(id,workspace,created_at,updated_at,status,title) VALUES(?,?,1,1,'idle','Old project history')").run("old-project-session",oldProject);
+  historyDb.exec("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10050) INSERT INTO sessions(id,workspace,created_at,updated_at,status,title) SELECT printf('noise-session-%05d',i),'/noise',9999999999,9999999999,'idle','Newer fixture' FROM n");
+  const putHistoryJob=historyDb.prepare("INSERT INTO desktop_jobs(id,payload) VALUES(?,?)");
+  for(let i=0;i<1100;i++){const id=`noise-job-${i.toString().padStart(5,'0')}`;putHistoryJob.run(id,JSON.stringify({id,workspace:project,session_id:task.session_id,task_id:task.task_id,status:"completed",result:{summary:"x".repeat(9000)}}));}
+  historyDb.exec("COMMIT");historyDb.close();
+  server=launch(["--json","serve"]);await until("History owner",()=>server.output.stderr.includes("serving"));
+  assert.equal((await cli(["jobs",task.id])).id,task.id);
+  assert.equal((await cli(["jobs",task.id.slice(0,12)])).id,task.id);
+  await cli(["sessions",task.session_id.slice(0,12),"--rename","Old history remains reachable"]);
+  assert.equal((await cli(["export","--session",task.session_id.slice(0,12)])).content.includes("CLI completed"),true);
+  assert.ok((await cli(["export"],0,{workspace:oldProject})).content.includes("Old project history"));
+  assert.match((await cli(["jobs","noise-job"],1)).error,/unique/);
+  await interrupt(server,"SIGTERM");await finish(server);
+  checks.push("indexed full-history IDs and project-default selection beyond 10,000 sessions and 1,000 large jobs");
   await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, binary, modelRequests: requests, checks }, null, 2));
   console.log(`Native CLI passed ${checks.length} scenario groups with ${requests} model requests.`);
 } catch (error) {

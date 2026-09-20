@@ -112,6 +112,12 @@ shadowcode config ui.theme dark
 shadowcode health --test-model
 ```
 
+Conversation and job IDs (including unique prefixes) resolve against the complete
+profile history, independently of recent-list limits. Ambiguous prefixes are
+rejected. Selecting the default conversation searches the current project directly,
+even when other projects have more than 10,000 newer conversations. Job lookup
+reads only the matching record instead of transferring recent jobs and their results.
+
 Exports traverse the full saved history within the service's 32 MB limit.
 File output uses an atomic write; redirected stdout preserves exact export
 bytes. Human display on a terminal strips control characters. With global

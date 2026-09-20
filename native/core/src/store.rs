@@ -224,6 +224,36 @@ impl Store {
             .into_iter()
             .next())
     }
+    /// Resolve identifiers against the complete indexed history, never a recent
+    /// list of potentially large job payloads. Two rows suffice for ambiguity.
+    pub fn resolve_id(&self, kind: &str, prefix: &str) -> Result<String> {
+        ensure!(
+            !prefix.is_empty()
+                && prefix.len() <= 128
+                && prefix
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')),
+            "Provide a valid ID or ID prefix"
+        );
+        let table = match kind {
+            "session" => "sessions",
+            "job" => "desktop_jobs",
+            _ => anyhow::bail!("Unknown identifier kind"),
+        };
+        let rows = self.query(
+            &format!("SELECT id FROM {table} WHERE id>=? AND id<? ORDER BY id LIMIT 2"),
+            params![prefix, format!("{prefix}~")],
+        )?;
+        ensure!(!rows.is_empty(), "No {kind} matches {prefix}");
+        ensure!(
+            rows.len() == 1,
+            "Choose a unique {kind} ID prefix; at least two matches found"
+        );
+        Ok(rows[0]["id"]
+            .as_str()
+            .context("Stored identifier missing")?
+            .into())
+    }
     pub fn sessions(&self, search: &str, limit: usize) -> Result<Vec<Value>> {
         self.sessions_in(search, limit, None)
     }

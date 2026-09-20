@@ -518,3 +518,48 @@ fn search_respects_ignored_files_and_result_limits() {
         .iter()
         .all(|v| v["path"] == "src/test.rs"));
 }
+
+#[test]
+fn identifier_resolution_uses_all_history_and_rejects_ambiguous_or_invalid_prefixes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("history.db");
+    let store = Store::open(&path).unwrap();
+    let mut db = rusqlite::Connection::open(&path).unwrap();
+    let tx = db.transaction().unwrap();
+    tx.execute("INSERT INTO sessions(id,workspace,created_at,updated_at,status,title) VALUES('old-session','/old',1,1,'idle','Older conversation')",[]).unwrap();
+    tx.execute(
+        "INSERT INTO desktop_jobs(id,payload) VALUES('old-job','not decoded by ID lookup')",
+        [],
+    )
+    .unwrap();
+    tx.execute("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10050) INSERT INTO sessions(id,workspace,created_at,updated_at,status,title) SELECT printf('new-%05d',i),'/new',i+1,i+1,'idle','Newer conversation' FROM n",[]).unwrap();
+    tx.execute("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1100) INSERT INTO desktop_jobs(id,payload) SELECT printf('new-job-%05d',i),'not decoded by ID lookup' FROM n",[]).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(store.resolve_id("session", "old-").unwrap(), "old-session");
+    assert_eq!(store.resolve_id("job", "old-job").unwrap(), "old-job");
+    assert!(store
+        .resolve_id("session", "new-")
+        .unwrap_err()
+        .to_string()
+        .contains("unique"));
+    assert!(store
+        .resolve_id("job", "new-job-")
+        .unwrap_err()
+        .to_string()
+        .contains("unique"));
+    assert!(store
+        .resolve_id("job", "missing")
+        .unwrap_err()
+        .to_string()
+        .contains("No job"));
+    for bad in ["", "%", "_ OR 1=1", "../job", "a/b"] {
+        assert!(store.resolve_id("job", bad).is_err());
+    }
+    assert!(store.resolve_id("events", "old-job").is_err());
+    assert_eq!(
+        store
+            .sessions_in("", 1, Some(std::path::Path::new("/old")))
+            .unwrap()[0]["id"],
+        "old-session"
+    );
+}

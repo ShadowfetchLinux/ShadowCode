@@ -183,6 +183,9 @@ impl Service {
         let text = |key: &str| body[key].as_str().unwrap_or("");
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
         match (request.method.as_str(), path) {
+            ("GET", "/api/resolve") => {
+                return Ok(json!({"id":store.resolve_id(q("kind"),q("prefix"))?}))
+            }
             #[cfg(unix)]
             ("GET", "/api/plugins") => {
                 return crate::plugins::catalog(

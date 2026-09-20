@@ -273,6 +273,19 @@ regression tests verify compact-dialog scrolling/resizing and trust confirmation
 bound to the displayed project; all ten library tests pass after that fix. Broader
 real-terminal resize coverage remains open.
 
+## Full-history identifier resolution
+
+The CLI history regression adds 10,050 newer conversations and 1,100 newer jobs
+with more than 10 MB of unrelated result content to a disposable stopped profile.
+Through a restarted shared engine, full and unique-prefix IDs still retrieve the
+older job, rename/export the older conversation, and choose the correct default
+conversation in a project whose history falls outside the old global list limit.
+Ambiguous prefixes fail. The actual executable passes **16 CLI scenario groups
+with 30 model requests**. The foundation suite passes all 17 tests, including
+indexed ID resolution without deserializing job payloads. Clippy and the native
+executable build pass. General job-list payload sizing and desktop long-history
+display remain separate stress gates.
+
 ## Native CLI
 
 `scripts/test-native-cli.mjs` exercises the actual executable with `DISPLAY` and

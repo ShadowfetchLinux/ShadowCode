@@ -2,6 +2,11 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- CLI conversation and job IDs resolve against the full saved history instead
+  of recent-list limits. Old records remain available for continuation, export,
+  rename and job inspection; default conversation selection is project-scoped.
+  Indexed lookup avoids loading unrelated job results just to resolve a prefix.
+
 - Native `tui` frontend shares the Rust engine with desktop and CLI: Unicode
   input, conversation/model/project pickers, task modes, queued follow-ups,
   explicit approvals, tool cards and paged saved history. Terminal-owned workflows

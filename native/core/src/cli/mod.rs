@@ -107,26 +107,47 @@ fn unique(rows: &[Value], prefix: &str, label: &str) -> Result<String> {
     );
     Ok(found[0].into())
 }
-async fn sessions(backend: &Backend) -> Result<Vec<Value>> {
-    Ok(backend
-        .call("GET", "/api/sessions?limit=10000", Value::Null)
-        .await?["sessions"]
-        .as_array()
-        .context("Session list missing")?
-        .clone())
+async fn resolve_id(backend: &Backend, kind: &str, prefix: &str) -> Result<String> {
+    let result = backend
+        .call(
+            "GET",
+            query("/api/resolve", &[("kind", kind), ("prefix", prefix)])?,
+            Value::Null,
+        )
+        .await?;
+    Ok(result["id"]
+        .as_str()
+        .context("Resolved identifier missing")?
+        .into())
 }
 async fn session(backend: &Backend, id: Option<&str>, workspace: &Path) -> Result<String> {
-    let rows = sessions(backend).await?;
     if let Some(id) = id {
-        unique(&rows, id, "conversation")
-    } else {
-        rows.iter()
-            .find(|row| row["workspace"].as_str() == workspace.to_str())
-            .and_then(|row| row["id"].as_str())
-            .map(str::to_owned)
-            .context("No conversation in this project; supply --session or run a task first")
+        return resolve_id(backend, "session", id).await;
     }
+    let rows = backend
+        .call(
+            "GET",
+            query(
+                "/api/sessions",
+                &[
+                    (
+                        "workspace",
+                        workspace.to_str().context("Workspace must be UTF-8")?,
+                    ),
+                    ("limit", "1"),
+                ],
+            )?,
+            Value::Null,
+        )
+        .await?;
+    rows["sessions"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["id"].as_str())
+        .map(str::to_owned)
+        .context("No conversation in this project; supply --session or run a task first")
 }
+
 async fn task(
     backend: &Backend,
     workspace: &Path,
@@ -797,13 +818,7 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
             delete,
         } => {
             if rename.is_some() || *delete {
-                let id = unique(
-                    &sessions(backend).await?,
-                    search
-                        .as_deref()
-                        .context("Provide a conversation ID prefix")?,
-                    "conversation",
-                )?;
+                let id = resolve_id(backend,"session",search.as_deref().context("Provide a conversation ID prefix")?).await?;
                 backend
                     .call(
                         if *delete { "DELETE" } else { "PATCH" },
@@ -861,9 +876,8 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
             cancel,
             interactive,
         } => {
-            let rows = backend.call("GET", "/api/jobs", Value::Null).await?;
             if let Some(id) = id {
-                let id = unique(rows["jobs"].as_array().context("Jobs missing")?, id, "job")?;
+                let id = resolve_id(backend,"job",id).await?;
                 let job = backend
                     .call(
                         if *cancel { "POST" } else { "GET" },
@@ -891,7 +905,7 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                     !watch_job && !cancel,
                     "Supply a job ID with --watch or --cancel"
                 );
-                rows
+                backend.call("GET", "/api/jobs", Value::Null).await?
             }
         }
         Command::Approvals {
