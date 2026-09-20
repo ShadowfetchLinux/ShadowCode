@@ -75,13 +75,27 @@ impl Workspace {
             normalized
         })
     }
-    fn writable(&self, path: &str) -> Result<PathBuf> {
+    pub(crate) fn writable(&self, path: &str) -> Result<PathBuf> {
         let rel = self.relative(path)?;
         ensure!(rel != Path::new("."), "Cannot modify the workspace root");
         ensure!(
             !rel.components().any(|c| c.as_os_str() == ".git"),
             "Use Git tools to modify repository metadata"
         );
+        // Reading a confined symlink is useful; replacing it silently changes
+        // the link itself and makes a content-only checkpoint lossy.
+        let mut part = PathBuf::new();
+        for component in rel.components() {
+            part.push(component);
+            match self.dir.symlink_metadata(&part) {
+                Ok(meta) => ensure!(
+                    !meta.file_type().is_symlink(),
+                    "Edits through symlinks are not supported; use the real workspace path"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => return Err(error.into()),
+            }
+        }
         let mut ancestor = rel
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -255,6 +269,15 @@ impl Workspace {
         self.dir.create_dir_all(self.writable(path)?)?;
         Ok(())
     }
+    pub fn set_mode(&self, path: &str, mode: u32) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use cap_std::fs::{Permissions, PermissionsExt};
+            let file = self.dir.open(self.writable(path)?)?;
+            file.set_permissions(Permissions::from_mode(mode & 0o777))?;
+        }
+        Ok(())
+    }
     pub fn delete(&self, path: &str, expected: Option<&str>) -> Result<()> {
         let rel = self.writable(path)?;
         let snapshot = self.snapshot(path)?;
@@ -291,10 +314,27 @@ impl Workspace {
         glob: Option<&str>,
         max_results: usize,
     ) -> Result<serde_json::Value> {
+        self.search_with_control(
+            pattern,
+            glob,
+            ".",
+            max_results,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+    }
+    pub fn search_with_control(
+        &self,
+        pattern: &str,
+        glob: Option<&str>,
+        root: &str,
+        max_results: usize,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value> {
         let regex = regex::RegexBuilder::new(pattern)
             .size_limit(2_000_000)
             .build()?;
-        let mut builder = ignore::WalkBuilder::new(&self.path);
+        let rel_root = self.dir.canonicalize(self.relative(root)?)?;
+        let mut builder = ignore::WalkBuilder::new(self.path.join(rel_root));
         builder
             .hidden(true)
             .follow_links(false)
@@ -306,8 +346,10 @@ impl Workspace {
         }
         let mut matches = Vec::new();
         let mut scanned = 0;
+        let mut scanned_bytes = 0usize;
         let limit = max_results.clamp(1, 1000);
         for entry in builder.build().filter_map(Result::ok) {
+            ensure!(!cancel.is_cancelled(), "Search cancelled");
             if !entry.file_type().is_some_and(|t| t.is_file()) {
                 continue;
             }
@@ -323,7 +365,14 @@ impl Workspace {
                 .to_string_lossy()
                 .into_owned();
             let Ok(file) = self.read(&rel) else { continue };
+            scanned_bytes += file.bytes;
+            if scanned_bytes > 128_000_000 {
+                return Ok(
+                    serde_json::json!({"matches":matches,"truncated":true,"scanned":scanned,"reason":"128 MB search budget reached"}),
+                );
+            }
             for (line, text) in file.content.lines().enumerate() {
+                ensure!(!cancel.is_cancelled(), "Search cancelled");
                 if regex.is_match(text) {
                     matches.push(serde_json::json!({"path":rel,"line":line+1,"text":text.chars().take(2000).collect::<String>()}));
                     if matches.len() >= limit {
@@ -335,6 +384,40 @@ impl Workspace {
             }
         }
         Ok(serde_json::json!({"matches":matches,"truncated":false,"scanned":scanned}))
+    }
+    pub fn find_files(
+        &self,
+        query: &str,
+        root: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value> {
+        let root = self.dir.canonicalize(self.relative(root)?)?;
+        let needle = query.to_lowercase();
+        let mut hits = Vec::new();
+        let mut builder = ignore::WalkBuilder::new(self.path.join(root));
+        builder.hidden(true).follow_links(false);
+        for (scanned, entry) in builder.build().filter_map(Result::ok).enumerate() {
+            ensure!(!cancel.is_cancelled(), "Search cancelled");
+            if scanned >= 20_000 || hits.len() >= 200 {
+                return Ok(serde_json::json!({"hits":hits,"truncated":true}));
+            }
+            if entry.file_type().is_some_and(|t| t.is_file())
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .contains(&needle)
+            {
+                hits.push(
+                    entry
+                        .path()
+                        .strip_prefix(&self.path)?
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+        Ok(serde_json::json!({"hits":hits,"truncated":false}))
     }
 }
 

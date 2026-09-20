@@ -1,0 +1,539 @@
+mod support;
+use serde_json::{json, Value};
+use shadowcode_core::{
+    checkpoint,
+    config::{Config, ModelConfig},
+    context,
+    engine::{Engine, Job, StartRequest},
+    paths::AppPaths,
+    workspace::Workspace,
+};
+use std::{fs, path::Path, time::Duration};
+
+fn response(text: &str, calls: Value) -> Value {
+    let reason = if calls.as_array().is_some_and(|v| !v.is_empty()) {
+        "tool_calls"
+    } else {
+        "stop"
+    };
+    json!({"choices":[{"message":{"role":"assistant","content":text,"tool_calls":calls},"finish_reason":reason}],"usage":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}})
+}
+fn tool(id: &str, name: &str, args: Value) -> Value {
+    json!({"id":id,"type":"function","function":{"name":name,"arguments":args.to_string()}})
+}
+fn setup(endpoint: &str) -> (tempfile::TempDir, Engine) {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("project")).unwrap();
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths,json!({"model":{"provider":"local","endpoint":endpoint,"name":"fixture","context_limit":16384},"permissions":{"approve_shell":false},"agent":{"max_steps":12}})).unwrap();
+    let engine = Engine::open(paths).unwrap();
+    (root, engine)
+}
+fn request(root: &Path, task: &str, session_id: Option<String>) -> StartRequest {
+    StartRequest {
+        workspace: root.join("project"),
+        task: task.into(),
+        session_id,
+        model: None,
+        mode: "code".into(),
+        queue: false,
+    }
+}
+async fn wait(engine: &Engine, id: &str) -> Job {
+    tokio::time::timeout(Duration::from_secs(8), engine.wait(id))
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn model_loop_edits_verifies_persists_and_continues_a_real_workspace() {
+    let server = support::server(|index, body| {
+        context::validate_pairs(body["messages"].as_array().unwrap()).unwrap();
+        let value = match index {
+            0 => response(
+                "Inspecting",
+                json!([tool("read", "read_file", json!({"path":"sum.sh"}))]),
+            ),
+            1 => {
+                let text = body["messages"].as_array().unwrap().last().unwrap()["content"]
+                    .as_str()
+                    .unwrap();
+                assert!(text.contains("a - b"));
+                response(
+                    "Fixing",
+                    json!([tool(
+                        "edit",
+                        "edit_file",
+                        json!({"path":"sum.sh","old_string":"a - b","new_string":"a + b"})
+                    )]),
+                )
+            }
+            2 => response(
+                "Checking",
+                json!([tool(
+                    "verify",
+                    "exec",
+                    json!({"command":"test \"$(sh sum.sh 2 3)\" = 5"})
+                )]),
+            ),
+            3 => {
+                let result: Value = serde_json::from_str(
+                    body["messages"].as_array().unwrap().last().unwrap()["content"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(result["success"], true);
+                response("Fixed addition; the shell assertion passed.", json!([]))
+            }
+            4 => {
+                assert!(body.to_string().contains("Fixed addition"));
+                response(
+                    "Reading again",
+                    json!([tool("read-again", "read_file", json!({"path":"sum.sh"}))]),
+                )
+            }
+            _ => response("The persisted file adds the numbers.", json!([])),
+        };
+        (value, Duration::ZERO)
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let project = root.path().join("project");
+    fs::write(project.join("sum.sh"), "a=$1; b=$2; echo $((a - b))\n").unwrap();
+    let job = engine
+        .start(request(root.path(), "Fix addition and test it", None))
+        .await
+        .unwrap();
+    let completed = wait(&engine, &job.id).await;
+    assert_eq!(completed.status, "completed", "{}", completed.summary);
+    assert_eq!(completed.usage.total_tokens, 120);
+    assert!(fs::read_to_string(project.join("sum.sh"))
+        .unwrap()
+        .contains("a + b"));
+    let tape = engine.store().messages(&job.id).unwrap();
+    context::validate_pairs(&tape).unwrap();
+    let follow = engine
+        .start(request(
+            root.path(),
+            "Check the current implementation",
+            Some(job.session_id.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(wait(&engine, &follow.id).await.status, "completed");
+    let events = engine.store().recent_events(&job.session_id, 200).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["type"] == "agent.completed")
+            .count(),
+        2
+    );
+    assert!(events.iter().any(|e| e["type"] == "verification.summary"
+        && e["payload"]["status"] == "last_command_succeeded"));
+    engine.shutdown().await.unwrap();
+    checkpoint::restore(
+        &engine.store(),
+        &Workspace::open(&project).unwrap(),
+        &job.task_id,
+    )
+    .unwrap();
+    assert!(fs::read_to_string(project.join("sum.sh"))
+        .unwrap()
+        .contains("a - b"));
+}
+
+#[tokio::test]
+async fn queued_followups_run_in_order_and_duplicate_active_work_is_rejected() {
+    let server = support::server(|_, body| {
+        let message = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|m| m["role"] == "user")
+            .unwrap()["content"]
+            .as_str()
+            .unwrap();
+        (response(message, json!([])), Duration::from_millis(50))
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let first = engine
+        .start(request(root.path(), "first", None))
+        .await
+        .unwrap();
+    assert!(engine
+        .start(request(root.path(), "conflict", None))
+        .await
+        .is_err());
+    let mut jobs = vec![first.clone()];
+    for task in ["second", "third", "fourth"] {
+        let mut req = request(root.path(), task, Some(first.session_id.clone()));
+        req.queue = true;
+        jobs.push(engine.start(req).await.unwrap());
+    }
+    for (job, expected) in jobs.iter().zip(["first", "second", "third", "fourth"]) {
+        let result = wait(&engine, &job.id).await;
+        assert_eq!(result.status, "completed", "{}", result.summary);
+        assert_eq!(result.summary, expected);
+    }
+    assert_eq!(server.requests.lock().unwrap().len(), 4);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn queued_cancel_is_immediate_and_shutdown_cancels_a_stalled_provider() {
+    let server =
+        support::server(|_, _| (response("late", json!([])), Duration::from_secs(30))).await;
+    let (root, engine) = setup(&server.endpoint);
+    let first = engine
+        .start(request(root.path(), "first", None))
+        .await
+        .unwrap();
+    let mut req = request(root.path(), "queued", Some(first.session_id.clone()));
+    req.queue = true;
+    let queued = engine.start(req).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(1), engine.cancel(&queued.id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.status, "cancelled");
+    tokio::time::timeout(Duration::from_secs(3), engine.shutdown())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(wait(&engine, &first.id).await.status, "cancelled");
+    let events = engine
+        .store()
+        .recent_events(&queued.session_id, 100)
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["type"] == "agent.completed" && e["task_id"] == queued.task_id)
+            .count(),
+        1
+    );
+    assert!(engine
+        .start(request(root.path(), "too late", None))
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn plan_mode_blocks_a_model_that_requests_a_write_anyway() {
+    let server = support::server(|index, body| {
+        if index == 0 {
+            assert!(!body["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["function"]["name"] == "write_file"));
+            (
+                response(
+                    "",
+                    json!([tool(
+                        "bad",
+                        "write_file",
+                        json!({"path":"forbidden","content":"x"})
+                    )]),
+                ),
+                Duration::ZERO,
+            )
+        } else {
+            let content = body["messages"].as_array().unwrap().last().unwrap()["content"]
+                .as_str()
+                .unwrap();
+            assert!(content.contains("read-only"));
+            (
+                response("Here is the plan. No files were changed.", json!([])),
+                Duration::ZERO,
+            )
+        }
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let mut req = request(root.path(), "Plan only", None);
+    req.mode = "plan".into();
+    let job = engine.start(req).await.unwrap();
+    assert_eq!(wait(&engine, &job.id).await.status, "completed");
+    assert!(!root.path().join("project/forbidden").exists());
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn usage_limit_stops_before_executing_new_tool_calls() {
+    let server = support::server(|_, _| {
+        (
+            response(
+                "",
+                json!([tool(
+                    "write",
+                    "write_file",
+                    json!({"path":"forbidden","content":"x"})
+                )]),
+            ),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    Config::patch(engine.paths(), json!({"agent":{"max_task_tokens":1}})).unwrap();
+    let job = engine
+        .start(request(root.path(), "Do work", None))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "failed");
+    assert!(result.summary.contains("token budget"));
+    assert_eq!(result.usage.total_tokens, 30);
+    assert!(!root.path().join("project/forbidden").exists());
+    engine.shutdown().await.unwrap();
+}
+
+#[test]
+fn recovery_repairs_missing_tool_results_without_replaying_mutations() {
+    let mut messages = vec![
+        json!({"role":"user","content":"edit"}),
+        json!({"role":"assistant","content":"","tool_calls":[tool("a","write_file",json!({})),tool("b","read_file",json!({}))]}),
+        json!({"role":"tool","tool_call_id":"a","content":"saved"}),
+    ];
+    assert!(context::validate_pairs(&messages).is_err());
+    context::repair_incomplete(&mut messages);
+    context::validate_pairs(&messages).unwrap();
+    assert_eq!(messages.len(), 4);
+    assert!(messages[3]["content"]
+        .as_str()
+        .unwrap()
+        .contains("may have run"));
+}
+
+#[test]
+fn compaction_keeps_current_request_and_complete_function_groups() {
+    let mut messages = vec![json!({"role":"system","content":"system"})];
+    for i in 0..40 {
+        messages.push(
+            json!({"role":"user","content":format!("Earlier request {i}: {}","x".repeat(500))}),
+        );
+        messages.push(json!({"role":"assistant","content":"read","tool_calls":[tool(&format!("t{i}"),"read_file",json!({"path":"a"}))]}));
+        messages
+            .push(json!({"role":"tool","tool_call_id":format!("t{i}"),"content":"y".repeat(2000)}));
+        messages.push(json!({"role":"assistant","content":"observed"}));
+    }
+    messages.push(json!({"role":"user","content":"Current request must remain intact"}));
+    let result = context::compact(&mut messages, &[], 4096, 0.7)
+        .unwrap()
+        .unwrap();
+    assert!(result["omitted_messages"].as_u64().unwrap() > 100);
+    context::validate_pairs(&messages).unwrap();
+    assert_eq!(
+        messages.last().unwrap()["content"],
+        "Current request must remain intact"
+    );
+    assert!(context::estimate_tokens(&json!(messages)) < 4096);
+}
+
+#[tokio::test]
+async fn offline_preview_and_cross_workspace_sessions_cannot_start_a_task() {
+    let server = support::server(|_, _| (response("done", json!([])), Duration::ZERO)).await;
+    let (root, engine) = setup(&server.endpoint);
+    let mut req = request(root.path(), "task", None);
+    req.model = Some(ModelConfig::default());
+    assert!(engine.start(req).await.is_err());
+    let elsewhere = root.path().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    let sid = engine
+        .store()
+        .create_session(&elsewhere, "local", "")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(engine
+        .start(request(root.path(), "task", Some(sid)))
+        .await
+        .is_err());
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_sessions_and_repeated_followups_survive_restart_without_duplicate_completions()
+{
+    let server = support::server(|_, _| (response("done", json!([])), Duration::ZERO)).await;
+    let (root, engine) = setup(&server.endpoint);
+    let paths = engine.paths().clone();
+    let mut jobs = Vec::new();
+    for index in 0..32 {
+        let workspace = root.path().join(format!("project-{index}"));
+        fs::create_dir(&workspace).unwrap();
+        let mut req = request(root.path(), "small concurrent task", None);
+        req.workspace = workspace;
+        jobs.push(engine.start(req).await.unwrap());
+    }
+    for job in &jobs {
+        assert_eq!(wait(&engine, &job.id).await.status, "completed");
+    }
+    let sid = jobs[0].session_id.clone();
+    for _ in 0..24 {
+        let mut req = request(root.path(), "next", Some(sid.clone()));
+        req.workspace = jobs[0].workspace.clone();
+        let job = engine.start(req).await.unwrap();
+        assert_eq!(wait(&engine, &job.id).await.status, "completed");
+    }
+    engine.shutdown().await.unwrap();
+    drop(engine);
+    let engine = Engine::open(paths).unwrap();
+    assert_eq!(engine.store().jobs(100).unwrap().len(), 56);
+    for job in &jobs {
+        assert_eq!(engine.job(&job.id).unwrap().unwrap().status, "completed");
+    }
+    let events = engine.store().recent_events(&sid, 1000).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["type"] == "agent.completed")
+            .count(),
+        25
+    );
+    let usage: Value = serde_json::from_str(
+        engine.store().session(&sid).unwrap().unwrap()["usage_json"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(usage["total_tokens"], 750);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn branching_copies_native_message_context_and_survives_parent_deletion() {
+    let server = support::server(|_, _| {
+        (
+            response("Retained native answer", json!([])),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let job = engine
+        .start(request(root.path(), "Remember this context", None))
+        .await
+        .unwrap();
+    wait(&engine, &job.id).await;
+    let branch = engine
+        .store()
+        .branch_session(&job.session_id, "Branch")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let tape = engine.store().latest_session_messages(&branch, "").unwrap();
+    assert!(tape
+        .iter()
+        .any(|m| m["content"] == "Retained native answer"));
+    engine.store().delete_session(&job.session_id).unwrap();
+    assert_eq!(
+        engine.store().latest_session_messages(&branch, "").unwrap(),
+        tape
+    );
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_explicit_read_request_requires_current_file_evidence() {
+    let server = support::server(|index, _| {
+        let value = match index {
+            0 => response("I remember the answer", json!([])),
+            1 => response(
+                "Inspecting the current file",
+                json!([tool("read", "read_file", json!({"path":"current"}))]),
+            ),
+            _ => response("The current file contains the new value", json!([])),
+        };
+        (value, Duration::ZERO)
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    fs::write(root.path().join("project/current"), "new value").unwrap();
+    let job = engine
+        .start(request(
+            root.path(),
+            "Read whichever file contains the current value",
+            None,
+        ))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "completed");
+    assert_eq!(result.steps, 3);
+    assert!(engine
+        .store()
+        .recent_events(&job.session_id, 100)
+        .unwrap()
+        .iter()
+        .any(|e| e["type"] == "verification.retry"));
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn explicit_file_requests_attach_fresh_confined_content_before_the_model_answers() {
+    let server = support::server(|_, body| {
+        let messages = body["messages"].as_array().unwrap();
+        context::validate_pairs(messages).unwrap();
+        assert_eq!(messages.last().unwrap()["role"], "tool");
+        assert!(messages.last().unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .contains("fresh value"));
+        (
+            response("The current value is fresh value", json!([])),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    fs::write(root.path().join("project/current"), "fresh value").unwrap();
+    let job = engine
+        .start(request(
+            root.path(),
+            "Read `current` and report its value",
+            None,
+        ))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "completed");
+    assert_eq!(result.steps, 1);
+    assert!(engine
+        .store()
+        .last_task_event(&job.task_id, "context.attached")
+        .unwrap()
+        .is_some());
+    let workspace = Workspace::open(&root.path().join("project")).unwrap();
+    assert!(context::requested_file("Read /etc/passwd", &workspace).is_none());
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn missing_provider_usage_is_estimated_and_still_enforces_the_budget() {
+    let server = support::server(|_, _| {
+        let mut value = response("done", json!([]));
+        value.as_object_mut().unwrap().remove("usage");
+        (value, Duration::ZERO)
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    Config::patch(engine.paths(), json!({"agent":{"max_task_tokens":1}})).unwrap();
+    let job = engine
+        .start(request(root.path(), "task", None))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "failed");
+    assert!(result.usage_is_estimated);
+    assert!(result.usage.total_tokens > 1);
+    engine.shutdown().await.unwrap();
+}

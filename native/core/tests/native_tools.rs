@@ -1,0 +1,287 @@
+use serde_json::{json, Value};
+use shadowcode_core::{
+    approvals::ApprovalHub,
+    checkpoint,
+    config::{Config, PermissionLevel},
+    events::TaskEvents,
+    models::ToolCall,
+    patch,
+    store::Store,
+    tools::ToolExecutor,
+    workspace::Workspace,
+};
+use std::{fs, sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
+
+fn fixture(config: Config) -> (tempfile::TempDir, ToolExecutor) {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let store = Arc::new(Store::open(&root.path().join("db")).unwrap());
+    let session_id = store.create_session(&project, "mock", "").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let task_id = store.create_task(&session_id, "test").unwrap();
+    let (sender, _) = tokio::sync::broadcast::channel(100);
+    let events = TaskEvents {
+        store,
+        session_id,
+        task_id,
+        sender,
+    };
+    let tools = ToolExecutor::new(
+        Arc::new(Workspace::open(&project).unwrap()),
+        config,
+        ApprovalHub::default(),
+        events,
+        CancellationToken::new(),
+    )
+    .unwrap();
+    (root, tools)
+}
+async fn call(tools: &ToolExecutor, name: &str, args: Value) -> shadowcode_core::tools::ToolResult {
+    tools
+        .execute(ToolCall {
+            id: shadowcode_core::id(),
+            name: name.into(),
+            arguments: args,
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn tool_edits_reject_stale_reads_and_rewind_moves_and_new_files() {
+    let (_root, tools) = fixture(Config::default());
+    tools.workspace.write("file", b"original", None).unwrap();
+    assert!(
+        !call(
+            &tools,
+            "write_file",
+            json!({"path":"file","content":"blind"})
+        )
+        .await
+        .success
+    );
+    assert!(
+        call(&tools, "read_file", json!({"path":"file"}))
+            .await
+            .success
+    );
+    tools
+        .workspace
+        .write("file", b"user changed it", None)
+        .unwrap();
+    assert!(
+        !call(
+            &tools,
+            "write_file",
+            json!({"path":"file","content":"stale overwrite"})
+        )
+        .await
+        .success
+    );
+    call(&tools, "read_file", json!({"path":"file"})).await;
+    assert!(
+        call(
+            &tools,
+            "edit_file",
+            json!({"path":"file","old_string":"user changed it","new_string":"agent edit"})
+        )
+        .await
+        .success
+    );
+    assert!(
+        call(&tools, "move_file", json!({"src":"file","dest":"moved"}))
+            .await
+            .success
+    );
+    assert!(
+        call(&tools, "write_file", json!({"path":"new","content":"new"}))
+            .await
+            .success
+    );
+    checkpoint::restore(&tools.events.store, &tools.workspace, &tools.events.task_id).unwrap();
+    assert_eq!(
+        tools.workspace.read("file").unwrap().content,
+        "user changed it"
+    );
+    assert!(tools.workspace.snapshot("moved").unwrap().bytes.is_none());
+    assert!(tools.workspace.snapshot("new").unwrap().bytes.is_none());
+}
+
+#[test]
+fn patch_preflight_is_atomic_and_accepts_real_unified_and_codex_formats() {
+    let (_root, tools) = fixture(Config::default());
+    let ws = &tools.workspace;
+    ws.write("a", b"one\ntwo\nthree\n", None).unwrap();
+    let patch="*** Begin Patch\n*** Update File: a\n@@\n one\n-two\n+changed\n three\n*** Add File: new file.txt\n+hello\n*** End Patch\n";
+    let changes = patch::prepare(ws, patch).unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(
+        changes[0].after.as_deref(),
+        Some(b"one\nchanged\nthree\n".as_slice())
+    );
+    assert_eq!(ws.read("a").unwrap().content, "one\ntwo\nthree\n");
+    assert!(patch::prepare(
+        ws,
+        &patch.replace("+hello", "*** Update File: missing\n@@\n-old\n+new")
+    )
+    .is_err());
+    let changes = patch::prepare(
+        ws,
+        "--- a/a\n+++ b/a\n@@ -1,3 +1,3 @@\n one\n-two\n+changed\n three\n",
+    )
+    .unwrap();
+    assert_eq!(
+        changes[0].after.as_deref(),
+        Some(b"one\nchanged\nthree\n".as_slice())
+    );
+    assert!(patch::prepare(ws, "--- a/a\n+++ b/a\n@@ -1,3 +1,3 @@\n one\n-two\n").is_err());
+}
+
+#[test]
+fn patches_preserve_newlines_and_disambiguate_repeated_lines_by_position() {
+    let (_root, tools) = fixture(Config::default());
+    let ws = &tools.workspace;
+    ws.write("a", b"one\r\ntwo", None).unwrap();
+    let changes = patch::prepare(
+        ws,
+        "*** Begin Patch\n*** Update File: a\n@@\n-two\n+three\n*** End of File\n*** End Patch",
+    )
+    .unwrap();
+    assert_eq!(
+        changes[0].after.as_deref(),
+        Some(b"one\r\nthree".as_slice())
+    );
+    ws.write("a", b"x\nx\nx\nx\nx\n", None).unwrap();
+    let changes = patch::prepare(ws, "--- a/a\n+++ b/a\n@@ -5 +5 @@\n-x\n+y\n").unwrap();
+    assert_eq!(
+        changes[0].after.as_deref(),
+        Some(b"x\nx\nx\nx\ny\n".as_slice())
+    );
+    assert!(patch::prepare(
+        ws,
+        "*** Begin Patch\n*** Update File: a\n@@\n-x\n+y\n*** End Patch"
+    )
+    .is_err());
+    ws.write("a", b"old", None).unwrap();
+    let changes=patch::prepare(ws,"--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n").unwrap();
+    assert_eq!(changes[0].after.as_deref(), Some(b"new".as_slice()));
+}
+
+#[tokio::test]
+async fn multi_file_patch_rejects_bad_later_context_without_changing_earlier_file() {
+    let (_root, tools) = fixture(Config::default());
+    tools.workspace.write("a", b"a\n", None).unwrap();
+    tools.workspace.write("b", b"b\n", None).unwrap();
+    let result=call(&tools,"apply_patch",json!({"patch":"*** Begin Patch\n*** Update File: a\n@@\n-a\n+changed\n*** Update File: b\n@@\n-wrong\n+changed\n*** End Patch"})).await;
+    assert!(!result.success);
+    assert_eq!(tools.workspace.read("a").unwrap().content, "a\n");
+    assert_eq!(
+        checkpoint::summary(&tools.events.store, &tools.workspace, &tools.events.task_id).unwrap()
+            ["changes"],
+        0
+    );
+}
+
+#[tokio::test]
+async fn shell_requires_scoped_approval_and_records_actual_exit_status() {
+    let (_root, tools) = fixture(Config::default());
+    let worker = tools.clone();
+    let task = tokio::spawn(async move {
+        call(
+            &worker,
+            "exec",
+            json!({"command":"printf verified; exit 3"}),
+        )
+        .await
+    });
+    let record = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(a) = tools.approvals.list(None).pop() {
+                break a;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!task.is_finished());
+    assert!(tools
+        .approvals
+        .decide(&record.id, "wrong-session", true)
+        .is_err());
+    tools
+        .approvals
+        .decide(&record.id, &tools.events.session_id, true)
+        .unwrap();
+    let result = task.await.unwrap();
+    assert!(!result.success);
+    assert_eq!(result.output["exit_code"], 3);
+    assert_eq!(result.output["stdout"], "verified");
+    let events = tools
+        .events
+        .store
+        .recent_events(&tools.events.session_id, 20)
+        .unwrap();
+    assert!(events.iter().any(|e| e["type"] == "approval.resolved"));
+    assert!(events
+        .iter()
+        .any(|e| e["type"] == "tool.completed" && e["payload"]["success"] == false));
+}
+
+#[tokio::test]
+async fn read_only_never_executes_a_command_and_cancellation_clears_pending_approval() {
+    let mut config = Config::default();
+    config.permissions.level = PermissionLevel::ReadOnly;
+    let (_root, tools) = fixture(config);
+    assert!(
+        !call(&tools, "exec", json!({"command":"touch should-not-exist"}))
+            .await
+            .success
+    );
+    assert!(tools
+        .workspace
+        .snapshot("should-not-exist")
+        .unwrap()
+        .bytes
+        .is_none());
+    assert!(tools.approvals.list(None).is_empty());
+    let (_root, tools) = fixture(Config::default());
+    let worker = tools.clone();
+    let task = tokio::spawn(async move {
+        call(&worker, "exec", json!({"command":"touch should-not-exist"})).await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while tools.approvals.list(None).is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tools.cancel.cancel();
+    assert!(!task.await.unwrap().success);
+    assert!(tools.approvals.list(None).is_empty());
+    assert!(tools
+        .workspace
+        .snapshot("should-not-exist")
+        .unwrap()
+        .bytes
+        .is_none());
+}
+
+#[tokio::test]
+async fn search_is_cooperatively_cancellable_and_plans_validate_state() {
+    let (_root, tools) = fixture(Config::default());
+    let token = CancellationToken::new();
+    token.cancel();
+    assert!(tools
+        .workspace
+        .search_with_control("x", None, ".", 100, &token)
+        .is_err());
+    assert!(!call(&tools,"update_plan",json!({"steps":[{"title":"a","status":"in_progress"},{"title":"b","status":"in_progress"}]})).await.success);
+    assert!(call(&tools,"update_plan",json!({"goal":"test","steps":[{"title":"a","status":"completed"},{"title":"b","status":"in_progress"}]})).await.success);
+    assert_eq!(tools.plan()["steps"][1]["status"], "running");
+}

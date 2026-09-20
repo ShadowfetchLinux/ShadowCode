@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS milestones (
 CREATE TABLE IF NOT EXISTS file_changes (
  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
  workspace TEXT NOT NULL, path TEXT NOT NULL, before_bytes BLOB,
- before_mode INTEGER, after_hash TEXT, restored INTEGER NOT NULL DEFAULT 0,
+ before_mode INTEGER, after_hash TEXT, observed_hash TEXT, restored INTEGER NOT NULL DEFAULT 0,
  UNIQUE(task_id,workspace,path)
 );
 CREATE TABLE IF NOT EXISTS job_messages (
@@ -89,10 +89,10 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", true)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 20,
+            version <= 21,
             "This database was created by a newer ShadowCode version"
         );
-        if version < 20 {
+        if version < 21 {
             if existed {
                 let backup_path = path.with_extension(format!("pre-native-{}.sqlite", id()));
                 let mut backup = Connection::open(&backup_path)?;
@@ -115,6 +115,7 @@ impl Store {
                 ("sessions", "parent_id", "TEXT"),
                 ("sessions", "branched_at", "REAL"),
                 ("tasks", "usage_json", "TEXT"),
+                ("file_changes", "observed_hash", "TEXT"),
             ] {
                 let columns: Vec<String> = tx
                     .prepare(&format!("PRAGMA table_info({table})"))?
@@ -124,7 +125,7 @@ impl Store {
                     tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
                 }
             }
-            tx.pragma_update(None, "user_version", 20)?;
+            tx.pragma_update(None, "user_version", 21)?;
             tx.commit()?;
         }
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -237,6 +238,16 @@ impl Store {
             params![branch,parent["workspace"].as_str(),time,time,parent["model_id"].as_str(),title,sid,time])?;
         tx.execute("INSERT INTO events(ts,type,session_id,task_id,payload) SELECT ts,type,?,task_id,payload FROM events WHERE session_id=? ORDER BY id",params![branch,sid])?;
         tx.execute("INSERT INTO pins(session_id,task_id,ts,label,body) SELECT ?,task_id,ts,label,body FROM pins WHERE session_id=?",params![branch,sid])?;
+        let tape=query_rows(&tx,"SELECT payload FROM job_messages WHERE job_id=(SELECT id FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND EXISTS(SELECT 1 FROM job_messages WHERE job_id=desktop_jobs.id) ORDER BY rowid DESC LIMIT 1) ORDER BY ordinal",[sid])?;
+        if !tape.is_empty() {
+            let messages: Vec<_> = tape.into_iter().map(|r| r["payload"].clone()).collect();
+            tx.execute(
+                "INSERT INTO session_meta(session_id,key,value) VALUES(?,'message_seed',?)",
+                params![branch, json!(messages).to_string()],
+            )?;
+        } else {
+            tx.execute("INSERT INTO session_meta(session_id,key,value) SELECT ?,key,value FROM session_meta WHERE session_id=? AND key='message_seed'",params![branch,sid])?;
+        }
         let result = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [&branch])?
             .pop()
             .context("Branch not found")?;
@@ -281,44 +292,49 @@ impl Store {
         Ok(task)
     }
     pub fn finish_task(&self, tid: &str, status: &str, summary: &str, usage: &Value) -> Result<()> {
+        self.finish_transaction(tid, status, summary, usage, None)
+            .map(|_| ())
+    }
+    pub fn finish_job(&self, job: &mut Value) -> Result<Value> {
+        let tid = job["task_id"]
+            .as_str()
+            .context("Missing task ID")?
+            .to_owned();
+        let status = job["status"].as_str().context("Missing status")?.to_owned();
+        let summary = job["summary"].as_str().unwrap_or("").to_owned();
+        let usage = job["usage"].clone();
+        self.finish_transaction(&tid, &status, &summary, &usage, Some(job))?
+            .context("Missing completion event")
+    }
+    fn finish_transaction(
+        &self,
+        tid: &str,
+        status: &str,
+        summary: &str,
+        usage: &Value,
+        job: Option<&mut Value>,
+    ) -> Result<Option<Value>> {
         let mut db = self.lock()?;
         let tx = db.transaction()?;
-        let sid: String = tx.query_row("SELECT session_id FROM tasks WHERE id=?", [tid], |r| {
-            r.get(0)
-        })?;
-        let previous: Option<String> =
-            tx.query_row("SELECT usage_json FROM tasks WHERE id=?", [tid], |r| {
-                r.get(0)
-            })?;
-        let previous: Value = previous
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(json!({}));
-        let current: Option<String> =
-            tx.query_row("SELECT usage_json FROM sessions WHERE id=?", [&sid], |r| {
-                r.get(0)
-            })?;
-        let mut total: Value = current
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(json!({}));
-        if let Some(usage) = usage.as_object() {
-            for (key, value) in usage {
-                total[key] = json!(total[key]
-                    .as_u64()
-                    .unwrap_or(0)
-                    .saturating_sub(previous[key].as_u64().unwrap_or(0))
-                    .saturating_add(value.as_u64().unwrap_or(0)));
-            }
-        }
-        tx.execute(
-            "UPDATE tasks SET status=?,summary=?,completed_at=?,usage_json=? WHERE id=?",
-            params![status, summary, now(), usage.to_string(), tid],
-        )?;
-        tx.execute(
-            "UPDATE sessions SET updated_at=?,usage_json=? WHERE id=?",
-            params![now(), total.to_string(), sid],
-        )?;
+        let sid = finish_task_on(&tx, tid, status, summary, usage)?;
+        let event = if let Some(job) = job {
+            let ts = now();
+            let payload = job["result"].clone();
+            tx.execute("INSERT INTO events(ts,type,session_id,task_id,payload) VALUES(?,'agent.completed',?,?,?)",params![ts,sid,tid,payload.to_string()])?;
+            let cursor = tx.last_insert_rowid();
+            job["event_cursor"] = json!(cursor);
+            tx.execute(
+                "UPDATE desktop_jobs SET payload=? WHERE id=?",
+                params![job.to_string(), job["id"].as_str()],
+            )?;
+            Some(
+                json!({"id":cursor,"ts":ts,"type":"agent.completed","session_id":sid,"task_id":tid,"payload":payload}),
+            )
+        } else {
+            None
+        };
         tx.commit()?;
-        Ok(())
+        Ok(event)
     }
     pub fn tasks(&self, sid: &str, limit: usize) -> Result<Vec<Value>> {
         self.query(
@@ -328,6 +344,14 @@ impl Store {
     }
     pub fn task(&self, tid: &str) -> Result<Option<Value>> {
         Ok(self.query("SELECT * FROM tasks WHERE id=?", [tid])?.pop())
+    }
+    pub fn last_task_event(&self, tid: &str, kind: &str) -> Result<Option<Value>> {
+        Ok(self
+            .query(
+                "SELECT * FROM events WHERE task_id=? AND type=? ORDER BY id DESC LIMIT 1",
+                params![tid, kind],
+            )?
+            .pop())
     }
     pub fn add_event(
         &self,
@@ -383,6 +407,54 @@ impl Store {
         self.execute("INSERT INTO desktop_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",params![id,job.to_string()])?;
         Ok(())
     }
+    /// Queue the task and its recoverable job atomically.
+    pub fn create_job(&self, job: &Value) -> Result<()> {
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        let task_id = job["task_id"].as_str().context("Missing task ID")?;
+        let session_id = job["session_id"].as_str().context("Missing session ID")?;
+        let prompt = job["task"].as_str().context("Missing task text")?;
+        tx.execute(
+            "INSERT INTO tasks(id,session_id,prompt,status,created_at) VALUES(?,?,?,'queued',?)",
+            params![task_id, session_id, prompt, now()],
+        )?;
+        tx.execute(
+            "INSERT INTO desktop_jobs(id,payload) VALUES(?,?)",
+            params![job["id"].as_str(), job.to_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO events(ts,type,session_id,task_id,payload) VALUES(?,'user.message',?,?,?)",
+            params![
+                now(),
+                session_id,
+                task_id,
+                json!({"text":prompt}).to_string()
+            ],
+        )?;
+        tx.execute("UPDATE sessions SET updated_at=?,title=CASE WHEN title IS NULL OR title='' THEN ? ELSE title END WHERE id=?",params![now(),prompt.chars().take(80).collect::<String>(),session_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn latest_session_messages(
+        &self,
+        session_id: &str,
+        excluding_job: &str,
+    ) -> Result<Vec<Value>> {
+        let row=self.query("SELECT id FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND id!=? AND EXISTS(SELECT 1 FROM job_messages WHERE job_id=desktop_jobs.id) ORDER BY rowid DESC LIMIT 1",params![session_id,excluding_job])?;
+        match row.first().and_then(|r| r["id"].as_str()) {
+            Some(id) => self.messages(id),
+            None => {
+                let seed = self.query(
+                    "SELECT value FROM session_meta WHERE session_id=? AND key='message_seed'",
+                    [session_id],
+                )?;
+                match seed.first().and_then(|r| r["value"].as_str()) {
+                    Some(seed) => Ok(serde_json::from_str(seed)?),
+                    None => Ok(Vec::new()),
+                }
+            }
+        }
+    }
     pub fn jobs(&self, limit: usize) -> Result<Vec<Value>> {
         Ok(self
             .query(
@@ -414,7 +486,13 @@ impl Store {
                 params![job.to_string(), job["id"].as_str()],
             )?;
             if let Some(tid) = job["task_id"].as_str() {
-                tx.execute("UPDATE tasks SET status='interrupted',completed_at=? WHERE id=? AND status='running'",params![now(),tid])?;
+                finish_task_on(
+                    &tx,
+                    tid,
+                    "interrupted",
+                    job["summary"].as_str().unwrap_or("Task interrupted"),
+                    &job["usage"],
+                )?;
             }
         }
         tx.commit()?;
@@ -514,4 +592,48 @@ fn query_rows(db: &Connection, sql: &str, args: impl Params) -> Result<Vec<Value
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+fn finish_task_on(
+    tx: &Connection,
+    tid: &str,
+    status: &str,
+    summary: &str,
+    usage: &Value,
+) -> Result<String> {
+    let sid: String = tx.query_row("SELECT session_id FROM tasks WHERE id=?", [tid], |r| {
+        r.get(0)
+    })?;
+    let previous: Option<String> =
+        tx.query_row("SELECT usage_json FROM tasks WHERE id=?", [tid], |r| {
+            r.get(0)
+        })?;
+    let previous: Value = previous
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(json!({}));
+    let current: Option<String> =
+        tx.query_row("SELECT usage_json FROM sessions WHERE id=?", [&sid], |r| {
+            r.get(0)
+        })?;
+    let mut total: Value = current
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(json!({}));
+    if let Some(usage) = usage.as_object() {
+        for (key, value) in usage {
+            total[key] = json!(total[key]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(previous[key].as_u64().unwrap_or(0))
+                .saturating_add(value.as_u64().unwrap_or(0)));
+        }
+    }
+    tx.execute(
+        "UPDATE tasks SET status=?,summary=?,completed_at=?,usage_json=? WHERE id=?",
+        params![status, summary, now(), usage.to_string(), tid],
+    )?;
+    tx.execute(
+        "UPDATE sessions SET updated_at=?,usage_json=? WHERE id=?",
+        params![now(), total.to_string(), sid],
+    )?;
+    Ok(sid)
 }

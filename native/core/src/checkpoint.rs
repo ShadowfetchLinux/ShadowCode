@@ -1,0 +1,108 @@
+use crate::{
+    store::Store,
+    workspace::{hash, Snapshot, Workspace},
+};
+use anyhow::{ensure, Result};
+use rusqlite::params;
+use serde_json::{json, Value};
+
+/// Record the original once and the intended current content before each write.
+/// A crash before the write is a no-op; a crash afterwards remains rewindable.
+pub fn record(
+    store: &Store,
+    workspace: &Workspace,
+    task: &str,
+    path: &str,
+    before: &Snapshot,
+    after: Option<&[u8]>,
+) -> Result<()> {
+    let path = workspace.relative(path)?.to_string_lossy().into_owned();
+    let after_hash = after.map(hash).unwrap_or_else(|| "missing".into());
+    store.execute("INSERT INTO file_changes(task_id,workspace,path,before_bytes,before_mode,after_hash,observed_hash) VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(task_id,workspace,path) DO UPDATE SET after_hash=excluded.after_hash,observed_hash=excluded.observed_hash,restored=0",
+        params![task,workspace.path.to_string_lossy(),path,before.bytes,before.mode,after_hash,before.hash.as_deref().unwrap_or("missing")])?;
+    Ok(())
+}
+
+pub fn summary(store: &Store, workspace: &Workspace, task: &str) -> Result<Value> {
+    let rows = store.query(
+        "SELECT path,restored FROM file_changes WHERE task_id=? AND workspace=? ORDER BY id",
+        params![task, workspace.path.to_string_lossy()],
+    )?;
+    Ok(
+        json!({"task_id":task,"workspace":workspace.path,"changes":rows.len(),"paths":rows.iter().map(|r|r["path"].clone()).collect::<Vec<_>>(),"restored":!rows.is_empty() && rows.iter().all(|r|r["restored"]==1)}),
+    )
+}
+
+pub fn restore(store: &Store, workspace: &Workspace, task: &str) -> Result<Vec<String>> {
+    struct Change {
+        id: i64,
+        path: String,
+        before: Option<Vec<u8>>,
+        mode: Option<u32>,
+        after: String,
+        current: Snapshot,
+    }
+    let mut changes = Vec::new();
+    {
+        let db = store.lock()?;
+        let mut statement=db.prepare("SELECT id,path,before_bytes,before_mode,after_hash,observed_hash FROM file_changes WHERE task_id=? AND workspace=? AND restored=0 ORDER BY id DESC")?;
+        let rows = statement.query_map(params![task, workspace.path.to_string_lossy()], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<Vec<u8>>>(2)?,
+                r.get::<_, Option<u32>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, path, before, mode, after, observed) = row?;
+            let current = workspace.snapshot(&path)?;
+            let before_hash = before
+                .as_deref()
+                .map(hash)
+                .unwrap_or_else(|| "missing".into());
+            let current_hash = current.hash.as_deref().unwrap_or("missing");
+            ensure!(
+                after.as_deref() == Some(current_hash)
+                    || observed.as_deref() == Some(current_hash)
+                    || before_hash == current_hash,
+                "Cannot rewind: {path} was changed after this task. No files were restored."
+            );
+            changes.push(Change {
+                id,
+                path,
+                before,
+                mode,
+                after: current_hash.to_owned(),
+                current,
+            });
+        }
+    }
+    let mut restored = Vec::new();
+    for change in changes {
+        let current_hash = change.current.hash.as_deref().unwrap_or("missing");
+        let before_hash = change
+            .before
+            .as_deref()
+            .map(hash)
+            .unwrap_or_else(|| "missing".into());
+        if before_hash != current_hash {
+            ensure!(change.after == current_hash, "Checkpoint mismatch");
+            match &change.before {
+                Some(bytes) => {
+                    workspace.write(&change.path, bytes, Some(current_hash))?;
+                    if let Some(mode) = change.mode {
+                        workspace.set_mode(&change.path, mode)?;
+                    }
+                }
+                None => workspace.delete(&change.path, Some(current_hash))?,
+            }
+        }
+        store.execute("UPDATE file_changes SET restored=1 WHERE id=?", [change.id])?;
+        restored.push(change.path);
+    }
+    Ok(restored)
+}

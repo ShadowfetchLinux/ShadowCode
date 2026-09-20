@@ -78,6 +78,16 @@ impl ModelClient {
         endpoint.trim_end_matches('/').to_owned()
     }
     pub fn request_body(&self, messages: &[Value], tools: &[Value], max_tokens: usize) -> Value {
+        let messages: Vec<Value> = messages
+            .iter()
+            .map(|message| {
+                let mut message = message.clone();
+                if let Some(object) = message.as_object_mut() {
+                    object.retain(|key, _| !key.starts_with("_shadow_"));
+                }
+                message
+            })
+            .collect();
         if self.config.provider == "ollama" {
             let messages: Vec<_> = messages
                 .iter()

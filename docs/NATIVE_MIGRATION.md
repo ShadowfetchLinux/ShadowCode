@@ -72,8 +72,21 @@ Implemented foundation:
 - Native Ollama and compatible streaming transports with incremental UTF-8/SSE
   parsing, parallel tool-call assembly, usage accounting, bounded responses,
   cancellation, and rejection of incomplete tool arguments.
+- A persisted native task loop, per-workspace FIFO follow-ups, four concurrent
+  workspaces, scoped approvals, cancellation that waits for cleanup, restart
+  recovery, and atomic completion/usage/event commits. Continuation and branching
+  retain valid function-call histories; interrupted calls are never blindly replayed.
+- Native filesystem, search, patch, shell, Git, and plan tools with durable audit
+  events. Patches preflight every file, reject ambiguous context, preserve line
+  endings, and journal edits for conflict-aware rewind. Shell and Git side effects
+  are not represented as filesystem-tool checkpoints.
+- Context compaction preserves complete tool-call groups and the current request.
+  Explicit requests to read a named file attach its current confined contents.
+  Providers that omit token usage receive labelled estimates for budget checks.
+- [Native engine verification](NATIVE_VERIFICATION.md), including scripted failure
+  cases, concurrent tasks, and real coding probes against two local models.
 
-The application window, complete agent orchestration, remaining integrations,
+The application window, remaining orchestration/integrations,
 frontend IPC adaptation, and release packaging are still in progress. The native
 branch is not yet a replacement for the 0.19 release.
 
@@ -85,6 +98,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 # Read-only protocol probe against an already installed local model:
 cargo run -p shadowcode-core --example probe_model -- gpt-oss:20b
+# Real coding task, command approval, continuation, and rewind in a temp project:
+cargo run -p shadowcode-core --example probe_task -- gpt-oss:20b
 ```
 
 Protocol references: [Tauri commands](https://v2.tauri.app/develop/calling-rust/),

@@ -1,0 +1,774 @@
+//! Durable task orchestration shared by the native window and optional transports.
+use crate::{
+    approvals::ApprovalHub,
+    config::{Config, ModelConfig, PermissionLevel},
+    context,
+    events::TaskEvents,
+    models::{ModelClient, Usage},
+    paths::AppPaths,
+    permissions,
+    store::Store,
+    tools::{self, ToolExecutor},
+    workspace::Workspace,
+};
+use anyhow::{anyhow, bail, ensure, Context, Result};
+use futures_util::{stream, FutureExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
+use tokio::sync::{broadcast, Notify, Semaphore};
+use tokio_util::sync::CancellationToken;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct StartRequest {
+    pub workspace: PathBuf,
+    pub task: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<ModelConfig>,
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub queue: bool,
+}
+fn default_mode() -> String {
+    "code".into()
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Job {
+    pub id: String,
+    pub workspace: PathBuf,
+    pub session_id: String,
+    pub task_id: String,
+    pub task: String,
+    pub status: String,
+    pub mode: String,
+    pub model: String,
+    pub started_at: f64,
+    pub finished_at: Option<f64>,
+    pub event_cursor: i64,
+    pub summary: String,
+    pub usage: Usage,
+    pub usage_is_estimated: bool,
+    pub result: Option<Value>,
+    pub steps: usize,
+}
+struct Running {
+    record: Mutex<Job>,
+    config: Config,
+    workspace: Arc<Workspace>,
+    cancel: CancellationToken,
+    finished: AtomicBool,
+    done: Notify,
+}
+#[derive(Default)]
+struct QueueState {
+    jobs: HashMap<String, Arc<Running>>,
+    lanes: HashMap<PathBuf, VecDeque<Arc<Running>>>,
+}
+struct Inner {
+    paths: AppPaths,
+    store: Arc<Store>,
+    approvals: ApprovalHub,
+    sender: broadcast::Sender<Value>,
+    queues: Mutex<QueueState>,
+    workers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    slots: Semaphore,
+    closing: AtomicBool,
+    _profile_lock: std::fs::File,
+}
+#[derive(Clone)]
+pub struct Engine(Arc<Inner>);
+impl Engine {
+    pub fn open(paths: AppPaths) -> Result<Self> {
+        let profile_lock = paths.lock()?;
+        let store = Arc::new(Store::open(&paths.database())?);
+        store.recover_jobs()?;
+        let (sender, _) = broadcast::channel(1024);
+        Ok(Self(Arc::new(Inner {
+            paths,
+            store,
+            approvals: ApprovalHub::default(),
+            sender,
+            queues: Mutex::new(QueueState::default()),
+            workers: Mutex::new(Vec::new()),
+            slots: Semaphore::new(4),
+            closing: AtomicBool::new(false),
+            _profile_lock: profile_lock,
+        })))
+    }
+    pub fn store(&self) -> Arc<Store> {
+        self.0.store.clone()
+    }
+    pub fn approvals(&self) -> ApprovalHub {
+        self.0.approvals.clone()
+    }
+    pub fn subscribe(&self) -> broadcast::Receiver<Value> {
+        self.0.sender.subscribe()
+    }
+    pub fn paths(&self) -> &AppPaths {
+        &self.0.paths
+    }
+    pub async fn start(&self, request: StartRequest) -> Result<Job> {
+        ensure!(
+            !self.0.closing.load(Ordering::Acquire),
+            "Application is shutting down"
+        );
+        ensure!(
+            !request.task.trim().is_empty() && request.task.len() <= 128_000,
+            "Task must contain between 1 and 128000 bytes"
+        );
+        ensure!(
+            matches!(request.mode.as_str(), "code" | "plan" | "review"),
+            "Unknown task mode"
+        );
+        let workspace = Arc::new(Workspace::open(&request.workspace)?);
+        let mut config = Config::load(&self.0.paths, Some(&workspace.path))?;
+        if let Some(model) = request.model {
+            config.model = model;
+        }
+        if request.mode != "code" {
+            config.permissions.level = PermissionLevel::ReadOnly;
+        }
+        config.validate()?;
+        ensure!(config.model.provider!="mock","Choose a local or compatible model before starting a coding task. The offline preview does not execute tasks.");
+        let mut queues = self
+            .0
+            .queues
+            .lock()
+            .map_err(|_| anyhow!("Task queue lock poisoned"))?;
+        ensure!(
+            !self.0.closing.load(Ordering::Acquire),
+            "Application is shutting down"
+        );
+        ensure!(
+            queues.jobs.len() < 64,
+            "At most 64 tasks may be running or queued"
+        );
+        let has_lane = queues.lanes.contains_key(&workspace.path);
+        let busy = queues
+            .lanes
+            .get(&workspace.path)
+            .is_some_and(|q| q.iter().any(|job| !job.finished.load(Ordering::Acquire)));
+        ensure!(
+            !busy || request.queue,
+            "This workspace has an active task. Queue a follow-up or stop the current task first."
+        );
+        let sid = if let Some(sid) = request.session_id {
+            let session = self
+                .0
+                .store
+                .session(&sid)?
+                .context("Session does not exist")?;
+            ensure!(
+                session["workspace"].as_str() == workspace.path.to_str(),
+                "Session belongs to a different workspace"
+            );
+            sid
+        } else {
+            self.0
+                .store
+                .create_session(&workspace.path, &config.model.default, "")?["id"]
+                .as_str()
+                .context("Session missing ID")?
+                .to_owned()
+        };
+        let job = Job {
+            id: crate::id(),
+            workspace: workspace.path.clone(),
+            session_id: sid,
+            task_id: crate::id(),
+            task: request.task,
+            status: "queued".into(),
+            mode: request.mode,
+            model: config.model.name.clone(),
+            started_at: crate::now(),
+            finished_at: None,
+            event_cursor: 0,
+            summary: String::new(),
+            usage: Usage::default(),
+            usage_is_estimated: false,
+            result: None,
+            steps: 0,
+        };
+        self.0.store.create_job(&json!(job))?;
+        let running = Arc::new(Running {
+            record: Mutex::new(job.clone()),
+            config,
+            workspace: workspace.clone(),
+            cancel: CancellationToken::new(),
+            finished: AtomicBool::new(false),
+            done: Notify::new(),
+        });
+        queues.jobs.insert(job.id.clone(), running.clone());
+        queues
+            .lanes
+            .entry(workspace.path.clone())
+            .or_default()
+            .push_back(running);
+        drop(queues);
+        if !has_lane {
+            let engine = self.clone();
+            let worker = tokio::spawn(async move {
+                engine.drain(workspace.path.clone()).await;
+            });
+            let mut workers = self
+                .0
+                .workers
+                .lock()
+                .map_err(|_| anyhow!("Worker registry lock poisoned"))?;
+            workers.retain(|worker| !worker.is_finished());
+            workers.push(worker);
+        }
+        Ok(job)
+    }
+    pub fn job(&self, id: &str) -> Result<Option<Job>> {
+        if let Some(job) = self.running(id)? {
+            return Ok(Some(job.snapshot()?));
+        }
+        self.0
+            .store
+            .job(id)?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(Into::into)
+    }
+    fn running(&self, id: &str) -> Result<Option<Arc<Running>>> {
+        Ok(self
+            .0
+            .queues
+            .lock()
+            .map_err(|_| anyhow!("Task queue lock poisoned"))?
+            .jobs
+            .get(id)
+            .cloned())
+    }
+    pub async fn wait(&self, id: &str) -> Result<Job> {
+        if let Some(job) = self.running(id)? {
+            loop {
+                let notified = job.done.notified();
+                if job.finished.load(Ordering::Acquire) {
+                    break;
+                }
+                notified.await;
+            }
+            return job.snapshot();
+        }
+        self.job(id)?.context("Job not found")
+    }
+    pub async fn cancel(&self, id: &str) -> Result<Job> {
+        let Some(job) = self.running(id)? else {
+            return self.job(id)?.context("Job not found");
+        };
+        job.cancel.cancel();
+        self.0.approvals.deny_task(&job.snapshot()?.task_id);
+        {
+            let mut record = job
+                .record
+                .lock()
+                .map_err(|_| anyhow!("Job lock poisoned"))?;
+            if matches!(record.status.as_str(), "queued" | "running") {
+                record.status = "cancelling".into();
+                self.0.store.save_job(&json!(*record))?;
+            }
+        }
+        // A queued cancellation should not wait for the current coding task.
+        let is_front = {
+            let queues = self
+                .0
+                .queues
+                .lock()
+                .map_err(|_| anyhow!("Task queue lock poisoned"))?;
+            queues
+                .lanes
+                .get(&job.workspace.path)
+                .and_then(|q| q.front())
+                .is_some_and(|front| Arc::ptr_eq(front, &job))
+        };
+        if !is_front {
+            self.finish(
+                &job,
+                Err(anyhow!("Queued task cancelled")),
+                json!({"steps":[]}),
+            )?;
+        }
+        self.wait(id).await
+    }
+    pub async fn shutdown(&self) -> Result<()> {
+        self.0.closing.store(true, Ordering::Release);
+        let jobs: Vec<_> = self
+            .0
+            .queues
+            .lock()
+            .map_err(|_| anyhow!("Task queue lock poisoned"))?
+            .jobs
+            .values()
+            .cloned()
+            .collect();
+        for job in &jobs {
+            job.cancel.cancel();
+            self.0.approvals.deny_task(&job.snapshot()?.task_id);
+        }
+        tokio::time::timeout(Duration::from_secs(15), async {
+            for job in jobs {
+                loop {
+                    let notified = job.done.notified();
+                    if job.finished.load(Ordering::Acquire) {
+                        break;
+                    }
+                    notified.await;
+                }
+            }
+            let workers = std::mem::take(
+                &mut *self
+                    .0
+                    .workers
+                    .lock()
+                    .map_err(|_| anyhow!("Worker registry lock poisoned"))?,
+            );
+            for worker in workers {
+                worker
+                    .await
+                    .context("Task scheduler worker stopped unexpectedly")?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .await
+        .context("Tasks are still shutting down; keep the app open until cleanup finishes")??;
+        Ok(())
+    }
+    async fn drain(&self, workspace: PathBuf) {
+        loop {
+            let job = {
+                let Ok(mut queues) = self.0.queues.lock() else {
+                    return;
+                };
+                match queues
+                    .lanes
+                    .get(&workspace)
+                    .and_then(|q| q.front())
+                    .cloned()
+                {
+                    Some(job) => job,
+                    None => {
+                        queues.lanes.remove(&workspace);
+                        return;
+                    }
+                }
+            };
+            if !job.finished.load(Ordering::Acquire) {
+                let outcome=std::panic::AssertUnwindSafe(async {
+                    let _slot=tokio::select! {_=job.cancel.cancelled()=>bail!("Task cancelled while queued"),slot=self.0.slots.acquire()=>slot.context("Task scheduler stopped")?};
+                    self.run(&job).await
+                }).catch_unwind().await.unwrap_or_else(|_|Err(anyhow!("The task worker panicked. Its checkpoints and history were retained.")));
+                let plan = outcome
+                    .as_ref()
+                    .map(|(_, plan)| plan.clone())
+                    .unwrap_or_else(|_| json!({"steps":[]}));
+                let result = outcome.map(|(summary, _)| summary);
+                if let Err(error) = self.finish(&job, result, plan) {
+                    if let Ok(mut record) = job.record.lock() {
+                        record.status = "failed".into();
+                        record.summary = format!("Could not persist final task state: {error:#}");
+                    }
+                    job.finished.store(true, Ordering::Release);
+                    job.done.notify_waiters();
+                }
+            }
+            if let Ok(mut queues) = self.0.queues.lock() {
+                if let Ok(record) = job.record.lock() {
+                    queues.jobs.remove(&record.id);
+                }
+                if let Some(lane) = queues.lanes.get_mut(&workspace) {
+                    lane.pop_front();
+                    if lane.is_empty() {
+                        queues.lanes.remove(&workspace);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    fn finish(&self, running: &Running, outcome: Result<String>, plan: Value) -> Result<()> {
+        if running.finished.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let mut job = running
+            .record
+            .lock()
+            .map_err(|_| anyhow!("Job lock poisoned"))?;
+        if running.finished.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let cancelled = running.cancel.is_cancelled();
+        let success = outcome.is_ok() && !cancelled;
+        job.status = if cancelled {
+            "cancelled"
+        } else if success {
+            "completed"
+        } else {
+            "failed"
+        }
+        .into();
+        job.summary = match outcome {
+            Ok(text) if !cancelled => text,
+            Ok(_) => {
+                "Task cancelled. Completed changes remain available for review or rewind.".into()
+            }
+            Err(error) => format!("{error:#}"),
+        };
+        job.finished_at = Some(crate::now());
+        let plan = if plan["steps"].as_array().is_some_and(Vec::is_empty) {
+            self.0
+                .store
+                .last_task_event(&job.task_id, "plan.updated")?
+                .map(|e| e["payload"]["plan"].clone())
+                .unwrap_or(plan)
+        } else {
+            plan
+        };
+        let verification = self
+            .0
+            .store
+            .last_task_event(&job.task_id, "verification.summary")?
+            .map(|e| e["payload"].clone())
+            .unwrap_or_else(|| json!({"status":"incomplete","commands":[]}));
+        job.result = Some(
+            json!({"success":success,"cancelled":cancelled,"summary":job.summary,"plan":plan,"usage":job.usage,"usage_is_estimated":job.usage_is_estimated,"verification":verification}),
+        );
+        self.0.approvals.deny_task(&job.task_id);
+        let mut saved = json!(*job);
+        let event = self.0.store.finish_job(&mut saved)?;
+        job.event_cursor = event["id"].as_i64().unwrap_or(0);
+        let _ = self.0.sender.send(event);
+        running.finished.store(true, Ordering::Release);
+        running.done.notify_waiters();
+        Ok(())
+    }
+    async fn run(&self, running: &Running) -> Result<(String, Value)> {
+        ensure!(
+            !running.cancel.is_cancelled(),
+            "Task cancelled before starting"
+        );
+        let mut job = running.snapshot()?;
+        job.status = "running".into();
+        job.started_at = crate::now();
+        *running
+            .record
+            .lock()
+            .map_err(|_| anyhow!("Job lock poisoned"))? = job.clone();
+        self.0.store.save_job(&json!(job))?;
+        self.0.store.execute(
+            "UPDATE tasks SET status='running' WHERE id=?",
+            [&job.task_id],
+        )?;
+        let events = TaskEvents {
+            store: self.0.store.clone(),
+            session_id: job.session_id.clone(),
+            task_id: job.task_id.clone(),
+            sender: self.0.sender.clone(),
+        };
+        let tools = ToolExecutor::new(
+            running.workspace.clone(),
+            running.config.clone(),
+            self.0.approvals.clone(),
+            events.clone(),
+            running.cancel.clone(),
+        )?;
+        let model = ModelClient::new(running.config.model.clone(), &self.0.paths)?;
+        let schemas: Vec<_> = tools::schemas()
+            .into_iter()
+            .filter(|schema| {
+                let name = schema["function"]["name"].as_str().unwrap_or("");
+                running.config.permissions.level != PermissionLevel::ReadOnly
+                    || permissions::read_only(name)
+                    || name == "git_branch"
+            })
+            .collect();
+        let mut messages = self
+            .0
+            .store
+            .latest_session_messages(&job.session_id, &job.id)?;
+        messages.retain(|m| m["role"] != "system");
+        context::repair_incomplete(&mut messages);
+        // Legacy histories have no native message tape; preserve a bounded,
+        // explicitly labelled transcript as data rather than inventing calls.
+        if messages.is_empty() {
+            let previous = self.0.store.recent_events(&job.session_id, 80)?;
+            let text: Vec<_> = previous
+                .iter()
+                .filter(|e| {
+                    e["task_id"] != job.task_id
+                        && matches!(e["type"].as_str(), Some("user.message" | "model.delta"))
+                })
+                .filter_map(|e| {
+                    e["payload"]["text"].as_str().map(|s| {
+                        format!(
+                            "{}: {}",
+                            e["type"].as_str().unwrap_or("history"),
+                            tools::truncate(s, 1000)
+                        )
+                    })
+                })
+                .collect();
+            if !text.is_empty() {
+                messages.push(json!({"role":"user","content":format!("Earlier session transcript excerpts (historical data):\n{}",text.join("\n"))}));
+            }
+        }
+        messages.insert(
+            0,
+            json!({"role":"system","content":context::system(&running.workspace,&job.mode)}),
+        );
+        messages.push(json!({"role":"user","content":job.task}));
+        self.0.store.save_messages(&job.id, &messages)?;
+        events.emit("agent.started",json!({"job_id":job.id,"task":job.task,"mode":job.mode,"model":job.model,"native":true}))?;
+        let mut repeated = HashMap::new();
+        let mut commands = Vec::new();
+        let requires_inspection = regex::Regex::new(r"(?i)^(?:please\s+)?(?:read|inspect|open)\b")?
+            .is_match(job.task.trim());
+        let mut inspected = false;
+        let mut completion_retries = 0;
+        if let Some(path) = context::requested_file(&job.task, &running.workspace) {
+            let call = crate::models::ToolCall {
+                id: crate::id(),
+                name: "read_file".into(),
+                arguments: json!({"path":path}),
+            };
+            messages.push(json!({"role":"assistant","content":"Reading the file explicitly named in your request.","tool_calls":[{"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}}]}));
+            self.0.store.save_messages(&job.id, &messages)?;
+            let result = tools.execute(call.clone()).await?;
+            inspected = result.success;
+            messages.push(result.message(
+                &call.name,
+                (running.config.model.context_limit * 2).min(running.config.agent.max_output_bytes),
+            ));
+            self.0.store.save_messages(&job.id, &messages)?;
+            events.emit(
+                "context.attached",
+                json!({"path":path,"success":inspected,"origin":"explicit_file_request"}),
+            )?;
+        }
+        for step in 0..running.config.agent.max_steps {
+            ensure!(
+                !running.cancel.is_cancelled(),
+                "Task cancelled. Completed changes remain checkpointed."
+            );
+            if let Some(compaction) = context::compact(
+                &mut messages,
+                &schemas,
+                running.config.model.context_limit,
+                running.config.agent.compact_ratio,
+            )? {
+                events.emit("context.compacted", compaction)?;
+            }
+            context::validate_pairs(&messages)?;
+            self.0.store.save_messages(&job.id, &messages)?;
+            let mut attempts = 0;
+            let mut response = loop {
+                let message_id = crate::id();
+                let mut pending = String::new();
+                let mut partial = String::new();
+                let mut flushed = Instant::now();
+                let mut event_error = None;
+                let response = model
+                    .chat(&messages, &schemas, running.cancel.clone(), |delta| {
+                        partial.push_str(delta);
+                        pending.push_str(delta);
+                        if pending.len() >= 4000 || flushed.elapsed() >= Duration::from_millis(80) {
+                            if let Err(error) = events.emit(
+                                "model.stream",
+                                json!({"text":pending,"message_id":message_id}),
+                            ) {
+                                event_error = Some(error);
+                                running.cancel.cancel();
+                            }
+                            pending.clear();
+                            flushed = Instant::now();
+                        }
+                    })
+                    .await;
+                if let Some(error) = event_error {
+                    return Err(error);
+                }
+                if !pending.is_empty() {
+                    events.emit(
+                        "model.stream",
+                        json!({"text":pending,"message_id":message_id}),
+                    )?;
+                }
+                match response {
+                    Ok(response) => {
+                        if !response.text.is_empty() {
+                            events.emit("model.delta",json!({"text":response.text,"message_id":message_id,"complete":true}))?;
+                        }
+                        break response;
+                    }
+                    Err(error) => {
+                        events.emit(
+                            "model.stream_end",
+                            json!({"message_id":message_id,"complete":false}),
+                        )?;
+                        let safe_retry = partial.is_empty()
+                            && error.chain().any(|e| {
+                                e.downcast_ref::<reqwest::Error>()
+                                    .is_some_and(reqwest::Error::is_connect)
+                            });
+                        if safe_retry
+                            && attempts < running.config.agent.model_retries
+                            && !running.cancel.is_cancelled()
+                        {
+                            attempts += 1;
+                            events.emit("model.retry",json!({"attempt":attempts,"reason":"connection failed before a response"}))?;
+                            let delay = Duration::from_secs_f64(
+                                (running.config.agent.retry_backoff_sec
+                                    * 2_f64.powi((attempts - 1) as i32))
+                                .min(30.0),
+                            );
+                            tokio::select! {_=running.cancel.cancelled()=>bail!("Task cancelled during connection retry"),_=tokio::time::sleep(delay)=>{}}
+                            continue;
+                        }
+                        if !partial.is_empty() {
+                            messages.push(json!({"role":"assistant","content":format!("{partial}\n[Response interrupted; no partial tool call was executed.]")}));
+                            self.0.store.save_messages(&job.id, &messages)?;
+                        }
+                        return Err(error);
+                    }
+                }
+            };
+            {
+                let mut record = running
+                    .record
+                    .lock()
+                    .map_err(|_| anyhow!("Job lock poisoned"))?;
+                if response.usage.total_tokens == 0 {
+                    response.usage.prompt_tokens = (context::estimate_tokens(&json!(messages))
+                        + context::estimate_tokens(&json!(schemas)))
+                        as u64;
+                    response.usage.completion_tokens = context::estimate_tokens(
+                        &json!({"text":response.text,"tool_calls":response.tool_calls}),
+                    ) as u64;
+                    response.usage.total_tokens =
+                        response.usage.prompt_tokens + response.usage.completion_tokens;
+                    record.usage_is_estimated = true;
+                }
+                record.usage.add(&response.usage);
+                record.steps = step + 1;
+                record.event_cursor = self.0.store.event_cursor(&job.session_id)?;
+                self.0.store.save_job(&json!(*record))?;
+                ensure!(
+                    record.usage.total_tokens <= running.config.agent.max_task_tokens,
+                    "Task token budget reached; completed changes are retained for review"
+                );
+            }
+            let mut assistant = json!({"role":"assistant","content":response.text});
+            if !response.tool_calls.is_empty() {
+                assistant["tool_calls"]=json!(response.tool_calls.iter().map(|call|json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}})).collect::<Vec<_>>());
+            }
+            messages.push(assistant);
+            self.0.store.save_messages(&job.id, &messages)?;
+            if response.tool_calls.is_empty() {
+                ensure!(
+                    !response.text.trim().is_empty(),
+                    "Model returned an empty response without a tool call"
+                );
+                if requires_inspection && !inspected {
+                    ensure!(completion_retries<running.config.agent.max_fix_retries,"The model did not inspect the current workspace as requested. Its answer has not been verified against current files.");
+                    completion_retries += 1;
+                    events.emit("verification.retry",json!({"attempt":completion_retries,"reason":"No current workspace inspection"}))?;
+                    messages.push(json!({"role":"system","content":"Execution check: the user explicitly requested inspection of the current workspace. You have not read or searched any current files in this task. Use the appropriate read-only tool before giving the final answer. Historical conversation is not proof of current file contents. If inspection fails, report that limitation; do not invent a result."}));
+                    continue;
+                }
+                events.emit("verification.summary",json!({"commands":commands,"status":if commands.is_empty(){"not_run"}else if commands.last().is_some_and(|v:&Value|v["success"]==true){"last_command_succeeded"}else{"last_command_failed"}}))?;
+                return Ok((response.text, tools.plan()));
+            }
+            ensure!(response.tool_calls.len()<=32,"Model requested more than 32 tools in one response; no calls from that response were executed");
+            for call in &response.tool_calls {
+                let key = format!("{}:{}", call.name, call.arguments);
+                let count = repeated.entry(key).or_insert(0usize);
+                *count += 1;
+                ensure!(*count<=5,"Model repeated the same tool call more than five times; stopped to prevent a loop");
+            }
+            // Parallelize adjacent safe observations only. Every mutation and
+            // plan update is a barrier, preserving the model's requested order.
+            let mut index = 0;
+            while index < response.tool_calls.len() {
+                ensure!(
+                    !running.cancel.is_cancelled(),
+                    "Task cancelled before remaining tool calls"
+                );
+                let start = index;
+                index += 1;
+                if running.config.agent.parallel_reads
+                    && permissions::parallel_safe(
+                        &response.tool_calls[start].name,
+                        &response.tool_calls[start].arguments,
+                    )
+                {
+                    while index < response.tool_calls.len()
+                        && permissions::parallel_safe(
+                            &response.tool_calls[index].name,
+                            &response.tool_calls[index].arguments,
+                        )
+                    {
+                        index += 1;
+                    }
+                }
+                let calls = &response.tool_calls[start..index];
+                let mut results = stream::iter(calls.iter().cloned().map(|call| {
+                    let tools = tools.clone();
+                    async move {
+                        let result = tools.execute(call.clone()).await;
+                        (call, result)
+                    }
+                }))
+                .buffered(4);
+                while let Some((call, result)) = results.next().await {
+                    let result = result?;
+                    if result.success
+                        && matches!(
+                            call.name.as_str(),
+                            "read_file"
+                                | "search_text"
+                                | "search_symbol"
+                                | "git_diff"
+                                | "git_status"
+                                | "git_log"
+                        )
+                    {
+                        inspected = true;
+                    }
+                    if call.name == "exec" {
+                        commands.push(json!({"command":call.arguments["command"],"success":result.success,"exit_code":result.output["exit_code"],"timed_out":result.output["timed_out"]}));
+                    }
+                    messages.push(
+                        result.message(
+                            &call.name,
+                            (running.config.model.context_limit * 2)
+                                .min(running.config.agent.max_output_bytes),
+                        ),
+                    );
+                    self.0.store.save_messages(&job.id, &messages)?;
+                }
+            }
+        }
+        bail!("Task reached its {}-step limit. Review the changes and continue with a focused follow-up.",running.config.agent.max_steps)
+    }
+}
+impl Running {
+    fn snapshot(&self) -> Result<Job> {
+        self.record
+            .lock()
+            .map(|v| v.clone())
+            .map_err(|_| anyhow!("Job lock poisoned"))
+    }
+}

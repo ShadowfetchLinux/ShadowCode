@@ -1,9 +1,17 @@
 //! Native application engine shared by the desktop, CLI, and MCP transports.
+pub mod approvals;
+pub mod checkpoint;
 pub mod config;
+pub mod context;
+pub mod engine;
+pub mod events;
 pub mod models;
+pub mod patch;
 pub mod paths;
+pub mod permissions;
 pub mod process;
 pub mod store;
+pub mod tools;
 pub mod workspace;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
