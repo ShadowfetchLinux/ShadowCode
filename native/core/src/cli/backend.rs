@@ -86,4 +86,7 @@ impl Backend {
     pub fn service(&self) -> Option<&Service> {
         self.local.as_ref().map(|(service, _)| service)
     }
+    pub(crate) async fn own_jobs(&self) -> Result<crate::control::OwnedJobs> {
+        self.client.own_jobs().await
+    }
 }

@@ -32,6 +32,8 @@ use tokio_util::sync::CancellationToken;
 
 mod goals;
 use goals::GoalRun;
+mod owner;
+pub(crate) use owner::JobOwner;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartRequest {
@@ -234,7 +236,7 @@ impl Engine {
         self.start_for_purpose(request, "").await
     }
     pub async fn start_for_purpose(&self, request: StartRequest, purpose: &str) -> Result<Job> {
-        self.start_with_context(request, None, purpose, None, None)
+        self.start_with_context(request, None, purpose, None, None, None)
             .await
     }
     pub async fn start_guided(
@@ -253,6 +255,7 @@ impl Engine {
             purpose,
             Some(guidance.info),
             None,
+            None,
         )
         .await
     }
@@ -263,7 +266,17 @@ impl Engine {
         purpose: &str,
         limit: Option<PermissionLevel>,
     ) -> Result<Job> {
-        self.start_with_context(request, None, purpose, None, limit)
+        self.start_limited_owned(request, purpose, limit, None)
+            .await
+    }
+    pub(crate) async fn start_limited_owned(
+        &self,
+        request: StartRequest,
+        purpose: &str,
+        limit: Option<PermissionLevel>,
+        owner: Option<&JobOwner>,
+    ) -> Result<Job> {
+        self.start_with_context(request, None, purpose, None, limit, owner)
             .await
     }
     async fn start_with_context(
@@ -273,6 +286,7 @@ impl Engine {
         purpose: &str,
         workflow: Option<WorkflowInfo>,
         permission_limit: Option<PermissionLevel>,
+        owner: Option<&JobOwner>,
     ) -> Result<Job> {
         ensure!(
             !self.0.closing.load(Ordering::Acquire),
@@ -365,13 +379,22 @@ impl Engine {
             result: None,
             steps: 0,
         };
-        self.0.store.create_job(&json!(job))?;
+        let cancel = match owner {
+            Some(owner) => owner.register(self, &job.id)?,
+            None => CancellationToken::new(),
+        };
+        if let Err(error) = self.0.store.create_job(&json!(job)) {
+            if let Some(owner) = owner {
+                owner.forget(&job.id);
+            }
+            return Err(error);
+        }
         let running = Arc::new(Running {
             record: Mutex::new(job.clone()),
             config,
             system_context,
             workspace: workspace.clone(),
-            cancel: CancellationToken::new(),
+            cancel,
             finished: AtomicBool::new(false),
             done: Notify::new(),
         });
@@ -432,8 +455,13 @@ impl Engine {
         self.job(id)?.context("Job not found")
     }
     pub async fn cancel(&self, id: &str) -> Result<Job> {
+        self.request_cancel(id)?;
+        self.wait(id).await
+    }
+    pub(crate) fn request_cancel(&self, id: &str) -> Result<()> {
         let Some(job) = self.running(id)? else {
-            return self.job(id)?.context("Job not found");
+            self.job(id)?.context("Job not found")?;
+            return Ok(());
         };
         job.cancel.cancel();
         self.0.approvals.deny_task(&job.snapshot()?.task_id);
@@ -467,7 +495,7 @@ impl Engine {
                 json!({"steps":[]}),
             )?;
         }
-        self.wait(id).await
+        Ok(())
     }
     pub async fn shutdown(&self) -> Result<()> {
         self.0.closing.store(true, Ordering::Release);

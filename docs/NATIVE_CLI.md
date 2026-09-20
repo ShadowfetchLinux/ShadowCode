@@ -149,6 +149,13 @@ also delegates individual approvals for that connection's own tasks. Run
 
 ## One engine per profile
 
+MCP delegates jobs through a private ownership connection to this engine.
+Gateway termination, including SIGKILL, cancels its owned running and queued work.
+The engine records ownership before scheduling, including when the submission
+reply is lost. Up to eight such connections can be active, leaving capacity for
+ordinary control requests. Explicitly detached CLI tasks are independent and
+continue until completion or cancellation.
+
 The AppImage runtime extracts each invocation into a private temporary directory.
 Simultaneous desktop and CLI launches can use the same `TMPDIR`; finishing one
 launch does not remove another's application files. See the

@@ -67,9 +67,19 @@ The `delegate` prompt accepts a task for the fixed project.
 The connection owns its delegated jobs. Normal EOF, protocol failure, explicit
 cancellation and an abandoned server future cancel unfinished owned jobs and await
 cleanup; unrelated tasks in the shared engine continue. A temporary engine closes
-when its server exits. A forcibly killed gateway attached to a separate persistent
-engine does not yet have an engine-side ownership lease; this remains a release
-gate. Inspect and cancel any surviving job through the desktop/CLI in that case.
+when its server exits. The first delegated task opens a private ownership socket
+to the engine. Ownership is registered before scheduling, so an unread submission
+reply or a forcibly killed gateway cannot silently detach its jobs. Socket EOF
+cancels that owner's running and queued tasks, including active command children.
+Queued cancellations do not wait for unrelated work ahead of them. Ordinary
+detached CLI jobs remain independent of this ownership connection.
+
+At most eight ownership sockets may be active per profile, reserving room for
+ordinary control requests. Each accepts at most 64 jobs over its lifetime and
+stays confined to its selected project. Invalid or abandoned protocol exchanges
+close ownership; valid rejected task submissions leave it usable. Submissions
+and cleanup acknowledgements have 30-second response deadlines. Normal close
+waits for the engine's task cleanup before acknowledging it.
 
 Incoming messages share the 1-MiB frame, 32-MiB lifetime and 128-frames-per-second
 transport limits. Initialization has a ten-second deadline. Up to eight tool or
@@ -276,6 +286,7 @@ and cleanup outcome without environment values.
 ```sh
 cargo test -p shadowcode-core --test mcp_stdio --test mcp_http --test mcp_application --locked
 cargo test -p shadowcode-core --test mcp_native_server --locked
+cargo test -p shadowcode-core --test control_owned --locked
 node scripts/test-native-mcp-server.mjs
 ```
 
@@ -314,7 +325,16 @@ execution, EOF/drop cleanup, malformed/oversized/truncated frames, and floods.
 The headless executable probe completes a scripted task with a file read, real
 write, exact command approval, terminal verification, checkpoint and rollback.
 It also checks registration, protocol-only stdout, resources, EOF and profile
-restart. CI runs this probe against both the source binary and AppImage.
+restart. Two more scripted model requests exercise an unrelated detached task
+and an approved long-running terminal command. The probe kills the native MCP
+gateway with SIGKILL and verifies that the command child stops, owned queued
+work never reaches the model, and the unrelated task remains running. CI runs
+this probe against both the source binary and AppImage.
+
+Four private-control regressions check owner capacity without exhausting normal
+control access, recovery after rejected task submissions, deleted completed
+history, immediate queued cancellation behind unrelated work, aborted transport
+handlers, unread submission replies, malformed frames and cross-project attempts.
 
 These checks do not stand in for the remaining server features, interoperability,
 and real local-model checks required for the full MCP migration. The standalone

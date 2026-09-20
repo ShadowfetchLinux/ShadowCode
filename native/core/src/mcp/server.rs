@@ -27,6 +27,7 @@ pub struct Access {
 struct Owned {
     jobs: BTreeMap<String, Value>,
     closing: bool,
+    lease: Option<crate::control::OwnedJobs>,
 }
 #[derive(Clone)]
 struct Handler {
@@ -197,6 +198,9 @@ impl Handler {
             owned.jobs.len() < 64,
             "This MCP connection has reached 64 delegated tasks; reconnect to continue"
         );
+        if owned.lease.is_none() {
+            owned.lease = Some(self.backend.own_jobs().await?);
+        }
         // Keep submission in the ownership lock. Shutdown cannot miss a job
         // whose engine submission has started but whose ID has not arrived.
         let session = self
@@ -206,7 +210,7 @@ impl Handler {
                 json!({"workspace":self.workspace.path,"title":"MCP delegated task"}),
             )
             .await?;
-        let job=self.call("POST","/api/jobs",json!({"workspace":self.workspace.path,"session_id":session["id"],"task":args["task"],"model":args["model"],"purpose":purpose,"permission_limit":level,"queue":args["queue"]})).await?;
+        let job=owned.lease.as_ref().unwrap().submit(json!({"workspace":self.workspace.path,"session_id":session["id"],"task":args["task"],"model":args["model"],"purpose":purpose,"permission_limit":level,"queue":args["queue"]})).await?;
         let id = text(&job, "id").to_owned();
         ensure!(!id.is_empty(), "Engine did not return a job ID");
         owned.jobs.insert(id.clone(), job.clone());
@@ -410,15 +414,10 @@ impl Handler {
         self.cancel.cancel();
         let mut owned = self.owned.lock().await;
         owned.closing = true;
-        let ids = owned.jobs.keys().cloned().collect::<Vec<_>>();
+        let lease = owned.lease.take();
         drop(owned);
-        let results = futures_util::future::join_all(ids.into_iter().map(|id| async move {
-            self.call("POST", format!("/api/jobs/{id}/cancel"), json!({}))
-                .await
-        }))
-        .await;
-        for result in results {
-            result?;
+        if let Some(lease) = lease {
+            lease.close().await?;
         }
         Ok(())
     }

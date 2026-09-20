@@ -2,7 +2,14 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readlink,
+  writeFile,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,11 +30,13 @@ await rm(path.join(artifacts, "result.json"), { force: true });
 await rm(path.join(artifacts, "failure.txt"), { force: true });
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-mcp-server-"));
 const project = path.join(scratch, "project");
+const otherProject = path.join(scratch, "unrelated");
 const profile = path.join(scratch, "profile");
 await mkdir(project);
+await mkdir(otherProject);
 await mkdir(path.join(profile, "config"), { recursive: true });
 await writeFile(path.join(project, "README.md"), "# MCP project\n");
-const env = { ...process.env };
+const env = { ...process.env, TMPDIR: scratch };
 delete env.DISPLAY;
 delete env.WAYLAND_DISPLAY;
 const children = new Set(),
@@ -45,10 +54,10 @@ async function until(label, fn, timeout = 15000) {
   }
   throw new Error(`${label} timed out`);
 }
-function launch(args) {
+function launch(args, workspace = project) {
   const child = spawn(
     binary,
-    [...binaryArgs, "--profile", profile, "--workspace", project, ...args],
+    [...binaryArgs, "--profile", profile, "--workspace", workspace, ...args],
     { env, stdio: "pipe", detached: true },
   );
   children.add(child);
@@ -71,7 +80,13 @@ function launch(args) {
       resolve({ code, signal, stdout, stderr });
     });
   });
-  return { child, done };
+  return {
+    child,
+    done,
+    get stderr() {
+      return stderr;
+    },
+  };
 }
 async function finish(run) {
   let timer;
@@ -84,6 +99,24 @@ async function finish(run) {
       );
     }),
   ]).finally(() => clearTimeout(timer));
+}
+async function nativePid(child) {
+  // AppImage has a launcher process. Follow only this invocation's descendants
+  // and kill its actual native executable, not merely the forwarding wrapper.
+  const pending = [child.pid];
+  while (pending.length) {
+    const pid = pending.pop();
+    const executable = await readlink(`/proc/${pid}/exe`).catch(() => "");
+    if (path.basename(executable) === "shadowcode") return pid;
+    const descendants = await readFile(
+      `/proc/${pid}/task/${pid}/children`,
+      "utf8",
+    ).catch(() => "");
+    pending.push(
+      ...descendants.trim().split(/\s+/).filter(Boolean).map(Number),
+    );
+  }
+  throw new Error("Could not locate the native MCP gateway process");
 }
 async function connect(args = []) {
   const run = launch(["mcp", "serve", ...args]);
@@ -158,6 +191,8 @@ const model = createServer(async (req, res) => {
     const payload = JSON.parse(body);
     assert.equal(payload.model, "mcp-native-fixture");
     const index = requests++;
+    const prompt = JSON.stringify(payload.messages);
+    if (prompt.includes("LEASE_UNRELATED")) return;
     const tool = (name, args) => ({
       id: `mcp-fixture-${index}`,
       type: "function",
@@ -174,12 +209,17 @@ const model = createServer(async (req, res) => {
         command: 'test "$(cat result.txt)" = native-mcp-server-ok',
       }),
     ];
+    if (prompt.includes("LEASE_TERMINAL")) {
+      calls[0] = tool("exec", {
+        command: "sleep 60 & echo $! > mcp-child.pid; wait",
+      });
+    }
     const message =
-      index < 3
+      index < 3 || prompt.includes("LEASE_TERMINAL")
         ? {
             role: "assistant",
             content: "Performing the next check",
-            tool_calls: [calls[index]],
+            tool_calls: [calls[prompt.includes("LEASE_TERMINAL") ? 0 : index]],
           }
         : {
             role: "assistant",
@@ -190,7 +230,10 @@ const model = createServer(async (req, res) => {
     res.end(
       JSON.stringify({
         choices: [
-          { message, finish_reason: index < 3 ? "tool_calls" : "stop" },
+          {
+            message,
+            finish_reason: message.tool_calls ? "tool_calls" : "stop",
+          },
         ],
         usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
       }),
@@ -216,7 +259,7 @@ await writeFile(
       endpoint: `http://127.0.0.1:${model.address().port}/v1`,
       context_limit: 16384,
     },
-    trusted_workspaces: [project],
+    trusted_workspaces: [project, otherProject],
     agent: { max_steps: 6, model_retries: 0 },
   }),
 );
@@ -304,6 +347,83 @@ try {
   // The owning server closed its profile cleanly; another invocation can reopen.
   const reopened = await finish(launch(["--json", "status"]));
   assert.equal(reopened.code, 0, reopened.stderr);
+  assert.equal(requests, 4);
+  const engine = launch(["serve"]);
+  await until("Persistent engine startup", () =>
+    engine.stderr.includes("serving"),
+  );
+  const cli = async (args, workspace = project) => {
+    const result = await finish(launch(["--json", ...args], workspace));
+    assert.equal(result.code, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const unrelated = await cli(
+    ["run", "LEASE_UNRELATED keep this task running", "--detach"],
+    otherProject,
+  );
+  const gateway = await connect(["--allow-write", "--allow-approvals"]);
+  const owned = (
+    await gateway.call("shadow_run", {
+      task: "LEASE_TERMINAL start the long-running verification",
+      permission_level: "workspace",
+    })
+  ).structuredContent.job;
+  assert.ok(owned?.id);
+  const pending = await until(
+    "Owned terminal approval",
+    async () =>
+      (await gateway.call("shadow_jobs", { job_id: owned.id }))
+        .structuredContent.approvals[0],
+  );
+  assert.match(pending.command, /sleep 60/);
+  assert.equal(
+    (
+      await gateway.call("shadow_approve", {
+        approval_id: pending.id,
+        decision: "approve",
+      })
+    ).isError,
+    false,
+  );
+  const childPid = await until("Owned terminal child", async () =>
+    readFile(path.join(project, "mcp-child.pid"), "utf8").catch(() => null),
+  );
+  const queued = (
+    await gateway.call("shadow_run", {
+      task: "This queued task must never call the model",
+      queue: true,
+    })
+  ).structuredContent.job;
+  assert.ok(queued?.id);
+  process.kill(await nativePid(gateway.child), "SIGKILL");
+  const killed = await finish(gateway);
+  assert.ok(
+    killed.signal === "SIGKILL" || killed.code === 137,
+    JSON.stringify(killed),
+  );
+  await until("Killed gateway tasks cancelled", async () => {
+    const a = await cli(["jobs", owned.id]),
+      b = await cli(["jobs", queued.id]);
+    return a.status === "cancelled" && b.status === "cancelled";
+  });
+  await until("Owned terminal child stopped", async () => {
+    const stat = await readFile(`/proc/${childPid.trim()}/stat`, "utf8").catch(
+      () => "",
+    );
+    return !stat || stat.includes(") Z ");
+  });
+  assert.equal(
+    (await cli(["jobs", unrelated.id], otherProject)).status,
+    "running",
+  );
+  await cli(["jobs", unrelated.id, "--cancel"], otherProject);
+  process.kill(-engine.child.pid, "SIGTERM");
+  assert.equal((await finish(engine)).code, 0);
+  assert.equal(
+    requests,
+    6,
+    "The cancelled queued task must not start another model request",
+  );
   await writeFile(
     path.join(artifacts, "result.json"),
     JSON.stringify(
@@ -321,6 +441,8 @@ try {
           "real write, terminal verification, checkpoint and rollback",
           "resource reads",
           "EOF cleanup and profile restart",
+          "SIGKILL gateway cleanup on a shared engine, including queued tasks and an active command child",
+          "unrelated detached task survives gateway death",
         ],
       },
       null,

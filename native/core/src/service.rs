@@ -2,7 +2,7 @@
 use crate::{
     checkpoint,
     config::{self, Config, ModelConfig, PermissionLevel},
-    engine::{Engine, StartRequest, WorkspaceReservation},
+    engine::{Engine, JobOwner, StartRequest, WorkspaceReservation},
     model_registry,
     models::{self, ModelClient},
     paths::AppPaths,
@@ -50,6 +50,7 @@ pub struct Service {
     selection: Arc<RwLock<Selection>>,
     detection: DetectionCache,
     remember_selection: bool,
+    job_owner: Option<JobOwner>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -73,6 +74,7 @@ impl Service {
             })),
             detection: Arc::new(tokio::sync::Mutex::new(None)),
             remember_selection: true,
+            job_owner: None,
         })
     }
     /// A transport client shares the engine, but has its own navigation state.
@@ -99,7 +101,12 @@ impl Service {
             })),
             detection: self.detection.clone(),
             remember_selection: false,
+            job_owner: None,
         })
+    }
+    pub(crate) fn with_job_owner(mut self, owner: JobOwner) -> Self {
+        self.job_owner = Some(owner);
+        self
     }
     pub fn workspace(&self) -> Result<PathBuf> {
         Ok(self
@@ -625,7 +632,7 @@ impl Service {
                 };
                 let job = self
                     .engine
-                    .start_limited(
+                    .start_limited_owned(
                         StartRequest {
                             workspace: workspace.clone(),
                             task: text("task").into(),
@@ -649,6 +656,7 @@ impl Service {
                             .filter(|v| !v.is_null())
                             .map(|v| serde_json::from_value(v.clone()))
                             .transpose()?,
+                        self.job_owner.as_ref(),
                     )
                     .await?;
                 self.select_if(

@@ -24,7 +24,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
-    sync::Notify,
+    sync::{Notify, Semaphore},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
@@ -32,6 +32,8 @@ const PROTOCOL: u32 = 1;
 const REQUEST_LIMIT: usize = 8_100_000;
 const RESPONSE_LIMIT: usize = 68_000_000;
 const MAX_CLIENTS: usize = 16;
+mod owned;
+pub use owned::OwnedJobs;
 
 fn uid() -> u32 {
     // SAFETY: geteuid has no arguments, dereferences no pointers, and cannot fail.
@@ -114,7 +116,12 @@ impl Client {
     /// Each request owns its connection. Dropping a pending request closes it;
     /// subsequent requests cannot consume an earlier abandoned response.
     pub async fn dispatch(&self, request: Request) -> Result<Value> {
-        let mut stream = tokio::time::timeout(
+        let mut stream = self.connect().await?;
+        send(&mut stream, &self.envelope(request), REQUEST_LIMIT).await?;
+        self.response(&mut stream).await
+    }
+    async fn connect(&self) -> Result<UnixStream> {
+        let stream = tokio::time::timeout(
             Duration::from_secs(2),
             UnixStream::connect(&self.endpoint.path),
         )
@@ -124,27 +131,37 @@ impl Client {
             stream.peer_cred()?.uid() == uid(),
             "Local engine belongs to another OS user"
         );
-        let envelope = Envelope {
+        Ok(stream)
+    }
+    fn envelope(&self, request: Request) -> Envelope {
+        Envelope {
             protocol: PROTOCOL,
             profile: self.endpoint.profile.clone(),
             workspace: self.workspace.clone(),
             session_id: self.session_id.clone(),
             request,
-        };
-        send(&mut stream, &envelope, REQUEST_LIMIT).await?;
-        let bytes = receive(&mut stream, RESPONSE_LIMIT).await?;
-        let mut response: Value = serde_json::from_slice(&bytes)?;
+        }
+    }
+    async fn response(&self, stream: &mut UnixStream) -> Result<Value> {
+        let bytes = receive(stream, RESPONSE_LIMIT).await?;
+        self.result(self.validate_response(&bytes)?)
+    }
+    fn validate_response(&self, bytes: &[u8]) -> Result<Value> {
+        let response: Value = serde_json::from_slice(bytes)?;
         ensure!(
             response["protocol"] == PROTOCOL && response["profile"] == self.endpoint.profile,
             "Local engine protocol/profile mismatch; use the matching ShadowCode build"
         );
+        ensure!(
+            response.get("result").is_some() || response["error"].is_string(),
+            "Local engine returned no result"
+        );
+        Ok(response)
+    }
+    fn result(&self, mut response: Value) -> Result<Value> {
         if let Some(error) = response["error"].as_str() {
             bail!("{error}");
         }
-        ensure!(
-            response.get("result").is_some(),
-            "Local engine returned no result"
-        );
         Ok(response["result"].take())
     }
     pub async fn available(&self) -> Result<bool> {
@@ -247,14 +264,15 @@ impl Server {
             let _completion = Completion(running.clone());
             let _lease = lease;
             let mut clients = JoinSet::new();
+            let owners = Arc::new(Semaphore::new(8));
             loop {
                 tokio::select! {
                     _=running.cancel.cancelled()=>break,
                     Some(_)=clients.join_next(),if !clients.is_empty()=>{},
                     accepted=listener.accept(),if clients.len()<MAX_CLIENTS=>match accepted {
                         Ok((stream,_))=>{
-                            let service=service.clone();let profile=profile.clone();let mode=mode.clone();
-                            clients.spawn(async move {let _=handle(stream, service, profile, mode).await;});
+                            let service=service.clone();let profile=profile.clone();let mode=mode.clone();let owners=owners.clone();
+                            clients.spawn(async move {let _=handle(stream, service, profile, mode, owners).await;});
                         }
                         Err(_)=>break,
                     }
@@ -294,6 +312,7 @@ async fn handle(
     service: Service,
     profile: String,
     mode: String,
+    owners: Arc<Semaphore>,
 ) -> Result<()> {
     ensure!(stream.peer_cred()?.uid() == uid(), "Wrong peer user");
     let response = async {
@@ -308,6 +327,12 @@ async fn handle(
         );
         if envelope.request.path == "/api/runtime" && envelope.request.method == "GET" {
             return Ok(json!({"mode":mode,"persistent":mode!="command","pid":std::process::id(),"version":crate::VERSION}));
+        }
+        if envelope.request.path == "/api/owned-jobs" && envelope.request.method == "POST" {
+            ensure!(mode != "command" || stream.peer_cred()?.pid() == Some(std::process::id() as i32), "A foreground CLI task owns this profile; use the desktop or shadowcode serve for concurrent work");
+            let permit = owners.try_acquire_owned().context("At most eight task ownership connections may be active")?;
+            let scoped = service.fork_selection(envelope.workspace, envelope.session_id)?;
+            return owned::serve(&mut stream, scoped, &profile, permit).await;
         }
         if mode == "command" && envelope.request.method != "GET" {
             ensure!(envelope.request.path.starts_with("/api/approvals/") || (envelope.request.path.starts_with("/api/jobs/") && envelope.request.path.ends_with("/cancel")), "A foreground CLI task owns this profile. Other clients can inspect it, approve tools, or cancel it; use the desktop or shadowcode serve for concurrent work.");

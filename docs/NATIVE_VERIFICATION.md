@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **151 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **155 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -90,13 +90,22 @@ integration tests** pass on the development machine. The suite covers:
   real approved execution, connection cancellation/EOF/abandoned-future cleanup,
   malformed/truncated/oversized frames and input floods. A separate shared task
   is checked to continue after the MCP connection stops.
+- Engine-side task ownership over a private socket: bounded owner capacity with
+  room for ordinary control requests, recovery after invalid task submissions,
+  cleanup after completed history deletion, queued cancellation behind unrelated
+  work, aborted control handlers, unread submission replies, malformed frames
+  and cross-project submission rejection.
 
 `scripts/test-native-mcp-server.mjs` exercises the real executable without a
-display or Python. Its four scripted model requests perform a read, file write,
-approved terminal verification and completion. The probe checks checkpoint
+display or Python. Its first four scripted model requests perform a read, file
+write, approved terminal verification and completion. The probe checks checkpoint
 restoration, all three resources, read-only defaults, registration with stable
-paths, JSON-RPC-only stdout, EOF cleanup and profile restart. It passes locally;
-CI is configured to repeat it against the source binary and packaged AppImage.
+paths, JSON-RPC-only stdout, EOF cleanup and profile restart. Two further requests
+run an unrelated detached task and an approved long-running terminal command on
+a shared engine. SIGKILL of the MCP gateway is checked to cancel its running/queued
+jobs and stop the command child, without stopping the unrelated task or invoking
+the model for cancelled queued work. The six-request probe passes locally; CI
+is configured to repeat it against the source binary and packaged AppImage.
 These fixtures do not substitute for broader client and real-model interoperability.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path

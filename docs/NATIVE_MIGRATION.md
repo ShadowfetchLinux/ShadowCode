@@ -154,9 +154,10 @@ retries, and supports modern and legacy Streamable HTTP negotiation. The native
 stdio server exposes twelve tools, three resources and a delegation prompt through
 the shared engine, with a fixed project, reduced per-task permissions, explicit
 approval delegation and connection-owned jobs. Built-in SQLite compatibility,
-remaining server tools/resources/HTTP serving, engine-side ownership after a
-gateway is forcibly killed, and broader interoperability/real-model verification
-remain open requirements.
+remaining server tools/resources/HTTP serving and broader interoperability/real-model
+verification remain open requirements. Private engine-side ownership now cancels
+MCP jobs after gateway SIGKILL, including unread submission replies, queued tasks
+and active command children; unrelated work continues.
 
 AppImage extraction now uses a source-pinned runtime patch with private
 per-invocation directories, signal forwarding, and checked cleanup. A dedicated
