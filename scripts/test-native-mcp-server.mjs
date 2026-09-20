@@ -1,6 +1,7 @@
 // Actual native executable protocol probe. No display or Python is required.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import {
   mkdtemp,
@@ -15,6 +16,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 const root = fileURLToPath(new URL("../", import.meta.url));
+const transport = process.env.SHADOW_MCP_TRANSPORT || "stdio";
+assert.ok(["stdio", "http"].includes(transport));
+const token = randomBytes(32).toString("hex");
 const binary =
   process.env.SHADOW_DESKTOP_BINARY ||
   path.join(root, "target/debug/shadowcode");
@@ -24,7 +28,10 @@ assert.ok(
 );
 const artifacts = path.resolve(
   process.env.SHADOW_MCP_ARTIFACTS ||
-    path.join(root, "artifacts/native-mcp-server"),
+    path.join(
+      root,
+      `artifacts/native-mcp-server${transport === "http" ? "-http" : ""}`,
+    ),
 );
 await mkdir(artifacts, { recursive: true });
 await rm(path.join(artifacts, "result.json"), { force: true });
@@ -38,6 +45,7 @@ await mkdir(otherProject);
 await mkdir(path.join(profile, "config"), { recursive: true });
 await writeFile(path.join(project, "README.md"), "# MCP project\n");
 const env = { ...process.env, TMPDIR: scratch };
+env.SHADOW_MCP_PROBE_TOKEN = token;
 delete env.DISPLAY;
 delete env.WAYLAND_DISPLAY;
 const children = new Set(),
@@ -120,6 +128,7 @@ async function nativePid(child) {
   throw new Error("Could not locate the native MCP gateway process");
 }
 async function connect(args = []) {
+  if (transport === "http") return connectHttp(args);
   const run = launch(["mcp", "serve", ...args]);
   let buffer = "",
     next = 1;
@@ -182,6 +191,103 @@ async function connect(args = []) {
       const result = await finish(run);
       assert.equal(result.code, 0, JSON.stringify(result));
       assert.equal(buffer, "");
+    },
+  };
+}
+async function connectHttp(args) {
+  const run = launch([
+    "mcp",
+    "serve",
+    "--http",
+    "127.0.0.1:0",
+    "--token-env",
+    "SHADOW_MCP_PROBE_TOKEN",
+    ...args,
+  ]);
+  const url = await until(
+    "HTTP gateway startup",
+    () =>
+      /MCP HTTP listening on (http:\/\/127\.0\.0\.1:\d+\/mcp);/.exec(
+        run.stderr,
+      )?.[1],
+  );
+  // This transport is owned by the gateway, independently of stdin or an
+  // individual HTTP request. Every request below uses a new TCP connection.
+  run.child.stdin.end();
+  let next = 1;
+  const request = (body, headers = {}) =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${token}`,
+        "MCP-Protocol-Version": "2025-11-25",
+        Connection: "close",
+        ...headers,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+  const rpc = async (method, params = {}, headers = {}) => {
+    const id = next++;
+    const response = await request(
+      { jsonrpc: "2.0", id, method, params },
+      headers,
+    );
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(response.headers.get("mcp-session-id"), null);
+    const message = await response.json();
+    assert.equal(message.id, id);
+    assert.equal(message.error, undefined, JSON.stringify(message));
+    return message.result;
+  };
+  const unauthenticated = await request(
+    { jsonrpc: "2.0", id: next++, method: "tools/list", params: {} },
+    { Authorization: "Bearer wrong" },
+  );
+  assert.equal(unauthenticated.status, 401);
+  assert.ok(!(await unauthenticated.text()).includes(token));
+  const info = await rpc("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "shadowcode-http-binary-probe", version: "1" },
+  });
+  assert.equal(info.serverInfo.name, "ShadowCode");
+  const notification = await request({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+  });
+  assert.equal(notification.status, 202);
+  assert.equal(await notification.text(), "");
+  const modern = await rpc(
+    "tools/list",
+    {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+    { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list" },
+  );
+  assert.equal(modern.tools.length, 17);
+  return {
+    ...run,
+    rpc,
+    call: async (name, args = {}) => {
+      const result = await rpc("tools/call", { name, arguments: args });
+      assert.deepEqual(
+        JSON.parse(result.content[0].text),
+        result.structuredContent,
+      );
+      return result;
+    },
+    close: async () => {
+      process.kill(-run.child.pid, "SIGTERM");
+      const result = await finish(run);
+      assert.equal(result.code, 0, JSON.stringify(result));
+      assert.equal(result.stdout, "");
+      assert.ok(!result.stderr.includes(token));
     },
   };
 }
@@ -265,6 +371,25 @@ await writeFile(
   }),
 );
 try {
+  if (transport === "http") {
+    for (const args of [
+      ["--http", "127.0.0.1:0"],
+      ["--token-env", "SHADOW_MCP_PROBE_TOKEN"],
+      ["--http", "0.0.0.0:0", "--token-env", "SHADOW_MCP_PROBE_TOKEN"],
+      [
+        "--http",
+        "127.0.0.1:0",
+        "--token-env",
+        "SHADOW_MCP_MISSING_PROBE_SECRET",
+      ],
+    ]) {
+      const rejected = await finish(launch(["mcp", "serve", ...args]));
+      assert.notEqual(rejected.code, 0);
+      assert.equal(rejected.stdout, "");
+      assert.ok(!rejected.stderr.includes(token));
+      assert.ok(!rejected.stderr.includes("MCP HTTP listening"));
+    }
+  }
   const registration = await finish(launch(["mcp", "register"]));
   assert.equal(registration.code, 0, registration.stderr);
   const spec = JSON.parse(registration.stdout).mcpServers.shadowcode;
@@ -280,12 +405,35 @@ try {
   const readonly = await connect();
   const catalog = await readonly.rpc("tools/list");
   assert.equal(catalog.tools.length, 17);
-  const database = new DatabaseSync(path.join(project,"data.db"));
-  database.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES('mcp sqlite')");
+  const database = new DatabaseSync(path.join(project, "data.db"));
+  database.exec(
+    "CREATE TABLE records(value TEXT); INSERT INTO records VALUES('mcp sqlite')",
+  );
   database.close();
-  assert.deepEqual((await readonly.call("shadow_sqlite",{path:"data.db"})).structuredContent.tables,["records"]);
-  assert.equal((await readonly.call("shadow_sqlite",{path:"data.db",sql:"SELECT value FROM records WHERE value=?",params:["mcp sqlite"]})).structuredContent.rows[0].value,"mcp sqlite");
-  assert.equal((await readonly.call("shadow_sqlite",{path:"data.db",sql:"DROP TABLE records"})).isError,true);
+  assert.deepEqual(
+    (await readonly.call("shadow_sqlite", { path: "data.db" }))
+      .structuredContent.tables,
+    ["records"],
+  );
+  assert.equal(
+    (
+      await readonly.call("shadow_sqlite", {
+        path: "data.db",
+        sql: "SELECT value FROM records WHERE value=?",
+        params: ["mcp sqlite"],
+      })
+    ).structuredContent.rows[0].value,
+    "mcp sqlite",
+  );
+  assert.equal(
+    (
+      await readonly.call("shadow_sqlite", {
+        path: "data.db",
+        sql: "DROP TABLE records",
+      })
+    ).isError,
+    true,
+  );
   const inspected = await readonly.call("shadow_understand");
   assert.equal(inspected.structuredContent.saved, false);
   assert.equal(
@@ -393,10 +541,22 @@ try {
   assert.equal(testResult.status, "completed");
   assert.equal(testResult.result.command.stdout, "standalone-test-ok");
   assert.equal(testResult.result.command.exit_code, 0);
-  const savedNotes = await testClient.call("shadow_memory", {action:"append", scope:"task", task_id:testJob.task_id, note:"Preserve the exact standalone test result."});
+  const savedNotes = await testClient.call("shadow_memory", {
+    action: "append",
+    scope: "task",
+    task_id: testJob.task_id,
+    note: "Preserve the exact standalone test result.",
+  });
   assert.equal(savedNotes.isError, false);
-  const taskNotes = await testClient.call("shadow_memory", {action:"read", scope:"task", task_id:testJob.task_id});
-  assert.match(taskNotes.structuredContent.task, /exact standalone test result/);
+  const taskNotes = await testClient.call("shadow_memory", {
+    action: "read",
+    scope: "task",
+    task_id: testJob.task_id,
+  });
+  assert.match(
+    taskNotes.structuredContent.task,
+    /exact standalone test result/,
+  );
   await testClient.close();
   // The owning server closed its profile cleanly; another invocation can reopen.
   const reopened = await finish(launch(["--json", "status"]));
@@ -439,9 +599,13 @@ try {
     ).isError,
     false,
   );
-  const childPid = await until("Owned terminal child", async () =>
-    readFile(path.join(project, "mcp-child.pid"), "utf8").catch(() => null),
-  );
+  const childPid = await until("Owned terminal child", async () => {
+    const value = await readFile(
+      path.join(project, "mcp-child.pid"),
+      "utf8",
+    ).catch(() => "");
+    return /^\d+\s*$/.test(value) && value.trim();
+  });
   const queued = (
     await gateway.call("shadow_run", {
       task: "This queued task must never call the model",
@@ -483,12 +647,15 @@ try {
     JSON.stringify(
       {
         passed: true,
+        transport,
         modelRequests: requests,
         tools: catalog.tools.length,
         resources: 4,
         checks: [
           "standalone headless native MCP process",
-          "JSON-RPC-only stdout",
+          transport === "http"
+            ? "authenticated loopback HTTP; modern and legacy protocol; empty stdout"
+            : "JSON-RPC-only stdout",
           "registration uses stable executable/project/profile",
           "read-only default",
           "native SQLite table discovery, bound queries and denied SQL writes",
@@ -496,7 +663,9 @@ try {
           "real write, terminal verification, checkpoint and rollback",
           "resource reads",
           "native project inspection, diagnostics, approved test execution and task notes without model calls",
-          "EOF cleanup and profile restart",
+          transport === "http"
+            ? "HTTP reconnect and stdin EOF preserve owner; SIGTERM cleanup and profile restart"
+            : "EOF cleanup and profile restart",
           "SIGKILL gateway cleanup on a shared engine, including queued tasks and an active command child",
           "unrelated detached task survives gateway death",
         ],
@@ -505,7 +674,9 @@ try {
       2,
     ),
   );
-  console.log(`Native MCP server passed with ${requests} model requests.`);
+  console.log(
+    `Native MCP ${transport} server passed with ${requests} model requests.`,
+  );
 } catch (error) {
   await writeFile(
     path.join(artifacts, "failure.txt"),

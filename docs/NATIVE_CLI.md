@@ -150,11 +150,14 @@ Disabling affects new tasks; cancel running and queued tasks to end their
 existing grants. HTTP definitions use `url` and an optional `api_key_env` bearer
 secret reference; remote hosts require network access in Permissions.
 
-To expose ShadowCode itself to another MCP client, use `mcp serve` over stdio.
+To expose ShadowCode itself to another MCP client, use `mcp serve` over stdio, or
+`mcp serve --http 127.0.0.1:8765 --token-env SHADOW_MCP_HTTP_TOKEN` for authenticated
+loopback HTTP. Set that environment/profile secret before starting the gateway.
 `mcp register` prints generic JSON for that executable, project and explicit
 profile. Both default to read-only access. `--allow-write` delegates changes
 within the trusted project's configured permissions; adding `--allow-approvals`
-also delegates individual approvals for that connection's own tasks. Run
+also delegates individual approvals for that MCP owner's tasks. HTTP reconnects
+share the same gateway owner; separate gateways keep clients independent. Run
 `mcp serve` without `--json` so stdout remains protocol-only. See the
 [native server's tools, lifecycle and remaining limits](NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode).
 

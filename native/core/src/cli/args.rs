@@ -203,7 +203,7 @@ pub enum Command {
 }
 #[derive(Debug, Subcommand)]
 pub enum Mcp {
-    /// Expose this project to an MCP client over stdin/stdout, without a window.
+    /// Expose this project over stdio or authenticated loopback HTTP, without a window.
     Serve {
         /// Delegate changes within the configured project permissions.
         #[arg(long)]
@@ -211,6 +211,12 @@ pub enum Mcp {
         /// Delegate approval decisions for this connection's own tasks.
         #[arg(long, requires = "allow_write")]
         allow_approvals: bool,
+        /// Bind a loopback IP:port for Streamable HTTP instead of stdin/stdout.
+        #[arg(long, requires = "token_env")]
+        http: Option<std::net::SocketAddr>,
+        /// Environment/profile-secret name containing a random bearer token (32–512 characters).
+        #[arg(long, requires = "http")]
+        token_env: Option<String>,
     },
     /// Print a generic MCP stdio registration using this executable and project.
     Register {

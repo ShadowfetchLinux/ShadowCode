@@ -2,14 +2,14 @@
 
 MCP remains an open [native release gate](NATIVE_MIGRATION.md). The Rust stdio and Streamable HTTP
 clients now connect to native Settings, CLI registration, project activation,
-and individually approved agent tool calls. The native stdio server now exposes
-tasks, goals, reviews, memory, SQLite inspection and checkpoints to external clients.
-The remaining server features and broader interoperability/real-model
-verification are still being migrated. Neither direction launches Python.
+and individually approved agent tool calls. Native stdio and authenticated loopback
+HTTP servers expose tasks, goals, reviews, memory, SQLite inspection and checkpoints
+to external clients. Client-specific registration and broader interoperability/real-model
+verification remain release requirements. Neither direction launches Python.
 
 ## Connect another coding tool to ShadowCode
 
-The native executable can serve a single MCP client without a display:
+The native executable can serve a single MCP client over stdio without a display:
 
 ```sh
 shadowcode --workspace /absolute/project mcp serve
@@ -41,7 +41,7 @@ Pending actions can be approved through ShadowCode's desktop or CLI. To delegate
 approval decisions to the connecting client, explicitly add **both**
 `--allow-write --allow-approvals` to `mcp serve` (or to `mcp register` when producing
 its configuration). The `shadow_approve` tool then resolves one exact pending
-approval from a task created by this connection. It cannot approve another
+approval from a task created by this MCP owner (the stdio connection or HTTP gateway). It cannot approve another
 client's task or all pending actions. Denying an owned approval does not require
 the approval flag. The client is responsible for obtaining the user's agreement
 to the displayed action before submitting approval.
@@ -63,7 +63,7 @@ The current server exposes seventeen tools:
 - `shadow_goal` creates, lists, inspects, advances or abandons durable goals.
   Creating or advancing a goal here does not start an agent automatically.
 - `shadow_run` creates a fresh conversation and returns its job ID. `shadow_jobs`
-  inspects that connection's jobs, paginated events and pending approvals, or
+  inspects that owner's jobs, paginated events and pending approvals, or
   cancels one. A returned job ID is not a claim that the task has completed.
 - `shadow_approve` handles the individual decision described above.
 - `shadow_test` submits an owned native test job without calling a model. An
@@ -78,7 +78,7 @@ The plan resource reads recorded events and returns null when no plan is recorde
 The `delegate` prompt accepts a task for the fixed project; `understand` requests
 a read-only project inspection.
 
-The connection owns its delegated jobs. Normal EOF, protocol failure, explicit
+A stdio connection owns its delegated jobs. Normal EOF, protocol failure, explicit
 cancellation and an abandoned server future cancel unfinished owned jobs and await
 cleanup; unrelated tasks in the shared engine continue. A temporary engine closes
 when its server exits. The first delegated task opens a private ownership socket
@@ -101,16 +101,68 @@ close ownership; valid rejected task submissions leave it usable. Submissions
 and cleanup acknowledgements have 30-second response deadlines. Normal close
 waits for the engine's task cleanup before acknowledging it.
 
-Incoming messages share the 1-MiB frame, 32-MiB lifetime and 128-frames-per-second
+Incoming stdio messages share the 1-MiB frame, 32-MiB lifetime and 128-frames-per-second
 transport limits. Initialization has a ten-second deadline. Up to eight tool or
 resource operations and 64 delegated tasks are allowed per connection. Other
 operations have a 45-second deadline; model jobs are asynchronous and follow the
 engine's own limits. Tool/resource results are capped at 2 MB and response writes
 have a five-second deadline. Reconnect after a connection limit is reached.
 
+### Authenticated HTTP gateway
+
+Run a persistent gateway for the selected project with an independently generated
+credential. `--token-env` names an environment variable or private profile secret;
+the actual token is not passed as a command-line argument:
+
+```sh
+export SHADOW_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
+shadowcode --workspace /absolute/project mcp serve \
+  --http 127.0.0.1:8765 --token-env SHADOW_MCP_HTTP_TOKEN
+```
+
+Configure the calling application's Streamable HTTP transport with
+`http://127.0.0.1:8765/mcp` and `Authorization: Bearer <the secret>`. The gateway
+announces its ready address on stderr; stdout stays empty. Port `0` selects an
+available port, which is reported after the engine is ready. Stdin EOF does not
+stop HTTP serving. SIGINT/SIGTERM stop the gateway and wait for owned cleanup.
+`mcp register` still emits only generic stdio configuration.
+
+The same read-only default, trust requirements and optional
+`--allow-write --allow-approvals` flags apply. A gateway is one fixed-project owner
+shared by every caller holding its credential. Reconnecting over HTTP preserves
+its delegated jobs and their approval scope. Use separate gateway invocations
+and credentials for independent clients. Each gateway has its own engine ownership
+lease; stopping or killing it cancels its unfinished running and queued jobs,
+without stopping another gateway's or the desktop's tasks. Restart after the
+64-job lifetime limit. Project background processes retain their independent
+lifetime described above.
+
+Only loopback IP binds are accepted. Credentials must contain 32–512 bearer-token
+characters; generate them randomly. Authentication is mandatory even on loopback.
+Only the bound IP or `localhost` with the actual port is accepted as Host. Browser
+Origin headers, query parameters and duplicate MCP metadata headers are rejected;
+credential values are removed before requests reach MCP handlers. This endpoint
+does not provide remote deployment, browser CORS, TLS or OAuth.
+
+The official Rust SDK supplies current per-request protocol negotiation and legacy
+Streamable HTTP initialization. The gateway is stateless at the protocol layer:
+it issues no MCP session ID and uses JSON responses, with request-scoped SSE when
+required by the SDK. GET and DELETE return 405. It does not implement the older
+separate `/sse` and message endpoints. See the MCP
+[Streamable HTTP specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+and [legacy transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+
+HTTP permits 32 concurrent TCP connections and 128 requests per second. Each
+connection handles one request, with five-second header/body deadlines, a 1-MiB
+request limit, a 60-second request/response deadline and an 8-MiB transport response
+limit. Existing eight-operation concurrency, 45-second tool deadlines and 2-MB
+result limits still apply. Model/test jobs return an ID and continue asynchronously;
+a closed HTTP request is not a request to cancel an already submitted job. Use
+`shadow_jobs` cancellation or stop its gateway.
+
 This is a development server, not full compatibility with the earlier Python
-server. HTTP serving and client-specific registration formats
-remain unimplemented. Tools use the fixed project and asynchronous owned jobs;
+server. Client-specific registration formats remain unimplemented.
+Tools use the fixed project and asynchronous owned jobs;
 map saving is explicit, and diagnostics do not perform automatic repairs.
 The current tests use the official
 Rust SDK and a real executable protocol probe; broader client interoperability

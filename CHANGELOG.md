@@ -2,6 +2,13 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Native MCP serving supports authenticated loopback Streamable HTTP alongside
+  stdio. Both expose the same project-scoped tools, approvals and owned tasks.
+  HTTP reconnects preserve the gateway's jobs; gateway shutdown cancels unfinished
+  owned work while unrelated engine tasks continue. Mandatory credentials, host
+  checks, denied browser origins, bounded traffic and protocol validation apply.
+  The executable probe runs both transports against source and packaged builds.
+
 - Rust task engine with confined file tools, bounded processes, streaming local
   and compatible models, scoped approvals, checkpoints, persisted queues, and
   recovery. Settings and legacy history are migrated with backups.

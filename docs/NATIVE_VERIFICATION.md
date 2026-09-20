@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **188 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **193 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -157,6 +157,21 @@ is configured to repeat it against the source binary and packaged AppImage.
 The seventeen-tool catalog includes project inspection, native diagnostics, SQLite and
 approved test execution, which the probe exercises without extra model requests.
 These fixtures do not substitute for broader client and real-model interoperability.
+
+The same executable probe now passes with `SHADOW_MCP_TRANSPORT=http`: six
+scripted model requests, modern per-request negotiation and legacy initialization,
+mandatory authentication, invalid bind/credential rejection, read-only defaults,
+real edits/tests, exact approvals, checkpoint rollback, and gateway SIGKILL cleanup.
+Each HTTP request opens a fresh connection; stdin EOF preserves the gateway and
+its delegated jobs. SIGTERM closes temporary owners cleanly. CI repeats both
+transports against the native binary and packaged AppImage.
+
+Five Rust HTTP-server tests additionally exercise official-SDK interoperability,
+project and owner isolation, duplicate/mismatched metadata, invalid credentials,
+browser origins and hosts, malformed and oversized bodies, slow partial requests,
+reconnects, queued cancellation, child cleanup, and abandoned-future profile/socket
+release. Dependency-notice generation passes with 540 application dependencies,
+including the HTTP server's newly resolved `httpdate` dependency.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:

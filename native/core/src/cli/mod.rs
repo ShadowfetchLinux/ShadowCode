@@ -186,6 +186,7 @@ pub async fn run(options: Options) -> Result<i32> {
             Mcp::Serve {
                 allow_write,
                 allow_approvals,
+                ..
             }
             | Mcp::Register {
                 allow_write,
@@ -240,6 +241,59 @@ pub async fn run(options: Options) -> Result<i32> {
             !options.json,
             "MCP stdout is reserved for JSON-RPC; omit --json"
         );
+        if let Mcp::Serve {
+            http: Some(address),
+            token_env,
+            ..
+        } = action
+        {
+            let name = token_env.as_deref().context("HTTP requires --token-env")?;
+            ensure!(
+                crate::config::valid_secret_name(name),
+                "Invalid bearer-secret reference"
+            );
+            let token = crate::config::secret(&paths, name)?
+                .context("MCP HTTP bearer secret is not set")?;
+            crate::mcp::server::http::validate(*address, &token)?;
+            let socket = tokio::net::TcpListener::bind(address)
+                .await
+                .context("Could not bind MCP HTTP listener")?;
+            let address = socket.local_addr()?;
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let _cancel_on_drop = cancel.clone().drop_guard();
+            let signal = cancel.clone();
+            let listener = tokio::spawn(async move {
+                crate::lifecycle::interrupted(parent).await;
+                signal.cancel();
+            });
+            let (ready, ready_rx) = tokio::sync::oneshot::channel();
+            let worker = tokio::spawn(crate::mcp::server::http::serve(
+                paths,
+                workspace,
+                crate::mcp::server::Access {
+                    allow_write,
+                    allow_approvals,
+                },
+                socket,
+                token,
+                cancel.clone(),
+                Some(ready),
+            ));
+            let announced = if ready_rx.await.is_ok() {
+                writeln!(std::io::stderr(), "MCP HTTP listening on http://{address}/mcp; bearer authentication required; {}", if allow_write { "project changes enabled" } else { "read-only" })
+                    .context("Could not write gateway startup status")
+            } else {
+                Ok(())
+            };
+            if announced.is_err() {
+                cancel.cancel();
+            }
+            let result = worker.await.context("MCP HTTP gateway worker failed");
+            listener.abort();
+            announced?;
+            result??;
+            return Ok(0);
+        }
         let cancel = tokio_util::sync::CancellationToken::new();
         let signal = cancel.clone();
         let listener = tokio::spawn(async move {

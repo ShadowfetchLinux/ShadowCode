@@ -87,7 +87,9 @@ each exact call. HTTP bearer secrets resolve only on connection, and remote
 hosts require network access. Connections close before the task finishes.
 `shadowcode mcp serve` also exposes the selected project to another client over
 stdio, with read-only defaults and explicitly delegated write/approval access.
-The [server guide](NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode) lists
+The native executable also serves authenticated loopback HTTP with a fixed
+project and a gateway owner that survives individual client reconnects. The
+[server guide](NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode) lists
 the implemented tools and remaining migration requirements.
 
 To work on the live interface, run `./ui/node_modules/.bin/tauri dev` from the
