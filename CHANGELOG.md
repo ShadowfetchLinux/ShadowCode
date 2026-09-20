@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Native terminal input uses level-triggered polling after CI exposed dropped
+  keys around resize events. Full-color PTY checks verify Escape closes Help
+  before the next task submission.
+
 - Reviewed CLI and desktop worktree return prepare incoming commits in the source index
   without committing. Stale reviews and active work are rejected; conflicts and
   ignored local files are preserved for explicit resolution.

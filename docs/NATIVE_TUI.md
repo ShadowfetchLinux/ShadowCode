@@ -68,7 +68,8 @@ terminal settings. Drafts and prompt recall are currently in memory.
 ## Verification and remaining work
 
 `node scripts/test-native-tui.mjs` drives a real PTY and scripted compatible model
-with no display. It covers multiline Unicode paste, actual file inspection, shared
+with no display and full terminal colors. It checks that Escape restores the
+composer before the next key, and covers multiline Unicode paste, actual file inspection, shared
 CLI attachment, explicit command approval, planning mode, owned task cancellation
 and terminal restoration. Live PTY resizing covers the below-minimum warning,
 compact help scrolling to its final line and Home, expanded-dialog recovery, and

@@ -33,6 +33,9 @@ await rm(path.join(artifacts, "failure.txt"), { force: true });
 const env = { ...process.env, TERM: "xterm-256color" };
 delete env.DISPLAY;
 delete env.WAYLAND_DISPLAY;
+// Exercise real color output even when the invoking tool disables colors.
+delete env.NO_COLOR;
+env.COLORTERM = "truecolor";
 const children = new Set(),
   sockets = new Set(),
   requests = [];
@@ -248,8 +251,11 @@ try {
   tui.child.stdin.write("\x1b[6~".repeat(40));
   await delay(150);
   await resize(tui, 40, 110, "unrelated tasks continue.");
+  const closingHelp = tui.output.stdout.length;
   tui.child.stdin.write("\x1b");
-  await delay(150);
+  await until("Escape closes help before another key", () =>
+    tui.output.stdout.slice(closingHelp).includes("\x1b[?25h"),
+  );
   await resize(tui, 32, 110, "SHADOWCODE");
   assert.equal(
     requests.length,

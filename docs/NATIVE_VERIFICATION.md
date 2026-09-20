@@ -304,6 +304,25 @@ these transitions. Assertions inspect fresh complete frames because incremental
 ANSI updates can split words. This covers resize recovery; broader picker
 navigation, visual review and sustained terminal stress remain open.
 
+## Terminal input after resize
+
+CI run `35544397210` failed the terminal probe after Help stayed open and the
+following Enter did not submit the draft. Its retained ANSI recording showed
+the Help overlay still present. A local full-color run reproduced a related
+Home/resize timeout, which the previous inherited `NO_COLOR` environment had
+not exposed. Crossterm now uses its level-triggered `use-dev-tty` input backend
+instead of the edge-triggered Mio source, avoiding dropped readiness across
+simultaneous input and resize notifications. The PTY fixture explicitly enables
+truecolor and waits for the visible composer cursor after Escape before sending
+another key.
+
+Three consecutive full-color PTY runs pass, each with eight scripted model
+requests, resize/help navigation, approvals, cancellation and terminal restoration.
+The native build, library tests and workspace Clippy pass. Dependency notice
+generation includes the new locked `filedescriptor` dependency and now covers
+576 application dependencies. These local results address the observed failure;
+the replacement CI run must still complete before its result is claimed.
+
 ## Reviewed return of worktree commits
 
 Nine worktree tests pass. Return-specific scenarios exercise diverged branches,
