@@ -10,6 +10,7 @@ pub mod patch;
 pub mod paths;
 pub mod permissions;
 pub mod process;
+pub mod service;
 pub mod store;
 pub mod tools;
 pub mod workspace;

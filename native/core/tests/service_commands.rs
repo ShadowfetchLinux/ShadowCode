@@ -1,0 +1,774 @@
+mod support;
+use serde_json::{json, Value};
+use shadowcode_core::{
+    config::Config,
+    engine::StartRequest,
+    paths::AppPaths,
+    service::{Request, Service},
+};
+use std::{fs, path::Path, process::Command, time::Duration};
+
+fn setup(trusted: bool) -> (tempfile::TempDir, Service) {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths, json!({"model":{"provider":"local","endpoint":"http://127.0.0.1:9/v1","name":"fixture","context_limit":16384},"trusted_workspaces":if trusted {vec![project.clone()]} else {vec![]}})).unwrap();
+    let service = Service::open(paths, Some(project)).unwrap();
+    (root, service)
+}
+async fn call(service: &Service, method: &str, path: &str, body: Value) -> anyhow::Result<Value> {
+    service
+        .dispatch(Request {
+            method: method.into(),
+            path: path.into(),
+            body,
+        })
+        .await
+}
+fn git(project: &Path, args: &[&str]) -> String {
+    let result = Command::new("git")
+        .args([
+            "-c",
+            "user.name=Service Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgSign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+        ])
+        .args(args)
+        .current_dir(project)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    String::from_utf8(result.stdout).unwrap()
+}
+fn init(project: &Path) {
+    git(project, &["init", "-q"]);
+    git(project, &["config", "user.name", "Service Test"]);
+    git(project, &["config", "user.email", "test@example.invalid"]);
+    fs::write(
+        project.join("sample.txt"),
+        (1..=30).map(|v| format!("line {v}\n")).collect::<String>(),
+    )
+    .unwrap();
+    git(project, &["add", "."]);
+    git(project, &["commit", "-qm", "Fixture"]);
+}
+
+#[tokio::test]
+async fn manual_mutations_require_trust_and_respect_read_only_mode() {
+    let (_root, service) = setup(false);
+    let workspace = service.workspace().unwrap();
+    let operations = [
+        (
+            "PUT",
+            "/api/workspace/instructions",
+            json!({"content":"Instructions"}),
+        ),
+        (
+            "PUT",
+            "/api/workspace/skills",
+            json!({"name":"build","content":"Build it"}),
+        ),
+        (
+            "POST",
+            "/api/workspace/attach",
+            json!({"filename":"note.txt","text":"Attached"}),
+        ),
+        (
+            "POST",
+            "/api/workspace/exec",
+            json!({"command":"touch unexpected"}),
+        ),
+        ("POST", "/api/workspace/git/add", json!({"paths":["."]})),
+    ];
+    for (method, path, body) in &operations {
+        assert!(call(&service, method, path, body.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Trust"));
+    }
+    let opened = call(&service, "POST", "/api/projects", json!({"path":workspace}))
+        .await
+        .unwrap();
+    assert_eq!(opened["needs_trust"], true);
+    call(
+        &service,
+        "POST",
+        "/api/projects/trust",
+        json!({"path":workspace}),
+    )
+    .await
+    .unwrap();
+    call(
+        &service,
+        "PUT",
+        "/api/workspace/instructions",
+        json!({"content":"Instructions"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(workspace.join(".shadow/instructions.md")).unwrap(),
+        "Instructions"
+    );
+    Config::patch(
+        service.engine.paths(),
+        json!({"permissions":{"level":"read_only"}}),
+    )
+    .unwrap();
+    for (method, path, body) in &operations {
+        assert!(call(&service, method, path, body.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("read-only"));
+    }
+    assert!(!workspace.join("unexpected").exists());
+    let file = call(
+        &service,
+        "GET",
+        "/api/workspace/file?path=.shadow%2Finstructions.md",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(file["content"], "Instructions");
+    assert!(call(
+        &service,
+        "GET",
+        "/api/workspace/file?path=..%2Fprofile%2Fconfig.yaml",
+        Value::Null
+    )
+    .await
+    .is_err());
+}
+
+#[tokio::test]
+async fn onboarding_preserves_custom_credential_name_and_selects_a_real_session() {
+    let (_root, service) = setup(false);
+    let workspace = service.workspace().unwrap();
+    let opened = call(
+        &service,
+        "POST",
+        "/api/onboarding",
+        json!({"workspace":workspace,"provider":"ollama","model":"local-code","theme":"dark"}),
+    )
+    .await
+    .unwrap();
+    let cfg = Config::load(service.engine.paths(), None).unwrap();
+    assert!(cfg.is_trusted(&workspace));
+    assert_eq!(cfg.model.context_limit, 16384);
+    assert_eq!(cfg.model.name, "local-code");
+    assert_eq!(cfg.ui["theme"], "dark");
+    let sid = opened["session_id"].as_str().unwrap();
+    let session = call(
+        &service,
+        "GET",
+        &format!("/api/sessions/{sid}"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(session["workspace"], json!(workspace));
+    Config::patch(
+        service.engine.paths(),
+        json!({"model":{"api_key_env":"CUSTOM_LOCAL_TOKEN"}}),
+    )
+    .unwrap();
+    call(
+        &service,
+        "POST",
+        "/api/models/register",
+        json!({"provider":"ollama","name":"another-code-model"}),
+    )
+    .await
+    .unwrap();
+    let registered = service
+        .engine
+        .store()
+        .models()
+        .unwrap()
+        .into_iter()
+        .find(|m| m["name"] == "another-code-model")
+        .unwrap();
+    assert_eq!(registered["metadata"]["api_key_env"], "CUSTOM_LOCAL_TOKEN");
+    assert_eq!(
+        call(&service, "GET", "/api/workspace/instructions", Value::Null)
+            .await
+            .unwrap()["content"],
+        ""
+    );
+    assert!(call(
+        &service,
+        "POST",
+        "/api/onboarding",
+        json!({"workspace":workspace,"provider":"ollama","model":"invalid","context_limit":1})
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        Config::load(service.engine.paths(), None)
+            .unwrap()
+            .model
+            .name,
+        "local-code"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_cancels_manual_terminal_and_audits_its_original_session() {
+    let (root, service) = setup(true);
+    let workspace = service.workspace().unwrap();
+    let session = call(
+        &service,
+        "POST",
+        "/api/sessions",
+        json!({"title":"Original"}),
+    )
+    .await
+    .unwrap();
+    let sid = session["id"].as_str().unwrap();
+    let worker = tokio::spawn({
+        let service = service.clone();
+        async move {
+            call(
+                &service,
+                "POST",
+                "/api/workspace/exec",
+                json!({"command":"sleep 30 & echo $! > child.pid; wait","timeout":60}),
+            )
+            .await
+            .unwrap()
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while !workspace.join("child.pid").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid = fs::read_to_string(workspace.join("child.pid"))
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert!(call(
+        &service,
+        "PUT",
+        "/api/workspace/instructions",
+        json!({"content":"Should not write"})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("manual operation"));
+    assert!(call(
+        &service,
+        "POST",
+        "/api/jobs",
+        json!({"task":"Explain the project"})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("manual operation"));
+    let other = root.path().join("other");
+    fs::create_dir(&other).unwrap();
+    call(
+        &service,
+        "POST",
+        "/api/sessions",
+        json!({"workspace":other}),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(4), service.engine.shutdown())
+        .await
+        .unwrap()
+        .unwrap();
+    let result = worker.await.unwrap();
+    assert_eq!(result["cancelled"], true);
+    assert_eq!(result["ok"], false);
+    let events = service.engine.store().recent_events(sid, 100).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["type"] == "terminal.completed")
+            .count(),
+        1
+    );
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            if stat.is_empty()
+                || stat
+                    .rsplit_once(") ")
+                    .is_some_and(|(_, tail)| tail.starts_with(['Z', 'X']))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(service
+        .engine
+        .reserve_workspace(&workspace)
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("shutting down"));
+}
+
+#[tokio::test]
+async fn workspace_reservation_excludes_tasks_and_is_released_on_drop() {
+    let (_root, service) = setup(true);
+    let workspace = service.workspace().unwrap();
+    let reservation = service.engine.reserve_workspace(&workspace).unwrap();
+    assert!(service.engine.reserve_workspace(&workspace).is_err());
+    let start = || StartRequest {
+        workspace: workspace.clone(),
+        task: "Describe the project".into(),
+        session_id: None,
+        model: None,
+        mode: "code".into(),
+        queue: true,
+    };
+    assert!(service
+        .engine
+        .start(start())
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("manual operation"));
+    drop(reservation);
+    let job = service.engine.start(start()).await.unwrap();
+    assert!(service.engine.reserve_workspace(&workspace).is_err());
+    service.engine.cancel(&job.id).await.unwrap();
+    drop(service.engine.reserve_workspace(&workspace).unwrap());
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn review_stages_one_hunk_rejects_another_and_refuses_stale_hunks() {
+    let (_root, service) = setup(true);
+    let workspace = service.workspace().unwrap();
+    init(&workspace);
+    let original = fs::read_to_string(workspace.join("sample.txt")).unwrap();
+    fs::write(
+        workspace.join("sample.txt"),
+        original
+            .replace("line 2\n", "first change\n")
+            .replace("line 28\n", "last change\n"),
+    )
+    .unwrap();
+    let diff = call(
+        &service,
+        "GET",
+        "/api/workspace/diff?path=sample.txt",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(diff["hunks"].as_array().unwrap().len(), 2);
+    assert!(diff["hunks"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == &json!({"kind":"add","text":"first change"})));
+    let first = json!({"path":"sample.txt","action":"accept","hunk":diff["hunks"][0]});
+    call(&service, "POST", "/api/workspace/diff/hunk", first.clone())
+        .await
+        .unwrap();
+    let staged = git(&workspace, &["show", ":sample.txt"]);
+    assert!(staged.contains("first change"));
+    assert!(!staged.contains("last change"));
+    assert!(call(&service, "POST", "/api/workspace/diff/hunk", first)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("Refresh"));
+    let remaining = call(
+        &service,
+        "GET",
+        "/api/workspace/diff?path=sample.txt",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    call(
+        &service,
+        "POST",
+        "/api/workspace/diff/hunk",
+        json!({"path":"sample.txt","action":"reject","hunk":remaining["hunks"][0]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(workspace.join("sample.txt")).unwrap(),
+        staged
+    );
+    call(
+        &service,
+        "POST",
+        "/api/workspace/git/commit",
+        json!({"message":"Stage one change"}),
+    )
+    .await
+    .unwrap();
+    assert!(git(&workspace, &["status", "--porcelain"]).is_empty());
+}
+
+#[tokio::test]
+async fn review_supports_new_binary_literal_and_no_final_newline_files() {
+    let (_root, service) = setup(true);
+    let workspace = service.workspace().unwrap();
+    init(&workspace);
+    fs::write(workspace.join("new [1].txt"), "new text\n").unwrap();
+    fs::write(workspace.join("binary.bin"), b"\0\x01\x02").unwrap();
+    let preview = call(
+        &service,
+        "GET",
+        "/api/workspace/diff?path=new%20%5B1%5D.txt",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(preview["untracked"], true);
+    assert!(!preview["hunks"].as_array().unwrap().is_empty());
+    assert!(call(
+        &service,
+        "POST",
+        "/api/workspace/diff/hunk",
+        json!({"path":"new [1].txt","action":"accept","hunk":preview["hunks"][0]})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("whole file"));
+    let binary = call(
+        &service,
+        "GET",
+        "/api/workspace/diff?path=binary.bin",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(binary["binary"], true);
+    assert_eq!(binary["untracked"], true);
+    call(
+        &service,
+        "POST",
+        "/api/workspace/git/add",
+        json!({"paths":["new [1].txt","binary.bin"]}),
+    )
+    .await
+    .unwrap();
+    let binary = call(
+        &service,
+        "GET",
+        "/api/workspace/diff?path=binary.bin",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(binary["binary"], true);
+    assert_eq!(binary["untracked"], false);
+    assert_eq!(git(&workspace, &["show", ":new [1].txt"]), "new text\n");
+    fs::write(workspace.join("sample.txt"), "no final newline").unwrap();
+    let diff = call(
+        &service,
+        "GET",
+        "/api/workspace/diff?path=sample.txt",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert!(diff["hunks"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["kind"] == "meta"));
+    call(
+        &service,
+        "POST",
+        "/api/workspace/diff/hunk",
+        json!({"path":"sample.txt","action":"accept","hunk":diff["hunks"][0]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        git(&workspace, &["show", ":sample.txt"]),
+        "no final newline"
+    );
+}
+
+#[tokio::test]
+async fn sessions_replay_beyond_page_limits_export_and_delete_without_stale_selection() {
+    let (_root, service) = setup(true);
+    let session = call(
+        &service,
+        "POST",
+        "/api/sessions",
+        json!({"title":"Long conversation"}),
+    )
+    .await
+    .unwrap();
+    let sid = session["id"].as_str().unwrap();
+    let store = service.engine.store();
+    for index in 0..10005 {
+        store
+            .add_event(
+                "model.delta",
+                &json!({"text":format!("Message {index}")}),
+                Some(sid),
+                None,
+            )
+            .unwrap();
+    }
+    let detail = call(
+        &service,
+        "GET",
+        &format!("/api/sessions/{sid}"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(detail["events"].as_array().unwrap().len(), 10000);
+    assert_eq!(
+        detail["events"].as_array().unwrap().last().unwrap()["id"],
+        detail["event_cursor"]
+    );
+    let exported = call(
+        &service,
+        "GET",
+        &format!("/api/sessions/{sid}/export?format=json"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    let content: Value = serde_json::from_str(exported["content"].as_str().unwrap()).unwrap();
+    assert_eq!(content["events"].as_array().unwrap().len(), 10005);
+    assert_eq!(content["events"][0]["payload"]["text"], "Message 0");
+    let boundary = store.event_cursor(sid).unwrap();
+    store
+        .add_event(
+            "model.delta",
+            &json!({"text":"After snapshot"}),
+            Some(sid),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        store.recent_events_through(sid, boundary, 1).unwrap()[0]["id"],
+        boundary
+    );
+    let mut cursor = 0;
+    let mut count = 0;
+    loop {
+        let page = call(
+            &service,
+            "GET",
+            &format!("/api/sessions/{sid}/events?after={cursor}&limit=1300"),
+            Value::Null,
+        )
+        .await
+        .unwrap();
+        let events = page["events"].as_array().unwrap();
+        if events.is_empty() {
+            break;
+        }
+        for event in events {
+            let next = event["id"].as_i64().unwrap();
+            assert!(next > cursor);
+            cursor = next;
+            count += 1;
+        }
+    }
+    assert_eq!(count, 10006);
+    call(
+        &service,
+        "DELETE",
+        &format!("/api/sessions/{sid}"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert!(call(&service, "GET", "/api/events", Value::Null)
+        .await
+        .unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn active_jobs_prevent_session_deletion_and_manual_edits_but_allow_replay() {
+    let server=support::server(|_,_|(json!({"choices":[{"message":{"role":"assistant","content":"Done"},"finish_reason":"stop"}]}),Duration::from_secs(30))).await;
+    let (_root, service) = setup(true);
+    Config::patch(
+        service.engine.paths(),
+        json!({"model":{"endpoint":server.endpoint}}),
+    )
+    .unwrap();
+    let job = call(
+        &service,
+        "POST",
+        "/api/jobs",
+        json!({"task":"Explain the concept of a project"}),
+    )
+    .await
+    .unwrap();
+    let sid = job["session_id"].as_str().unwrap();
+    let jid = job["id"].as_str().unwrap();
+    assert!(call(
+        &service,
+        "DELETE",
+        &format!("/api/sessions/{sid}"),
+        Value::Null
+    )
+    .await
+    .is_err());
+    assert!(call(
+        &service,
+        "PUT",
+        "/api/workspace/instructions",
+        json!({"content":"Collision"})
+    )
+    .await
+    .is_err());
+    let replay = call(
+        &service,
+        "GET",
+        &format!("/api/jobs/{jid}/events"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(replay["events"][0]["type"], "user.message");
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while server.requests.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    call(
+        &service,
+        "POST",
+        &format!("/api/jobs/{jid}/cancel"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    call(
+        &service,
+        "DELETE",
+        &format!("/api/sessions/{sid}"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_new_task_selects_its_session_so_approval_buttons_work() {
+    let server = support::server(|index, _| {
+        let message = if index == 0 {
+            json!({"role":"assistant","content":"Checking the terminal","tool_calls":[{"id":"approved-command","type":"function","function":{"name":"exec","arguments":"{\"command\":\"printf approved\"}"}}]})
+        } else { json!({"role":"assistant","content":"The approved command completed."}) };
+        (json!({"choices":[{"message":message,"finish_reason":if index==0 {"tool_calls"}else{"stop"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}),Duration::ZERO)
+    }).await;
+    let (_root, service) = setup(true);
+    Config::patch(
+        service.engine.paths(),
+        json!({"model":{"endpoint":server.endpoint}}),
+    )
+    .unwrap();
+    let job = call(
+        &service,
+        "POST",
+        "/api/jobs",
+        json!({"task":"Run printf approved in the terminal"}),
+    )
+    .await
+    .unwrap();
+    let sid = job["session_id"].as_str().unwrap();
+    let approval = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let pending = call(&service, "GET", "/api/approvals", Value::Null)
+                .await
+                .unwrap();
+            if let Some(approval) = pending["approvals"].as_array().unwrap().first() {
+                break approval.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(approval["session_id"], sid);
+    let aid = approval["id"].as_str().unwrap();
+    assert!(call(
+        &service,
+        "POST",
+        &format!("/api/approvals/{aid}"),
+        json!({"decision":"approve","session_id":"another-session"})
+    )
+    .await
+    .is_err());
+    call(
+        &service,
+        "POST",
+        &format!("/api/approvals/{aid}"),
+        json!({"decision":"approve"}),
+    )
+    .await
+    .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(4),
+        service.engine.wait(job["id"].as_str().unwrap()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(result.status, "completed", "{}", result.summary);
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn deleting_a_session_does_not_require_its_project_directory_to_exist() {
+    let (_root, service) = setup(true);
+    let session = call(
+        &service,
+        "POST",
+        "/api/sessions",
+        json!({"title":"Removed project"}),
+    )
+    .await
+    .unwrap();
+    fs::remove_dir(service.workspace().unwrap()).unwrap();
+    let sid = session["id"].as_str().unwrap();
+    call(
+        &service,
+        "DELETE",
+        &format!("/api/sessions/{sid}"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert!(service.engine.store().session(sid).unwrap().is_none());
+}

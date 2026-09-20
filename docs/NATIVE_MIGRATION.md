@@ -83,6 +83,13 @@ Implemented foundation:
 - Context compaction preserves complete tool-call groups and the current request.
   Explicit requests to read a named file attach its current confined contents.
   Providers that omit token usage receive labelled estimates for budget checks.
+- A shared native command service for onboarding/model configuration, project
+  trust, sessions/branching/export/pins, task replay and approvals, files,
+  instructions/skill storage, terminal commands, Git review, and checkpoint rewind.
+  Manual mutations reserve the same workspace registry as agent tasks. Shutdown
+  cancels manual commands and waits for their cleanup; navigation preserves audit
+  attribution. Per-hunk staging/discard validates the current diff, and exports
+  traverse the full event history up to an explicit 32 MB limit.
 - [Native engine verification](NATIVE_VERIFICATION.md), including scripted failure
   cases, concurrent tasks, and real coding probes against two local models.
 

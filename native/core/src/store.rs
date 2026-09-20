@@ -395,9 +395,17 @@ impl Store {
         )
     }
     pub fn recent_events(&self, sid: &str, limit: usize) -> Result<Vec<Value>> {
+        self.recent_events_through(sid, i64::MAX, limit)
+    }
+    pub fn recent_events_through(
+        &self,
+        sid: &str,
+        through: i64,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
         let mut rows = self.query(
-            "SELECT * FROM events WHERE session_id=? ORDER BY id DESC LIMIT ?",
-            params![sid, limit.clamp(1, 10000)],
+            "SELECT * FROM events WHERE session_id=? AND id<=? ORDER BY id DESC LIMIT ?",
+            params![sid, through, limit.clamp(1, 10000)],
         )?;
         rows.reverse();
         Ok(rows)

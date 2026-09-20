@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **50 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **60 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -22,6 +22,14 @@ integration tests** pass on the development machine. The suite covers:
   verification retries, token limits, and labelled estimates for absent usage.
 - Streaming UTF-8/SSE/NDJSON, malformed/truncated provider responses, large frame
   batches, bounded process output, concurrent commands, and process-group cleanup.
+- Application commands for onboarding, trusted/read-only projects, credentials,
+  sessions, fresh-task approvals, and deletion after a project folder is removed.
+- Manual terminal/agent workspace exclusion, cancellation of a terminal's child
+  process during shutdown, and attribution to its original session after navigation.
+- Git staging/discard of individual hunks, stale-hunk rejection, literal filenames,
+  untracked and binary previews, and files without a final newline.
+- Export of 10,005 events without silently truncating history, ordered pagination,
+  and snapshot cursors that cannot skip an event arriving during session loading.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:

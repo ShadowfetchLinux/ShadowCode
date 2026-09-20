@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -75,6 +75,33 @@ struct Running {
 struct QueueState {
     jobs: HashMap<String, Arc<Running>>,
     lanes: HashMap<PathBuf, VecDeque<Arc<Running>>>,
+    manual: HashMap<PathBuf, Arc<ManualState>>,
+}
+struct ManualState {
+    cancel: CancellationToken,
+    finished: AtomicBool,
+    done: Notify,
+}
+/// Holds an exclusive manual-write reservation in the same registry as agent
+/// jobs. Dropping it releases the workspace even if its request is cancelled.
+pub struct WorkspaceReservation {
+    engine: Engine,
+    workspace: PathBuf,
+    state: Arc<ManualState>,
+}
+impl WorkspaceReservation {
+    pub fn cancellation(&self) -> CancellationToken {
+        self.state.cancel.clone()
+    }
+}
+impl Drop for WorkspaceReservation {
+    fn drop(&mut self) {
+        if let Ok(mut queues) = self.engine.0.queues.lock() {
+            queues.manual.remove(&self.workspace);
+        }
+        self.state.finished.store(true, Ordering::Release);
+        self.state.done.notify_waiters();
+    }
 }
 struct Inner {
     paths: AppPaths,
@@ -119,6 +146,60 @@ impl Engine {
     pub fn paths(&self) -> &AppPaths {
         &self.0.paths
     }
+    pub fn delete_session(&self, id: &str) -> Result<bool> {
+        // Starting a job uses this same lock through session lookup and insert.
+        // No filesystem lookup is needed to delete a session for a missing folder.
+        let queues = self
+            .0
+            .queues
+            .lock()
+            .map_err(|_| anyhow!("Task queue lock poisoned"))?;
+        let session = self.0.store.session(id)?.context("Session not found")?;
+        let workspace = Path::new(
+            session["workspace"]
+                .as_str()
+                .context("Missing session workspace")?,
+        );
+        ensure!(
+            !queues.manual.contains_key(workspace),
+            "Wait for the manual operation to finish before deleting this session"
+        );
+        self.0.store.delete_session(id)
+    }
+    pub fn reserve_workspace(&self, workspace: &Path) -> Result<WorkspaceReservation> {
+        let workspace = workspace.canonicalize()?;
+        let mut queues = self
+            .0
+            .queues
+            .lock()
+            .map_err(|_| anyhow!("Task queue lock poisoned"))?;
+        ensure!(
+            !self.0.closing.load(Ordering::Acquire),
+            "Application is shutting down"
+        );
+        ensure!(
+            !queues.manual.contains_key(&workspace),
+            "A manual operation is already using this workspace"
+        );
+        ensure!(
+            !queues
+                .lanes
+                .get(&workspace)
+                .is_some_and(|lane| lane.iter().any(|job| !job.finished.load(Ordering::Acquire))),
+            "Stop the running task before making manual changes"
+        );
+        let state = Arc::new(ManualState {
+            cancel: CancellationToken::new(),
+            finished: AtomicBool::new(false),
+            done: Notify::new(),
+        });
+        queues.manual.insert(workspace.clone(), state.clone());
+        Ok(WorkspaceReservation {
+            engine: self.clone(),
+            workspace,
+            state,
+        })
+    }
     pub async fn start(&self, request: StartRequest) -> Result<Job> {
         ensure!(
             !self.0.closing.load(Ordering::Acquire),
@@ -154,6 +235,10 @@ impl Engine {
         ensure!(
             queues.jobs.len() < 64,
             "At most 64 tasks may be running or queued"
+        );
+        ensure!(
+            !queues.manual.contains_key(&workspace.path),
+            "Wait for the manual operation in this workspace to finish before starting a task"
         );
         let has_lane = queues.lanes.contains_key(&workspace.path);
         let busy = queues
@@ -306,6 +391,18 @@ impl Engine {
     }
     pub async fn shutdown(&self) -> Result<()> {
         self.0.closing.store(true, Ordering::Release);
+        let manual: Vec<_> = self
+            .0
+            .queues
+            .lock()
+            .map_err(|_| anyhow!("Task queue lock poisoned"))?
+            .manual
+            .values()
+            .cloned()
+            .collect();
+        for operation in &manual {
+            operation.cancel.cancel();
+        }
         let jobs: Vec<_> = self
             .0
             .queues
@@ -320,6 +417,15 @@ impl Engine {
             self.0.approvals.deny_task(&job.snapshot()?.task_id);
         }
         tokio::time::timeout(Duration::from_secs(15), async {
+            for operation in manual {
+                loop {
+                    let notified = operation.done.notified();
+                    if operation.finished.load(Ordering::Acquire) {
+                        break;
+                    }
+                    notified.await;
+                }
+            }
             for job in jobs {
                 loop {
                     let notified = job.done.notified();
