@@ -1303,3 +1303,55 @@ kbd {
 .input-action button {
   flex-shrink: 0;
 }
+
+.worktree-create {
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 18px 0;
+}
+.worktree-create label {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 220px;
+}
+.worktree-list {
+  display: grid;
+  gap: 12px;
+}
+.worktree-card,
+.worktree-review {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+}
+.worktree-card {
+  display: grid;
+  gap: 8px;
+}
+.worktree-card p {
+  margin: 0;
+}
+.worktree-path {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.worktree-review {
+  margin-top: 18px;
+  background: var(--surface-2);
+  scroll-margin: 16px;
+}
+.worktree-review pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.worktree-review code {
+  overflow-wrap: anywhere;
+}
+
+.worktree-card strong,
+.worktree-review strong {
+  overflow-wrap: anywhere;
+}

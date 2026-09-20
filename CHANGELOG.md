@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Desktop Settings adds worktree creation, opening through project trust,
+  inspection and reviewed removal. Actions bind to the displayed source project;
+  dirty or stale reviews cannot authorize removal.
+
 - Managed worktrees support inspection and reviewed clean removal. Dirty/ignored
   files, detached or locked checkouts, active tasks and background servers block
   removal. Branches and commits remain; private records are archived after success.

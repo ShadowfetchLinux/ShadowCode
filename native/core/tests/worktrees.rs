@@ -137,6 +137,13 @@ async fn invalid_refs_untrusted_read_only_and_nested_projects_do_not_create_work
             .to_string()
             .contains("repository root")
     );
+    let different = root.path().join("different");
+    fs::create_dir(&different).unwrap();
+    assert!(call(&service, "POST", json!({"workspace":different}))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("Project changed"));
     assert!(worktrees::list(&paths, &project).unwrap().is_empty());
     assert_eq!(
         git(&project, &["worktree", "list", "--porcelain"])

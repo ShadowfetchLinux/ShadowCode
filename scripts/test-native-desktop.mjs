@@ -44,6 +44,7 @@ let httpPeer;
 await mkdir(nativeEnv.TMPDIR);
 await mkdir(project); await mkdir(configDirectory, { recursive: true });
 await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
+for (const args of [["init","-q"],["add","README.md"],["commit","-qm","Desktop fixture base"]]) await promisify(execFile)("git",["-c","core.hooksPath=/dev/null","-c","user.name=Desktop Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd:project});
 await mkdir(path.join(project, ".shadowcode/hooks"), { recursive: true });
 await writeFile(path.join(project, ".shadowcode/hooks/verify.json"), JSON.stringify({
   name: "verify-result", events: ["on_complete"], timeout_sec: 10,
@@ -328,6 +329,21 @@ try {
   await accessibility("background");
   await click('button.drawer-close');
   await openSettings();
+  await clickButton("Worktrees");
+  await until("Worktree creation ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Create worktree' && !b.disabled)"));
+  await clickButton("Create worktree");
+  const worktree=await until("Managed worktree created",async()=>(await api("GET","/api/worktrees")).worktrees[0]);
+  assert.equal(await readFile(path.join(worktree.path,"README.md"),"utf8"),"# Native desktop test\nA disposable workspace.\n");
+  await until("Worktree open button",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Open worktree'&&!b.disabled)"));await clickButton("Open worktree");
+  await until("Explicit worktree trust",()=>execute("return [...document.querySelectorAll('h2')].some(e=>e.textContent==='Trust this folder?')"));await clickButton("Cancel");
+  await openSettings();await clickButton("Worktrees");await until("Worktree inspect ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Inspect removal'&&!b.disabled)"));await clickButton("Inspect removal");
+  await until("Worktree review focused",()=>execute("return document.activeElement?.classList.contains('worktree-review')"));
+  await screenshot("worktrees");await accessibility("worktrees");
+  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktrees-dark");await execute("document.documentElement.dataset.theme='light'");
+  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktrees-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
+  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
+  await clickButton("Remove clean worktree");await until("Managed worktree removed",async()=>!(await api("GET","/api/worktrees")).worktrees.length);
+  assert.equal((await promisify(execFile)("git",["rev-parse",worktree.branch],{cwd:project})).stdout.trim(),worktree.base_commit);
   await clickButton("Plugins");
   await until("Native plugin catalog",()=>execute("return !!document.querySelector('.plugin-settings')"));
   await clickButton("Review python-expert");
@@ -753,7 +769,8 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, retained branch and light/dark/compact accessibility",
+    "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

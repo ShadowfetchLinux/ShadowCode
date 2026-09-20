@@ -273,6 +273,19 @@ regression tests verify compact-dialog scrolling/resizing and trust confirmation
 bound to the displayed project; all ten library tests pass after that fix. Broader
 real-terminal resize coverage remains open.
 
+## Desktop worktree controls
+
+The native Settings panel creates and lists worktrees, opens the normal trust
+prompt, and presents a focused removal review with exact path, branch, commit and
+status. Requests bind to the displayed source project. Five service tests include
+rejection after project selection changes; all 23 UI tests and seven browser
+scenarios pass. UI regressions cover dirty-removal blocking, exact review hashes,
+stale-review errors and explicit project opening. The native-window probe creates
+and removes a real Git worktree, cancels its trust prompt, verifies retained branch
+identity, and checks light/dark/compact accessibility. The worktree screenshot is
+inspected for layout. Clippy and both frontend/native builds pass. Dirty-state
+transfer, reviewed return of changes and damaged-checkout recovery remain open.
+
 ## Reviewed worktree removal
 
 Five worktree tests now include locked/detached checkouts, staged and unstaged
@@ -283,8 +296,8 @@ record. Eleven library tests include an atomic idle-workspace reservation that
 blocks new background starts and releases correctly. The existing 16 background
 process/tool tests pass. The executable's 17 CLI groups / 32 scripted model requests
 now exercise inspection, rejected stale removal, successful removal, empty active
-inventory and retained branch identity. Clippy and the native build pass. Dedicated
-desktop controls and missing/damaged-checkout recovery remain open.
+inventory and retained branch identity. Clippy and the native build pass. Missing/damaged-checkout recovery remains open; desktop controls are verified
+separately above.
 
 ## Isolated worktree creation foundation
 
@@ -297,7 +310,7 @@ with source contents intact. The native CLI passes **17 scenario groups with
 32 scripted model requests**, including creation, inventory, explicit trust and a
 model file-inspection task inside the isolated checkout. Clippy and the executable
 build pass. This proves the creation foundation; dirty-state transfer, missing-checkout
-recovery controls and dedicated desktop workflows remain open. Reviewed clean
+recovery controls remain open. Reviewed clean
 removal is verified separately above.
 
 ## Compact desktop job polling

@@ -1621,6 +1621,7 @@ export default function App() {
       {overlay === "settings" && (
         <Settings
           cfg={cfg}
+          onOpenProject={(path) => void pickProject(path)}
           onClose={() => setOverlay("")}
           onToast={toast}
           onSave={async (values, key, env) => {

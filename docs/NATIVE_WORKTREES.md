@@ -10,6 +10,14 @@ shadowcode --workspace /path/to/repository worktree --create
 shadowcode --workspace /path/to/repository worktree --create --reference main
 ```
 
+In the native desktop, open **Settings → Worktrees**. The panel shows the source
+project and managed checkouts, creates from a chosen local reference, and opens a
+checkout through the normal trust flow. **Inspect removal** shows its exact path,
+branch, commit and status before enabling **Remove clean worktree**. Dirty reviews
+remain blocked; an error clears the review so a fresh inspection is required.
+Actions include the displayed source project, and the engine rejects a changed
+selection. The panel supports keyboard focus and light/dark/compact layouts.
+
 The command returns the new path, branch, base commit and recovery-record ID.
 Open that path through the existing project controls, or use it as `--workspace`.
 Review and trust the new project before running tasks there:
@@ -56,5 +64,5 @@ removal, just as with ordinary Git operations. Missing or damaged checkout
 registrations still require manual inspection; the recovery record remains.
 
 Carrying uncommitted changes into an isolated checkout, reviewed return/merge
-operations, recovery controls for missing/damaged checkouts, and dedicated desktop
-controls remain part of the [native migration gates](NATIVE_MIGRATION.md).
+operations and recovery controls for missing/damaged checkouts remain part of the
+[native migration gates](NATIVE_MIGRATION.md).

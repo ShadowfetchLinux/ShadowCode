@@ -182,10 +182,19 @@ impl Service {
         let store = self.engine.store();
         let text = |key: &str| body[key].as_str().unwrap_or("");
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
+        if path.starts_with("/api/worktrees")
+            && request.method == "POST"
+            && !text("workspace").is_empty()
+        {
+            ensure!(
+                Workspace::open(Path::new(text("workspace")))?.path == self.workspace()?,
+                "Project changed; refresh worktrees before continuing"
+            );
+        }
         match (request.method.as_str(), path) {
             ("GET", "/api/worktrees") => {
                 return Ok(
-                    json!({"worktrees":crate::worktrees::list(self.engine.paths(),&self.workspace()?)?}),
+                    json!({"workspace":self.workspace()?,"worktrees":crate::worktrees::list(self.engine.paths(),&self.workspace()?)?}),
                 )
             }
             ("POST", "/api/worktrees/inspect") => {

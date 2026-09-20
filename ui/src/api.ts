@@ -106,6 +106,26 @@ export type HookCatalog = {
   trusted?: boolean;
   approved?: { path: string; hash: string }[];
 };
+export type ManagedWorktree = {
+  id: string;
+  source: string;
+  path: string;
+  branch: string;
+  base_commit: string;
+  common_directory: string;
+  state: string;
+  created_at: number;
+  detail: string;
+};
+export type WorktreeInspection = {
+  record: ManagedWorktree;
+  head: string;
+  current_branch: string;
+  status: string;
+  can_remove: boolean;
+  reason: string;
+  hash: string;
+};
 export type Job = {
   id: string;
   task_id?: string;
@@ -454,6 +474,21 @@ export const api = {
       values: { servers },
       api_key: "",
       api_key_env: "",
+    }),
+  worktrees: () =>
+    get<{ workspace: string; worktrees: ManagedWorktree[] }>("/api/worktrees"),
+  createWorktree: (workspace: string, reference: string) =>
+    send<ManagedWorktree>("/api/worktrees", "POST", { workspace, reference }),
+  inspectWorktree: (workspace: string, id: string) =>
+    send<WorktreeInspection>("/api/worktrees/inspect", "POST", {
+      workspace,
+      id,
+    }),
+  removeWorktree: (workspace: string, id: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/remove", "POST", {
+      workspace,
+      id,
+      hash,
     }),
   plugins: () => get<LegacyPluginCatalog | NativePluginCatalog>("/api/plugins"),
   previewPlugin: (source: { name: string } | { bundle: unknown }) =>

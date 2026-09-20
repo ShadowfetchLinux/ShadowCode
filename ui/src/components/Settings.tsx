@@ -1,4 +1,5 @@
 import { Dialog } from "./Dialog";
+import { WorktreeSettings } from "./WorktreeSettings";
 import { PluginSettings } from "./PluginSettings";
 import { McpSettings } from "./McpSettings";
 import { isNative } from "../lib/transport";
@@ -15,7 +16,13 @@ import {
 } from "../api";
 
 type Section =
-  "model" | "permissions" | "appearance" | "hooks" | "mcp" | "plugins";
+  | "model"
+  | "permissions"
+  | "appearance"
+  | "hooks"
+  | "mcp"
+  | "plugins"
+  | "worktrees";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "model", label: "Model" },
   { id: "permissions", label: "Permissions" },
@@ -23,6 +30,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "hooks", label: "Hooks" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
+  { id: "worktrees", label: "Worktrees" },
 ];
 
 export function Settings({
@@ -31,6 +39,7 @@ export function Settings({
   onSave,
   onToast,
   initialSection = "model",
+  onOpenProject,
 }: {
   cfg: Record<string, unknown>;
   onClose: () => void;
@@ -41,6 +50,7 @@ export function Settings({
   ) => Promise<void>;
   onToast: (text: string, kind: "ok" | "err" | "info") => void;
   initialSection?: Section;
+  onOpenProject?: (path: string) => void;
 }) {
   const model = (cfg.model || {}) as Record<string, string>;
   const permissions = (cfg.permissions || {}) as Record<
@@ -270,7 +280,7 @@ export function Settings({
     <Dialog label="Settings" className="modal settings" onClose={onClose}>
       <nav className="settings-nav">
         <h2>Settings</h2>
-        {SECTIONS.map((s) => (
+        {SECTIONS.filter((s) => s.id !== "worktrees" || isNative()).map((s) => (
           <button
             type="button"
             key={s.id}
@@ -758,6 +768,9 @@ export function Settings({
           </section>
         )}
 
+        {section === "worktrees" && isNative() && (
+          <WorktreeSettings onOpen={onOpenProject} onToast={onToast} />
+        )}
         <div className="row end settings-foot">
           <button type="button" className="ghost" onClick={onClose}>
             Close
