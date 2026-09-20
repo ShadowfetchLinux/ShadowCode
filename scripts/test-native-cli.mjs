@@ -1,0 +1,283 @@
+// Exercise the shipped executable without DISPLAY, Python, or a browser.
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL("../", import.meta.url));
+const binary = process.env.SHADOW_DESKTOP_BINARY || path.join(root, "target/debug/shadowcode");
+const binaryArgs = JSON.parse(process.env.SHADOW_CLI_ARGS || "[]");
+assert.ok(Array.isArray(binaryArgs) && binaryArgs.every(arg => typeof arg === "string"));
+const artifacts = path.resolve(process.env.SHADOW_CLI_ARTIFACTS || path.join(root, "artifacts/native-cli"));
+await mkdir(artifacts, { recursive: true });
+await rm(path.join(artifacts, "result.json"), { force: true });
+await rm(path.join(artifacts, "failure.txt"), { force: true });
+const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-cli-"));
+const project = path.join(scratch, "project");
+const profile = path.join(scratch, "profile");
+await mkdir(project); await mkdir(path.join(profile, "config"), { recursive: true });
+await writeFile(path.join(project, "README.md"), "# CLI project\nfixture-read-value\n");
+const env = { ...process.env };
+delete env.DISPLAY; delete env.WAYLAND_DISPLAY;
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const children = new Set(), sockets = new Set(), checks = [];
+let modelError, requests = 0, hungRequests = 0;
+async function until(label, fn, timeout = 15000) {
+  const end = Date.now() + timeout; let last;
+  while (Date.now() < end) {
+    if (modelError) throw modelError;
+    try { const value = await fn(); if (value) return value; } catch (error) { last = error; }
+    await delay(50);
+  }
+  throw new Error(`${label} timed out${last ? `: ${last}` : ""}`);
+}
+function launch(args, { workspace = project, tty = false } = {}) {
+  const commandArgs = [...binaryArgs, "--profile", profile, "--workspace", workspace, ...args];
+  // util-linux script supplies a real PTY for approval tests. Every argument is
+  // shell quoted; no task or filesystem text is interpolated as shell syntax.
+  const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
+  const child = tty ? spawn("script", ["--quiet", "--return", "--flush", "--command", [binary, ...commandArgs].map(quote).join(" "), "/dev/null"], { env, stdio: "pipe", detached: true })
+    : spawn(binary, commandArgs, { env, stdio: "pipe", detached: true });
+  const output = { stdout: "", stderr: "", code: undefined, signal: undefined };
+  child.stdout.on("data", data => { output.stdout += data; if (output.stdout.length > 2_000_000) child.kill("SIGKILL"); });
+  child.stderr.on("data", data => { output.stderr += data; if (output.stderr.length > 2_000_000) child.kill("SIGKILL"); });
+  children.add(child);
+  const done = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => { output.code = code; output.signal = signal; children.delete(child); resolve(output); });
+  });
+  return { child, output, done, args };
+}
+async function interrupt(run, signal = "SIGINT") {
+  run.expectedSignal = signal;
+  run.child.kill(signal);
+}
+async function finish(run, code = 0, timeout = 20000) {
+  let timer;
+  const output = await Promise.race([run.done, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`CLI ${JSON.stringify(run.args)} timed out: ${JSON.stringify(run.output)}`)), timeout); })]).finally(() => clearTimeout(timer));
+  // AppImage's extraction wrapper can die by signal while the native child
+  // still performs orderly cleanup. Its outer signal status is preserved; the
+  // caller also checks the native child's JSON result and saved process state.
+  if (output.signal && binaryArgs.includes("--appimage-extract-and-run") && run.expectedSignal) {
+    assert.equal(output.signal, run.expectedSignal, JSON.stringify(output));
+    assert.equal(output.code, null);
+  } else {
+    assert.equal(output.code, code, JSON.stringify(output));
+    assert.equal(output.signal, null, JSON.stringify(output));
+  }
+  if (modelError) throw modelError;
+  return output;
+}
+async function cli(args, code = 0, opts) {
+  const output = await finish(launch(["--json", ...args], opts), code);
+  try { return JSON.parse(output.stdout); } catch { throw new Error(`Invalid CLI JSON: ${JSON.stringify(output)}`); }
+}
+async function dead(pid) {
+  try { return /\) [ZX] /.test(await readFile(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+}
+const model = createServer(async (req, res) => {
+  try {
+    let body = ""; for await (const chunk of req) body += chunk;
+    const payload = JSON.parse(body); const index = requests++;
+    assert.equal(payload.model, "native-cli-fixture");
+    const prompt = payload.messages.filter(m => m.role === "user").at(-1).content;
+    const current = payload.messages.slice(payload.messages.findLastIndex(m => m.role === "user") + 1);
+    const hadTool = current.some(m => m.role === "tool");
+    const tool = (name, args) => ({ id: `cli-call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
+    if (prompt.includes("PIPE")) {
+      res.writeHead(200, { "Content-Type": "text/event-stream" }); res.flushHeaders();
+      const interval = setInterval(() => res.write(`data: ${JSON.stringify({choices:[{delta:{content:"Streaming until the client closes its output. "}, finish_reason:null}]})}\n\n`), 20);
+      res.on("close", () => clearInterval(interval)); return;
+    }
+    if (prompt.includes("HANG")) { hungRequests++; res.writeHead(200, { "Content-Type": "application/json" }); res.flushHeaders(); return; }
+    let message;
+    if (prompt.includes("APPROVE") && !hadTool) {
+      message = { role: "assistant", content: "Checking the exact authorized operation.", tool_calls: [tool("exec", { command: "printf approval-ran > approval.txt" })] };
+    } else if (prompt.includes("CHECK_WRITE") && !hadTool) {
+      message = { role: "assistant", content: "Writing a checkpointed file.", tool_calls: [tool("write_file", { path: "checkpoint.txt", content: "checkpoint-value\n", expected_hash: "missing" })] };
+    } else if (!hadTool) {
+      message = { role: "assistant", content: "Inspecting this project.", tool_calls: [tool("read_file", { path: "README.md" })] };
+    } else {
+      if (prompt.includes("CONTINUE")) assert.ok(payload.messages.some(m => m.role === "assistant" && m.content?.includes("CLI completed")), "Continuation must preserve prior assistant history");
+      if (!prompt.includes("APPROVE") && !prompt.includes("CHECK_WRITE")) assert.ok(current.some(m => m.role === "tool" && m.content.includes("fixture-read-value")), "Read result must reach the model");
+      message = { role: "assistant", content: "CLI completed the requested inspection." };
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ choices: [{ message, finish_reason: message.tool_calls ? "tool_calls" : "stop" }], usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 } }));
+  } catch (error) {
+    modelError = error;
+    res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: String(error) }));
+  }
+});
+model.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+await new Promise(resolve => model.listen(0, "127.0.0.1", resolve));
+await writeFile(path.join(profile, "config/config.yaml"), JSON.stringify({
+  model: { default: "native-cli-fixture", name: "native-cli-fixture", provider: "local", endpoint: `http://127.0.0.1:${model.address().port}/v1`, context_limit: 16384 },
+  onboarding: { completed: true, workspace: project }, ui: { notify: false },
+}));
+let server;
+try {
+  assert.match((await finish(launch(["--version"]))).stdout, /^ShadowCode 0\.20\.0\s*$/);
+  assert.match((await finish(launch(["ui", "--version"]))).stdout, /^ShadowCode 0\.20\.0\s*$/);
+  assert.match((await finish(launch(["--help"]))).stdout, /serve/);
+  await finish(launch(["--unknown-option"]), 2);
+  assert.equal((await cli(["health"])).runtime, "rust");
+  assert.match((await cli(["run", "READ"], 1)).error, /trust/i);
+  assert.match((await cli(["config", "not_a_setting", "true"], 1)).error, /Unknown setting/);
+  await cli(["trust"]);
+  assert.match((await cli(["run", "READ", "--detach"], 1)).error, /Detached/);
+  assert.match((await cli(["background", "start", "--command", "touch unexpected"], 1)).error, /Background processes/);
+  assert.equal((await cli(["jobs"])).jobs.length, 0);
+  await finish(launch(["models", "--use", "native-cli-fixture", "--context-limit", "32768"]), 2);
+  const registered = await cli(["models", "--use", "native-cli-fixture", "--provider", "local", "--endpoint", `http://127.0.0.1:${model.address().port}/v1`, "--context-limit", "32768"]);
+  assert.equal(registered.model.context_limit, 32768);
+  assert.equal(await cli(["config", "model.context_limit"]), 32768);
+  checks.push("headless startup, arguments, project trust and lifecycle validation");
+
+  const task = await cli(["run", "READ this project\r \u001b[31m"]);
+  assert.equal(task.status, "completed"); assert.equal(task.usage.total_tokens, 80);
+  const continued = await cli(["run", "CONTINUE this inspection", "--session", task.session_id.slice(0, 12)]);
+  assert.equal(continued.status, "completed"); assert.equal(continued.session_id, task.session_id);
+  const replayed = (await finish(launch(["jobs", task.id, "--watch"]))).stdout;
+  assert.equal(replayed.split("CLI completed the requested inspection.").length - 1, 1, "Completed jobs replay their own saved response once");
+  const events = (await finish(launch(["run", "EVENTS inspect project", "--events"]))).stdout.trim().split("\n").map(line => JSON.parse(line));
+  assert.ok(events.some(e => e.type === "event" && e.event.type === "tool.completed"));
+  const cursors = events.filter(e => e.type === "event").map(e => e.event.id);
+  assert.ok(cursors.every((id, index) => index === 0 || id > cursors[index - 1]), "Events must be emitted once in saved cursor order");
+  assert.equal(events.at(-1).type, "result"); assert.equal(events.at(-1).exit_code, 0);
+  const badEvents = (await finish(launch(["run", "EVENTS invalid", "--events", "--interactive"]), 1)).stdout.trim().split("\n").map(line => JSON.parse(line));
+  assert.equal(badEvents.at(-1).exit_code, 1);
+  checks.push("real native tool loop, structured results, ordered events and saved continuation");
+
+  const denied = await cli(["run", "APPROVE this command"], 2);
+  assert.equal(denied.status, "needs_approval");
+  assert.equal(await readFile(path.join(project, "approval.txt")).then(() => true, () => false), false);
+  const interactive = launch(["run", "APPROVE interactively", "--interactive"], { tty: true });
+  await until("Interactive approval", () => interactive.output.stdout.includes("[y/N]"));
+  interactive.child.stdin.write("y\n");
+  await finish(interactive);
+  assert.equal(await readFile(path.join(project, "approval.txt"), "utf8"), "approval-ran");
+  await rm(path.join(project, "approval.txt"));
+  const decline = launch(["run", "APPROVE but decline", "--interactive"], { tty: true });
+  await until("Interactive denial", () => decline.output.stdout.includes("[y/N]"));
+  decline.child.stdin.write("n\n"); await finish(decline);
+  assert.equal(await readFile(path.join(project, "approval.txt")).then(() => true, () => false), false);
+  const cancelPrompt = launch(["run", "APPROVE then interrupt", "--interactive"], { tty: true });
+  await until("Interruptible approval", () => cancelPrompt.output.stdout.includes("[y/N]"));
+  cancelPrompt.child.stdin.write("\x03"); await finish(cancelPrompt, 130);
+  checks.push("noninteractive approval refusal, actual PTY approval/denial and Ctrl-C at prompt");
+
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const before = hungRequests;
+    const hung = launch(["--json", "run", `HANG until ${signal}`]);
+    await until("Stalled provider", () => hungRequests > before);
+    const observed = await cli(["jobs"]);
+    assert.ok(observed.jobs.some(j => j.status === "running"));
+    const status = await cli(["status"]);
+    assert.equal(status.workspace, project); assert.ok(status.jobs.some(j => j.status === "running"));
+    assert.match((await cli(["exec", "touch unexpected"], 1)).error, /foreground CLI/);
+    await interrupt(hung, signal);
+    assert.equal(JSON.parse((await finish(hung, 130)).stdout).status, "cancelled");
+    assert.ok((await cli(["jobs"])).jobs.every(j => !["running", "queued", "cancelling"].includes(j.status)));
+  }
+  checks.push("SIGINT/SIGTERM cancellation, concurrent observation and temporary-owner mutation rejection");
+
+  await cli(["sessions", task.session_id.slice(0, 12), "--rename", "CLI unique title % _"]);
+  const found = await cli(["sessions", "CLI unique title % _"]);
+  assert.equal(found.sessions.length, 1); assert.equal(found.sessions[0].id, task.session_id);
+  const exported = path.join(scratch, "conversation.json");
+  await cli(["export", "--session", task.session_id, "--format", "json", "--output", exported]);
+  const exact = (await finish(launch(["export", "--session", task.session_id, "--format", "json"]))).stdout;
+  assert.equal(exact, await readFile(exported, "utf8")); assert.ok(JSON.parse(exact));
+  const markdown = path.join(scratch, "conversation.md");
+  await cli(["export", "--session", task.session_id, "--output", markdown]);
+  const rawMarkdown = (await finish(launch(["export", "--session", task.session_id]))).stdout;
+  assert.equal(rawMarkdown, await readFile(markdown, "utf8")); assert.ok(rawMarkdown.includes("\u001b[31m"), "Redirected exports preserve source bytes");
+  const written = await cli(["run", "CHECK_WRITE create checkpoint"]);
+  assert.equal(await readFile(path.join(project, "checkpoint.txt"), "utf8"), "checkpoint-value\n");
+  const checkpoint = await cli(["checkpoints", "--session", written.session_id]);
+  assert.notEqual(checkpoint.kind, "error");
+  await cli(["checkpoints", "--session", written.session_id, "--undo"]);
+  assert.equal(await readFile(path.join(project, "checkpoint.txt")).then(() => true, () => false), false);
+  checks.push("literal session search, prefix resolution, exact atomic export and checkpoint rewind");
+
+  await mkdir(path.join(project, ".shadow/skills"), { recursive: true });
+  await writeFile(path.join(project, ".shadow/skills/inspect.md"), "---\nmode: review\ndescription: CLI inspection\n---\nInspect this project. $ARGUMENTS\n");
+  assert.ok(JSON.stringify(await cli(["skill", "--list"])).includes("inspect"));
+  assert.equal((await cli(["skill", "inspect", "CLI_SKILL"])).status, "completed");
+  const goalCount = (await cli(["goals"])).goals.length;
+  await cli(["goal", "Invalid interactive goal", "--run", "--interactive"], 1);
+  assert.equal((await cli(["goals"])).goals.length, goalCount, "Invalid options must not create a goal");
+  const goal = await cli(["goal", "HANG persistent goal"]);
+  assert.ok((await cli(["goals"])).goals.some(g => g.id === goal.id));
+  checks.push("project skills, durable goal creation and validation before mutation");
+
+  server = launch(["--json", "serve"]);
+  await until("Headless owner", () => server.output.stderr.includes("serving"));
+  assert.match((await cli(["serve"], 1)).error, /already owns/);
+  const serverHealth = await cli(["health"]); assert.equal(serverHealth.workspace, project);
+  const background = await cli(["background", "start", "--name", "cli-dev", "--command", "printf ready; sleep 60"]);
+  assert.ok(background.id);
+  await until("Background logs", async () => (await cli(["background", "logs", background.id])).output.includes("ready"));
+  assert.equal((await cli(["run", "READ while server runs"])).status, "completed");
+  const brokenPipe = launch(["run", "PIPE until output closes", "--events"]);
+  brokenPipe.child.stdout.once("data", () => brokenPipe.child.stdout.destroy());
+  await finish(brokenPipe, 1);
+  assert.ok((await cli(["jobs"])).jobs.every(j => !["running", "queued", "cancelling"].includes(j.status)), "A broken output pipe must cancel the task started by that CLI, including on a persistent owner");
+  const brokenStatus = launch(["run", "HANG with closed stderr"]);
+  brokenStatus.child.stderr.destroy();
+  await finish(brokenStatus, 1);
+  assert.ok((await cli(["jobs"])).jobs.every(j => !["running", "queued", "cancelling"].includes(j.status)), "Closed status output must not panic or abandon the new task");
+  await cli(["background", "stop", background.id.slice(0, 12)]);
+  await until("Stopped background process", () => dead(background.pid));
+  const before = hungRequests;
+  const detached = await cli(["run", "HANG detached", "--detach"]);
+  await until("Detached model request", () => hungRequests > before);
+  const observer = launch(["jobs", detached.id, "--watch"]);
+  await until("Attached job observer", () => observer.output.stderr.includes("Model:"));
+  await interrupt(observer);
+  assert.equal(JSON.parse((await finish(observer, 130)).stdout).status, "detached");
+  assert.equal((await cli(["jobs", detached.id])).status, "running");
+  await cli(["jobs", detached.id, "--cancel"]);
+
+  const waiting = launch(["--json", "run", "APPROVE through another CLI", "--approval", "wait"]);
+  const pending = await until("Externally available approval", async () => (await cli(["approvals"])).approvals[0]);
+  await cli(["approvals", "--session", pending.session_id, "--id", pending.id, "--decision", "approve"]);
+  assert.equal(JSON.parse((await finish(waiting)).stdout).status, "completed");
+  assert.equal(await readFile(path.join(project, "approval.txt"), "utf8"), "approval-ran");
+
+  const goalRun = launch(["--json", "goals", "--resume", goal.id]);
+  await until("Resumed persistent goal", async () => (await cli(["goals"])).goals.some(g => g.id === goal.id && g.running));
+  await interrupt(goalRun); await finish(goalRun, 130);
+  assert.equal((await cli(["goals"])).goals.find(g => g.id === goal.id).running, false);
+  checks.push("shared persistent owner, background lifecycle, detached jobs, watch-only cancellation, external approval and goal pause");
+
+  const remoteExec = launch(["--json", "exec", "sleep 60 & echo $! > remote-child.pid; wait", "--timeout", "120"]);
+  const remoteChild = await until("Remote terminal child", async () => (await readFile(path.join(project, "remote-child.pid"), "utf8")).trim());
+  await interrupt(remoteExec, "SIGTERM");
+  assert.equal(JSON.parse((await finish(remoteExec, 130)).stdout).status, "cancelled");
+  await until("Remote disconnect child cleanup", () => dead(remoteChild));
+  const stubborn = await cli(["background", "start", "--name", "stubborn", "--command", "trap '' TERM; sleep 60 & echo $! > stubborn-child.pid; wait"]);
+  const stubbornChild = await until("Stubborn child", async () => (await readFile(path.join(project, "stubborn-child.pid"), "utf8")).trim());
+  await interrupt(server, "SIGTERM");
+  assert.equal(JSON.parse((await finish(server)).stdout).status, "stopped");
+  await until("Persistent parent cleanup", () => dead(stubborn.pid));
+  await until("Persistent child cleanup", () => dead(stubbornChild));
+  assert.ok((await cli(["background", "list"])).tasks.every(t => !["RUNNING", "STARTING", "STOPPING"].includes(t.status)));
+  assert.equal(await readFile(path.join(project, "unexpected")).then(() => true, () => false), false);
+  checks.push("remote command disconnect and persistent-owner shutdown clean process groups and release the profile");
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, binary, modelRequests: requests, checks }, null, 2));
+  console.log(`Native CLI passed ${checks.length} scenario groups with ${requests} model requests.`);
+} catch (error) {
+  await writeFile(path.join(artifacts, "failure.txt"), `${error.stack}\nModel error: ${modelError?.stack || "none"}\nModel requests: ${requests}\nPassed: ${checks.join("; ")}\n${[...children].map(c => `Live child: ${c.pid}`).join("\n")}\n`);
+  throw error;
+} finally {
+  for (const child of children) { try { process.kill(-child.pid, "SIGTERM"); } catch {} }
+  for (const socket of sockets) socket.destroy(); model.close();
+  await delay(3000);
+  for (const child of children) { try { process.kill(-child.pid, "SIGKILL"); } catch {} }
+  await rm(scratch, { recursive: true, force: true });
+}

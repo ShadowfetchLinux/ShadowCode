@@ -8,8 +8,8 @@ the existing React visual design. This document tracks engineering acceptance;
 
 - Ship an executable and AppImage containing no Python interpreter, Python
   sidecar, or browser-launch dependency. Embed the compiled interface. The native
-  desktop communicates through Tauri IPC; a loopback service is optional for CLI
-  integrations and browser automation, not required for desktop operation.
+  desktop communicates through Tauri IPC; native CLI clients share the engine
+  through a private Unix socket, with no desktop HTTP listener required.
 - Preserve existing XDG settings, secrets, sessions, tasks, events, goals, and
   workspaces. Back up before schema migration, use atomic writes, and lock the
   active profile so concurrent managers cannot corrupt job recovery.
@@ -81,6 +81,13 @@ Implemented foundation:
   discovery, explicit invocation, frozen queued instructions, model routing,
   preserved Plan/Review permissions, source/hash provenance, durable command
   cards, validated editing, and project notes included in task guidance.
+- [Native CLI](NATIVE_CLI.md) for tasks, commands/skills, approvals, sessions and
+  export, model settings, goals, checkpoints, and background controls. It starts
+  without a display and shares an active desktop or explicit headless owner
+  through a private local connection. Client navigation does not switch the
+  desktop project. Owned tasks cancel on interrupt/output failure; watching an
+  existing task leaves it running. Full TUI, updater/doctor, and integration
+  migration remain separate requirements.
 - [Managed background processes](NATIVE_BACKGROUND.md) for project servers and
   watchers, with permission checks, bounded live log tails, durable status and
   audit events, project-scoped controls, bounded concurrency, legacy history
@@ -132,6 +139,15 @@ Implemented foundation:
 The remaining orchestration/integrations, full desktop interaction/stress
 coverage, and release packaging are still in progress. The native
 branch is not yet a replacement for the 0.19 release.
+
+One identified packaging blocker is concurrent AppImage extraction. The pinned
+type2 runtime extracts identical images into a shared content-based directory,
+then removes that directory when one wrapper exits. The scripted CLI/desktop
+workflow passes because application code and UI are already loaded, but that
+does not prove resources needed later remain available. The release must provide
+isolated extraction lifetimes and test that one launch cannot remove another's
+files, including repeated default-profile activation. Until then, use the native
+executable or separate temporary extraction directories for simultaneous launches.
 
 See [native desktop development](NATIVE_DESKTOP.md) for prerequisites and isolated
 build/run instructions. Compile the interface before checks that include the

@@ -9,7 +9,15 @@ without live credentials. There is no bug bounty program.
 
 ## Local trust boundary
 
-The desktop API defaults to `127.0.0.1:7430`. It validates loopback Host values,
+Native 0.20 development uses embedded Tauri IPC for the desktop and a private
+Unix socket for CLI clients. The socket directory must be owned by the OS user
+and private; both peers check user credentials, protocol and profile identity.
+Requests use bounded frames and independent project/session selection. It opens
+no TCP listener. See [native CLI lifecycle and trust](docs/NATIVE_CLI.md).
+These boundaries trust processes running as the same user. Full native hooks,
+plugins and MCP migration remain in progress.
+
+The supported 0.19 desktop API defaults to `127.0.0.1:7430`. It validates loopback Host values,
 rejects cross-origin and cross-site browser requests, and sends framing, MIME,
 referrer, and content-security headers. Do not expose it to a network, reverse
 proxy it to the public internet, or run it under a shared untrusted account.
@@ -55,7 +63,11 @@ load remote images embedded in model responses. External links open with
 ## Releases
 
 Verify release assets against `SHA256SUMS`. Checksums detect mismatched or damaged
-downloads; they are not independent signatures. The AppImage bundles Python and
+downloads; they are not independent signatures. The 0.19 AppImage bundles Python and
 its dependencies, so security updates require installing a new build. Source
 installations use a project virtual environment. Neither installer deletes keys,
 configuration, or saved task history.
+
+Native development packages contain Rust application code, embedded UI assets,
+and native libraries; their dependency inventories and notices are checked during
+packaging. They have not yet replaced the supported release download.

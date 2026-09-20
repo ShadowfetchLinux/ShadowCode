@@ -54,9 +54,11 @@ persisted PID, which could now belong to an unrelated process. An interrupted
 record does not prove that an independently detached process has exited.
 
 The desktop uses Rust IPC routes `GET/POST /api/background`,
-`GET /api/background/<id>`, and `POST /api/background/<id>/stop`. The full native
-CLI and agent-facing background tools remain part of the broader integration
-work; this feature supplies the manager and user-operated desktop controls.
+`GET /api/background/<id>`, and `POST /api/background/<id>/stop`.
+The [native CLI](NATIVE_CLI.md) exposes `background start`, `list`, `logs`, and
+`stop`; starting requires an open desktop or persistent `shadowcode serve`
+owner. Agent-facing background tools remain part of the broader integration
+work.
 
 See [verification](NATIVE_VERIFICATION.md) and the remaining
 [release gates](NATIVE_MIGRATION.md).

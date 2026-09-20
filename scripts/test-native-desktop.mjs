@@ -2,7 +2,8 @@
 // tauri-driver, and WebKitWebDriver. No Python service or browser launcher.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createWriteStream } from "node:fs";
 import { mkdtemp, mkdir, readFile, writeFile, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -336,6 +337,26 @@ try {
     return task?.name === "shutdown-server" && task.output.includes("shutdown-ready") && task;
   });
   const backgroundChild = (await readFile(path.join(project, "background-child.pid"), "utf8")).trim();
+  // A separate CLI in another project shares this actual desktop's engine.
+  // It must not change the visible or remembered project/session selection.
+  const cliProject = path.join(scratch, "cli-project"); await mkdir(cliProject);
+  const cliEnv = {...process.env}; delete cliEnv.DISPLAY; delete cliEnv.WAYLAND_DISPLAY;
+  const cli = async args => {
+    const result = await promisify(execFile)(binary, [...binaryArgs.filter(arg => arg !== "ui"), "--profile", profile, "--workspace", cliProject, "--json", ...args], {env: cliEnv, timeout: 20000, maxBuffer: 2_000_000});
+    return JSON.parse(result.stdout);
+  };
+  const remembered = await readFile(path.join(profile, "state/last-workspace.txt"), "utf8");
+  assert.equal((await cli(["health"])).workspace, cliProject);
+  await cli(["trust"]);
+  assert.ok((await cli(["command", "new"])).metadata.session_id);
+  const cliProcess = await cli(["background", "start", "--name", "cli-owner", "--command", "printf cli-ready; sleep 60"]);
+  await until("CLI logs through desktop owner", async () => (await cli(["background", "logs", cliProcess.id])).output.includes("cli-ready"));
+  await cli(["background", "stop", cliProcess.id]);
+  assert.equal((await api("GET", "/api/workspace/status")).workspace, project);
+  assert.equal(await readFile(path.join(profile, "state/last-workspace.txt"), "utf8"), remembered);
+  const desktopProcesses = (await api("GET", "/api/background")).tasks;
+  assert.ok(desktopProcesses.some(p => p.id === shutdownBackground.id && p.status === "RUNNING"));
+  assert.ok(desktopProcesses.every(p => p.id !== cliProcess.id));
   // A terminal command is still running when the actual native quit command is
   // invoked. The process and its child must be gone before shutdown completes.
   await execute("window.__TAURI_INTERNALS__.invoke('api',{request:{method:'POST',path:'/api/workspace/exec',body:{command:'sleep 60 & echo $! > child.pid; wait',timeout:120}}}).catch(()=>{});return true;");
@@ -348,8 +369,8 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
-  console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, replay, cancellation, layout, goals, accessibility, shutdown.");
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "shared CLI engine with independent project selection and background controls", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {
     await screenshot("failure").catch(() => {});

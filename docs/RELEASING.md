@@ -1,5 +1,13 @@
 # Release procedure
 
+The procedure below is for the supported Python-based 0.19 release. Native 0.20
+development packages use [the Rust/Tauri build](NATIVE_DESKTOP.md) and are checked
+by `.github/workflows/native.yml`, including the actual headless CLI and native
+window from the AppImage. Before replacing the supported download, complete
+all [native migration and release gates](NATIVE_MIGRATION.md), prepare
+corresponding-source artifacts, and verify the final installation. Do not use
+the legacy tag workflow to publish a native release.
+
 Build on Ubuntu 24.04 / x86_64 with Python 3.12 and Node 22. `requirements-build.txt`
 records the Python build/test dependency set used for 0.19.0; `ui/package-lock.json`
 locks the frontend. This is a pinned dependency build, not a claim of bit-for-bit

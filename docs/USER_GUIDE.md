@@ -1,5 +1,11 @@
 # ShadowCode user guide
 
+This guide covers the supported 0.19 release. For the Python-free 0.20
+development branch, use the [native desktop](NATIVE_DESKTOP.md) and
+[native CLI](NATIVE_CLI.md) guides, plus the documented
+[migration status](NATIVE_MIGRATION.md). Native lifecycle and integration support
+differ from the browser/API release described below.
+
 ## Start a project
 
 Open ShadowCode, choose a project directory, and select a model. Local servers

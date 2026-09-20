@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **97 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **103 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -55,6 +55,10 @@ integration tests** pass on the development machine. The suite covers:
   mode enforcement, queued source snapshots, source/hash events, project notes,
   terminal exit status and durable cards, session branching/resume/pins,
   untrusted/cross-project rejection, latest-checkpoint rewind, and stale edits.
+- Private local control transport: socket permissions, protocol/size rejection,
+  preservation of existing files and live endpoints, per-client project/session
+  isolation, cleanup after a manual-command client disconnects, bounded idle
+  connection shutdown, and temporary-owner restrictions with profile-lock release.
 
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:
@@ -64,6 +68,28 @@ LD_LIBRARY_PATH=/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib cargo test --works
 ```
 
 The pinned CI toolchain does not require this host-specific workaround.
+
+## Native CLI
+
+`scripts/test-native-cli.mjs` exercises the actual executable with `DISPLAY` and
+`WAYLAND_DISPLAY` removed, an isolated profile and a scripted compatible model.
+It checks project trust, invalid options before mutation, model registration,
+task completion/usage, saved continuation, ordered event JSON, session search,
+exact redirected and atomic file exports, checkpoint rewind, skills and goals.
+Actual pseudo-terminal sessions cover approval, denial, and Ctrl-C while a
+prompt is waiting. Noninteractive requests never silently grant approval.
+
+The probe also hosts `serve`, starts and stops background commands, reads their
+logs, runs a task alongside them, observes and cancels detached work, and approves
+a waiting task from another CLI. SIGINT/SIGTERM, a closed stdout pipe, remote
+manual-command disconnect, and owner shutdown are checked for task/process
+cleanup. Stopping an observer leaves the existing job running. Invalid
+interactive goal options create no goal. Reports go to `artifacts/native-cli/`;
+the same probe runs against the packaged AppImage in `artifacts/native-package/cli/`.
+The package checks caught an argument-parser compatibility regression in
+`shadowcode ui --version` and an AppImage wrapper signal that left its native
+child running. The CLI now preserves that version invocation, and CLI/desktop
+lifecycles observe the extraction wrapper so its loss triggers managed cleanup.
 
 ## Native window
 
@@ -104,6 +130,10 @@ both the skill provenance and a subsequent `/status` command card. Controlled
 input filling explicitly dispatches the input event before WebDriver typing
 and sends Return keys for multiline text. WebKit's clear operation alone can
 otherwise retain the old React value.
+It invokes a headless CLI in a second project while that real desktop owns the
+engine, creates a conversation, starts/reads/stops a background process, and
+checks that the desktop's project, remembered project and original background
+process remain unchanged.
 Fifteen interface unit tests cover ordered replay, pagination, stream finalization,
 listener cleanup, interruption, native tool cards, routing/fallback replay,
 workflow provenance, durable command cards, and disambiguated model labels that omit URL credentials. The seven existing browser
@@ -113,7 +143,7 @@ The same native window workflow also passes when launched from the local optimiz
 AppImage in FUSE-free extraction mode with the legacy `ui` argument. The package
 checker confirms that AppImage and Debian packages contain native ELF application
 code with matching versions and no Python runtime or sidecars. Packaging now
-collects notices for 523 application dependencies, including the resolved Cargo
+collects notices for 534 application dependencies, including the resolved Cargo
 build/test graph and production npm graph. The local AppImage inventory records
 156 system packages; that number depends on the build host's libraries and GTK
 data. Unattributed system files stop packaging, and the extracted-package check
@@ -133,6 +163,10 @@ for that download are retained locally in `artifacts/native-ci-package/`.
 OS dialog interaction, notification delivery, default-profile single-instance
 behavior, broader stress/accessibility coverage, corresponding-source artifacts,
 and the final installed release still need their release-gate checks.
+An upstream-runtime source review also identified shared extraction-cache removal
+between concurrent AppImage invocations. Passing the current window workflow
+does not cover deferred resource access after a second launcher exits. Isolated
+extraction and a dedicated regression remain release requirements.
 
 ## Real local models
 

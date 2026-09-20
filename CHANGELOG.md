@@ -24,6 +24,12 @@
   cards, and support explicit project skills with source/hash provenance. Skills
   preserve Plan/Review restrictions and queued instructions; the editor validates
   metadata and rejects stale saves. Project notes guide subsequent tasks.
+- Native CLI runs tasks without a display, streams ordered event JSON, handles
+  terminal and external approvals, and exposes sessions/export, checkpoints,
+  goals, model settings, skills, and background controls. It shares an open
+  desktop or explicit headless owner through a private Unix connection while
+  keeping project selection independent. Interruptions, broken output pipes,
+  and disconnected manual commands clean up their owned work.
 - Native window automation covers actual tool execution, approvals, reload,
   cancellation, goal progression/pause, accessibility, and subprocess cleanup.
 - Native AppImage and Debian build scripts preserve per-format executable

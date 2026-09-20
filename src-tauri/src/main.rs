@@ -3,8 +3,10 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use shadowcode_core::{
+    cli,
     config::Config,
-    paths::{self, AppPaths},
+    control,
+    paths::{self},
     service::{Request, Service},
 };
 use std::{
@@ -125,8 +127,10 @@ fn request_shutdown(app: &tauri::AppHandle) {
     }
     let app = app.clone();
     let service = app.state::<Service>().inner().clone();
+    app.state::<control::Server>().close();
     let _ = app.emit("shadowcode:shutdown", json!({"status":"closing"}));
     tauri::async_runtime::spawn(async move {
+        app.state::<control::Server>().wait_closed().await;
         match service.engine.shutdown().await {
             Ok(()) => {
                 app.state::<Lifecycle>()
@@ -157,38 +161,40 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let mut profile = None;
-    let mut workspace = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--version" | "-V" => {
-                println!("ShadowCode {}", shadowcode_core::VERSION);
-                return Ok(());
+    let extraction_parent = shadowcode_core::lifecycle::extraction_parent();
+    let options = cli::Options::parse_args();
+    if !options.desktop() {
+        let json_output = options.json;
+        let events_output = options.events();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?;
+        let result = runtime.block_on(cli::run(options));
+        runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+        let code = match result {
+            Ok(code) => code,
+            Err(error) => {
+                if json_output || events_output {
+                    use std::io::Write;
+                    let value = json!({"ok":false,"error":format!("{error:#}")});
+                    let value = if events_output {
+                        json!({"type":"result","exit_code":1,"result":value})
+                    } else {
+                        value
+                    };
+                    let _ = writeln!(std::io::stdout(), "{value}");
+                } else {
+                    use std::io::Write;
+                    let _ = writeln!(std::io::stderr(), "ShadowCode: {error:#}");
+                }
+                1
             }
-            "--help" | "-h" => {
-                println!("ShadowCode {}\n\nUsage: shadowcode [--workspace PATH] [--profile PATH]\n\n  --workspace PATH  Open this project\n  --profile PATH    Use an isolated data profile\n  --version         Print version\n  --help            Show help",shadowcode_core::VERSION);
-                return Ok(());
-            }
-            "ui" => {}
-            "--profile" => {
-                profile = Some(PathBuf::from(
-                    args.next().context("--profile requires a path")?,
-                ))
-            }
-            "--workspace" => {
-                workspace = Some(PathBuf::from(
-                    args.next().context("--workspace requires a path")?,
-                ))
-            }
-            _ => anyhow::bail!("Unknown argument: {arg}. Use --help for available options."),
-        }
+        };
+        std::process::exit(code);
     }
-    let isolated = profile.is_some();
-    let paths = match profile {
-        Some(path) => AppPaths::isolated(&path)?,
-        None => AppPaths::discover()?,
-    };
+    let isolated = options.profile.is_some();
+    let paths = options.paths()?;
+    let workspace = options.workspace;
     let mut builder = tauri::Builder::default();
     if !isolated {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -218,6 +224,9 @@ fn run() -> Result<()> {
         .setup(move |app| {
             let webview_data = paths.data.join("webview");
             let service = Service::open(paths, workspace)?;
+            let control =
+                tauri::async_runtime::block_on(async { control::Server::start(service.clone()) })?;
+            app.manage(control);
             let mut events = service.engine.subscribe();
             app.manage(service.clone());
             let config = app
@@ -283,7 +292,7 @@ fn run() -> Result<()> {
                     if let Ok(mut terminate) =
                         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     {
-                        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{}}
+                        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{},_=shadowcode_core::lifecycle::parent_exited(extraction_parent)=>{}}
                         request_shutdown(&handle);
                     }
                 });

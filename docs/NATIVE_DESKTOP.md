@@ -38,6 +38,11 @@ Choose an installed local model or a compatible endpoint in onboarding. The
 offline preview lets you inspect the workspace but cannot execute coding tasks.
 Model inference remains in Ollama or the selected provider; it is not bundled.
 
+The [native CLI](NATIVE_CLI.md) uses this same executable. Commands such as
+`run`, `sessions`, and `health` run without a display and share an open desktop's
+engine without changing its selected project. `serve` explicitly hosts the
+engine headlessly for detached tasks and background servers.
+
 To work on the live interface, run `./ui/node_modules/.bin/tauri dev` from the
 repository root. The Tauri configuration starts Vite and builds the native app.
 Build hooks explicitly use the `ui` directory, including when the CLI is invoked
@@ -74,6 +79,10 @@ on the development machine. These remain development artifacts.
 Corresponding-source release artifacts, complete feature migration, and final
 release verification/installation are still required before publication as the
 supported download.
+Concurrent extraction-mode launches also need isolated temporary directories:
+the pinned AppImage runtime otherwise shares a directory and can remove files
+still needed by another instance. That lifetime issue remains a release blocker;
+use the unbundled executable or a distinct `TMPDIR` per development invocation.
 
 If linuxdeploy aborts while scanning an inaccessible symlink in a PATH directory,
 remove that directory from PATH for the packaging command; the application does
@@ -101,6 +110,9 @@ not require that tool. No global PATH change is needed.
 - [Background processes](NATIVE_BACKGROUND.md) run project servers and watchers
   alongside coding tasks, with live bounded logs, retained history, stop controls,
   and process-group cleanup during application shutdown.
+- A private Unix socket connects native CLI clients to the desktop's engine.
+  Each client keeps independent navigation state; managed shutdown closes the
+  connection and cancels its in-flight manual commands before engine cleanup.
 
 ## Checks
 
@@ -109,6 +121,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 npm --prefix ui test
+node scripts/test-native-cli.mjs
 ```
 
 The actual window test uses Tauri's WebDriver bridge and a scripted compatible
@@ -127,6 +140,7 @@ and a machine-readable result are written to `artifacts/native/`. This test
 checks the real embedded window, Rust IPC, approval, file and terminal tools,
 reload, cancellation, compact layout, model routing/fallback notices, goals and
 their live transcript, pause, managed background processes,
+CLI coexistence and project isolation,
 light/dark/compact/goals/routing/background accessibility,
 and managed shutdown. It also verifies
 that the executable embeds the current compiled interface and does not load

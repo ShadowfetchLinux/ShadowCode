@@ -49,6 +49,7 @@ pub struct Service {
     pub engine: Engine,
     selection: Arc<RwLock<Selection>>,
     detection: DetectionCache,
+    remember_selection: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -71,6 +72,33 @@ impl Service {
                 session: None,
             })),
             detection: Arc::new(tokio::sync::Mutex::new(None)),
+            remember_selection: true,
+        })
+    }
+    /// A transport client shares the engine, but has its own navigation state.
+    /// Its requests must never activate a different project in the desktop.
+    pub fn fork_selection(&self, workspace: PathBuf, session: Option<String>) -> Result<Self> {
+        let workspace = Workspace::open(&workspace)?.path;
+        if let Some(id) = &session {
+            ensure!(
+                self.engine
+                    .store()
+                    .session(id)?
+                    .context("Session not found")?["workspace"]
+                    .as_str()
+                    == workspace.to_str(),
+                "Session belongs to a different workspace"
+            );
+        }
+        Ok(Self {
+            engine: self.engine.clone(),
+            selection: Arc::new(RwLock::new(Selection {
+                workspace,
+                session,
+                generation: 0,
+            })),
+            detection: self.detection.clone(),
+            remember_selection: false,
         })
     }
     pub fn workspace(&self) -> Result<PathBuf> {
@@ -103,7 +131,9 @@ impl Service {
         if expected.is_some_and(|generation| generation != selection.generation) {
             return Ok(());
         }
-        self.engine.paths().remember_workspace(&workspace)?;
+        if self.remember_selection {
+            self.engine.paths().remember_workspace(&workspace)?;
+        }
         self.engine.store().touch_project(&workspace)?;
         *selection = Selection {
             workspace,
@@ -341,7 +371,12 @@ impl Service {
                 return Ok(json!({"providers":presets}));
             }
             ("GET", "/api/models") => {
-                model_registry::record_detected(&store, &self.detected(q("refresh") == "1").await)?;
+                if q("detect") != "false" {
+                    model_registry::record_detected(
+                        &store,
+                        &self.detected(q("refresh") == "1").await,
+                    )?;
+                }
                 let cfg = self.config()?;
                 self.register(&cfg.model)?;
                 return Ok(json!({"models":model_registry::catalog(&store,&cfg.model)?}));

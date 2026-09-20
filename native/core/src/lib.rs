@@ -2,10 +2,16 @@
 pub mod approvals;
 pub mod background;
 pub mod checkpoint;
+#[cfg(unix)]
+pub mod cli;
 pub mod config;
 pub mod context;
+#[cfg(unix)]
+pub mod control;
 pub mod engine;
 pub mod events;
+#[cfg(unix)]
+pub mod lifecycle;
 pub mod model_registry;
 pub mod models;
 pub mod patch;
