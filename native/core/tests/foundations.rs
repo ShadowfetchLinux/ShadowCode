@@ -1,0 +1,325 @@
+use serde_json::json;
+use shadowcode_core::{
+    config::{secret, set_secret, Config, PermissionLevel},
+    paths::AppPaths,
+    store::Store,
+    workspace::Workspace,
+};
+use std::{fs, sync::Arc};
+
+#[test]
+fn profile_lock_prevents_a_second_manager_and_releases_on_drop() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(root.path()).unwrap();
+    let first = paths.lock().unwrap();
+    assert!(paths.lock().is_err());
+    drop(first);
+    assert!(paths.lock().is_ok());
+}
+
+#[test]
+fn config_round_trip_validates_and_preserves_extension_fields() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(root.path()).unwrap();
+    Config::patch(
+        &paths,
+        json!({"ui":{"theme":"dark"},"extension":{"enabled":true}}),
+    )
+    .unwrap();
+    let config = Config::load(&paths, None).unwrap();
+    assert_eq!(config.ui["theme"], "dark");
+    assert_eq!(config.extra["extension"]["enabled"], true);
+    assert!(Config::patch(&paths, json!({"agent":{"max_steps":0}})).is_err());
+    assert!(Config::patch(&paths, json!({"model":{"endpoint":"file:///etc/passwd"}})).is_err());
+    assert!(Config::patch(
+        &paths,
+        json!({"model":{"endpoint":"http://user:secret@localhost"}})
+    )
+    .is_err());
+    assert_eq!(Config::load(&paths, None).unwrap().ui["theme"], "dark");
+}
+
+#[test]
+fn repository_config_cannot_escalate_access_or_redirect_model_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    let workspace = root.path().join("project");
+    fs::create_dir_all(workspace.join(".shadow/config")).unwrap();
+    fs::write(workspace.join(".shadow/config/config.yaml"),"permissions:\n  level: elevated\n  network: true\nmodel:\n  endpoint: https://attacker.invalid\nagent:\n  max_steps: 10\n").unwrap();
+    let config = Config::load(&paths, Some(&workspace)).unwrap();
+    assert_eq!(config.agent.max_steps, 64); // untrusted files have no authority
+    Config::patch(&paths, json!({"trusted_workspaces":[workspace]})).unwrap();
+    let config = Config::load(&paths, Some(&workspace)).unwrap();
+    assert_eq!(config.agent.max_steps, 10);
+    assert_eq!(config.permissions.level, PermissionLevel::Workspace);
+    assert!(!config.permissions.network);
+    assert_eq!(config.model.endpoint, "");
+}
+
+#[test]
+fn secrets_are_private_and_never_evaluated_as_shell() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(root.path()).unwrap();
+    let value = "$(touch /tmp/not-executed)\"quoted\"'";
+    set_secret(&paths, "SHADOW_TEST_API_KEY", value).unwrap();
+    assert_eq!(
+        secret(&paths, "SHADOW_TEST_API_KEY").unwrap().as_deref(),
+        Some(value)
+    );
+    assert!(!paths.config_file().exists());
+    assert!(set_secret(&paths, "BAD-NAME", "x").is_err());
+    assert!(set_secret(&paths, "KEY", "x\nEVIL=y").is_err());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(paths.secrets_file())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn legacy_database_migration_retains_rows_and_creates_a_restorable_backup() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("shadow-agent.db");
+    {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE sessions(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,created_at REAL NOT NULL,updated_at REAL NOT NULL,model_id TEXT,status TEXT NOT NULL);
+            INSERT INTO sessions VALUES('legacy','/workspace',1,1,'local','active');").unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    let session = store.session("legacy").unwrap().unwrap();
+    assert_eq!(session["workspace"], "/workspace");
+    assert!(session["title"].is_null());
+    let backups: Vec<_> = fs::read_dir(root.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains("pre-native"))
+        .collect();
+    assert_eq!(backups.len(), 1);
+    let backup = rusqlite::Connection::open(backups[0].path()).unwrap();
+    assert_eq!(
+        backup
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(store);
+    Store::open(&path).unwrap();
+    assert_eq!(
+        fs::read_dir(root.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains("pre-native"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn event_replay_survives_long_history_concurrent_writers_and_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("store.db");
+    let store = Arc::new(Store::open(&path).unwrap());
+    let session = store.create_session(root.path(), "mock", "Stress").unwrap();
+    let sid = session["id"].as_str().unwrap().to_owned();
+    let handles: Vec<_> = (0..8)
+        .map(|writer| {
+            let store = store.clone();
+            let sid = sid.clone();
+            std::thread::spawn(move || {
+                for index in 0..250 {
+                    store
+                        .add_event(
+                            "stress",
+                            &json!({"writer":writer,"index":index}),
+                            Some(&sid),
+                            None,
+                        )
+                        .unwrap();
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    let mut after = 0;
+    let mut count = 0;
+    loop {
+        let page = store.events_after(&sid, after, None, 173).unwrap();
+        if page.is_empty() {
+            break;
+        }
+        for event in page {
+            let next = event["id"].as_i64().unwrap();
+            assert!(next > after);
+            after = next;
+            count += 1;
+        }
+    }
+    assert_eq!(count, 2000);
+    assert_eq!(after, store.event_cursor(&sid).unwrap());
+    assert_eq!(
+        store.events_after(&sid, 0, Some(900), 2000).unwrap().len(),
+        900
+    );
+}
+
+#[test]
+fn branching_is_independent_and_deleting_parent_preserves_branch() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("db")).unwrap();
+    let original = store.create_session(root.path(), "mock", "Parent").unwrap();
+    let sid = original["id"].as_str().unwrap();
+    store
+        .add_event("user.message", &json!({"text":"context"}), Some(sid), None)
+        .unwrap();
+    store.add_pin(sid, "Important", "Keep this").unwrap();
+    let branch = store.branch_session(sid, "").unwrap();
+    let branch = branch["id"].as_str().unwrap();
+    store
+        .add_event("new", &json!({}), Some(branch), None)
+        .unwrap();
+    assert_eq!(store.recent_events(sid, 100).unwrap().len(), 1);
+    assert_eq!(store.recent_events(branch, 100).unwrap().len(), 2);
+    assert_eq!(store.pins(branch).unwrap().len(), 1);
+    store.delete_session(sid).unwrap();
+    assert!(store.session(branch).unwrap().unwrap()["parent_id"].is_null());
+    assert_eq!(store.recent_events(branch, 100).unwrap().len(), 2);
+}
+
+#[test]
+fn job_recovery_is_durable_and_usage_is_idempotent() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("db");
+    let store = Store::open(&path).unwrap();
+    let session = store.create_session(root.path(), "mock", "").unwrap();
+    let sid = session["id"].as_str().unwrap();
+    let tid = store.create_task(sid, "test").unwrap();
+    store
+        .save_job(&json!({"id":"job","session_id":sid,"task_id":tid,"status":"running"}))
+        .unwrap();
+    assert!(store.delete_session(sid).is_err());
+    assert_eq!(store.recover_jobs().unwrap(), 1);
+    assert_eq!(store.recover_jobs().unwrap(), 0);
+    assert_eq!(store.job("job").unwrap().unwrap()["status"], "interrupted");
+    assert_eq!(store.task(&tid).unwrap().unwrap()["status"], "interrupted");
+    for _ in 0..2 {
+        store
+            .finish_task(&tid, "completed", "ok", &json!({"total_tokens":10}))
+            .unwrap();
+    }
+    let usage: serde_json::Value = serde_json::from_str(
+        store.session(sid).unwrap().unwrap()["usage_json"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(usage["total_tokens"], 10);
+    assert!(store.delete_session(sid).unwrap());
+    assert!(store.job("job").unwrap().is_none());
+}
+
+#[test]
+fn workspace_edits_are_atomic_and_reject_stale_context() {
+    let root = tempfile::tempdir().unwrap();
+    let ws = Workspace::open(root.path()).unwrap();
+    ws.write("src/main.rs", b"hello\n", Some("missing"))
+        .unwrap();
+    let original = ws.read("src/main.rs").unwrap();
+    ws.edit("src/main.rs", "hello", "world", false).unwrap();
+    assert!(ws
+        .write("src/main.rs", b"stale", Some(&original.hash))
+        .is_err());
+    assert_eq!(ws.read("src/main.rs").unwrap().content, "world\n");
+    ws.write("repeated", b"a a", None).unwrap();
+    assert!(ws.edit("repeated", "a", "b", false).is_err());
+    assert!(ws.write(".git/config", b"bad", None).is_err());
+    assert!(ws.delete("src", None).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_capabilities_block_symlink_and_parent_escapes() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let outside = root.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("secret"), "private").unwrap();
+    symlink(&outside, project.join("escape")).unwrap();
+    let ws = Workspace::open(&project).unwrap();
+    assert!(ws.read("escape/secret").is_err());
+    assert!(ws.write("escape/new", b"bad", None).is_err());
+    assert!(ws.mkdir("escape/newdir").is_err());
+    assert!(ws.read("../outside/secret").is_err());
+    assert!(ws.read(outside.join("secret").to_str().unwrap()).is_err());
+    assert!(!outside.join("new").exists());
+    fs::create_dir(project.join("inner")).unwrap();
+    fs::write(project.join("inner/file"), "okay").unwrap();
+    symlink("inner", project.join("safe-link")).unwrap();
+    assert_eq!(ws.read("safe-link/file").unwrap().content, "okay");
+    fs::create_dir(project.join(".git")).unwrap();
+    symlink(".git", project.join("metadata-alias")).unwrap();
+    assert!(ws.write("metadata-alias/config", b"bad", None).is_err());
+}
+
+#[test]
+fn legacy_goals_import_once_without_modifying_the_original_database() {
+    let root = tempfile::tempdir().unwrap();
+    let legacy = root.path().join("goals.db");
+    {
+        let db = rusqlite::Connection::open(&legacy).unwrap();
+        db.execute_batch("CREATE TABLE goals(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,instruction TEXT NOT NULL,status TEXT NOT NULL,progress REAL NOT NULL,title TEXT,created_at REAL NOT NULL,updated_at REAL NOT NULL);
+            CREATE TABLE milestones(id TEXT PRIMARY KEY,goal_id TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,order_index INTEGER NOT NULL,detail TEXT,task_id TEXT,created_at REAL NOT NULL,updated_at REAL NOT NULL);
+            INSERT INTO goals VALUES('goal','/project','Finish project','active',0.5,'Project',1,2);
+            INSERT INTO milestones VALUES('step','goal','Verify','pending',0,'',NULL,1,2);").unwrap();
+    }
+    let original = fs::read(&legacy).unwrap();
+    let path = root.path().join("shadow-agent.db");
+    drop(Store::open(&path).unwrap());
+    drop(Store::open(&path).unwrap());
+    assert_eq!(fs::read(&legacy).unwrap(), original);
+    let db = rusqlite::Connection::open(path).unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM goals WHERE id='goal'", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row("SELECT title FROM milestones WHERE id='step'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .unwrap(),
+        "Verify"
+    );
+}
+
+#[test]
+fn search_respects_ignored_files_and_result_limits() {
+    let root = tempfile::tempdir().unwrap();
+    let ws = Workspace::open(root.path()).unwrap();
+    fs::create_dir(root.path().join(".git")).unwrap();
+    fs::write(root.path().join(".gitignore"), "ignored/\n").unwrap();
+    ws.write("src/test.rs", b"needle\nneedle\nneedle\n", None)
+        .unwrap();
+    ws.write("ignored/secret", b"needle\n", None).unwrap();
+    let found = ws.search("needle", None, 2).unwrap();
+    assert_eq!(found["matches"].as_array().unwrap().len(), 2);
+    assert_eq!(found["truncated"], true);
+    assert!(found["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|v| v["path"] == "src/test.rs"));
+}

@@ -1,0 +1,19 @@
+name: Native engine
+on:
+  push:
+    branches: [native-0.20]
+  pull_request:
+    paths: ['native/**', 'src-tauri/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - run: cargo +1.95.0 fmt --all --check
+      - run: cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo +1.95.0 test --workspace --locked
+      - run: cargo +1.95.0 build --release -p shadowcode-core --examples --locked

@@ -1,0 +1,517 @@
+use crate::{id, now};
+use anyhow::{ensure, Context, Result};
+use rusqlite::{params, types::ValueRef, Connection, OptionalExtension, Params};
+use serde_json::{json, Map, Value};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard},
+    time::Duration,
+};
+
+const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS sessions (
+ id TEXT PRIMARY KEY, workspace TEXT NOT NULL, created_at REAL NOT NULL,
+ updated_at REAL NOT NULL, model_id TEXT, status TEXT NOT NULL,
+ title TEXT, usage_json TEXT, parent_id TEXT, branched_at REAL
+);
+CREATE TABLE IF NOT EXISTS tasks (
+ id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
+ prompt TEXT NOT NULL, status TEXT NOT NULL, summary TEXT,
+ created_at REAL NOT NULL, completed_at REAL, usage_json TEXT
+);
+CREATE TABLE IF NOT EXISTS events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, type TEXT NOT NULL,
+ session_id TEXT, task_id TEXT, payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_session_id ON events(session_id,id);
+CREATE INDEX IF NOT EXISTS events_task_id ON events(task_id,id);
+CREATE TABLE IF NOT EXISTS models (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL,
+ endpoint TEXT, context_limit INTEGER, metadata TEXT
+);
+CREATE TABLE IF NOT EXISTS projects (
+ id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, name TEXT NOT NULL, last_opened REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_meta (
+ session_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(session_id,key)
+);
+CREATE TABLE IF NOT EXISTS pins (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+ task_id TEXT, ts REAL NOT NULL, label TEXT NOT NULL, body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS desktop_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS native_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS goals (
+ id TEXT PRIMARY KEY, workspace TEXT NOT NULL, instruction TEXT NOT NULL,
+ status TEXT NOT NULL, progress REAL NOT NULL, title TEXT,
+ created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS milestones (
+ id TEXT PRIMARY KEY, goal_id TEXT NOT NULL REFERENCES goals(id),
+ title TEXT NOT NULL, status TEXT NOT NULL, order_index INTEGER NOT NULL,
+ detail TEXT, task_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS file_changes (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+ workspace TEXT NOT NULL, path TEXT NOT NULL, before_bytes BLOB,
+ before_mode INTEGER, after_hash TEXT, restored INTEGER NOT NULL DEFAULT 0,
+ UNIQUE(task_id,workspace,path)
+);
+CREATE TABLE IF NOT EXISTS job_messages (
+ job_id TEXT NOT NULL, ordinal INTEGER NOT NULL, payload TEXT NOT NULL,
+ PRIMARY KEY(job_id,ordinal)
+);
+CREATE TABLE IF NOT EXISTS queued_tasks (
+ id TEXT PRIMARY KEY, session_id TEXT NOT NULL, workspace TEXT NOT NULL,
+ payload TEXT NOT NULL, status TEXT NOT NULL, created_at REAL NOT NULL
+);
+"#;
+
+pub struct Store {
+    pub path: PathBuf,
+    connection: Mutex<Connection>,
+}
+
+impl Store {
+    pub fn open(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let existed = path.exists();
+        let mut connection = Connection::open(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        }
+        connection.busy_timeout(Duration::from_secs(10))?;
+        connection.pragma_update(None, "foreign_keys", true)?;
+        let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        ensure!(
+            version <= 20,
+            "This database was created by a newer ShadowCode version"
+        );
+        if version < 20 {
+            if existed {
+                let backup_path = path.with_extension(format!("pre-native-{}.sqlite", id()));
+                let mut backup = Connection::open(&backup_path)?;
+                rusqlite::backup::Backup::new(&connection, &mut backup)?.run_to_completion(
+                    128,
+                    Duration::from_millis(5),
+                    None,
+                )?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600))?;
+                }
+            }
+            let tx = connection.transaction()?;
+            tx.execute_batch(SCHEMA)?;
+            for (table, column, kind) in [
+                ("sessions", "title", "TEXT"),
+                ("sessions", "usage_json", "TEXT"),
+                ("sessions", "parent_id", "TEXT"),
+                ("sessions", "branched_at", "REAL"),
+                ("tasks", "usage_json", "TEXT"),
+            ] {
+                let columns: Vec<String> = tx
+                    .prepare(&format!("PRAGMA table_info({table})"))?
+                    .query_map([], |r| r.get(1))?
+                    .collect::<rusqlite::Result<_>>()?;
+                if !columns.iter().any(|c| c == column) {
+                    tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
+                }
+            }
+            tx.pragma_update(None, "user_version", 20)?;
+            tx.commit()?;
+        }
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        let store = Self {
+            path: path.into(),
+            connection: Mutex::new(connection),
+        };
+        store.import_legacy_goals()?;
+        Ok(store)
+    }
+
+    fn import_legacy_goals(&self) -> Result<()> {
+        let legacy = self.path.with_file_name("goals.db");
+        if legacy == self.path || !legacy.is_file() {
+            return Ok(());
+        }
+        let mut db = self.lock()?;
+        if db
+            .query_row(
+                "SELECT value FROM native_meta WHERE key='legacy_goals_imported'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .is_some()
+        {
+            return Ok(());
+        }
+        db.execute(
+            "ATTACH DATABASE ? AS legacy_goals",
+            params![legacy.to_string_lossy()],
+        )?;
+        let result = (|| -> Result<()> {
+            let tx = db.transaction()?;
+            tx.execute_batch(
+                "INSERT OR IGNORE INTO goals SELECT * FROM legacy_goals.goals;
+                INSERT OR IGNORE INTO milestones SELECT * FROM legacy_goals.milestones;
+                INSERT INTO native_meta(key,value) VALUES('legacy_goals_imported','true');",
+            )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        db.execute("DETACH DATABASE legacy_goals", [])?;
+        result
+    }
+
+    pub(crate) fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.connection
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Database lock was poisoned"))
+    }
+    pub(crate) fn query(&self, sql: &str, args: impl Params) -> Result<Vec<Value>> {
+        query_rows(&*self.lock()?, sql, args)
+    }
+    pub(crate) fn execute(&self, sql: &str, args: impl Params) -> Result<usize> {
+        Ok(self.lock()?.execute(sql, args)?)
+    }
+
+    pub fn create_session(&self, workspace: &Path, model: &str, title: &str) -> Result<Value> {
+        let sid = id();
+        let now = now();
+        self.execute("INSERT INTO sessions(id,workspace,created_at,updated_at,model_id,status,title) VALUES(?,?,?,?,?,'active',?)",
+            params![sid,workspace.to_string_lossy(),now,now,model,title])?;
+        self.session(&sid)?.context("Created session disappeared")
+    }
+    pub fn session(&self, sid: &str) -> Result<Option<Value>> {
+        Ok(self
+            .query("SELECT * FROM sessions WHERE id=?", [sid])?
+            .into_iter()
+            .next())
+    }
+    pub fn sessions(&self, search: &str, limit: usize) -> Result<Vec<Value>> {
+        let needle = format!(
+            "%{}%",
+            search
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        self.query("SELECT s.* FROM sessions s WHERE s.title LIKE ? ESCAPE '\' OR s.workspace LIKE ? ESCAPE '\'
+            OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '\')
+            ORDER BY s.updated_at DESC LIMIT ?", params![needle,needle,needle,limit.clamp(1,10000)])
+    }
+    pub fn rename_session(&self, sid: &str, title: &str) -> Result<()> {
+        ensure!(title.len() <= 500, "Task title is too long");
+        ensure!(
+            self.execute(
+                "UPDATE sessions SET title=?,updated_at=? WHERE id=?",
+                params![title, now(), sid]
+            )? == 1,
+            "Session not found"
+        );
+        Ok(())
+    }
+    pub fn branch_session(&self, sid: &str, title: &str) -> Result<Value> {
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        let parent = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [sid])?
+            .pop()
+            .context("Session not found")?;
+        let branch = id();
+        let time = now();
+        let title = if title.is_empty() {
+            format!("{} (branch)", parent["title"].as_str().unwrap_or("Task"))
+        } else {
+            title.into()
+        };
+        tx.execute("INSERT INTO sessions(id,workspace,created_at,updated_at,model_id,status,title,parent_id,branched_at) VALUES(?,?,?,?,?,'active',?,?,?)",
+            params![branch,parent["workspace"].as_str(),time,time,parent["model_id"].as_str(),title,sid,time])?;
+        tx.execute("INSERT INTO events(ts,type,session_id,task_id,payload) SELECT ts,type,?,task_id,payload FROM events WHERE session_id=? ORDER BY id",params![branch,sid])?;
+        tx.execute("INSERT INTO pins(session_id,task_id,ts,label,body) SELECT ?,task_id,ts,label,body FROM pins WHERE session_id=?",params![branch,sid])?;
+        let result = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [&branch])?
+            .pop()
+            .context("Branch not found")?;
+        tx.commit()?;
+        Ok(result)
+    }
+    pub fn delete_session(&self, sid: &str) -> Result<bool> {
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        let active: i64 = tx.query_row("SELECT count(*) FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND json_extract(payload,'$.status') IN ('queued','running','cancelling')",[sid],|r|r.get(0))?;
+        ensure!(
+            active == 0,
+            "Stop the running task before deleting this session"
+        );
+        for table in ["events", "pins", "session_meta", "queued_tasks"] {
+            tx.execute(&format!("DELETE FROM {table} WHERE session_id=?"), [sid])?;
+        }
+        tx.execute(
+            "DELETE FROM file_changes WHERE task_id IN (SELECT id FROM tasks WHERE session_id=?)",
+            [sid],
+        )?;
+        tx.execute("DELETE FROM job_messages WHERE job_id IN (SELECT id FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=?)",[sid])?;
+        tx.execute(
+            "DELETE FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=?",
+            [sid],
+        )?;
+        tx.execute("DELETE FROM tasks WHERE session_id=?", [sid])?;
+        tx.execute(
+            "UPDATE sessions SET parent_id=NULL WHERE parent_id=?",
+            [sid],
+        )?;
+        let deleted = tx.execute("DELETE FROM sessions WHERE id=?", [sid])? != 0;
+        tx.commit()?;
+        Ok(deleted)
+    }
+    pub fn create_task(&self, sid: &str, prompt: &str) -> Result<String> {
+        let task = id();
+        self.execute(
+            "INSERT INTO tasks(id,session_id,prompt,status,created_at) VALUES(?,?,?,'running',?)",
+            params![task, sid, prompt, now()],
+        )?;
+        Ok(task)
+    }
+    pub fn finish_task(&self, tid: &str, status: &str, summary: &str, usage: &Value) -> Result<()> {
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        let sid: String = tx.query_row("SELECT session_id FROM tasks WHERE id=?", [tid], |r| {
+            r.get(0)
+        })?;
+        let previous: Option<String> =
+            tx.query_row("SELECT usage_json FROM tasks WHERE id=?", [tid], |r| {
+                r.get(0)
+            })?;
+        let previous: Value = previous
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(json!({}));
+        let current: Option<String> =
+            tx.query_row("SELECT usage_json FROM sessions WHERE id=?", [&sid], |r| {
+                r.get(0)
+            })?;
+        let mut total: Value = current
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(json!({}));
+        if let Some(usage) = usage.as_object() {
+            for (key, value) in usage {
+                total[key] = json!(total[key]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .saturating_sub(previous[key].as_u64().unwrap_or(0))
+                    .saturating_add(value.as_u64().unwrap_or(0)));
+            }
+        }
+        tx.execute(
+            "UPDATE tasks SET status=?,summary=?,completed_at=?,usage_json=? WHERE id=?",
+            params![status, summary, now(), usage.to_string(), tid],
+        )?;
+        tx.execute(
+            "UPDATE sessions SET updated_at=?,usage_json=? WHERE id=?",
+            params![now(), total.to_string(), sid],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn tasks(&self, sid: &str, limit: usize) -> Result<Vec<Value>> {
+        self.query(
+            "SELECT * FROM tasks WHERE session_id=? ORDER BY created_at DESC LIMIT ?",
+            params![sid, limit.clamp(1, 10000)],
+        )
+    }
+    pub fn task(&self, tid: &str) -> Result<Option<Value>> {
+        Ok(self.query("SELECT * FROM tasks WHERE id=?", [tid])?.pop())
+    }
+    pub fn add_event(
+        &self,
+        kind: &str,
+        payload: &Value,
+        sid: Option<&str>,
+        tid: Option<&str>,
+    ) -> Result<Value> {
+        let db = self.lock()?;
+        let time = now();
+        db.execute(
+            "INSERT INTO events(ts,type,session_id,task_id,payload) VALUES(?,?,?,?,?)",
+            params![time, kind, sid, tid, payload.to_string()],
+        )?;
+        Ok(
+            json!({"id":db.last_insert_rowid(),"ts":time,"type":kind,"session_id":sid,"task_id":tid,"payload":payload}),
+        )
+    }
+    pub fn event_cursor(&self, sid: &str) -> Result<i64> {
+        Ok(self.lock()?.query_row(
+            "SELECT coalesce(max(id),0) FROM events WHERE session_id=?",
+            [sid],
+            |r| r.get(0),
+        )?)
+    }
+    pub fn events_after(
+        &self,
+        sid: &str,
+        after: i64,
+        through: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        self.query(
+            "SELECT * FROM events WHERE session_id=? AND id>? AND id<=? ORDER BY id LIMIT ?",
+            params![
+                sid,
+                after.max(0),
+                through.unwrap_or(i64::MAX),
+                limit.clamp(1, 2000)
+            ],
+        )
+    }
+    pub fn recent_events(&self, sid: &str, limit: usize) -> Result<Vec<Value>> {
+        let mut rows = self.query(
+            "SELECT * FROM events WHERE session_id=? ORDER BY id DESC LIMIT ?",
+            params![sid, limit.clamp(1, 10000)],
+        )?;
+        rows.reverse();
+        Ok(rows)
+    }
+    pub fn save_job(&self, job: &Value) -> Result<()> {
+        let id = job["id"].as_str().context("Job requires an ID")?;
+        self.execute("INSERT INTO desktop_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",params![id,job.to_string()])?;
+        Ok(())
+    }
+    pub fn jobs(&self, limit: usize) -> Result<Vec<Value>> {
+        Ok(self
+            .query(
+                "SELECT payload FROM desktop_jobs ORDER BY rowid DESC LIMIT ?",
+                [limit.clamp(1, 10000)],
+            )?
+            .into_iter()
+            .map(|v| v["payload"].clone())
+            .collect())
+    }
+    pub fn job(&self, id: &str) -> Result<Option<Value>> {
+        Ok(self
+            .query("SELECT payload FROM desktop_jobs WHERE id=?", [id])?
+            .pop()
+            .map(|v| v["payload"].clone()))
+    }
+    /// Called only by the profile-lock owner, before accepting new work.
+    pub fn recover_jobs(&self) -> Result<usize> {
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        let jobs = query_rows(&tx,"SELECT payload FROM desktop_jobs WHERE json_extract(payload,'$.status') IN ('queued','running','cancelling')",[])?;
+        for row in &jobs {
+            let mut job = row["payload"].clone();
+            job["status"] = json!("interrupted");
+            job["finished_at"] = json!(now());
+            job["summary"]=json!("The application stopped before this task finished. Review its changes, then continue.");
+            tx.execute(
+                "UPDATE desktop_jobs SET payload=? WHERE id=?",
+                params![job.to_string(), job["id"].as_str()],
+            )?;
+            if let Some(tid) = job["task_id"].as_str() {
+                tx.execute("UPDATE tasks SET status='interrupted',completed_at=? WHERE id=? AND status='running'",params![now(),tid])?;
+            }
+        }
+        tx.commit()?;
+        Ok(jobs.len())
+    }
+    pub fn save_messages(&self, job_id: &str, messages: &[Value]) -> Result<()> {
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        tx.execute("DELETE FROM job_messages WHERE job_id=?", [job_id])?;
+        for (ordinal, message) in messages.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO job_messages(job_id,ordinal,payload) VALUES(?,?,?)",
+                params![job_id, ordinal, message.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn messages(&self, job_id: &str) -> Result<Vec<Value>> {
+        Ok(self
+            .query(
+                "SELECT payload FROM job_messages WHERE job_id=? ORDER BY ordinal",
+                [job_id],
+            )?
+            .into_iter()
+            .map(|v| v["payload"].clone())
+            .collect())
+    }
+    pub fn touch_project(&self, path: &Path) -> Result<()> {
+        let path = path.canonicalize()?;
+        self.execute("INSERT INTO projects(id,path,name,last_opened) VALUES(?,?,?,?) ON CONFLICT(path) DO UPDATE SET last_opened=excluded.last_opened",params![id(),path.to_string_lossy(),path.file_name().map(|s|s.to_string_lossy().into_owned()).unwrap_or_else(||"/".into()),now()])?;
+        Ok(())
+    }
+    pub fn projects(&self) -> Result<Vec<Value>> {
+        self.query(
+            "SELECT * FROM projects ORDER BY last_opened DESC LIMIT 1000",
+            [],
+        )
+    }
+    pub fn models(&self) -> Result<Vec<Value>> {
+        self.query("SELECT * FROM models ORDER BY name", [])
+    }
+    pub fn upsert_model(&self, model: &Value) -> Result<()> {
+        self.execute("INSERT INTO models(id,name,provider,endpoint,context_limit,metadata) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,provider=excluded.provider,endpoint=excluded.endpoint,context_limit=excluded.context_limit,metadata=excluded.metadata",
+            params![model["id"].as_str().context("Model ID required")?,model["name"].as_str().context("Model name required")?,model["provider"].as_str().context("Provider required")?,model["endpoint"].as_str().unwrap_or(""),model["context_limit"].as_u64().unwrap_or(128000),model.get("metadata").unwrap_or(&json!({})).to_string()])?;
+        Ok(())
+    }
+    pub fn pins(&self, sid: &str) -> Result<Vec<Value>> {
+        self.query("SELECT * FROM pins WHERE session_id=? ORDER BY id", [sid])
+    }
+    pub fn add_pin(&self, sid: &str, label: &str, body: &str) -> Result<i64> {
+        ensure!(self.session(sid)?.is_some(), "Session not found");
+        let db = self.lock()?;
+        db.execute(
+            "INSERT INTO pins(session_id,ts,label,body) VALUES(?,?,?,?)",
+            params![sid, now(), label, body],
+        )?;
+        Ok(db.last_insert_rowid())
+    }
+    pub fn delete_pin(&self, sid: &str, id: i64) -> Result<()> {
+        self.execute(
+            "DELETE FROM pins WHERE session_id=? AND id=?",
+            params![sid, id],
+        )?;
+        Ok(())
+    }
+}
+
+fn query_rows(db: &Connection, sql: &str, args: impl Params) -> Result<Vec<Value>> {
+    let mut statement = db.prepare(sql)?;
+    let columns: Vec<String> = statement
+        .column_names()
+        .iter()
+        .map(|s| (*s).into())
+        .collect();
+    let rows = statement
+        .query_map(args, |row| {
+            let mut out = Map::new();
+            for (i, key) in columns.iter().enumerate() {
+                let value = match row.get_ref(i)? {
+                    ValueRef::Null => Value::Null,
+                    ValueRef::Integer(v) => json!(v),
+                    ValueRef::Real(v) => json!(v),
+                    ValueRef::Text(v) => {
+                        let text = String::from_utf8_lossy(v).into_owned();
+                        if matches!(key.as_str(), "payload" | "metadata") {
+                            serde_json::from_str(&text).unwrap_or(Value::Null)
+                        } else {
+                            json!(text)
+                        }
+                    }
+                    ValueRef::Blob(_) => Value::Null,
+                };
+                out.insert(key.clone(), value);
+            }
+            Ok(Value::Object(out))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
