@@ -229,7 +229,7 @@ impl Server {
     }
     pub fn start_with_mode(service: Service, mode: &str) -> Result<Self> {
         ensure!(
-            matches!(mode, "desktop" | "server" | "command"),
+            matches!(mode, "desktop" | "server" | "command" | "tui"),
             "Invalid engine mode"
         );
         let mode = mode.to_owned();

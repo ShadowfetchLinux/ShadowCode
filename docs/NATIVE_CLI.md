@@ -6,6 +6,8 @@ Node runtime, browser, or HTTP listener. Model inference still runs in Ollama or
 your configured compatible provider. This guide describes the native development
 branch; [remaining release gates](NATIVE_MIGRATION.md) still apply.
 
+For a fullscreen workspace, use [`shadowcode tui`](NATIVE_TUI.md).
+
 ## Start a task
 
 Build the executable using the [desktop development guide](NATIVE_DESKTOP.md).

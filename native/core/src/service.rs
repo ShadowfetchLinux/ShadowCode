@@ -1031,7 +1031,13 @@ impl Service {
             let sid = parts[2];
             let session = store.session(sid)?.context("Session not found")?;
             match (request.method.as_str(), parts.get(3).copied()) {
-                ("GET", None) => return self.session(sid),
+                ("GET", None) => {
+                    return if q("summary") == "true" {
+                        Ok(session)
+                    } else {
+                        self.session(sid)
+                    }
+                }
                 ("PATCH", None) => {
                     store.rename_session(sid, text("title"))?;
                     return Ok(json!({"ok":true}));
@@ -1069,9 +1075,16 @@ impl Service {
                     return store.branch_session_with_memory(sid, text("title"), &memory);
                 }
                 ("GET", Some("events")) => {
+                    if !q("before").is_empty() {
+                        let before: i64 = q("before").parse().context("Invalid history cursor")?;
+                        ensure!(before > 0, "History cursor must be positive");
+                        return Ok(
+                            json!({"events":store.recent_events_through(sid,before-1,query_limit(&query,256,2000))?}),
+                        );
+                    }
                     return Ok(
                         json!({"events":store.events_after(sid,q("after").parse().unwrap_or(0),None,query_limit(&query,512,10000))?}),
-                    )
+                    );
                 }
                 ("GET", Some("export")) => return self.export(sid, q("format")),
                 ("GET", Some("cost")) => {

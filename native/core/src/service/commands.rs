@@ -157,6 +157,14 @@ impl Service {
         let args = body["args"].as_str().unwrap_or("");
         ensure!(workflows::valid_name(name), "Invalid slash command name");
         ensure!(args.len() <= 64000, "Command arguments exceed 64 KB");
+        if self.job_owner.is_some() {
+            ensure!(
+                !BUILTINS.iter().any(|entry| entry.0 == name)
+                    || matches!(name, "plan" | "review" | "skill")
+                    || (name == "test" && args.trim().is_empty()),
+                "Task ownership accepts only model workflows; use a test job for terminal commands"
+            );
+        }
         let selection = self.snapshot_selection()?;
         let workspace = selection.workspace.clone();
         let config = Config::load(self.engine.paths(), Some(&workspace))?;
@@ -632,10 +640,17 @@ impl Service {
         };
         let job = if let Some(definition) = definition {
             self.engine
-                .start_guided(request, purpose, definition.guidance(args)?)
+                .start_guided_owned(
+                    request,
+                    purpose,
+                    definition.guidance(args)?,
+                    self.job_owner.as_ref(),
+                )
                 .await?
         } else {
-            self.engine.start_for_purpose(request, purpose).await?
+            self.engine
+                .start_limited_owned(request, purpose, None, self.job_owner.as_ref())
+                .await?
         };
         self.select_if(
             &workspace,

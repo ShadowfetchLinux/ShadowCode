@@ -91,8 +91,12 @@ Implemented foundation:
   without a display and shares an active desktop or explicit headless owner
   through a private local connection. Client navigation does not switch the
   desktop project. Owned tasks cancel on interrupt/output failure; watching an
-  existing task leaves it running. Full TUI, updater/automatic diagnostic repairs, and integration
+  existing task leaves it running. Updater/automatic diagnostic repairs and integration
   migration remain separate requirements.
+- [Native terminal interface](NATIVE_TUI.md) with a shared engine, model/session/project
+  pickers, Unicode composer, explicit approvals, task modes, queued follow-ups,
+  tool cards and paged history. Real PTY checks cover submission, approval and
+  cleanup. Broader terminal navigation, visual and stress checks remain open.
 - [Native project plugins](NATIVE_PLUGINS.md) with built-in and custom bundle
   review/import in Settings and CLI, namespaced usable workflows, separately
   activated hooks/MCP, collision and stale-hash checks, private recovery journals,

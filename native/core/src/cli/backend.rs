@@ -19,11 +19,34 @@ impl Backend {
         serving: bool,
         parent: Option<u32>,
     ) -> Result<Self> {
+        Self::open_mode(
+            paths,
+            workspace,
+            if serving { "server" } else { "command" },
+            serving,
+            parent,
+        )
+        .await
+    }
+    pub(crate) async fn open_tui(
+        paths: AppPaths,
+        workspace: PathBuf,
+        parent: Option<u32>,
+    ) -> Result<Self> {
+        Self::open_mode(paths, workspace, "tui", false, parent).await
+    }
+    async fn open_mode(
+        paths: AppPaths,
+        workspace: PathBuf,
+        mode: &str,
+        require_owner: bool,
+        parent: Option<u32>,
+    ) -> Result<Self> {
         let endpoint = Endpoint::for_paths(&paths)?;
         let client = endpoint.client(workspace.clone(), None);
         for attempt in 0..30 {
             if client.available().await? {
-                if serving {
+                if require_owner {
                     bail!("An engine already owns this profile; use its desktop or existing headless server");
                 }
                 let runtime = client
@@ -42,14 +65,11 @@ impl Backend {
             }
             match Service::open(paths.clone(), Some(workspace.clone())) {
                 Ok(service) => {
-                    let server = Server::start_with_mode(
-                        service.clone(),
-                        if serving { "server" } else { "command" },
-                    )?;
+                    let server = Server::start_with_mode(service.clone(), mode)?;
                     return Ok(Self {
                         local: Some((service, server)),
                         client,
-                        persistent: serving,
+                        persistent: mode != "command",
                         parent,
                     });
                 }

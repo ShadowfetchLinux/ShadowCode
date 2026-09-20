@@ -228,3 +228,120 @@ async fn unread_submission_replies_and_protocol_failures_cannot_orphan_accepted_
     server.wait_closed().await;
     service.engine.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn workflow_ownership_cancels_only_its_jobs_and_rejects_non_task_commands() {
+    let model = support::server(|_, _| (json!({}), Duration::from_secs(60))).await;
+    let (_root, service) = setup(&model.endpoint);
+    let workspace = service.workspace().unwrap();
+    let skills = workspace.join(".shadowcode/skills/owned-review");
+    fs::create_dir_all(&skills).unwrap();
+    fs::write(skills.join("SKILL.md"),"---\nname: owned-review\ndescription: Ownership fixture\nmode: review\n---\nReview the project carefully.\n").unwrap();
+    let server = Server::start_with_mode(service.clone(), "tui").unwrap();
+    let client = server.endpoint().client(workspace.clone(), None);
+    let owner = client.own_jobs().await.unwrap();
+    assert!(owner
+        .submit_workflow(json!({"name":"model","args":"unexpected-model"}))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("only model workflows"));
+    let unrelated = service
+        .engine
+        .start(StartRequest {
+            workspace,
+            task: "Unrelated work".into(),
+            session_id: None,
+            model: None,
+            mode: "plan".into(),
+            queue: false,
+        })
+        .await
+        .unwrap();
+    let skill = owner
+        .submit_workflow(json!({"name":"skill","args":"owned-review inspect","queue":true}))
+        .await
+        .unwrap();
+    let plan = owner
+        .submit_workflow(json!({"name":"plan","args":"Design a fix","queue":true}))
+        .await
+        .unwrap();
+    assert_eq!(skill["metadata"]["job"]["status"], "queued");
+    assert_eq!(skill["metadata"]["job"]["mode"], "review");
+    drop(owner);
+    assert_eq!(
+        done(&service, &skill["metadata"]["job"]["id"]).await,
+        "cancelled"
+    );
+    assert_eq!(
+        done(&service, &plan["metadata"]["job"]["id"]).await,
+        "cancelled"
+    );
+    assert_eq!(
+        service.engine.job(&unrelated.id).unwrap().unwrap().status,
+        "running"
+    );
+    server.close();
+    server.wait_closed().await;
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn terminal_history_pages_are_ordered_exclusive_and_metadata_is_small() {
+    use shadowcode_core::service::Request;
+    let (_root, service) = setup("http://127.0.0.1:1/v1");
+    let store = service.engine.store();
+    let session = store
+        .create_session(&service.workspace().unwrap(), "fixture", "History")
+        .unwrap();
+    let sid = session["id"].as_str().unwrap();
+    for i in 0..1030 {
+        store
+            .add_event(
+                "user.message",
+                &json!({"text":format!("row {i}")}),
+                Some(sid),
+                None,
+            )
+            .unwrap();
+    }
+    let call = |path: String| {
+        service.dispatch(Request {
+            method: "GET".into(),
+            path,
+            body: Value::Null,
+        })
+    };
+    let summary = call(format!("/api/sessions/{sid}?summary=true"))
+        .await
+        .unwrap();
+    assert!(summary.get("events").is_none());
+    assert_eq!(summary["title"], "History");
+    let mut cursor = store.event_cursor(sid).unwrap() + 1;
+    let mut seen = Vec::new();
+    loop {
+        let page = call(format!(
+            "/api/sessions/{sid}/events?before={cursor}&limit=127"
+        ))
+        .await
+        .unwrap();
+        let rows = page["events"].as_array().unwrap();
+        if rows.is_empty() {
+            break;
+        }
+        let ids: Vec<i64> = rows.iter().map(|r| r["id"].as_i64().unwrap()).collect();
+        assert!(ids.windows(2).all(|p| p[0] < p[1]));
+        assert!(ids.iter().all(|id| *id < cursor));
+        cursor = ids[0];
+        seen.extend(ids);
+    }
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), 1030);
+    for bad in ["0", "-1", "junk"] {
+        assert!(call(format!("/api/sessions/{sid}/events?before={bad}"))
+            .await
+            .is_err());
+    }
+    service.engine.shutdown().await.unwrap();
+}

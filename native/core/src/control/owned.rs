@@ -43,6 +43,9 @@ impl OwnedJobs {
     pub async fn submit_test(&self, body: Value) -> Result<Value> {
         self.exchange("test", body).await
     }
+    pub async fn submit_workflow(&self, body: Value) -> Result<Value> {
+        self.exchange("workflow", body).await
+    }
     async fn exchange(&self, operation: &str, body: Value) -> Result<Value> {
         let mut guard = self.stream.lock().await;
         let mut stream = guard
@@ -123,7 +126,9 @@ pub(super) async fn serve(
             if message["close"] == true {
                 break;
             }
-            let operation = if message.get("test").is_some() {
+            let operation = if message.get("workflow").is_some() {
+                "workflow"
+            } else if message.get("test").is_some() {
                 "test"
             } else {
                 "job"
@@ -142,7 +147,9 @@ pub(super) async fn serve(
             body.insert("workspace".into(), json!(workspace));
             let request = Request {
                     method: "POST".into(),
-                    path: if operation == "test" {
+                    path: if operation == "workflow" {
+                        "/api/commands/run".into()
+                    } else if operation == "test" {
                         "/api/jobs/test".into()
                     } else {
                         "/api/jobs".into()

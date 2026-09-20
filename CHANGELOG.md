@@ -2,6 +2,12 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Native `tui` frontend shares the Rust engine with desktop and CLI: Unicode
+  input, conversation/model/project pickers, task modes, queued follow-ups,
+  explicit approvals, tool cards and paged saved history. Terminal-owned workflows
+  cancel on disconnect while unrelated work in an attached engine continues.
+  Real PTY checks exercise submission, approval, planning and terminal restoration.
+
 - Concurrent desktop/CLI settings changes preserve unrelated fields, project
   trust, integration grants and secret entries. Read–modify–write operations are
   serialized through the owning native engine. Rejected updates preserve the

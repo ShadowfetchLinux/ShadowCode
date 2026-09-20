@@ -20,6 +20,11 @@ pub enum Command {
     /// Open the desktop window (also the default).
     #[command(display_name = "ShadowCode")]
     Ui,
+    /// Open the native full-screen terminal workspace.
+    Tui {
+        #[arg(long, short = 's')]
+        session: Option<String>,
+    },
     /// Run a task, stream its progress, and return its actual exit status.
     Run(Run),
     /// Run an exact user-supplied terminal command.

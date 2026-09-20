@@ -25,8 +25,8 @@ workflows, [managed background processes and model tools](docs/NATIVE_BACKGROUND
 [approved MCP stdio and HTTP tools](docs/NATIVE_MCP.md), a
 [native MCP stdio and authenticated HTTP server](docs/NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode)
 with Codex/Claude Code/Cursor registration output, and a
-[native CLI](docs/NATIVE_CLI.md) that shares the active desktop engine or runs
-headlessly with its own profile.
+[native CLI](docs/NATIVE_CLI.md) and [terminal interface](docs/NATIVE_TUI.md)
+that share the active desktop engine or run headlessly with their own profile.
 Development AppImage and Debian
 packages include [dependency inventories and notices](licenses/native/README.md).
 Integrations and release checks are

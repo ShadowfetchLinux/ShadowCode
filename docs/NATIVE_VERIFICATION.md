@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **208 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **216 native unit and
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -250,6 +250,25 @@ checks skill discovery and stale-hash refusal, and verifies edited-file retentio
 The [plugin guide](NATIVE_PLUGINS.md) documents the supported schema, example
 bundle, limits, separate executable activation and partial-install recovery.
 Legacy Python bundles remain on disk and are explicitly reported for conversion.
+
+## Native terminal interface
+
+The initial `shadowcode tui` frontend passes a real-PTY probe with **8 scripted
+model requests** (`scripts/test-native-tui.mjs`). It verifies bracketed multiline
+Unicode paste without accidental submission, local file-tool evidence, an attached
+CLI, approval remaining pending while typing `y`, F4/Tab/Enter approval of the exact
+command with a real file effect, read-only planning, cancellation on quit and
+restored terminal settings. A second terminal attaches to `serve`; its queued task
+is cancelled on quit while an unrelated running task survives. Artifacts are in
+`artifacts/native-tui/`. CI includes source and AppImage variants; this local probe
+used the development executable, not a newly packaged AppImage.
+
+Eight added Rust tests cover bounded/escaped transcripts, grapheme editing,
+Unicode wrapping and small screens, safe approval selection, queue-full draft
+retention, workflow ownership and exclusive older-history pages. Clippy and the
+full 216-test suite pass. The existing 15 CLI groups / 30 model requests also pass.
+Dependency notice generation now covers 575 application dependencies. Terminal
+picker/navigation, resize, visual and sustained stress coverage remain open.
 
 ## Native CLI
 

@@ -30,6 +30,8 @@ jobs:
       - run: cargo +1.95.0 build -p shadowcode-desktop --locked
       - name: Exercise the native CLI without a display
         run: node scripts/test-native-cli.mjs
+      - name: Exercise the native terminal through a real PTY
+        run: node scripts/test-native-tui.mjs
       - name: Exercise the native MCP server without a display
         run: node scripts/test-native-mcp-server.mjs
       - name: Exercise the authenticated native MCP HTTP server
@@ -49,7 +51,9 @@ jobs:
         if: always()
         with:
           name: native-cli-diagnostics
-          path: artifacts/native-cli
+          path: |
+            artifacts/native-cli
+            artifacts/native-tui
       - run: cargo +1.95.0 install tauri-driver --version 2.0.6 --locked
       - name: Exercise the native window
         run: xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- node scripts/test-native-desktop.mjs
@@ -75,6 +79,12 @@ jobs:
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_CLI_ARTIFACTS: artifacts/native-package/cli
         run: node scripts/test-native-cli.mjs
+      - name: Exercise the packaged native terminal
+        env:
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage
+          SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
+          SHADOW_TUI_ARTIFACTS: artifacts/native-package/tui
+        run: node scripts/test-native-tui.mjs
       - name: Exercise the packaged native window
         env:
           SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage

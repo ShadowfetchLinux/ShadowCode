@@ -15,6 +15,7 @@ macro_rules! err {
 pub mod args;
 pub(crate) mod backend;
 mod registration;
+mod tui;
 mod watch;
 use crate::{
     paths::{self, AppPaths},
@@ -179,6 +180,22 @@ pub async fn run(options: Options) -> Result<i32> {
     )?)?
     .path;
     let paths = options.paths()?;
+    if let Some(Command::Tui { session }) = &options.command {
+        ensure!(
+            !options.json,
+            "The terminal interface does not support --json"
+        );
+        ensure!(
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            "The terminal interface requires a terminal on stdin and stdout"
+        );
+        let backend = Backend::open_tui(paths.clone(), workspace.clone(), parent).await?;
+        let result = tui::run(&paths, workspace, session.as_deref(), parent).await;
+        let closed = backend.close().await;
+        result?;
+        closed?;
+        return Ok(0);
+    }
     if let Some(Command::Mcp {
         action: Some(action @ (Mcp::Serve { .. } | Mcp::Register { .. })),
     }) = &options.command
@@ -460,6 +477,7 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
         .context("No CLI command selected")?;
     let value = match command {
         Command::Ui => bail!("Desktop startup must use the native window"),
+        Command::Tui { .. } => unreachable!("Terminal UI handled before CLI dispatch"),
         Command::Sqlite {path,sql,params,limit,timeout_ms}=>backend.call("POST","/api/sqlite",json!({"path":path,"sql":sql,"params":serde_json::from_str::<Value>(params).context("--params must be a JSON array")?,"limit":limit,"timeout_ms":timeout_ms})).await?,
         Command::Memory {note,task,replace,expected_hash}=>backend.call("POST","/api/memory",json!({"action":if *replace{"replace"}else if note.is_some(){"append"}else{"read"},"scope":if task.is_some(){"task"}else{"project"},"task_id":task,"note":note,"expected_hash":expected_hash})).await?,
         Command::Doctor { test_model } => {

@@ -263,6 +263,16 @@ impl Engine {
         purpose: &str,
         guidance: Guidance,
     ) -> Result<Job> {
+        self.start_guided_owned(request, purpose, guidance, None)
+            .await
+    }
+    pub(crate) async fn start_guided_owned(
+        &self,
+        request: StartRequest,
+        purpose: &str,
+        guidance: Guidance,
+        owner: Option<&JobOwner>,
+    ) -> Result<Job> {
         ensure!(
             guidance.instructions.len() <= 132000,
             "Workflow context is too large"
@@ -273,6 +283,7 @@ impl Engine {
                 system_context: Some(guidance.instructions),
                 purpose,
                 workflow: Some(guidance.info),
+                owner,
                 ..Default::default()
             },
         )
