@@ -1,0 +1,120 @@
+# Native commands and project skills
+
+The native desktop runs slash commands through the Rust command service. Type
+`/` in the composer to see available commands. Command results appear in the
+conversation and survive reload; model tasks stream through the normal task,
+approval, cancellation, and checkpoint system.
+
+## Start work
+
+- `/plan <task>` starts a read-only planning task.
+- `/review [focus]` starts a read-only review. Without a focus, it inspects the
+  current project changes for supported findings.
+- `/test` asks the Test model to inspect the project and run relevant checks.
+- `/test <command>` and `/run <command>` run that exact user-supplied terminal
+  command and report its actual exit status. These use the Terminal policy;
+  shell side effects are not file-tool checkpoints.
+- `/goal <instruction>` creates and runs a durable goal with milestones.
+- `/skill <name> [context]` runs a project skill. A unique skill or custom command
+  is also available directly as `/<name> [context]`.
+
+The composer’s selected model is an explicit override. Otherwise the effective
+Plan, Review, Test, or Build purpose uses the configured model routing. A workflow
+cannot widen a Plan or Review task into a writing task. A workflow declaring
+`mode: plan` or `mode: review` also restricts a Build invocation. Existing project
+trust, workspace permissions, approval rules, and queue limits still apply.
+
+## Create a skill
+
+Open **Skills & instructions**. Project instructions in
+`.shadow/instructions.md` guide every task. Skills are loaded into model context
+only when explicitly selected; discovering a skill does not execute anything.
+**Use /name** places the invocation in the composer so you can add context and
+choose the task mode and model before sending it.
+
+The editor saves `.shadow/skills/<name>.md`. It validates the definition before
+writing, preserves front matter when editing, and rejects overwriting a file
+that changed since it was loaded. Skills in other supported directories are
+shown with their source path and instructions; edit those source files directly.
+
+For example, `.agents/skills/review-change/SKILL.md`:
+
+```markdown
+---
+name: review-change
+description: Inspect a change and report concrete defects
+alias: inspect-change
+mode: review
+---
+Read the relevant source and pending diff for $ARGUMENTS.
+Explain each finding with a file location and a concrete failure scenario.
+If there are no supported findings, say so and identify verification limits.
+```
+
+Run `/skill review-change src/parser.rs` or `/review-change src/parser.rs`.
+`$ARGUMENTS` and `{{args}}` are literal text substitutions, made once. Arguments
+containing template tokens or shell syntax are not recursively expanded or
+executed. If no placeholder exists, arguments are appended as the additional
+user request. Supporting files remain in the workspace and can be read with
+the ordinary file tools relative to the skill directory.
+
+## Discovery and limits
+
+The native catalog reads these project paths:
+
+- `.shadow/commands/*.md`, with legacy `.yaml`/`.yml` files treated as plain
+  prompt text.
+- `.shadow/skills/*.md` and `.shadow/skills/<directory>/SKILL.md`.
+- The same flat-file and `SKILL.md` forms under `.shadowcode/skills` and
+  `.agents/skills`.
+
+Names and aliases use 1–80 ASCII letters, digits, hyphens, or underscores.
+Optional YAML front matter accepts text `name`, `description`, `alias`, and
+`mode` fields; mode is `code`, `plan`, `review`, or `test`.
+`user-invocable: false` makes a definition unavailable to this explicit-invocation
+catalog. Automatic model invocation is not implemented here, so
+`disable-model-invocation` does not broaden access.
+
+The native parser rejects unsupported operative fields such as `model`, `hooks`,
+`allowed-tools`, and `permission-mode` instead of silently ignoring constraints.
+Configure models and permissions in Settings. Malformed definitions appear as
+discovery issues. Ambiguous names and aliases are rejected. Built-in names stay
+reserved; a skill with the same name can be invoked using `/skill <name>`.
+Discovery remains confined to the project and does not follow directory symlinks
+to load external skills. User-global skill catalogs and automatic invocation
+remain outside this implementation.
+
+Each definition is limited to 64 KB, arguments to 32 KB, and expanded workflow
+text to 128 KB. Discovery accepts at most 256 files and 2 MB of file contents.
+The selected source, hash, and effective mode are recorded with the task.
+Instructions are frozen when the task is queued; later file edits affect future
+invocations. Very large guidance can still exceed the selected model’s context
+budget and produces an explicit error.
+
+## Other commands
+
+`/help` lists built-ins and valid project workflows. `/status`, `/models`,
+`/model [id]`, and `/router [on|off]` inspect or update model configuration.
+`/git` and `/diff [path]` inspect repository state. `/cost` and `/context` show
+recorded conversation usage and the configured context limit; they do not infer
+prices or bill local inference.
+
+`/new` and `/clear` create a conversation without deleting history. `/branch
+[title]`, `/resume <unique-id-prefix>`, and `/pin [label]` manage saved work.
+`/checkpoints` lists file-tool checkpoints in the current conversation, `/undo`
+restores the latest available checkpoint, and `/rollback <task-id>` restores a
+specific listed checkpoint. Conflict checks preserve unrelated edits.
+
+`/memory [note]` reads or appends `.shadow/memory/project.md`. Saved notes guide
+future tasks; the append command limits the file to 16 KB so it fits the project
+guidance excerpt. These are user-written project notes, not a generated summary
+of hidden model reasoning.
+
+`/background` opens process controls; `list`, `start <name> <command>`, and
+`stop <id>` manage the current project’s processes. `/sessions`, `/skills`,
+`/goals`, `/health`, and `/settings` open the corresponding controls. `/expand`
+toggles the latest tool card. `/quit` and `/exit` close the native application
+through managed cleanup.
+
+See [native verification](NATIVE_VERIFICATION.md) and the remaining
+[release gates](NATIVE_MIGRATION.md).

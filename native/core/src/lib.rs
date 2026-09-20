@@ -16,6 +16,7 @@ pub mod routing;
 pub mod service;
 pub mod store;
 pub mod tools;
+pub mod workflows;
 pub mod workspace;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

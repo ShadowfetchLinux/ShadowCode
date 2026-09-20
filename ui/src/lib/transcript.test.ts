@@ -8,6 +8,32 @@ const event = (
   task_id = "one",
 ): EventRow => ({ id, ts: id, type, payload, task_id });
 describe("durable transcript", () => {
+  it("replays selected workflow provenance and command cards without duplicates", () => {
+    const rows = [
+      event(1, "workflow.selected", {
+        name: "audit",
+        path: ".agents/skills/audit/SKILL.md",
+        mode: "code",
+        effective_mode: "review",
+      }),
+      event(2, "command.completed", {
+        name: "run",
+        result: { kind: "error", headline: "Command failed", body: "Exit: 7" },
+      }),
+    ];
+    const state = replay(rows);
+    expect(state.items[0]).toMatchObject({
+      kind: "note",
+      text: "Workflow /audit · .agents/skills/audit/SKILL.md · review",
+    });
+    expect(state.items[1]).toMatchObject({
+      kind: "command",
+      card: { kind: "error", body: "Exit: 7" },
+    });
+    expect(state.items.filter((item) => item.kind === "agent")).toHaveLength(0);
+    expect(rows.reduce(applyEvent, state)).toEqual(state);
+  });
+
   it("retains readable fallback notices from legacy conversations", () => {
     const state = replay([
       event(1, "routing.fallback", {

@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **89 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **97 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -50,6 +50,12 @@ integration tests** pass on the development machine. The suite covers:
   is never signalled. Active processes remain visible past 100 newer history
   entries; failed audit storage prevents spawning an unrecorded command.
 
+- Project workflow discovery and ambiguous/invalid metadata, confined paths,
+  literal bounded argument expansion, selected-only model context, read-only
+  mode enforcement, queued source snapshots, source/hash events, project notes,
+  terminal exit status and durable cards, session branching/resume/pins,
+  untrusted/cross-project rejection, latest-checkpoint rewind, and stale edits.
+
 The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:
 
@@ -74,8 +80,8 @@ The first window run exposed a SQLite LIKE escape bug that appeared only after
 sessions existed. A regression now covers real session listing and literal
 search. Visual inspection also found a cancellation transcript race and an open
 sidebar obscuring a resized compact window; the window test checks both.
-Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, compact, Goals, Router, and Background workspace
-views. The compact check caught the Review button losing its accessible name
+Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, compact, Goals, Router,
+Background, and Skills workspace views. The compact check caught the Review button losing its accessible name
 when its text was hidden; the control now retains an explicit label.
 The native test also creates a goal through the drawer, completes all three
 milestones, approves its verification command, checks the resulting file and
@@ -91,9 +97,16 @@ The window test starts a background process through the form, inspects live and
 retained output, performs a coding task while it runs, and stops it through the
 drawer. It then closes the application with another background process and
 terminal child running, checking that the app and both managed process groups exit.
-Fourteen interface unit tests cover ordered replay, pagination, stream finalization,
-listener cleanup, interruption, native tool cards, routing/fallback replay, and
-disambiguated model labels that omit URL credentials. The seven existing browser
+The window also creates a skill through its editor, expands it from the Skills
+panel into the composer, passes arguments, executes a real read-only tool loop,
+and checks its source path and effective mode in the conversation. Reload keeps
+both the skill provenance and a subsequent `/status` command card. Controlled
+input filling explicitly dispatches the input event before WebDriver typing
+and sends Return keys for multiline text. WebKit's clear operation alone can
+otherwise retain the old React value.
+Fifteen interface unit tests cover ordered replay, pagination, stream finalization,
+listener cleanup, interruption, native tool cards, routing/fallback replay,
+workflow provenance, durable command cards, and disambiguated model labels that omit URL credentials. The seven existing browser
 tests continue to pass through the legacy transport.
 
 The same native window workflow also passes when launched from the local optimized

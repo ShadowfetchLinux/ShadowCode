@@ -77,6 +77,10 @@ Implemented foundation:
   editable Plan/Build/Review/Test selections, preserved custom credentials and
   context limits, queued configuration snapshots, explicit per-task overrides,
   persisted model/fallback notices, and goal verification routed to Test.
+- [Native commands and project skills](NATIVE_WORKFLOWS.md) with confined
+  discovery, explicit invocation, frozen queued instructions, model routing,
+  preserved Plan/Review permissions, source/hash provenance, durable command
+  cards, validated editing, and project notes included in task guidance.
 - [Managed background processes](NATIVE_BACKGROUND.md) for project servers and
   watchers, with permission checks, bounded live log tails, durable status and
   audit events, project-scoped controls, bounded concurrency, legacy history
@@ -94,7 +98,7 @@ Implemented foundation:
   Providers that omit token usage receive labelled estimates for budget checks.
 - A shared native command service for onboarding/model configuration, project
   trust, sessions/branching/export/pins, task replay and approvals, files,
-  instructions/skill storage, terminal commands, Git review, and checkpoint rewind.
+  instructions/skill editing and execution, terminal commands, Git review, and checkpoint rewind.
   Manual mutations reserve the same workspace registry as agent tasks. Shutdown
   cancels manual commands and waits for their cleanup; navigation preserves audit
   attribution. Per-hunk staging/discard validates the current diff, and exports

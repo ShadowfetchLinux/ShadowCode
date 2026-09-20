@@ -7,6 +7,7 @@ import {
   type FileEntry,
   type Goal,
   type Health,
+  type ProjectSkill,
   type RoutingView,
   type Session,
   type UpdateInfo,
@@ -47,6 +48,8 @@ export function Drawer({
   onOpenSession,
   onNewSession,
   onRefreshSessions,
+  onSkillsChanged,
+  onUseSkill,
   diffPath,
   onDiffPath,
   health,
@@ -62,6 +65,8 @@ export function Drawer({
   onOpenSession: (id: string) => void;
   onNewSession: () => void;
   onRefreshSessions: () => Promise<void>;
+  onSkillsChanged: () => Promise<void>;
+  onUseSkill: (name: string) => void;
   diffPath: string;
   onDiffPath: (path: string) => void;
   health: Health | null;
@@ -116,7 +121,14 @@ export function Drawer({
         {tab === "changes" && (
           <ChangesTab path={diffPath} busy={busy} toast={toast} />
         )}
-        {tab === "skills" && <SkillsTab toast={toast} />}
+        {tab === "skills" && (
+          <SkillsTab
+            toast={toast}
+            onChanged={onSkillsChanged}
+            onUse={onUseSkill}
+            busy={busy}
+          />
+        )}
         {tab === "goals" && (
           <GoalsTab
             key={workspace}
@@ -655,31 +667,75 @@ function ChangesTab({
 
 // --- Skills / instructions ------------------------------------------------------
 
-function SkillsTab({ toast }: { toast: Toast }) {
+function SkillsTab({
+  toast,
+  onChanged,
+  onUse,
+  busy,
+}: {
+  toast: Toast;
+  onChanged: () => Promise<void>;
+  onUse: (name: string) => void;
+  busy: boolean;
+}) {
   const [instructions, setInstructions] = useState("");
-  const [skills, setSkills] = useState<{ name: string; content: string }[]>([]);
+  const [skills, setSkills] = useState<ProjectSkill[]>([]);
+  const [issues, setIssues] = useState<string[]>([]);
   const [name, setName] = useState("workflow");
   const [body, setBody] = useState("");
+  const [hash, setHash] = useState("missing");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const load = useCallback(async () => {
-    try {
-      const [inst, sk] = await Promise.all([api.instructions(), api.skills()]);
-      setInstructions(inst.content);
-      setSkills(sk.skills);
-    } catch {
-      /* not in a workspace */
-    }
+    const [inst, sk] = await Promise.all([api.instructions(), api.skills()]);
+    setInstructions(inst.content);
+    setSkills(sk.skills);
+    setIssues(sk.issues || []);
   }, []);
   useEffect(() => {
-    void load();
+    void load().catch((error) => setError(String(error)));
   }, [load]);
+  const save = async (skill: boolean) => {
+    setSaving(true);
+    setError("");
+    try {
+      if (skill) await api.saveSkill(name, body, isNative() ? hash : undefined);
+      else await api.saveInstructions(instructions);
+      await load();
+      await onChanged();
+      if (skill) {
+        const saved = (await api.skills()).skills.find(
+          (item) => item.path === `.shadow/skills/${name}.md`,
+        );
+        setHash(saved?.hash || "missing");
+      }
+      toast(skill ? `Saved skill ${name}` : "Instructions saved", "ok");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <>
       <p className="hint">
-        Injected into every run from <code>.shadow/</code>.
+        Project instructions guide every task.{" "}
+        {isNative()
+          ? "Skills run when you select them or use /skill name in the composer."
+          : "Save reusable project workflow files here."}
       </p>
+      {error && (
+        <p className="health-bad" role="alert">
+          {error}
+        </p>
+      )}
       <div className="field">
-        <label>.shadow/instructions.md</label>
+        <label htmlFor="project-instructions">Project instructions</label>
+        <p className="hint">
+          <code>.shadow/instructions.md</code>
+        </p>
         <textarea
+          id="project-instructions"
           rows={7}
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
@@ -688,54 +744,92 @@ function SkillsTab({ toast }: { toast: Toast }) {
         <button
           type="button"
           className="mini"
-          onClick={() =>
-            void api
-              .saveInstructions(instructions)
-              .then(() => toast("Instructions saved", "ok"))
-          }
+          disabled={saving || busy}
+          onClick={() => void save(false)}
         >
-          Save
+          Save instructions
         </button>
       </div>
       <div className="field">
-        <label>Skill</label>
+        <label htmlFor="skill-name">Skill name</label>
         <input
+          id="skill-name"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          maxLength={80}
+          onChange={(e) => {
+            setName(e.target.value);
+            setHash("missing");
+          }}
           placeholder="skill name"
         />
+        <label htmlFor="skill-body">Skill instructions</label>
         <textarea
+          id="skill-body"
           rows={5}
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="# How to run tests…"
+          placeholder="Describe the workflow. Use $ARGUMENTS for additional context."
         />
+        <p className="hint">
+          Saved to <code>.shadow/skills/{name || "name"}.md</code>.
+        </p>
         <button
           type="button"
           className="mini"
-          onClick={() =>
-            void api
-              .saveSkill(name, body)
-              .then(load)
-              .then(() => toast(`Saved skill ${name}`, "ok"))
-          }
+          disabled={saving || busy || !name.trim() || !body.trim()}
+          onClick={() => void save(true)}
         >
           Save skill
         </button>
       </div>
+      {issues.map((issue, index) => (
+        <p key={index} className="health-bad">
+          {issue}
+        </p>
+      ))}
       <div className="list">
-        {skills.map((s) => (
-          <button
-            type="button"
-            key={s.name}
-            className="file"
-            onClick={() => {
-              setName(s.name);
-              setBody(s.content);
-            }}
-          >
-            {s.name}
-          </button>
+        {skills.map((skill) => (
+          <details key={skill.path || skill.name}>
+            <summary>
+              {skill.name}
+              {skill.mode ? ` · ${skill.mode}` : ""}
+            </summary>
+            {skill.description && <p className="hint">{skill.description}</p>}
+            {skill.path && (
+              <p className="hint">
+                <code>{skill.path}</code>
+              </p>
+            )}
+            <pre className="op-full">{skill.content}</pre>
+            {isNative() && (
+              <button
+                type="button"
+                className="mini"
+                disabled={busy}
+                onClick={() => onUse(skill.name)}
+              >
+                Use /{skill.name}
+              </button>
+            )}
+            {(!skill.path ||
+              /^\.shadow\/skills\/[^/]+\.md$/.test(skill.path)) && (
+              <button
+                type="button"
+                className="mini"
+                disabled={saving}
+                onClick={() => {
+                  setName(
+                    skill.path?.split("/").at(-1)?.replace(/\.md$/, "") ||
+                      skill.name,
+                  );
+                  setBody(skill.raw_content || skill.content);
+                  setHash(skill.hash || "missing");
+                }}
+              >
+                Edit {skill.name}
+              </button>
+            )}
+          </details>
         ))}
       </div>
     </>

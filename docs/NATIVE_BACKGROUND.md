@@ -2,6 +2,8 @@
 
 Open **Background processes** in the sidebar, or the **Background** drawer tab.
 Give the process a name, enter its command, and choose **Start process**. This is
+also available through `/background start <name> <command>`; `/background list`
+and `/background stop <id>` inspect and stop a process. It is
 useful for a development server or watcher that should continue while you work
 on other tasks in the same project. Commands run in the selected project folder.
 

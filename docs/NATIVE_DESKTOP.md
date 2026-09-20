@@ -96,6 +96,8 @@ not require that tool. No global PATH change is needed.
 - [Model routing](NATIVE_ROUTING.md) selects a registered model for Plan, Build,
   Review, and Test. Provider-scoped IDs keep identical model names on different
   servers distinct; conversations retain the actual selection and fallback notices.
+- [Commands and project skills](NATIVE_WORKFLOWS.md) run selected workflows through
+  the native task engine and retain command results and source provenance.
 - [Background processes](NATIVE_BACKGROUND.md) run project servers and watchers
   alongside coding tasks, with live bounded logs, retained history, stop controls,
   and process-group cleanup during application shutdown.

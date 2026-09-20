@@ -61,6 +61,15 @@ export type EventRow = {
   session_id?: string;
   task_id?: string;
 };
+export type ProjectSkill = {
+  name: string;
+  content: string;
+  raw_content?: string;
+  description?: string;
+  path?: string;
+  mode?: string;
+  hash?: string;
+};
 export type FileEntry = { name: string; path: string; type: "file" | "dir" };
 export type PlanStep = {
   id: string;
@@ -506,11 +515,13 @@ export const api = {
   saveInstructions: (content: string) =>
     send<{ ok: boolean }>("/api/workspace/instructions", "PUT", { content }),
   skills: () =>
-    get<{ skills: { name: string; content: string }[] }>(
-      "/api/workspace/skills",
-    ),
-  saveSkill: (name: string, content: string) =>
-    send<{ ok: boolean }>("/api/workspace/skills", "PUT", { name, content }),
+    get<{ skills: ProjectSkill[]; issues?: string[] }>("/api/workspace/skills"),
+  saveSkill: (name: string, content: string, expectedHash?: string) =>
+    send<{ ok: boolean }>("/api/workspace/skills", "PUT", {
+      name,
+      content,
+      expected_hash: expectedHash,
+    }),
   attach: (filename: string, text: string) =>
     send<{ path: string }>("/api/workspace/attach", "POST", { filename, text }),
   undo: () =>
@@ -570,11 +581,17 @@ export const api = {
         source: string;
       }[];
     }>("/api/commands"),
-  runCommand: (name: string, args = "", sessionId?: string) =>
+  runCommand: (
+    name: string,
+    args = "",
+    sessionId?: string,
+    options: { model?: string; purpose?: string; queue?: boolean } = {},
+  ) =>
     send<CommandResult>("/api/commands/run", "POST", {
       name,
       args,
       session_id: sessionId,
+      ...options,
     }),
 };
 

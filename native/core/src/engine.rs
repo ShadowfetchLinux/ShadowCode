@@ -10,6 +10,7 @@ use crate::{
     permissions, routing,
     store::Store,
     tools::{self, ToolExecutor},
+    workflows::{Guidance, WorkflowInfo},
     workspace::Workspace,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
@@ -59,6 +60,7 @@ pub struct Job {
     pub mode: String,
     pub model: String,
     pub routing: Option<routing::Decision>,
+    pub workflow: Option<WorkflowInfo>,
     pub started_at: f64,
     pub finished_at: Option<f64>,
     pub event_cursor: i64,
@@ -231,13 +233,32 @@ impl Engine {
         self.start_for_purpose(request, "").await
     }
     pub async fn start_for_purpose(&self, request: StartRequest, purpose: &str) -> Result<Job> {
-        self.start_with_context(request, None, purpose).await
+        self.start_with_context(request, None, purpose, None).await
+    }
+    pub async fn start_guided(
+        &self,
+        request: StartRequest,
+        purpose: &str,
+        guidance: Guidance,
+    ) -> Result<Job> {
+        ensure!(
+            guidance.instructions.len() <= 132000,
+            "Workflow context is too large"
+        );
+        self.start_with_context(
+            request,
+            Some(guidance.instructions),
+            purpose,
+            Some(guidance.info),
+        )
+        .await
     }
     async fn start_with_context(
         &self,
         request: StartRequest,
         system_context: Option<String>,
         purpose: &str,
+        workflow: Option<WorkflowInfo>,
     ) -> Result<Job> {
         ensure!(
             !self.0.closing.load(Ordering::Acquire),
@@ -317,6 +338,7 @@ impl Engine {
             mode: request.mode,
             model: config.model.name.clone(),
             routing: Some(decision),
+            workflow,
             started_at: crate::now(),
             finished_at: None,
             event_cursor,
@@ -708,6 +730,11 @@ impl Engine {
             )?;
         }
         let mut repeated = HashMap::new();
+        if let Some(workflow) = &job.workflow {
+            let mut selected = json!(workflow);
+            selected["effective_mode"] = json!(job.mode);
+            events.emit("workflow.selected", selected)?;
+        }
         let mut commands = Vec::new();
         let requires_inspection = regex::Regex::new(r"(?i)^(?:please\s+)?(?:read|inspect|open)\b")?
             .is_match(job.task.trim());

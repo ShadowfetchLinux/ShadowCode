@@ -1,4 +1,9 @@
-import type { EventRow, PlanStep, RoutingDecision } from "../api";
+import type {
+  CommandResult,
+  EventRow,
+  PlanStep,
+  RoutingDecision,
+} from "../api";
 import type { ChatItem } from "../components/cards";
 
 export type Transcript = {
@@ -29,6 +34,31 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let routing = state.routing;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
+  if (
+    event.type === "command.completed" &&
+    p.result &&
+    typeof p.result === "object"
+  ) {
+    items = [
+      ...items,
+      {
+        kind: "command",
+        card: p.result as CommandResult,
+        text: (p.result as CommandResult).body || "",
+        taskId,
+      },
+    ];
+  }
+  if (event.type === "workflow.selected") {
+    items = [
+      ...items,
+      {
+        kind: "note",
+        taskId,
+        text: `Workflow /${String(p.name || "workflow")} · ${String(p.path || "project")} · ${String(p.effective_mode || p.mode || "current task mode")}`,
+      },
+    ];
+  }
   if (event.type === "user.message") {
     items = [...items, { kind: "user", text, taskId }];
     stage = "QUEUED";

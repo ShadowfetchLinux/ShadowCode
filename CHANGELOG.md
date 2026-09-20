@@ -20,6 +20,10 @@
   tasks, retain bounded live logs and durable history, honor project permissions,
   and stop managed child processes when the application closes. Legacy history
   is imported without signalling stored PIDs or replaying old commands.
+- Native slash commands run real tasks and terminal actions, persist command
+  cards, and support explicit project skills with source/hash provenance. Skills
+  preserve Plan/Review restrictions and queued instructions; the editor validates
+  metadata and rejects stale saves. Project notes guide subsequent tasks.
 - Native window automation covers actual tool execution, approvals, reload,
   cancellation, goal progression/pause, accessibility, and subprocess cleanup.
 - Native AppImage and Debian build scripts preserve per-format executable

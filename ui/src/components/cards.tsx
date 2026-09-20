@@ -1,6 +1,7 @@
 import type { Approval, CommandResult } from "../api";
 
 export type ChatItem =
+  | { kind: "command"; card: CommandResult; text: string; taskId?: string }
   | { kind: "user"; text: string; taskId?: string }
   | { kind: "note"; text: string; taskId?: string; warning?: boolean }
   | {

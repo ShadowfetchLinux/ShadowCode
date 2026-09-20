@@ -25,9 +25,11 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
+mod commands;
 
 #[derive(Clone)]
 struct Selection {
+    generation: u64,
     workspace: PathBuf,
     session: Option<String>,
 }
@@ -64,6 +66,7 @@ impl Service {
         Ok(Self {
             engine: Engine::open(paths)?,
             selection: Arc::new(RwLock::new(Selection {
+                generation: 0,
                 workspace,
                 session: None,
             })),
@@ -81,15 +84,32 @@ impl Service {
     fn config(&self) -> Result<Config> {
         Config::load(self.engine.paths(), Some(&self.workspace()?))
     }
+    fn snapshot_selection(&self) -> Result<Selection> {
+        Ok(self
+            .selection
+            .read()
+            .map_err(|_| anyhow::anyhow!("Project selection lock poisoned"))?
+            .clone())
+    }
     fn select(&self, path: &Path, session: Option<String>) -> Result<()> {
+        self.select_if(path, session, None)
+    }
+    fn select_if(&self, path: &Path, session: Option<String>, expected: Option<u64>) -> Result<()> {
         let workspace = Workspace::open(path)?.path;
-        self.engine.paths().remember_workspace(&workspace)?;
-        self.engine.store().touch_project(&workspace)?;
-        *self
+        let mut selection = self
             .selection
             .write()
-            .map_err(|_| anyhow::anyhow!("Project selection lock poisoned"))? =
-            Selection { workspace, session };
+            .map_err(|_| anyhow::anyhow!("Project selection lock poisoned"))?;
+        if expected.is_some_and(|generation| generation != selection.generation) {
+            return Ok(());
+        }
+        self.engine.paths().remember_workspace(&workspace)?;
+        self.engine.store().touch_project(&workspace)?;
+        *selection = Selection {
+            workspace,
+            session,
+            generation: selection.generation.wrapping_add(1),
+        };
         Ok(())
     }
     pub async fn detected(&self, refresh: bool) -> Vec<Value> {
@@ -123,6 +143,8 @@ impl Service {
         let text = |key: &str| body[key].as_str().unwrap_or("");
         let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
         match (request.method.as_str(), path) {
+            ("GET", "/api/commands") => return self.command_catalog(),
+            ("POST", "/api/commands/run") => return self.run_command(body).await,
             ("GET", "/api/version") => {
                 return Ok(
                     json!({"name":"ShadowCode","version":crate::VERSION,"runtime":"rust","transport":"native","pid":std::process::id()}),
@@ -494,7 +516,7 @@ impl Service {
                                 .map(str::to_owned)
                                 .or_else(|| {
                                     if workspace == selection.workspace {
-                                        selection.session
+                                        selection.session.clone()
                                     } else {
                                         None
                                     }
@@ -506,7 +528,11 @@ impl Service {
                         purpose,
                     )
                     .await?;
-                self.select(&job.workspace, Some(job.session_id.clone()))?;
+                self.select_if(
+                    &job.workspace,
+                    Some(job.session_id.clone()),
+                    Some(selection.generation),
+                )?;
                 return Ok(json!(job));
             }
             ("GET", "/api/approvals") => {
@@ -557,17 +583,13 @@ impl Service {
             }
             ("GET", "/api/workspace/skills") => {
                 let ws = Workspace::open(&self.workspace()?)?;
-                let mut skills = Vec::new();
-                if let Ok(entries) = ws.list(".shadow/skills") {
-                    for entry in entries.into_iter().take(100) {
-                        if entry.kind == "file" && entry.name.ends_with(".md") {
-                            if let Ok(file) = ws.read(&entry.path) {
-                                skills.push(json!({"name":entry.name.trim_end_matches(".md"),"content":truncate(&file.content,64000)}));
-                            }
-                        }
-                    }
-                }
-                return Ok(json!({"skills":skills}));
+                let catalog = crate::workflows::discover(&ws);
+                let skills: Vec<_> = catalog
+                    .definitions
+                    .into_iter()
+                    .filter(|item| item.info.kind == "skill")
+                    .collect();
+                return Ok(json!({"skills":skills,"issues":catalog.issues}));
             }
             ("PUT", "/api/workspace/skills") => {
                 let name = text("name");
@@ -579,10 +601,13 @@ impl Service {
                             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')),
                     "Skill name may contain letters, numbers, - and _"
                 );
-                self.mutable_workspace()?.write(
-                    &format!(".shadow/skills/{name}.md"),
+                let ws = self.mutable_workspace()?;
+                let path = format!(".shadow/skills/{name}.md");
+                crate::workflows::Definition::parse(&path, "skill", text("content"), "")?;
+                ws.write(
+                    &path,
                     text("content").as_bytes(),
-                    None,
+                    body["expected_hash"].as_str(),
                 )?;
                 return Ok(json!({"ok":true}));
             }
@@ -601,8 +626,14 @@ impl Service {
                 return Ok(json!({"path":path}));
             }
             ("POST", "/api/workspace/exec") => {
-                let ws = self.mutable_workspace()?;
-                let cfg = self.config()?;
+                let selection = self.snapshot_selection()?;
+                let workspace = if text("workspace").is_empty() {
+                    selection.workspace.clone()
+                } else {
+                    expand_path(text("workspace"))?
+                };
+                let ws = self.mutable_workspace_at(&workspace)?;
+                let cfg = Config::load(self.engine.paths(), Some(&ws.path))?;
                 let command = text("command");
                 ensure!(
                     !command.trim().is_empty() && command.len() <= 64000,
@@ -615,7 +646,18 @@ impl Service {
                 }
                 // This route is the terminal Run button: the exact command was
                 // supplied by the user. Agent commands use ApprovalHub instead.
-                let session = self.current_session()?;
+                let session = body["session_id"].as_str().map(str::to_owned).or_else(|| {
+                    (ws.path == selection.workspace)
+                        .then_some(selection.session)
+                        .flatten()
+                });
+                if let Some(sid) = &session {
+                    ensure!(
+                        store.session(sid)?.context("Session not found")?["workspace"].as_str()
+                            == ws.path.to_str(),
+                        "Session belongs to a different workspace"
+                    );
+                }
                 let spec = ProcessSpec::shell(
                     command,
                     ws.path.clone(),
@@ -864,7 +906,10 @@ impl Service {
             .clone())
     }
     fn mutable_workspace(&self) -> Result<ManualWorkspace> {
-        let workspace = Workspace::open(&self.workspace()?)?;
+        self.mutable_workspace_at(&self.workspace()?)
+    }
+    fn mutable_workspace_at(&self, path: &Path) -> Result<ManualWorkspace> {
+        let workspace = Workspace::open(path)?;
         let cfg = Config::load(self.engine.paths(), Some(&workspace.path))?;
         ensure!(
             cfg.permissions.level != PermissionLevel::ReadOnly,

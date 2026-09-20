@@ -468,6 +468,8 @@ export default function App() {
     }
   }
   async function runSlash(text: string) {
+    const ticket = selection.current;
+    const originSession = selectedRef.current;
     const [name, ...rest] = text.slice(1).split(" ");
     const args = rest.join(" ");
     if (name === "new" || name === "clear") {
@@ -481,19 +483,70 @@ export default function App() {
       skills: "skills",
       health: "health",
       doctor: "health",
+      background: "background",
     };
     if (panels[name] && !args) {
       setPanel(panels[name]);
       return;
     }
-    if (name === "settings") {
+    if (name === "settings" && !args) {
       setOverlay("settings");
       return;
     }
-    const result = await api.runCommand(name, args, sessionId || undefined);
-    if (result.kind === "overlay")
+    const result = await api.runCommand(name, args, sessionId || undefined, {
+      model: modelChoice || undefined,
+      purpose: mode,
+    });
+    if (ticket !== selection.current) {
+      await refresh();
+      return;
+    }
+    const metadata = result.metadata || {};
+    const started = metadata.job as Job | undefined;
+    if (started?.id) {
+      if (started.session_id !== selectedRef.current) {
+        selectedRef.current = started.session_id;
+        setSessionId(started.session_id);
+        localStorage.setItem("shadow:selected", started.session_id);
+      }
+      conversation.start(started);
+    } else if (typeof metadata.session_id === "string") {
+      await openSession(metadata.session_id);
+    } else if (result.kind === "overlay") {
       setOverlay((result.overlay as Overlay) || "settings");
-    else setCommandCards((prev) => [...prev, result]);
+    } else if (metadata.action === "expand") {
+      setTranscript((state) => {
+        const index = state.items.map((item) => item.kind).lastIndexOf("tool");
+        return {
+          ...state,
+          items: state.items.map((item, i) =>
+            i === index && item.kind === "tool"
+              ? { ...item, collapsed: item.collapsed === false }
+              : item,
+          ),
+        };
+      });
+    } else if (metadata.action === "quit" || result.quit) {
+      if (isNative()) await invoke("desktop_quit");
+      else toast("Close this browser tab to leave ShadowCode.", "info");
+    } else if (!metadata.panel) {
+      if (isNative() && originSession) {
+        const [detail, current] = await Promise.all([
+          api.session(originSession),
+          api.currentJob(originSession),
+        ]);
+        if (ticket === selection.current)
+          conversation.load(detail, current.job);
+      } else setCommandCards((prev) => [...prev, result]);
+    }
+    if (
+      typeof metadata.panel === "string" &&
+      [...Object.values(panels), "changes"].includes(
+        metadata.panel as DrawerTab,
+      )
+    )
+      setPanel(metadata.panel as DrawerTab);
+    if (metadata.reload_config) await reloadConfig();
     await refresh();
   }
   async function submit() {
@@ -504,6 +557,7 @@ export default function App() {
       await newSession();
       return;
     }
+    const submitTicket = selection.current;
     const original = task;
     const attached = [...chips];
     const text = (
@@ -531,6 +585,10 @@ export default function App() {
         modelChoice || undefined,
         mode,
       );
+      if (submitTicket !== selection.current) {
+        await refresh();
+        return;
+      }
       if (started.session_id !== selectedRef.current) {
         selectedRef.current = started.session_id;
         setSessionId(started.session_id);
@@ -539,6 +597,10 @@ export default function App() {
       conversation.start(started);
       await refresh().catch(() => undefined);
     } catch (e) {
+      if (submitTicket !== selection.current) {
+        toast(String(e), "err");
+        return;
+      }
       setTask(original);
       setChips(attached);
       setError(String(e));
@@ -723,12 +785,24 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+  const reloadCommands = useCallback(async () => {
+    const result = await api.commands();
+    setCommands(result.commands);
+  }, []);
   useEffect(() => {
+    let current = true;
     api
       .commands()
-      .then((d) => setCommands(d.commands))
-      .catch(() => undefined);
-  }, []);
+      .then((result) => {
+        if (current) setCommands(result.commands);
+      })
+      .catch(() => {
+        if (current) setCommands([]);
+      });
+    return () => {
+      current = false;
+    };
+  }, [workspace]);
 
   const current = sessions.find((s) => s.id === sessionId);
   const title = current?.title || "New task";
@@ -1029,6 +1103,8 @@ export default function App() {
                         setPanel("changes");
                       }}
                     />
+                  ) : item.kind === "command" ? (
+                    <CommandCardView key={i} card={item.card} />
                   ) : item.kind === "note" ? (
                     <div
                       key={i}
@@ -1397,6 +1473,12 @@ export default function App() {
               if (next) await openSession(next.id);
               else await newSession();
             }
+          }}
+          onSkillsChanged={reloadCommands}
+          onUseSkill={(name) => {
+            setTask(`/skill ${name} `);
+            setPanel(null);
+            promptRef.current?.focus();
           }}
           diffPath={diffPath}
           onDiffPath={setDiffPath}

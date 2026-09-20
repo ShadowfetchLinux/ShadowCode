@@ -15,7 +15,7 @@ const binaryArgs = JSON.parse(process.env.SHADOW_DESKTOP_ARGS || "[]");
 assert.ok(Array.isArray(binaryArgs) && binaryArgs.every(arg => typeof arg === "string"), "SHADOW_DESKTOP_ARGS must be a JSON array of strings");
 const artifacts = process.env.SHADOW_NATIVE_ARTIFACTS || path.join(root, "artifacts/native");
 await mkdir(artifacts, { recursive: true });
-for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "routing.png", "background.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json", "accessibility-routing.json", "accessibility-background.json"]) {
+for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "routing.png", "background.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json", "accessibility-routing.json", "accessibility-background.json", "skills.png", "accessibility-skills.json"]) {
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
@@ -24,11 +24,13 @@ const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
 await mkdir(project); await mkdir(path.join(profile, "config"), { recursive: true });
 await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
+let modelError;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function until(label, fn, timeout = 15000) {
   const end = Date.now() + timeout;
   let last;
   while (Date.now() < end) {
+    if (modelError) throw modelError;
     try { const value = await fn(); if (value) return value; } catch (error) { last = error; }
     await delay(80);
   }
@@ -44,9 +46,12 @@ async function unusedPort() {
 let requests = 0;
 const requestedModels = [];
 let goalMode = false;
+let workflowMode = false;
+let workflowCalls = 0;
 const milestoneCalls = new Map();
 const sockets = new Set();
 const model = createServer(async (req, res) => {
+  try {
   let body = "";
   for await (const chunk of req) body += chunk;
   const payload = JSON.parse(body);
@@ -54,6 +59,17 @@ const model = createServer(async (req, res) => {
   requestedModels.push(payload.model);
   const index = requests++;
   const tool = (name, args) => ({ id: `call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
+  if (workflowMode) {
+    const system = payload.messages.find(m => m.role === "system").content;
+    assert.ok(system.includes("WINDOW_SKILL: inspect README.md"));
+    assert.ok(payload.tools.every(t => !["write_file", "exec"].includes(t.function.name)), "Selected review skill must have read-only tools");
+    const first = workflowCalls++ === 0;
+    const message = first ? {role: "assistant", content: "Inspecting selected skill context.", tool_calls: [tool("read_file", {path: "README.md"})]}
+      : {role: "assistant", content: "Selected skill reviewed README.md."};
+    res.writeHead(200, {"Content-Type": "application/json"});
+    res.end(JSON.stringify({choices: [{message, finish_reason: first ? "tool_calls" : "stop"}], usage: {prompt_tokens: 30, completion_tokens: 10, total_tokens: 40}}));
+    return;
+  }
   if (goalMode) {
     const task = payload.messages.filter(m => m.role === "user").at(-1).content;
     const milestone = task.split("\n")[0];
@@ -76,6 +92,11 @@ const model = createServer(async (req, res) => {
       : { role: "assistant", content: "Created hello.txt and verified its contents." };
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ choices: [{ message, finish_reason: index < 2 ? "tool_calls" : "stop" }], usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 } }));
+  } catch (error) {
+    modelError = error;
+    res.writeHead(500, {"Content-Type": "application/json"});
+    res.end(JSON.stringify({error: String(error)}));
+  }
 });
 model.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
 await new Promise(resolve => model.listen(0, "127.0.0.1", resolve));
@@ -121,11 +142,15 @@ async function clickButton(text) {
   await wd("POST", `/session/${session}/element/${found["element-6066-11e4-a52e-4f735466cecf"]}/click`, {});
 }
 async function type(selector, text) {
-  await wd("POST", `/session/${session}/element/${await element(selector)}/value`, { text });
+  await wd("POST", `/session/${session}/element/${await element(selector)}/value`, { text: text.replaceAll("\n", "\uE006") });
 }
 async function fill(selector, text) {
-  await wd("POST", `/session/${session}/element/${await element(selector)}/clear`, {});
+  await click(selector);
+  // WebKit's element-clear may skip the input event React needs. Clear through
+  // the browser's native value setter and emit input, then type with WebDriver.
+  await execute("const el=document.querySelector(arguments[0]);const prototype=el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(prototype,'value').set.call(el,'');el.dispatchEvent(new Event('input',{bubbles:true}));", [selector]);
   await type(selector, text);
+  assert.equal(await execute("return document.querySelector(arguments[0]).value", [selector]), text);
 }
 async function screenshot(name) {
   await writeFile(path.join(artifacts, `${name}.png`), Buffer.from(await wd("GET", `/session/${session}/screenshot`), "base64"));
@@ -171,7 +196,7 @@ try {
   assert.match(await execute("return document.querySelector('select[aria-label=\"Model for this task\"]').selectedOptions[0].textContent"), /Automatic/);
   await click('button[aria-label="Terminal"]');
   await clickButton("Background");
-  await fill('#background-name', "dev");
+  assert.equal(await execute("return document.querySelector('#background-name').value"), "dev");
   await type('#background-command', "printf 'native-background-ready\\n'; trap 'printf graceful-stop; exit 0' TERM; while :; do sleep 1; done");
   await clickButton("Start process");
   const background = await until("Background process output", async () => {
@@ -234,6 +259,30 @@ try {
   await accessibility("compact");
   assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"), true);
   await wd("POST", `/session/${session}/window/rect`, { width: 1380, height: 920 });
+  await click('button[aria-label="Terminal"]');
+  await clickButton("Skills");
+  await fill('#skill-name', "audit");
+  await type('#skill-body', "---\nmode: review\n---\nWINDOW_SKILL: inspect $ARGUMENTS");
+  assert.equal(await execute("return document.querySelector('#skill-body').value"), "---\nmode: review\n---\nWINDOW_SKILL: inspect $ARGUMENTS");
+  await clickButton("Save skill");
+  await until("Saved skill usable", () => execute("return [...document.querySelectorAll('button')].some(button=>button.textContent==='Use /audit')"));
+  await click(".drawer-body .list details summary");
+  await screenshot("skills");
+  await accessibility("skills");
+  workflowMode = true;
+  await clickButton("Use /audit");
+  assert.equal(await execute("return document.querySelector('textarea[aria-label=\"Message ShadowCode\"]').value"), "/skill audit ");
+  await type('textarea[aria-label="Message ShadowCode"]', "README.md");
+  await click('button[aria-label="Send task"]');
+  await until("Selected skill result", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Selected skill reviewed README.md.')) && !document.querySelector('button[aria-label=\"Stop task\"]')"));
+  assert.equal(workflowCalls, 2);
+  await until("Skill provenance", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('.shadow/skills/audit.md') && e.textContent.includes('review'))"));
+  workflowMode = false;
+  await type('textarea[aria-label="Message ShadowCode"]', "/status");
+  await click('button[aria-label="Send task"]');
+  await until("Durable command card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Permission mode'))"));
+  await wd("POST", `/session/${session}/refresh`, {});
+  await until("Skill and command reload", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('.shadow/skills/audit.md')) && [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Permission mode'))"));
   goalMode = true;
   await click('button[aria-label="Terminal"]');
   await clickButton("Goals");
@@ -299,7 +348,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, checks: ["embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "selected skill execution, mode enforcement, provenance and durable command cards", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {
