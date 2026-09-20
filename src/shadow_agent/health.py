@@ -108,8 +108,8 @@ def doctor_report(config: AppConfig, workspace: Path | None = None) -> dict[str,
         checks.append({"id": check_id, "ok": bool(ok), "label": label, "detail": detail, "fix": fix if not ok else ""})
 
     # Python version
-    py_ok = sys.version_info >= (3, 10)
-    add("python", py_ok, "Python >= 3.10", sys.version.split()[0], "Install Python 3.12 (sudo apt install python3.12).")
+    py_ok = sys.version_info >= (3, 12)
+    add("python", py_ok, "Python >= 3.12", sys.version.split()[0], "Install Python 3.12 (sudo apt install python3.12).")
 
     # Config file parses
     cfg_file = paths.config_file()
@@ -281,7 +281,8 @@ def _project_checks(workspace: Path) -> list[dict[str, Any]]:
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    from shadow_agent.resources import resource_root
+    return resource_root()
 
 
 def ui_build_state(root: Path | None = None) -> dict[str, Any]:
@@ -289,7 +290,7 @@ def ui_build_state(root: Path | None = None) -> dict[str, Any]:
     root = root or repo_root()
     ui = root / "ui"
     index = ui / "dist" / "index.html"
-    if not (ui / "package.json").is_file():
+    if not index.is_file() and not (ui / "package.json").is_file():
         return {"ok": True, "detail": "no ui/ directory (headless install)", "stale": False, "built": False}
     if not index.is_file():
         return {"ok": False, "detail": "ui/dist/index.html missing", "stale": False, "built": False}

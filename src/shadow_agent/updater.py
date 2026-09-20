@@ -110,7 +110,7 @@ def apply_update(
     run = runner or (lambda *args, **kw: subprocess.run(*args, **kw))
     result: dict[str, Any] = {"ok": False, "root": str(root), "before": "", "after": "", "tag": tag, "steps": [], "error": ""}
     if not (root / ".git").exists():
-        result["error"] = f"{root} is not a git checkout; reinstall from https://github.com/{REPO}"
+        result["error"] = f"This is a packaged installation. Download the new release from https://github.com/{REPO}/releases/latest and run scripts/install-appimage.sh (or reinstall the wheel)."
         return result
     head = _git(root, "rev-parse", "--short", "HEAD")
     result["before"] = head.stdout.strip()

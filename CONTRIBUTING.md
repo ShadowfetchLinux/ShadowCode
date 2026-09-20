@@ -1,30 +1,39 @@
 # Contributing to ShadowCode
 
-Thanks for helping improve the harness.
-
-## Setup
+Use Python 3.12+ and Node.js 20.19+ or 22.12+.
 
 ```bash
-git clone https://github.com/ShadowfetchLinux/ShadowCode.git
-cd ShadowCode
-python3 -m pip install -e ".[dev]" --user
-cd ui && npm install && npm run build && cd ..
-python3 -m pytest
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+npm --prefix ui ci
+npm --prefix ui run build
+.venv/bin/python -m pytest
+npm --prefix ui test
+cd ui
+npx playwright install chromium
+npm run test:e2e
 ```
 
-Use the mock provider for tests. Do not commit API keys, `secrets.env`,
-session databases, or machine-specific paths.
+For frontend development, run the API with `shadow ui --no-browser`, then
+`npm --prefix ui run dev`. Vite proxies `/api` to the local API. Use its proxy;
+the API intentionally rejects cross-origin requests.
 
-## Pull requests
+Keep harness logic provider-independent. Add behavioral regression tests when
+changing runtime behavior. UI interactions belong in `ui/e2e`, event transformations
+in Vitest, and backend invariants in pytest. Avoid tests that inspect spelling or
+formatting in source files. Run type checking and build the UI before testing the
+bundle or creating a release.
 
-- Keep changes focused. Prefer a harness fix over a model-specific hack.
-- Add or update tests under `tests/` when behavior changes.
-- Do not put secrets, home-directory paths, or personal emails in the tree.
-- Match the existing Python 3.12 / Typer / FastAPI style.
+Tests must use throwaway workspaces and XDG directories. Do not commit API keys,
+`secrets.env`, databases, browser profiles, or machine-specific home paths. The
+browser test server creates its own data and never loads the user's secrets.
+Optional provider integration checks may be skipped when their dependencies are
+unavailable; report those separately from deterministic coverage.
 
-## Reporting bugs
+Format frontend changes with `npm --prefix ui run format`. Use clear Python 3.12
+code and explicit exception handling around external processes. Preserve saved
+user data and compatibility with the `shadow-agent` XDG directories.
 
-Open a GitHub issue with OS, Python version, `shadow doctor` output
-(redact secrets), and the steps to reproduce.
-
-For vulnerabilities, see [SECURITY.md](SECURITY.md).
+For bugs, include OS, release version, relevant redacted `shadow doctor` output,
+and reproduction steps. See [SECURITY.md](SECURITY.md) for private vulnerability
+reports and [docs/RELEASING.md](docs/RELEASING.md) for builds and publication.

@@ -40,6 +40,7 @@ class PlanStep(BaseModel):
     title: str
     status: Status = "pending"
     detail: str = ""
+    kind: str = "custom"
 
 
 class Plan(BaseModel):
@@ -92,6 +93,7 @@ class Plan(BaseModel):
 def initial_plan(task: str) -> Plan:
     lowered = task.lower()
     if re.search(r"hello[- ]?world", lowered):
+        kinds = ["inspect", "change", "execute", "verify"]
         titles = [
             "Inspect workspace",
             "Create hello-world files",
@@ -99,6 +101,7 @@ def initial_plan(task: str) -> Plan:
             "Verify output",
         ]
     elif re.search(r"test|pytest|failing", lowered):
+        kinds = ["inspect", "execute", "inspect", "change", "verify", "summarize"]
         titles = [
             "Inspect project",
             "Run tests",
@@ -108,6 +111,7 @@ def initial_plan(task: str) -> Plan:
             "Summarize",
         ]
     else:
+        kinds = ["understand", "inspect", "change", "verify", "summarize"]
         titles = [
             "Understand the task",
             "Inspect relevant files",
@@ -115,7 +119,7 @@ def initial_plan(task: str) -> Plan:
             "Verify with commands/tests",
             "Summarize",
         ]
-    steps = [PlanStep(id=f"s{i+1}", title=title) for i, title in enumerate(titles)]
+    steps = [PlanStep(id=f"s{i+1}", title=title, kind=kinds[i]) for i, title in enumerate(titles)]
     plan = Plan(goal=task, steps=steps)
     plan.mark_next()
     return plan

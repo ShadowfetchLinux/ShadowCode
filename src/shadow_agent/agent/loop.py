@@ -136,7 +136,9 @@ class AgentRunner:
     def run(self, task: str, purpose: str = "coder") -> AgentResult:
         task_id = self.store.create_task(self.session_id, task)
         title = task.splitlines()[0][:80]
-        self.store.set_session_title(self.session_id, title)
+        existing = self.store.get_session(self.session_id) or {}
+        if len(self.store.list_tasks(self.session_id, limit=2)) == 1 and existing.get("title") in {None, "", "New task", "New session", self.workspace.name}:
+            self.store.set_session_title(self.session_id, title)
         self.checkpoints = CheckpointStore(self.workspace, task_id)
         self.stages = StageTracker(
             max_fix_retries=int(self.config.agent.max_fix_retries),
@@ -179,6 +181,24 @@ class AgentRunner:
         )
         # Legacy alias: older UI/CLI/tests still listen for agent.planning.
         self._emit("agent.planning", {"plan": plan.model_dump(), "todos": self.todos}, task_id)
+        # Restore conversational intent, including branched sessions, without
+        # replaying stale tool calls or granting them fresh authority.
+        earlier = self.store.list_events(session_id=self.session_id, limit=2000)
+        history = [e for e in earlier if e.get("task_id") != task_id and e["type"] in {"agent.started", "agent.completed"}][-24:]
+        budget = min(24000, self.model.get_context_limit())
+        selected = []
+        for event in reversed(history):
+            text = str(event["payload"].get("task" if event["type"] == "agent.started" else "summary") or "")[:4000]
+            if len(text) > budget:
+                break
+            budget -= len(text)
+            selected.append((event["type"], text))
+        for kind, text in reversed(selected):
+            if text:
+                if kind == "agent.started":
+                    context.add_user(text)
+                else:
+                    context.add_assistant(text)
         context.add_user(task)
         verifier = Verifier(self.workspace)
         event_names = ["agent.started", "agent.understand", "agent.plan", "agent.planning"]
@@ -298,6 +318,13 @@ class AgentRunner:
                 event_names.append("agent.verify")
                 last_verify_ok = verdict.ok
                 if verdict.ok:
+                    for item in plan.steps:
+                        if item.kind in {"understand", "verify", "summarize"}:
+                            plan.update(item.id, status="done")
+                        elif item.status in {"pending", "in_progress"} and item.kind != "custom":
+                            plan.update(item.id, status="skipped", detail="Not needed for this task")
+                    plan.current = None
+                    self._emit("plan.updated", {"plan": plan.model_dump()}, task_id)
                     success = True
                     self.stages.transition(
                         Stage.DONE,
@@ -370,7 +397,7 @@ class AgentRunner:
             "agent.completed",
             {"success": success, "summary": summary, "steps": step, "usage": self.usage, "cancelled": cancelled,
              "stage": self.stages.current.value if self.stages.current else "DONE",
-             "fix_retries": self.stages.fix_retries},
+             "fix_retries": self.stages.fix_retries, "plan": plan.model_dump()},
             task_id,
         )
         event_names.append("agent.completed")
@@ -454,7 +481,7 @@ class AgentRunner:
             return ToolResult(id=call.id, success=False, error="Stopped by the user.", metadata={"cancelled": True})
         if self.checkpoints is not None:
             self.checkpoints.record_call(call.tool_name, call.arguments)
-        self._emit("tool.started", {"tool": call.tool_name, "arguments": _safe_args(call)}, task_id)
+        self._emit("tool.started", {"call_id": call.id, "tool": call.tool_name, "arguments": _safe_args(call)}, task_id)
         # Hook: before_command — fires for exec/terminal tools; can block dangerous commands.
         if call.tool_name in {"exec", "kill"}:
             from shadow_agent.hooks import HookContext
@@ -554,6 +581,7 @@ class AgentRunner:
         self._emit(
             "tool.completed",
             {
+                "call_id": call.id,
                 "tool": call.tool_name,
                 "success": result.success,
                 "error": friendly_error(result.error) if result.error else "",
@@ -571,6 +599,7 @@ class AgentRunner:
             self._emit(kind, {"command": call.arguments.get("command"), "success": result.success}, task_id)
             event_names.append(kind)
         _advance_plan(plan, call, result)
+        self._emit("plan.updated", {"plan": plan.model_dump()}, task_id)
         context.set_plan(plan)
         return result
 
@@ -686,23 +715,20 @@ def _fix_note(verdict: VerificationResult, attempt: int, max_attempts: int) -> s
 
 
 def _advance_plan(plan: Plan, call: ToolCall, result: ToolResult) -> None:
-    mapping = {
-        "list_files": "s1",
-        "write_file": "s2",
-        "edit_file": "s4",
-        "apply_patch": "s4",
-        "exec": None,
-    }
-    step_id = mapping.get(call.tool_name)
-    if call.tool_name == "exec":
-        command = str(call.arguments.get("command") or "")
-        if "pytest" in command:
-            step_id = "s5" if result.success else "s2"
-        elif "hello" in command:
-            step_id = "s3"
-    if step_id:
-        plan.update(step_id, status="done" if result.success else "failed", detail=call.tool_name)
-        plan.mark_next()
+    if call.tool_name in {"list_files", "read_file", "search", "grep", "git_status", "git_diff"}:
+        kind = "inspect"
+    elif call.tool_name in {"write_file", "edit_file", "apply_patch", "delete_file", "move_file"}:
+        kind = "change"
+    elif call.tool_name == "exec":
+        kind = "execute"
+    else:
+        return
+    for item in plan.steps:
+        if item.kind == "understand":
+            plan.update(item.id, status="done")
+        if item.kind == kind:
+            plan.update(item.id, status="done" if result.success else "failed", detail=call.tool_name)
+    plan.mark_next()
 
 
 def _safe_args(call: ToolCall) -> dict:

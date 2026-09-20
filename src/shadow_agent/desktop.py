@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import os
+import sys
+import json
 import shutil
 import subprocess
 import time
 import urllib.request
 from pathlib import Path
 
-from shadow_agent import paths
+from shadow_agent import paths, __version__
+from shadow_agent.resources import resource_root
 from shadow_agent.secrets import load_secrets
 
 
@@ -24,22 +27,33 @@ def launch_desktop(workspace: Path, host: str = "127.0.0.1", port: int = 7430) -
     if _up(url):
         _open_browser(url, profile)
         return
+    if getattr(sys, "frozen", False):
+        # Keep the AppImage mount/extraction alive for the lifetime of the API.
+        # A detached child would lose its bundled assets when the launcher exits.
+        import threading
+        from shadow_agent.api.server import serve
+
+        def open_when_ready():
+            for _ in range(120):
+                if _up(url):
+                    _open_browser(url, profile)
+                    return
+                time.sleep(0.15)
+
+        threading.Thread(target=open_when_ready, daemon=True).start()
+        serve(host, port, workspace)
+        return
     env = os.environ.copy()
     env["SHADOW_AGENT_WORKSPACE"] = str(workspace)
     with log.open("a", encoding="utf-8") as handle:
         subprocess.Popen(
-            [
-                "python3",
-                "-c",
-                (
-                    "from pathlib import Path; from shadow_agent.secrets import load_secrets; "
-                    "load_secrets(); from shadow_agent.api.server import serve; "
-                    f"serve({host!r}, {port}, Path({str(workspace)!r}))"
-                ),
-            ],
+            ([sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "shadow_agent"]) +
+            ["ui", "--no-browser", "--host", host, "--port", str(port), "--project", str(workspace)],
             stdout=handle,
             stderr=handle,
             env=env,
+            start_new_session=True,
+            close_fds=True,
         )
     for _ in range(80):
         if _up(url):
@@ -73,8 +87,9 @@ def _open_browser(url: str, profile: Path) -> None:
 def _up(url: str) -> bool:
     try:
         with urllib.request.urlopen(url + "/api/health", timeout=1) as resp:
-            return resp.status == 200
-    except OSError:
+            body = json.load(resp)
+            return resp.status == 200 and body.get("app") == "ShadowCode" and body.get("version") == __version__
+    except (OSError, ValueError):
         return False
 
 
@@ -95,12 +110,12 @@ def _browser() -> str | None:
 
 
 def _ensure_ui_built() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = resource_root()
     dist = root / "ui" / "dist" / "index.html"
     if dist.is_file():
         return
     ui = root / "ui"
     if not (ui / "package.json").is_file():
-        return
-    subprocess.run(["npm", "install", "--no-fund", "--no-audit"], cwd=ui, check=False)
-    subprocess.run(["npm", "run", "build"], cwd=ui, check=False)
+        raise RuntimeError("Desktop assets are missing. Reinstall the ShadowCode release.")
+    subprocess.run(["npm", "ci", "--no-fund", "--no-audit"], cwd=ui, check=True)
+    subprocess.run(["npm", "run", "build"], cwd=ui, check=True)

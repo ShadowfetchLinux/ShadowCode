@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS pins (
     label TEXT NOT NULL,
     body TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS events_session_id ON events(session_id, id);
+CREATE TABLE IF NOT EXISTS desktop_jobs (
+    id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
 """
 
 
@@ -280,6 +285,7 @@ class Store:
             self._conn.execute("DELETE FROM pins WHERE session_id = ?", (session_id,))
             self._conn.execute("DELETE FROM session_meta WHERE session_id = ?", (session_id,))
             self._conn.execute("DELETE FROM tasks WHERE session_id = ?", (session_id,))
+            self._conn.execute("DELETE FROM desktop_jobs WHERE json_extract(payload, '$.session_id') = ?", (session_id,))
             self._conn.execute("UPDATE sessions SET parent_id = NULL WHERE parent_id = ?", (session_id,))
             self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             self._conn.commit()
@@ -364,6 +370,37 @@ class Store:
             item["payload"] = json.loads(item["payload"])
             out.append(item)
         return list(reversed(out))
+
+    def event_cursor(self, session_id: str | None = None) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM events" + (" WHERE session_id = ?" if session_id else ""),
+                (session_id,) if session_id else (),
+            ).fetchone()
+        return int(row[0])
+
+    def events_after(self, session_id: str, cursor: int, limit: int = 500) -> list[dict[str, Any]]:
+        """Read an ascending page. Stable IDs never stall when the history grows."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM events WHERE session_id = ? AND id > ? ORDER BY id LIMIT ?",
+                (session_id, max(0, cursor), max(1, min(limit, 2000))),
+            ).fetchall()
+        return [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]
+
+    def save_desktop_job(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO desktop_jobs(id, payload) VALUES (?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (payload["id"], json.dumps(payload)),
+            )
+            self._conn.commit()
+
+    def desktop_jobs(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute("SELECT payload FROM desktop_jobs ORDER BY rowid DESC LIMIT 200").fetchall()
+        return [json.loads(row[0]) for row in rows]
 
     def upsert_model(
         self,

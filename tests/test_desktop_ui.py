@@ -1,4 +1,4 @@
-"""Tests for the desktop UI contract (0.5.x light mode → 0.18.0 clean layout).
+"""Desktop API contract. Interaction and accessibility coverage lives in ui/e2e.
 
 Covers:
 - light theme is the default; explicit dark is respected and round-trips
@@ -77,10 +77,6 @@ def test_existing_dark_theme_is_respected(isolated, workspace) -> None:
     assert load_config().ui.theme == "dark"
 
 
-def test_app_tsx_theme_defaults_light_when_unset() -> None:
-    src = _src(APP_TSX)
-    assert '?.theme || "light"' in src
-    assert "dataset.theme" in src
 
 
 def test_index_html_defaults_light_and_is_branded() -> None:
@@ -100,21 +96,8 @@ def test_abilities_live_in_settings_not_composer() -> None:
 # --- composer: Enter sends + clears ---------------------------------------------
 
 
-def test_app_tsx_enter_submits_unless_shift() -> None:
-    src = _src(APP_TSX)
-    assert 'ev.key === "Enter"' in src
-    assert "!ev.shiftKey" in src
-    assert "Ask for follow-up" in src
 
 
-def test_app_tsx_composer_clears_before_dispatch() -> None:
-    src = _src(APP_TSX)
-    run_block = src.split("async function runTask(")[1].split("async function stopAgent")[0]
-    assert "const text = composeTask()" in run_block
-    assert '{ kind: "user", text }' in run_block
-    assert 'setTask("")' in run_block
-    assert "setChips([])" in run_block
-    assert run_block.index('setTask("")') < run_block.index("api.startJob")
 
 
 def test_api_startjob_accepts_purpose() -> None:
@@ -125,22 +108,8 @@ def test_api_startjob_accepts_purpose() -> None:
 # --- 0.18.0 clean layout --------------------------------------------------------
 
 
-def test_drawer_is_closed_by_default() -> None:
-    src = _src(APP_TSX)
-    assert "const [drawerOpen, setDrawerOpen] = useState(false)" in src
-    # The default view carries an explicit class the served HTML/JS can be checked for.
-    assert '"drawer-open" : "drawer-closed"' in src
-    # The drawer is not even mounted while closed.
-    assert "{drawerOpen && (" in src
 
 
-def test_default_view_is_topbar_transcript_composer_statusline() -> None:
-    src = _src(APP_TSX)
-    for cls in ('className="top"', 'className="chat-stream"', 'className="composer"', 'className="statusline"'):
-        assert cls in src, cls
-    # Legacy three-column panels are gone.
-    for gone in ('className="left"', 'className="right"', "RECENT FOLDERS", "Work locally", "INSPECT", "WORKSPACE"):
-        assert gone not in src, f"legacy panel leaked into the clean layout: {gone}"
 
 
 def test_single_drawer_consolidates_inspect_panels() -> None:
@@ -148,14 +117,10 @@ def test_single_drawer_consolidates_inspect_panels() -> None:
     for tab in ("sessions", "files", "changes", "skills", "goals", "health", "background"):
         assert f'id: "{tab}"' in src, tab
     # Health tab carries doctor + router; changes tab carries git + per-hunk actions.
-    assert "api.doctor()" in src and "api.routing()" in src
-    assert 'hunkAction(selected, h, action)' in src
+    assert ".doctor()" in src and ".routing()" in src
+    assert '.hunkAction(selected, h, action)' in src
 
 
-def test_command_palette_and_drawer_shortcuts() -> None:
-    src = _src(APP_TSX)
-    assert 'key === "k"' in src and 'setOverlay("palette")' in src
-    assert 'key === "b"' in src and "setDrawerOpen((v) => !v)" in src
 
 
 def test_model_picker_groups_all_providers_and_has_custom_entry() -> None:
@@ -166,14 +131,6 @@ def test_model_picker_groups_all_providers_and_has_custom_entry() -> None:
     assert "CustomModelDialog" in src
 
 
-def test_op_card_stays_collapsed_and_has_rewind_and_diff_actions() -> None:
-    cards = _src(CARDS_TSX)
-    assert "collapsed === false" in cards
-    assert "↶ Rewind" in cards
-    assert "Review diff" in cards
-    # Approval card: subtle, Allow ↵ / Cancel Esc.
-    assert "Allow <span" in cards and "↵" in cards
-    assert "Cancel <span" in cards and "Esc" in cards
 
 
 def test_onboarding_is_single_screen_one_click() -> None:
@@ -190,10 +147,6 @@ def test_settings_overlay_grouped_sections() -> None:
         assert f'label: "{label}"' in src, label
 
 
-def test_desktop_notification_on_completion() -> None:
-    src = _src(APP_TSX)
-    assert "new Notification(" in src
-    assert "Notification.requestPermission" in src
 
 
 # --- API contracts behind the picker -------------------------------------------
@@ -225,30 +178,18 @@ def test_api_select_free_text_model_for_any_provider(isolated, workspace) -> Non
 # --- built bundle --------------------------------------------------------------
 
 
-@pytest.mark.skipif(not UI_DIST.exists(), reason="UI not built")
-def test_built_bundle_ships_clean_layout() -> None:
-    js = next(UI_DIST.glob("index-*.js")).read_text(encoding="utf-8")
-    css = next(UI_DIST.glob("index-*.css")).read_text(encoding="utf-8")
-    for token in ("composer-wrap", "chat-stream", "statusline", "drawer-tabs", "op-card", "submit-btn", "mode-select", "mic-btn"):
-        assert token in css, f"missing CSS token: {token}"
-        assert token in js, f"missing JS class: {token}"
-    assert "drawer-closed" in js
-    assert "Custom model" in js
-    assert "shiftKey" in js
-    assert "Work locally" not in js
-    assert "#ffffff" in css
-    assert '[data-theme="dark"]' in css or "data-theme=dark]" in css
+
+
 
 
 @pytest.mark.skipif(not UI_DIST.exists(), reason="UI not built")
-def test_built_bundle_is_fresh_and_light() -> None:
-    js_path = next(UI_DIST.glob("index-*.js"))
-    js = js_path.read_text(encoding="utf-8")
-    call_idx = js.index(".startJob(")
-    window = js[max(0, call_idx - 160):call_idx]
-    assert '("")' in window, "runTask must clear the task text before dispatching"
-    assert "([])" in window, "runTask must clear the chips before dispatching"
-    html = (ROOT / "ui" / "dist" / "index.html").read_text(encoding="utf-8")
-    assert 'data-theme="light"' in html
-    newest_src = max(p.stat().st_mtime for p in UI_SRC.rglob("*") if p.is_file())
-    assert js_path.stat().st_mtime >= newest_src - 1, "ui/dist is stale — rebuild before shipping"
+def test_built_bundle_assets_exist_and_are_fresh():
+    import re
+    html = (ROOT / "ui" / "dist" / "index.html").read_text()
+    assets = re.findall(r'(?:src|href)="(/assets/[^"]+)"', html)
+    assert assets
+    for asset in assets:
+        assert (ROOT / "ui" / "dist" / asset.lstrip("/")).is_file()
+    bundles = list(UI_DIST.glob("*.js"))
+    newest = max(p.stat().st_mtime for p in UI_SRC.rglob("*") if p.is_file() and '.test.' not in p.name)
+    assert max(p.stat().st_mtime for p in bundles) >= newest - 1

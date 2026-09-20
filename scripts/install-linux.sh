@@ -1,64 +1,29 @@
 #!/usr/bin/env bash
+# Source installation: isolated Python dependencies and an atomic launcher update.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}"
-BIN="${HOME}/.local/bin"
-CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/shadow-agent"
-
-# Drop a stale pip/site-packages copy so Python cannot import the old 0.1 package.
-# Do this before writing ~/.local/bin/shadow — pip uninstall also removes that entry point.
-python3 -m pip uninstall -y shadow-agent >/dev/null 2>&1 || \
-  python3 -m pip uninstall -y shadow-agent --break-system-packages >/dev/null 2>&1 || true
-
-mkdir -p "$BIN"
-# Replace any previous wrapper (do not delete user config/sessions/memories).
-rm -f "$BIN/shadow"
-cat >"$BIN/shadow" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-SECRETS="\${XDG_CONFIG_HOME:-\$HOME/.config}/shadow-agent/secrets.env"
-if [[ -f "\$SECRETS" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "\$SECRETS"
-  set +a
-fi
-export PYTHONPATH="${ROOT}/src\${PYTHONPATH:+:\$PYTHONPATH}"
-exec python3 -m shadow_agent "\$@"
-EOF
-chmod +x "$BIN/shadow"
-
-mkdir -p "$CONFIG"
-# Build the desktop UI so one-click launch serves this upgrade.
-(cd "$ROOT/ui" && npm install --no-fund --no-audit && npm run build)
-
-ICON_SRC="$ROOT/assets/icons/shadow-agent.svg"
-cp "$ICON_SRC" "$ROOT/assets/shadow-agent.svg"
-mkdir -p "$ROOT/assets/icons/hicolor/scalable/apps"
-cp "$ICON_SRC" "$ROOT/assets/icons/hicolor/scalable/apps/shadow-agent.svg"
-cp "$ICON_SRC" "$ROOT/ui/public/icon.svg"
-for size in 16 22 24 32 48 64 128 256 512; do
-  dest="$PREFIX/icons/hicolor/${size}x${size}/apps"
-  proj="$ROOT/assets/icons/hicolor/${size}x${size}/apps"
-  mkdir -p "$dest" "$proj"
-  if command -v rsvg-convert >/dev/null 2>&1; then
-    rsvg-convert -w "$size" -h "$size" "$ICON_SRC" -o "$dest/shadow-agent.png"
-    cp "$dest/shadow-agent.png" "$proj/shadow-agent.png"
-  fi
-done
-mkdir -p "$PREFIX/icons/hicolor/scalable/apps"
-cp "$ICON_SRC" "$PREFIX/icons/hicolor/scalable/apps/shadow-agent.svg"
-
-mkdir -p "$PREFIX/applications"
-sed "s|^Exec=.*|Exec=${BIN}/shadow ui|; s|^TryExec=.*|TryExec=${BIN}/shadow|" \
-  "$ROOT/packaging/shadow-agent.desktop" > "$PREFIX/applications/shadow-agent.desktop"
-
-if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "$PREFIX/applications" >/dev/null 2>&1 || true
-fi
-if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-  gtk-update-icon-cache -q "$PREFIX/icons/hicolor" >/dev/null 2>&1 || true
-fi
-
-echo "Installed shadow → ${BIN}/shadow"
-echo "Desktop entry → ${PREFIX}/applications/shadow-agent.desktop (Icon=shadow-agent)"
+BIN="$HOME/.local/bin"
+PYTHON="${SHADOW_PYTHON:-python3}"
+"$PYTHON" -c 'import sys; assert sys.version_info >= (3,12), "ShadowCode requires Python 3.12+"'
+command -v npm >/dev/null || { echo 'Node.js 20.19+ or 22.12+ and npm are required to build the UI.' >&2; exit 1; }
+[[ -x "$ROOT/.venv/bin/python" ]] || "$PYTHON" -m venv "$ROOT/.venv"
+"$ROOT/.venv/bin/python" -m pip install -e "$ROOT"
+npm --prefix "$ROOT/ui" ci --no-fund --no-audit
+npm --prefix "$ROOT/ui" run build
+mkdir -p "$BIN" "$PREFIX/applications" "$PREFIX/icons/hicolor/scalable/apps"
+# Python loads secrets safely; the wrapper never sources secrets as shell code.
+"$ROOT/.venv/bin/python" - "$ROOT" "$BIN" <<'PY'
+import os, shlex, sys
+from pathlib import Path
+root, binary = map(Path, sys.argv[1:])
+target = binary / 'shadow'
+temporary = binary / '.shadow-install'
+temporary.write_text('#!/usr/bin/env bash\nset -euo pipefail\nexec ' + shlex.quote(str(root / '.venv/bin/python')) + ' -m shadow_agent "$@"\n')
+temporary.chmod(0o755)
+os.replace(temporary, target)
+PY
+cp "$ROOT/assets/icons/shadow-agent.svg" "$PREFIX/icons/hicolor/scalable/apps/shadow-agent.svg"
+sed "s|^Exec=.*|Exec=\"${BIN}/shadow\" ui|; s|^TryExec=.*|TryExec=${BIN}/shadow|" "$ROOT/packaging/shadow-agent.desktop" > "$PREFIX/applications/shadow-agent.desktop"
+command -v update-desktop-database >/dev/null && update-desktop-database "$PREFIX/applications" || true
+printf 'Installed ShadowCode. Launch with %s/shadow ui\nExisting config and task history are preserved.\n' "$BIN"

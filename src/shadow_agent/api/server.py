@@ -8,9 +8,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -42,7 +42,9 @@ from shadow_agent.secrets import has_secret, load_secrets, set_secret
 from shadow_agent.store import Store
 from shadow_agent.tools.sandbox import SandboxError, WorkspaceSandbox
 
-UI_DIST = Path(__file__).resolve().parents[3] / "ui" / "dist"
+from shadow_agent.resources import resource_root
+
+UI_DIST = resource_root() / "ui" / "dist"
 
 PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     "mock": {"provider": "mock", "default": "mock", "name": "mock-coder", "endpoint": "", "api_key_env": "OPENAI_API_KEY"},
@@ -121,7 +123,7 @@ class BackgroundBody(BaseModel):
 
 
 class RunBody(BaseModel):
-    task: str
+    task: str = Field(min_length=1, max_length=100_000)
     workspace: str | None = None
     session_id: str | None = None
     model: str | None = None
@@ -148,8 +150,8 @@ class TrustBody(BaseModel):
 
 
 class ExecBody(BaseModel):
-    command: str
-    timeout: int = 60
+    command: str = Field(min_length=1, max_length=100_000)
+    timeout: int = Field(60, ge=1, le=300)
 
 
 class HunkBody(BaseModel):
@@ -194,7 +196,7 @@ class SkillsBody(BaseModel):
 
 class AttachBody(BaseModel):
     path: str = ""
-    text: str = ""
+    text: str = Field("", max_length=1_000_000)
     filename: str = ""
 
 
@@ -236,12 +238,35 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         detected(force=True)
 
     app = FastAPI(title="ShadowCode", version=__version__)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]", "testserver"])
+
+    @app.middleware("http")
+    async def local_browser_boundary(request: Request, call_next):
+        # Cross-origin browser pages must not read secrets or operate local tools.
+        # Native CLI clients have no Origin; development uses Vite's same-origin proxy.
+        origin = request.headers.get("origin")
+        if request.url.path.startswith("/api/"):
+            from urllib.parse import urlsplit
+            if origin and (urlsplit(origin).netloc != request.headers.get("host") or urlsplit(origin).scheme not in {"http", "https"}):
+                return JSONResponse({"detail": "Cross-origin requests are not allowed."}, status_code=403)
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
+        if request.method in {"POST", "PUT", "DELETE"} and request.url.path.startswith(("/api/workspace/", "/api/checkpoints/")):
+            cfg = load_config(runtime.get("workspace"))
+            if cfg.permissions.level == PermissionLevel.READ_ONLY:
+                return JSONResponse({"detail": "Workspace changes are disabled in read-only mode."}, status_code=403)
+            if any(j.workspace == _ws(runtime).resolve() for j in jobs.list_active()):
+                return JSONResponse({"detail": "Wait for the running task to stop before changing this workspace."}, status_code=409)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        if request.url.path == "/":
+            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     workspace = default_workspace or last_workspace()
     runtime: dict[str, Any] = {
         "store": store,
@@ -261,6 +286,7 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         cfg = load_config(runtime.get("workspace"))
         payload = collect_health(cfg, runtime.get("workspace"))
         payload["ok"] = True
+        payload["app"] = "ShadowCode"
         return payload
 
     @app.get("/api/onboarding")
@@ -516,6 +542,7 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             raise HTTPException(409, friendly_error("stop the running task before deleting this session"))
         if not store.delete_session(session_id):
             raise HTTPException(404, friendly_http(404, "session not found"))
+        jobs.forget_session(session_id)
         return {"ok": True, "id": session_id}
 
     @app.get("/api/sessions/{session_id}")
@@ -524,8 +551,22 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         if not row:
             raise HTTPException(404, friendly_http(404, "session not found"))
         row["tasks"] = store.list_tasks(session_id)
-        row["events"] = store.list_events(session_id=session_id, limit=400)
+        row["events"] = store.list_events(session_id=session_id, limit=10000)
+        row["event_cursor"] = row["events"][-1]["id"] if row["events"] else 0
         return row
+
+    @app.post("/api/sessions/{session_id}/activate")
+    def activate_session(session_id: str) -> dict[str, Any]:
+        row = store.get_session(session_id)
+        if not row:
+            raise HTTPException(404, "Session not found")
+        workspace = Path(row["workspace"]).resolve()
+        if not workspace.is_dir():
+            raise HTTPException(400, "This project's folder no longer exists.")
+        runtime["workspace"] = workspace
+        remember_workspace(workspace)
+        store.touch_project(workspace)
+        return session(session_id)
 
     @app.get("/api/sessions/{session_id}/export")
     def session_export(session_id: str, format: str = "md"):
@@ -614,7 +655,10 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         runtime["workspace"] = workspace
         remember_workspace(workspace)
         store.touch_project(workspace)
-        job = jobs.start(workspace, body.task, session_id=body.session_id, model=body.model, purpose=body.purpose)
+        try:
+            job = jobs.start(workspace, body.task, session_id=body.session_id, model=body.model, purpose=body.purpose)
+        except ValueError as exc:
+            raise HTTPException(409 if "already running" in str(exc) else 400, str(exc)) from exc
         return job.to_dict()
 
     @app.get("/api/jobs")
@@ -622,8 +666,10 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         return {"jobs": [job.to_dict() for job in jobs.list_active()]}
 
     @app.get("/api/jobs/current")
-    def current_job(session_id: str | None = None) -> dict[str, Any]:
+    def current_job(session_id: str | None = None, include_finished: bool = False) -> dict[str, Any]:
         job = jobs.current(session_id)
+        if job is None and session_id and include_finished:
+            job = jobs.latest(session_id)
         return {"job": job.to_dict() if job else None}
 
     @app.get("/api/jobs/{job_id}")
@@ -648,52 +694,49 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         jobs.cancel(job.id)
         return {"ok": True, "stopped": [job.id]}
 
-    @app.get("/api/jobs/{job_id}/events")
-    def job_events(job_id: str) -> StreamingResponse:
-        def gen():
-            seen = 0
-            while True:
-                job = jobs.get(job_id)
-                if job is None:
-                    yield f"data: {json.dumps({'type': 'error', 'payload': {'error': 'unknown job'}})}\n\n"
-                    return
-                rows = store.list_events(session_id=job.session_id, limit=800)
-                if len(rows) > seen:
-                    for row in rows[seen:]:
-                        yield f"data: {json.dumps(row, default=str)}\n\n"
-                    seen = len(rows)
-                if job.status in {"completed", "failed", "cancelled"} and len(rows) <= seen:
+    def event_stream(session_id: str, cursor: int, request: Request, job=None):
+        import asyncio
+
+        async def gen():
+            nonlocal cursor
+            while not await request.is_disconnected():
+                terminal = job is not None and job.status in {"completed", "failed", "cancelled", "interrupted"}
+                rows = store.events_after(session_id, cursor)
+                for row in rows:
+                    cursor = row["id"]
+                    yield f"id: {cursor}\ndata: {json.dumps(row, default=str)}\n\n"
+                if terminal and len(rows) < 500:
                     yield f"data: {json.dumps({'type': 'job.done', 'payload': job.to_dict()})}\n\n"
                     return
+                if len(rows) == 500:
+                    continue
                 yield ": keepalive\n\n"
-                time.sleep(0.25)
+                await asyncio.sleep(0.25)
 
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        return StreamingResponse(gen(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+    def stream_cursor(request: Request, after: int, minimum: int = 0) -> int:
+        try:
+            return max(minimum, after, int(request.headers.get("last-event-id", "0")))
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid event cursor") from exc
+
+    @app.get("/api/jobs/{job_id}/events")
+    def job_events(job_id: str, request: Request, after: int = Query(0, ge=0)) -> StreamingResponse:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Job not found")
+        return event_stream(job.session_id, stream_cursor(request, after, job.event_cursor), request, job)
 
     @app.get("/api/events")
-    def events(session_id: str | None = None, limit: int = 200) -> dict[str, Any]:
+    def events(session_id: str | None = None, limit: int = Query(200, ge=1, le=10000)) -> dict[str, Any]:
         return {"events": store.list_events(session_id=session_id, limit=limit)}
 
     @app.get("/api/sessions/{session_id}/events")
-    def session_events(session_id: str) -> StreamingResponse:
-        def gen():
-            seen = 0
-            idle = 0
-            while True:
-                rows = store.list_events(session_id=session_id, limit=800)
-                if len(rows) > seen:
-                    for row in rows[seen:]:
-                        yield f"data: {json.dumps(row, default=str)}\n\n"
-                    seen = len(rows)
-                    idle = 0
-                else:
-                    yield ": keepalive\n\n"
-                    idle += 1
-                if idle > 80:
-                    return
-                time.sleep(0.4)
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
+    def session_events(session_id: str, request: Request, after: int = Query(0, ge=0)) -> StreamingResponse:
+        if not store.get_session(session_id):
+            raise HTTPException(404, "Session not found")
+        return event_stream(session_id, stream_cursor(request, after), request)
 
     @app.get("/api/approvals")
     def list_approvals(session_id: str | None = None) -> dict[str, Any]:
@@ -749,43 +792,19 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
 
     @app.get("/api/workspace/diff")
     def workspace_diff(path: str = "") -> dict[str, Any]:
-        workspace = _ws(runtime)
-        import subprocess
-
-        args = ["git", "diff", "--", path] if path else ["git", "diff"]
-        proc = subprocess.run(args, cwd=workspace, capture_output=True, text=True, check=False)
-        staged = subprocess.run(
-            ["git", "diff", "--cached", "--", path] if path else ["git", "diff", "--cached"],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return {
-            "path": path,
-            "diff": proc.stdout,
-            "staged": staged.stdout,
-            "hunks": _parse_diff_hunks(proc.stdout or staged.stdout),
-        }
+        from shadow_agent.review import diff
+        try:
+            result = diff(_ws(runtime), path)
+        except SandboxError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        result["hunks"] = _parse_diff_hunks(result["diff"])
+        result["staged_hunks"] = _parse_diff_hunks(result["staged"])
+        return result
 
     @app.get("/api/workspace/git")
     def workspace_git() -> dict[str, Any]:
-        workspace = _ws(runtime)
-        import subprocess
-
-        def git(*args: str) -> str:
-            proc = subprocess.run(["git", *args], cwd=workspace, capture_output=True, text=True, check=False)
-            return proc.stdout or proc.stderr
-
-        porcelain = git("status", "--porcelain=v1", "-b")
-        return {
-            "status": git("status", "-sb"),
-            "porcelain": porcelain,
-            "log": git("log", "-12", "--oneline", "--decorate"),
-            "diff": git("diff", "--stat"),
-            "files": _parse_porcelain(porcelain),
-            "repo": (workspace / ".git").exists(),
-        }
+        from shadow_agent.review import status
+        return status(_ws(runtime))
 
     @app.post("/api/workspace/git/add")
     def git_add(body: GitCommitBody) -> dict[str, Any]:
@@ -823,16 +842,22 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             "usage": (store.list_sessions(limit=1) or [{}])[0].get("usage_json"),
         }
 
+    def safe_workspace_path(path: str) -> Path:
+        try:
+            return WorkspaceSandbox(_ws(runtime)).resolve(path)
+        except SandboxError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.get("/api/workspace/instructions")
     def get_instructions() -> dict[str, Any]:
         workspace = _ws(runtime)
-        path = workspace / ".shadow" / "instructions.md"
+        path = safe_workspace_path(".shadow/instructions.md")
         return {"path": ".shadow/instructions.md", "content": path.read_text(encoding="utf-8") if path.is_file() else "", "exists": path.is_file()}
 
     @app.put("/api/workspace/instructions")
     def put_instructions(body: SkillsBody) -> dict[str, Any]:
         workspace = _ws(runtime)
-        path = workspace / ".shadow" / "instructions.md"
+        path = safe_workspace_path(".shadow/instructions.md")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body.content, encoding="utf-8")
         return {"ok": True, "path": ".shadow/instructions.md"}
@@ -840,11 +865,11 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
     @app.get("/api/workspace/skills")
     def get_skills() -> dict[str, Any]:
         workspace = _ws(runtime)
-        skill_dir = workspace / ".shadow" / "skills"
+        skill_dir = safe_workspace_path(".shadow/skills")
         items = []
         if skill_dir.is_dir():
             for path in sorted(skill_dir.glob("*.md")):
-                items.append({"name": path.stem, "path": f".shadow/skills/{path.name}", "content": path.read_text(encoding="utf-8")})
+                items.append({"name": path.stem, "path": f".shadow/skills/{path.name}", "content": safe_workspace_path(f".shadow/skills/{path.name}").read_text(encoding="utf-8")})
         return {"skills": items}
 
     @app.put("/api/workspace/skills")
@@ -853,7 +878,7 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         if not name or "/" in name or name.startswith("."):
             raise HTTPException(400, "invalid skill name")
         workspace = _ws(runtime)
-        path = workspace / ".shadow" / "skills" / f"{name}.md"
+        path = safe_workspace_path(f".shadow/skills/{name}.md")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body.content, encoding="utf-8")
         return {"ok": True, "name": name, "path": f".shadow/skills/{name}.md"}
@@ -918,11 +943,17 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         workspace = _ws(runtime)
         sandbox = WorkspaceSandbox(workspace)
         try:
-            target = sandbox.resolve(body.path, must_exist=True)
+            target = sandbox.resolve(body.path)
         except SandboxError as exc:
             raise HTTPException(400, friendly_error(exc)) from exc
-        if not target.is_file():
-            raise HTTPException(400, "not a file")
+        from shadow_agent.review import diff
+        current = diff(workspace, body.path)
+        if current["untracked"]:
+            raise HTTPException(400, "Stage new files as a whole file.")
+        if current["truncated"] or body.hunk not in _parse_diff_hunks(current["diff"]):
+            raise HTTPException(409, "This diff has changed. Refresh it before applying a hunk.")
+        if any(c in body.path for c in ("\n", "\r", "\t", '"')):
+            raise HTTPException(400, "Stage files with special path characters as a whole file.")
         patch = _build_hunk_patch(body.path, body.hunk)
         if not patch:
             raise HTTPException(400, "could not rebuild hunk patch")
@@ -1252,6 +1283,11 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             raise HTTPException(403, friendly_error("background tasks are disabled in read-only mode"))
         if not body.command.strip():
             raise HTTPException(400, "command is required")
+        from shadow_agent.permissions import PermissionGate
+        gate = PermissionGate(cfg.permissions.level, require_approval_for_dangerous=cfg.permissions.require_approval_for_dangerous, network=cfg.permissions.network, allow_root=cfg.permissions.allow_root)
+        decision = gate.check_command(body.command)
+        if not decision.allowed:
+            raise HTTPException(403, decision.reason)
         task = BackgroundManager().start(body.name or "background", body.command, cwd=_ws(runtime))
         return task.to_dict()
 

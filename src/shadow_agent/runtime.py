@@ -34,6 +34,8 @@ class Job:
         self.purpose: str = "coder"
         self.started_at = time.time()
         self.finished_at: float | None = None
+        self.event_cursor = 0
+        self.cancel_requested = threading.Event()
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -48,6 +50,7 @@ class Job:
             "usage": self.usage,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "event_cursor": self.event_cursor,
         }
         if self.result is not None:
             payload["result"] = self.result.model_dump(mode="json")
@@ -61,6 +64,21 @@ class JobManager:
         self.approvals = approvals
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
+        # Retain completed jobs across restarts. A vanished worker is interrupted,
+        # never silently presented as completed or left running forever.
+        for payload in store.desktop_jobs():
+            job = Job(payload["id"], Path(payload["workspace"]), payload["task"], payload["session_id"])
+            for key in ("task_id", "status", "summary", "error", "usage", "started_at", "finished_at", "event_cursor"):
+                if key in payload:
+                    setattr(job, key, payload[key])
+            if payload.get("result"):
+                job.result = AgentResult.model_validate(payload["result"])
+            if job.status in {"queued", "running", "cancelling"}:
+                job.status = "interrupted"
+                job.summary = "The application stopped before this task finished. Review its changes before continuing."
+                job.finished_at = time.time()
+                store.save_desktop_job(job.to_dict())
+            self._jobs[job.id] = job
 
     def start(
         self,
@@ -71,20 +89,35 @@ class JobManager:
         model: str | None = None,
         purpose: str = "coder",
     ) -> Job:
+        if not task.strip():
+            raise ValueError("Enter a task before starting the agent.")
         workspace = Path(workspace).resolve()
+        if session_id:
+            session = self.store.get_session(session_id)
+            if not session:
+                raise ValueError("Session not found.")
+            if Path(session["workspace"]).resolve() != workspace:
+                raise ValueError("The session belongs to a different workspace.")
         cfg = config or load_config(workspace)
-        sid = session_id or self.store.create_session(str(workspace), cfg.model.default, title=task.splitlines()[0][:80])
-        job = Job(uuid.uuid4().hex, workspace, task, sid)
-        job.model_override = model
-        job.purpose = purpose
         with self._lock:
+            if any(j.workspace == workspace and j.status in {"queued", "running", "cancelling"} for j in self._jobs.values()):
+                raise ValueError("A task is already running in this workspace. Stop it or wait for it to finish.")
+            sid = session_id or self.store.create_session(str(workspace), cfg.model.default, title=task.splitlines()[0][:80])
+            job = Job(uuid.uuid4().hex, workspace, task, sid)
+            job.model_override = model
+            job.purpose = purpose
+            job.event_cursor = self.store.event_cursor(sid)
             self._jobs[job.id] = job
+            self.store.save_desktop_job(job.to_dict())
+        if not self.store.list_tasks(sid) and (self.store.get_session(sid) or {}).get("title") in {"", "New session", "New task"}:
+            self.store.set_session_title(sid, task.splitlines()[0][:80])
         thread = threading.Thread(target=self._run, args=(job, cfg), name=f"shadow-job-{job.id[:8]}", daemon=True)
         thread.start()
         return job
 
     def _run(self, job: Job, config: AppConfig) -> None:
         job.status = "running"
+        self.store.save_desktop_job(job.to_dict())
         try:
             runner = AgentRunner(
                 job.workspace,
@@ -97,12 +130,14 @@ class JobManager:
                 purpose=job.purpose,
             )
             job.runner = runner
-            result = runner.run(job.task)
+            if job.cancel_requested.is_set():
+                runner.cancel()
+            result = runner.run(job.task, purpose=job.purpose)
             job.result = result
             job.task_id = result.task_id
             job.summary = result.summary
             job.usage = result.usage
-            if result.cancelled:
+            if result.cancelled or job.cancel_requested.is_set():
                 job.status = "cancelled"
             else:
                 job.status = "completed" if result.success else "failed"
@@ -113,6 +148,7 @@ class JobManager:
         finally:
             job.finished_at = time.time()
             job.runner = None
+            self.store.save_desktop_job(job.to_dict())
             duration = job.finished_at - job.started_at
             sent = notify_done(
                 job.task,
@@ -134,11 +170,14 @@ class JobManager:
         job = self.get(job_id)
         if job is None:
             raise KeyError(job_id)
-        if job.runner is not None:
-            job.runner.cancel()
-        if job.status in {"queued", "running"}:
-            job.status = "cancelled"
-            job.summary = job.summary or "Stopped by the user."
+        if job.status in {"queued", "running", "cancelling"}:
+            job.cancel_requested.set()
+            job.status = "cancelling"
+            if job.runner is not None:
+                job.runner.cancel()
+            for pending in self.approvals.list_pending(job.session_id):
+                self.approvals.decide(pending["id"], "deny")
+            self.store.save_desktop_job(job.to_dict())
         return job
 
     def cancel_session(self, session_id: str) -> list[str]:
@@ -159,6 +198,15 @@ class JobManager:
             active = [job for job in active if job.session_id == session_id]
         return active[0] if active else None
 
+    def latest(self, session_id: str) -> Job | None:
+        with self._lock:
+            rows = [job for job in self._jobs.values() if job.session_id == session_id]
+        return max(rows, key=lambda job: job.started_at) if rows else None
+
+    def forget_session(self, session_id: str) -> None:
+        with self._lock:
+            self._jobs = {key: job for key, job in self._jobs.items() if job.session_id != session_id}
+
     def list_active(self) -> list[Job]:
         with self._lock:
-            return [job for job in self._jobs.values() if job.status in {"queued", "running"}]
+            return [job for job in self._jobs.values() if job.status in {"queued", "running", "cancelling"}]

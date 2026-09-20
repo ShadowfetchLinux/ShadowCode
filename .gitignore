@@ -26,3 +26,8 @@ htmlcov/
 .DS_Store
 .shadow/
 scripts/smoke_qwen_opcard.py
+
+artifacts/
+ui/test-results/
+ui/playwright-report/
+src/shadow_agent/_assets/

@@ -1,101 +1,105 @@
-# Shadow Agent Architecture
+# ShadowCode architecture
 
-Linux-native autonomous coding-agent **harness**. The LLM is replaceable.
-The harness is the product.
+ShadowCode 0.19.0 has one Python harness shared by the CLI, TUI, desktop API,
+and MCP server. React is a client of that harness.
 
-```
-CLI / Desktop UI
-       │
-   Agent API  (same runtime)
-       │
-   Agent Loop
-       │
- Context │ Tools │ Permissions │ Memory │ Plan │ Verify
-       │
- Model Interface  (generate / stream / chat / tool_call)
-       │
- Providers: mock | openai-compatible | local | ollama | llama.cpp | vLLM
+```text
+CLI / TUI / React desktop / MCP
+                |
+       AgentRunner + runtime
+                |
+  Context / Plan / Tools / Permissions / Verify
+                |
+         Model interface
+                |
+ Ollama / OpenAI-compatible / local / mock
 ```
 
-## Stack
+## Runtime and persistence
 
-| Layer | Choice |
-| --- | --- |
-| Runtime | Python 3.12 |
-| Config / schema | pydantic + PyYAML |
-| CLI | Typer (`shadow`) |
-| Persistence | sqlite3 + Markdown memory |
-| HTTP API | FastAPI + uvicorn (loopback) |
-| Desktop | Vite + React, served by the same API |
-| Tests | pytest |
+`agent/loop.py` drives understand → plan → inspect/act → observe → verify.
+The verifier can request a fix cycle. Tool calls and observed results produce
+structured events; final status reflects verification and cancellation.
+`planning/plan.py` supplies typed plan phases. Plans are emitted after automatic
+progress and explicit model updates, including in the final event.
 
-XDG only: `~/.config/shadow-agent/`, `~/.local/share/shadow-agent/`,
-`~/.local/state/shadow-agent/`. API keys come from environment variables
-named in config — never from files in this repo.
+`store.py` uses SQLite for sessions, tasks, events, models, projects, pins, and
+`desktop_jobs`. Schema changes are additive. Events have monotonically increasing
+IDs and an index on `(session_id, id)`.
 
-## Principles
+`runtime.py` owns desktop/MCP jobs and worker threads. A task gets an event cursor
+before its worker starts. A workspace admits one active job per manager. Cancellation
+sets a durable request and releases pending approvals; terminal status follows
+worker exit. Finished records persist. On service startup, unfinished records are
+marked interrupted; a worker cannot continue across process termination.
 
-1. **Harness owns control flow.** Models reason and select tools. They do
-   not own filesystem, git, permissions, or “we are done.”
-2. **Loop, not prompt→response.** Understand → plan → inspect → reason →
-   tool → observe → update context → verify → continue or finish.
-3. **Success is observed.** Tests and command output decide completion.
-4. **Workspace sandbox.** Paths resolve under the project root. Terminal
-   cwd is the workspace. Destructive / network / root actions need
-   ELEVATED and user-enabled policy.
-5. **Linux-first.** No Windows/macOS path assumptions.
+`jobs.py` is the separate legacy CLI background-job implementation, using
+`jobs.db`. It is not the desktop job store. Run one desktop API service per XDG
+profile; multiple independent API/MCP managers are not a distributed scheduler.
 
-## Packages (`src/shadow_agent/`)
+## Session continuity
 
-| Module | Responsibility |
-| --- | --- |
-| `paths`, `config` | XDG, YAML, defaults, overlays |
-| `events`, `store` | Event bus + SQLite (sessions, tasks, events, models, projects) |
-| `permissions` | READ_ONLY / WORKSPACE / ELEVATED + command policy |
-| `models/` | Provider ABC, registry, adapters |
-| `tools/` | FS, terminal, git, search + sandbox |
-| `context/` | Prioritize / compress / truncate / memory |
-| `planning/` | Observable, updatable plans |
-| `verification/` | Test loop + error recovery |
-| `agent/` | Main loop + subagent hooks + routing |
-| `api/` | HTTP/SSE used by CLI and UI |
-| `plugins/` | Tool/provider/event hooks; MCP reserved |
+Activating a session explicitly changes the API workspace, checks that its folder
+exists, and returns its tasks, event history, and last event ID. Follow-up tasks
+hydrate up to 24 recent prompt/result events within a bounded character budget.
+Branched sessions copy the event history. Old tool calls are not replayed into a
+new model request. Project memory is a separate source of context.
 
-## Model interface
+The desktop hydrates the saved transcript and asks for the current/latest job.
+SSE requests begin after the hydrated cursor. `Last-Event-ID` and the `after`
+query parameter support reconnects. The server reads ascending pages, drains
+remaining events, then emits `job.done`. There is no fixed-length-array cursor.
+The client ignores duplicate event IDs and matches parallel tool results by
+call ID. A connection error keeps the task running and enables polling fallback.
 
-Every provider implements `generate`, `stream`, `chat`, `tool_call`,
-`get_capabilities`, `get_context_limit`. Internal types are
-`ToolCall` and `ToolResult`. Adapters map vendor protocols.
+## Frontend
 
-V1 ships **mock** (CI, no credits) and **openai-compatible** (Grok, OpenAI,
-any `/v1/chat/completions` host). Local / Ollama / llama.cpp / vLLM are
-thin adapters over the same protocol with different default endpoints.
+- `App.tsx`: application state, project activation, composer, shortcuts, panels.
+- `components/Sidebar.tsx`: projects, task search, pinned tasks.
+- `hooks/useConversation.ts`: stream lifecycle, reconnects, terminal snapshots.
+- `lib/transcript.ts`: pure event reducer and replay.
+- `components/Markdown.tsx`: safe Markdown, code copy; no raw HTML or remote image
+  loading from model output.
+- `components/Dialog.tsx`: modal focus containment and restoration.
+- `components/Drawer.tsx`: files, staged/unstaged review, bounded terminal,
+  task management, goals, skills, health, and background processes.
+- `index.css`: shared controls; `workspace.css`: workspace layout and themes.
 
-## Memory (provider-agnostic)
+Task selection, pins, sidebar visibility, and unsent text drafts live in local
+browser storage. Durable agent work and history live in SQLite. Scroll following
+stops when the user reads older content. Appearance follows saved app settings.
 
-| Kind | Location |
-| --- | --- |
-| Project | `<workspace>/.shadow/memory/` + `instructions.md` / `skills/` |
-| Task | state dir `tasks/<id>/memory.md` |
-| Session | SQLite + JSONL event log |
+## Review and permissions
 
-## Security levels
+`review.py` invokes Git with literal pathspecs, no external diff driver, a timeout,
+and NUL-delimited status parsing. New text files get bounded previews. Staged and
+unstaged diffs stay separate. Hunk mutations compare the supplied hunk to the
+current diff before applying it. New files are staged whole.
 
-- **READ_ONLY** — list/read/search/git inspect
-- **WORKSPACE** — write/edit/exec (non-dangerous)/git add+commit
-- **ELEVATED** — network, destructive git, dangerous commands (opt-in)
+The HTTP API accepts loopback hostnames and same-origin browser requests, blocks
+cross-site access, and adds CSP/frame/content-type protections. CLI requests
+without Origin remain supported. Direct workspace mutations honor read-only
+permissions and reject writes while a desktop task owns that workspace.
 
-Audit events are always recorded.
+Filesystem tools use `WorkspaceSandbox` path resolution. Shell command controls
+are policy checks, not kernel isolation. See [SECURITY.md](SECURITY.md).
 
-## UI
+## Distribution
 
-The desktop is a client of the Agent API, not a second agent.
-Layout: Sessions/Projects/Models | Conversation/Plan/Tools | Files/Diff/Git/Skills/Health.
-Jobs run in a background thread. The UI streams events over SSE, can cancel
-the loop, and can approve or deny dangerous commands.
+`resources.py` locates assets in source, a wheel's `_assets`, or PyInstaller's
+bundle. Wheels include the compiled UI. PyInstaller produces a portable directory;
+`build-linux.sh` wraps it as an x86_64 AppImage and archive. The standalone launcher
+keeps its AppImage mount/extraction alive while serving the API. The browser uses
+a separate profile and the existing `shadow-agent` desktop identity.
 
-## Milestones
+Source installations use an isolated `.venv`. AppImage installation writes a
+stable `~/Applications/ShadowCode.AppImage` link and replaces the launcher after
+validating the executable. Neither path migrates or deletes user configuration.
 
-M1 foundation → M2 tools → M3 git/search/edit → M4 context/memory →
-M5 plan/verify → M6 remote OpenAI-compatible → M7 desktop → M8 subagents →
-M9 local server → M10 Ollama/llama.cpp/vLLM → M11 routing → M12 events UI.
+## Verification
+
+Python tests cover the harness, APIs, database migration, cursor replay, recovery,
+cancellation, workspace selection, origin checks, and Git review. Vitest exercises
+the reducer. Playwright uses a temporary XDG profile and the real API with a mock
+model; it covers workflow, reload/reconnect, responsive layout, and accessibility.
+A local-model smoke test supplements deterministic tests before a release.

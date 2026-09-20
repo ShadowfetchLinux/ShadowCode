@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shadow-agent"
-version = "0.18.0"
+version = "0.19.0"
 description = "Linux-native, model-agnostic coding-agent harness (Claude Code / Codex alternative)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,6 +19,7 @@ dependencies = [
   "uvicorn>=0.30",
   "rich>=13.0",
   "prompt_toolkit>=3.0",
+  "mcp>=1.12,<2",
 ]
 
 [project.optional-dependencies]
