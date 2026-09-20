@@ -50,6 +50,7 @@ export async function buildRuntime() {
     "manifest.json",
     "Dockerfile",
     "build.sh",
+    "fetch-source.sh",
     "apk-packages.txt",
     "alpine-sources.json",
     "isolated-extraction.patch",
@@ -232,6 +233,7 @@ export async function runtimeNotices(appdir, built) {
     "alpine-sources.json",
     "isolated-extraction.patch",
     "build.sh",
+    "fetch-source.sh",
     "Dockerfile",
     "apk-packages.txt",
   ]) {

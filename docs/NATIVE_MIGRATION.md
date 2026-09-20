@@ -152,8 +152,11 @@ regression exercises concurrent owners/clients, deferred WebKit resources,
 process groups, `nohup`, and path limits. Packaged window automation also checks
 repeated default-profile activation under disposable XDG roots and private DBus.
 The runtime's notices, source archive, and compiled code are verified as part of
-packaging. Corresponding sources for all remaining redistributed dependencies
-and the broader release gates above still apply.
+packaging. Source retrieval accepts listed mirrors only for the pinned bytes;
+retained sources are reused and rechecked. A separate regression rebuilds the
+shipped runtime sources in a container with networking disabled and compares
+the resulting machine code. Corresponding sources for all remaining redistributed
+dependencies and the broader release gates above still apply.
 
 See [native desktop development](NATIVE_DESKTOP.md) for prerequisites and isolated
 build/run instructions. Compile the interface before checks that include the

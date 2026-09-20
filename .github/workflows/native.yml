@@ -44,10 +44,14 @@ jobs:
           name: native-window-diagnostics
           path: artifacts/native
       - run: cargo +1.95.0 build --release -p shadowcode-core --examples --locked
+      - name: Check pinned-source failures and mirror recovery
+        run: node --test scripts/test-native-source-fetch.mjs
       - name: Build native development packages with dependency notices
         run: node scripts/build-native.mjs
       - name: Inspect both packages
         run: node scripts/check-native-package.mjs target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage target/release/bundle/deb/ShadowCode_0.20.0_amd64.deb
+      - name: Rebuild the shipped runtime sources without network access
+        run: node scripts/test-native-runtime-sources.mjs
       - name: Exercise concurrent AppImage extraction and shutdown
         run: node scripts/test-native-runtime.mjs
       - name: Exercise the packaged CLI without a display

@@ -215,6 +215,23 @@ The source-built runtime milestone also passed the complete clean-runner
 including both package formats, runtime regressions, packaged CLI, and the
 packaged native window.
 
+Source retrieval now verifies each candidate before publishing an archive, uses
+an identical-byte Alpine mirror for zlib, and rechecks retained sources for
+rebuilds. The local HTTP regression covers wrong successful responses, errors,
+redirects, exhausted candidates, corrupt retained files, and temporary-file
+cleanup. It never changes the pinned checksum to accommodate a failed download.
+
+The September 20 source-retrieval update passes package inspection for both
+formats: a 19,324,112-byte executable, an 84,498,936-byte AppImage, and an
+8,943,832-byte Debian package. The 104,164,476-byte runtime source archive was
+rebuilt with container networking disabled using the already-installed pinned
+toolchain. Its runtime machine code matches the packaged code. The report's
+archive checksum matches the final packaged source archive; results are in
+`artifacts/native-package/source-rebuild/result.json`. CI now runs the same
+download-failure and offline-rebuild checks before the existing packaged-runtime,
+CLI, and window checks. This verifies runtime sources; corresponding sources for
+the other redistributed components remain required.
+
 OS dialog interaction, notification delivery, broader stress/accessibility
 coverage, corresponding sources for remaining redistributed components,
 and the final installed release still need their release-gate checks.

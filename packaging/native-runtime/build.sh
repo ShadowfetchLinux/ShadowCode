@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build-only container: no interpreter or compiler is copied into the application.
 set -euo pipefail
+source /build/fetch-source.sh
 mkdir -p /out/sources /out/notices /build/dependencies
 UPSTREAM_SHA="$(jq -r .upstream.sha256 manifest.json)"
 printf '%s  upstream.tar.gz\n' "$UPSTREAM_SHA" | sha256sum -c -
@@ -8,12 +9,11 @@ tar -xzf upstream.tar.gz
 UPSTREAM_COMMIT="$(jq -r .upstream.commit manifest.json)"
 RUNTIME_SOURCE="/build/type2-runtime-$UPSTREAM_COMMIT"
 patch --batch --fuzz=0 -d "$RUNTIME_SOURCE" -p1 < isolated-extraction.patch
-cp upstream.tar.gz manifest.json alpine-sources.json isolated-extraction.patch build.sh Dockerfile apk-packages.txt /out/sources/
+cp upstream.tar.gz manifest.json alpine-sources.json isolated-extraction.patch build.sh fetch-source.sh Dockerfile apk-packages.txt /out/sources/
 cp "$RUNTIME_SOURCE/LICENSE" /out/notices/type2-runtime-LICENSE
 
 while IFS=$'\t' read -r archive url digest; do
-    wget -q -O "/out/sources/$archive" "$url"
-    printf '%s  %s\n' "$digest" "/out/sources/$archive" | sha256sum -c -
+    fetch_source "/out/sources/$archive" sha256 "$digest" "/build/$archive" "$url"
     tar -xf "/out/sources/$archive" -C /build/dependencies
 done < <(jq -r '.sources[] | [.archive,.url,.sha256] | @tsv' manifest.json)
 
@@ -40,10 +40,10 @@ cd /build
 # only the original notices and provenance are copied into the application.
 while IFS=$'\t' read -r name archive directory; do
     mkdir -p "/out/sources/alpine/$name" "/out/notices/$name"
-    while IFS=$'\t' read -r file url digest; do
-        wget -q -O "/out/sources/alpine/$name/$file" "$url"
-        printf '%s  %s\n' "$digest" "/out/sources/alpine/$name/$file" | sha512sum -c -
-    done < <(jq -r --arg name "$name" '.packages[] | select(.name == $name) | .files[] | [.file,.url,.sha512] | @tsv' alpine-sources.json)
+    while IFS=$'\t' read -r file digest urls; do
+        IFS=$'\t' read -r -a candidates <<< "$urls"
+        fetch_source "/out/sources/alpine/$name/$file" sha512 "$digest" "/build/alpine/$name/$file" "${candidates[@]}"
+    done < <(jq -r --arg name "$name" '.packages[] | select(.name == $name) | .files[] | [.file,.sha512,.url,(.mirrors // [])[]] | @tsv' alpine-sources.json)
     while IFS= read -r notice; do
         tar -xOf "/out/sources/alpine/$name/$archive" "$directory/$notice" > "/out/notices/$name/$notice"
         test -s "/out/notices/$name/$notice"

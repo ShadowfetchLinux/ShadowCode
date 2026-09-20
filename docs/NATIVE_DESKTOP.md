@@ -64,6 +64,8 @@ node scripts/check-native-package.mjs \
   target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage \
   target/release/bundle/deb/ShadowCode_0.20.0_amd64.deb
 node scripts/test-native-runtime.mjs
+node --test scripts/test-native-source-fetch.mjs
+node scripts/test-native-runtime-sources.mjs
 ```
 
 The build script collects [dependency notices](../licenses/native/README.md),

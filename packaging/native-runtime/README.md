@@ -29,6 +29,11 @@ user. The container is pinned by digest, every APK version is pinned in
 fail the build. Build tools stay in the container; none are copied into the app.
 The runtime itself links statically, and the build rejects dynamic dependencies.
 
+Source downloads use bounded attempts and verify the pinned digest before
+publishing a file. A listed mirror is accepted only for identical bytes; zlib has
+an Alpine distfiles fallback for upstream outages or unexpected response bodies.
+Exhausted candidates fail the build, with no partial archive left behind.
+
 `alpine-sources.json` records the exact Alpine recipes, patches, upstream archives,
 and notices for musl, zlib, zstd, mimalloc, and GCC's runtime code. Libfuse and
 squashfuse are built from the archives in `manifest.json`. The exported linker map
@@ -52,12 +57,29 @@ docker build --platform linux/amd64 \
   -t shadowcode-runtime-rebuild .
 ```
 
+This uses the retained dependency sources in the archive without downloading
+them again. Every retained archive and patch is rechecked; corruption fails the
+build instead of triggering a replacement download. Fetching the pinned container
+image and installing the pinned APK build tools still require network access.
+
 The source artifact is separate from the installable application. Corresponding
 sources for the other bundled system/application dependencies remain a separate
 release gate. This recipe pins inputs; it does not claim byte-for-byte
 reproducibility across compiler build timestamps.
 
 ## Regression checks
+
+`node --test scripts/test-native-source-fetch.mjs` checks unexpected HTTP 200
+bodies, HTTP errors, redirects, identical-byte mirror recovery, both digest
+algorithms, retained-source reuse without HTTP requests, corrupt retained inputs,
+and cleanup after exhausted downloads. It uses only a disposable local server.
+
+After packaging, `node scripts/test-native-runtime-sources.mjs` extracts the
+shipped source archive, verifies its receipt, and rebuilds in a disposable
+container with networking disabled. The already-built image supplies the pinned
+toolchain; its previous source and output trees are cleared. The regression checks
+that the new runtime has the same machine-code digest and writes its report to
+`artifacts/native-package/source-rebuild/`. CI runs both source checks.
 
 `node scripts/test-native-runtime.mjs [APPIMAGE]` launches simultaneous native
 owners and eight short clients using one shared temporary directory. It verifies
