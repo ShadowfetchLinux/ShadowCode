@@ -772,3 +772,55 @@ async fn deleting_a_session_does_not_require_its_project_directory_to_exist() {
     .unwrap();
     assert!(service.engine.store().session(sid).unwrap().is_none());
 }
+
+#[tokio::test]
+async fn session_listing_and_literal_search_work_after_tasks_are_saved() {
+    let (_root, service) = setup(true);
+    let special = call(
+        &service,
+        "POST",
+        "/api/sessions",
+        json!({"title":"Literal 100%_!\\ title"}),
+    )
+    .await
+    .unwrap();
+    let plain = call(
+        &service,
+        "POST",
+        "/api/sessions",
+        json!({"title":"Other session"}),
+    )
+    .await
+    .unwrap();
+    let all = call(&service, "GET", "/api/sessions", Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(all["sessions"].as_array().unwrap().len(), 2);
+    for query in ["100%25", "%25_", "%21", "%5C", "Literal"] {
+        let found = call(
+            &service,
+            "GET",
+            &format!("/api/sessions?q={query}"),
+            Value::Null,
+        )
+        .await
+        .unwrap();
+        assert_eq!(found["sessions"].as_array().unwrap().len(), 1, "{query}");
+        assert_eq!(found["sessions"][0]["id"], special["id"]);
+    }
+    service
+        .engine
+        .store()
+        .create_task(plain["id"].as_str().unwrap(), "Find the archived needle")
+        .unwrap();
+    let found = call(
+        &service,
+        "GET",
+        "/api/sessions?q=archived%20needle",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(found["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(found["sessions"][0]["id"], plain["id"]);
+}

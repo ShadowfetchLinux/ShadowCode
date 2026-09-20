@@ -1,5 +1,6 @@
 [workspace]
-members = ["native/core"]
+members = ["native/core", "src-tauri"]
+default-members = ["native/core"]
 resolver = "2"
 
 [workspace.package]

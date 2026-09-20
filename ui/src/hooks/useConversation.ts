@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type EventRow, type Job, type SessionDetail } from "../api";
 import { applyEvent, emptyTranscript, replay } from "../lib/transcript";
+import { jobEvents } from "../lib/jobEvents";
+import { isNative } from "../lib/transport";
 
 export const isActive = (job: Job | null) =>
   !!job && ["queued", "running", "cancelling"].includes(job.status);
@@ -51,9 +53,7 @@ export function useConversation(onComplete: () => void) {
     let closed = false;
     let polling = false;
     let recovering = false;
-    const source = new EventSource(
-      `/api/jobs/${id}/events?after=${cursor.current}`,
-    );
+    const source = jobEvents(id, cursor.current);
     function finish(done: Job) {
       if (closed || current !== generation.current) return;
       closed = true;
@@ -80,6 +80,7 @@ export function useConversation(onComplete: () => void) {
       });
       complete.current();
       if (
+        !isNative() &&
         document.hidden &&
         typeof Notification !== "undefined" &&
         Notification.permission === "granted"

@@ -12,6 +12,7 @@ import {
   type UpdateInfo,
 } from "../api";
 import { Empty } from "./cards";
+import { exportSession } from "../lib/transport";
 
 export type DrawerTab =
   | "terminal"
@@ -270,7 +271,9 @@ function SessionsTab({
                 type="button"
                 className="mini"
                 title="Export as Markdown"
-                onClick={() => window.open(api.exportUrl(s.id, "md"), "_blank")}
+                onClick={() =>
+                  void exportSession(s.id).catch((e) => toast(String(e), "err"))
+                }
               >
                 Export
               </button>

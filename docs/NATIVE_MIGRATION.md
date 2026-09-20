@@ -92,10 +92,19 @@ Implemented foundation:
   traverse the full event history up to an explicit 32 MB limit.
 - [Native engine verification](NATIVE_VERIFICATION.md), including scripted failure
   cases, concurrent tasks, and real coding probes against two local models.
+- A Tauri desktop executable with embedded interface assets and Rust IPC, native
+  dialog/export/link adapters, default-profile single-instance activation,
+  persisted window state, notifications, and managed close/termination handling.
+  Native UI replay preserves streaming message IDs, tool paths, and durable
+  completion. The actual window is exercised through WebKit WebDriver.
 
-The application window, remaining orchestration/integrations,
-frontend IPC adaptation, and release packaging are still in progress. The native
+The remaining orchestration/integrations, full desktop interaction/stress
+coverage, and release packaging are still in progress. The native
 branch is not yet a replacement for the 0.19 release.
+
+See [native desktop development](NATIVE_DESKTOP.md) for prerequisites and isolated
+build/run instructions. Compile the interface before checks that include the
+desktop crate.
 
 Developer checks:
 

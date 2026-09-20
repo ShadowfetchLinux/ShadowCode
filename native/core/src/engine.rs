@@ -268,6 +268,7 @@ impl Engine {
                 .context("Session missing ID")?
                 .to_owned()
         };
+        let event_cursor = self.0.store.event_cursor(&sid)?;
         let job = Job {
             id: crate::id(),
             workspace: workspace.path.clone(),
@@ -279,7 +280,7 @@ impl Engine {
             model: config.model.name.clone(),
             started_at: crate::now(),
             finished_at: None,
-            event_cursor: 0,
+            event_cursor,
             summary: String::new(),
             usage: Usage::default(),
             usage_is_estimated: false,

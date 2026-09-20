@@ -1,3 +1,5 @@
+import { request } from "./lib/transport";
+
 export type ModelInfo = {
   id: string;
   name: string;
@@ -190,33 +192,14 @@ export type UpdateInfo = {
   error: string;
 };
 
-async function parseError(res: Response, path: string): Promise<string> {
-  try {
-    const data = await res.json();
-    return String(data.detail || data.error || `${path} ${res.status}`);
-  } catch {
-    return `${path} ${res.status}`;
-  }
-}
-
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(await parseError(res, path));
-  return res.json() as Promise<T>;
-}
+const get = <T>(path: string) => request<T>(path);
 
 async function send<T>(
   path: string,
   method: string,
   body?: unknown,
 ): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await parseError(res, path));
-  return res.json() as Promise<T>;
+  return request<T>(path, method, body);
 }
 
 export const api = {

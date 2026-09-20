@@ -1,0 +1,30 @@
+[package]
+name = "shadowcode-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A native workspace for local coding models"
+
+[[bin]]
+name = "shadowcode"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+shadowcode-core = { path = "../native/core" }
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["signal"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

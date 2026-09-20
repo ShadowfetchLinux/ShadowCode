@@ -1,8 +1,15 @@
 import type { Approval, CommandResult } from "../api";
 
 export type ChatItem =
-  | { kind: "user"; text: string }
-  | { kind: "agent"; text: string; who?: string }
+  | { kind: "user"; text: string; taskId?: string }
+  | {
+      kind: "agent";
+      text: string;
+      who?: string;
+      messageId?: string;
+      taskId?: string;
+      live?: boolean;
+    }
   | {
       kind: "tool";
       tool: string;

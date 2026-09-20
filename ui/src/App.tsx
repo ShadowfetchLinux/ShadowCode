@@ -47,6 +47,13 @@ import {
 } from "./components/overlays";
 import { Settings } from "./components/Settings";
 import { useConversation } from "./hooks/useConversation";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  exportSession as saveExport,
+  isNative,
+  openExternal,
+} from "./lib/transport";
 
 type Overlay =
   "" | "settings" | "help" | "palette" | "project" | "custom-model";
@@ -95,6 +102,10 @@ export default function App() {
   } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [error, setError] = useState("");
+  const [shutdown, setShutdown] = useState<{
+    status: string;
+    message?: string;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -124,6 +135,39 @@ export default function App() {
       5000,
     );
   }, []);
+
+  useEffect(() => {
+    if (!isNative()) return;
+    let stopped = false;
+    let unsubscribe: (() => void) | undefined;
+    void listen<{ status: string; message?: string }>(
+      "shadowcode:shutdown",
+      (event) => setShutdown(event.payload),
+    )
+      .then((stop) => {
+        if (stopped) stop();
+        else unsubscribe = stop;
+      })
+      .catch((error) => {
+        if (!stopped) toast(String(error), "err");
+      });
+    const external = (event: MouseEvent) => {
+      const anchor = (
+        event.target as Element | null
+      )?.closest<HTMLAnchorElement>("a[href]");
+      if (!anchor || anchor.getAttribute("href")?.startsWith("#")) return;
+      event.preventDefault();
+      void openExternal(anchor.href).catch((error) =>
+        toast(String(error), "err"),
+      );
+    };
+    document.addEventListener("click", external, true);
+    return () => {
+      stopped = true;
+      unsubscribe?.();
+      document.removeEventListener("click", external, true);
+    };
+  }, [toast]);
 
   const refresh = useCallback(async () => {
     const [s, p, active, state] = await Promise.all([
@@ -155,7 +199,7 @@ export default function App() {
     void refresh().catch(() => undefined);
   });
   const { transcript, setTranscript, job, busy, connection } = conversation;
-  const locked = busy || submitting || switching;
+  const locked = busy || submitting || switching || Boolean(shutdown);
 
   async function reloadConfig() {
     const [config, state, modelData, providerData] = await Promise.all([
@@ -249,6 +293,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("shadow:sidebar", sidebar ? "open" : "closed");
   }, [sidebar]);
+  useEffect(() => {
+    const compact = window.matchMedia("(max-width: 760px)");
+    const resize = (event: MediaQueryListEvent) => {
+      if (event.matches) setSidebar(false);
+    };
+    compact.addEventListener("change", resize);
+    return () => compact.removeEventListener("change", resize);
+  }, []);
   useEffect(() => {
     document.title = `${busy ? "● " : ""}ShadowCode`;
   }, [busy]);
@@ -352,7 +404,12 @@ export default function App() {
     if (!job || !busy) return;
     try {
       const next = await api.cancelJob(job.id);
-      conversation.setJob(next);
+      if (selectedRef.current === next.session_id) {
+        const detail = await api.session(next.session_id);
+        if (selectedRef.current === next.session_id)
+          conversation.load(detail, next);
+      }
+      await refresh();
     } catch (e) {
       toast(String(e), "err");
     }
@@ -487,7 +544,8 @@ export default function App() {
     }
   }
   function exportSession() {
-    if (sessionId) window.open(api.exportUrl(sessionId), "_blank", "noopener");
+    if (sessionId)
+      void saveExport(sessionId).catch((e) => toast(String(e), "err"));
   }
   const palette: PaletteItem[] = [
     {
@@ -717,6 +775,7 @@ export default function App() {
           <button
             type="button"
             className={`top-action ${panel === "changes" ? "on" : ""}`}
+            aria-label="Review changes"
             onClick={() => setPanel(panel === "changes" ? null : "changes")}
           >
             <GitPullRequest size={15} />
@@ -790,6 +849,23 @@ export default function App() {
           }}
         >
           <div className={`chat-inner ${empty ? "is-empty" : ""}`}>
+            {shutdown && (
+              <div className="notice" role="status">
+                <span>
+                  {shutdown.message ||
+                    "Stopping active work and saving the session before closing…"}
+                </span>
+                {shutdown.status === "error" && (
+                  <button
+                    type="button"
+                    className="mini"
+                    onClick={() => void invoke("desktop_quit")}
+                  >
+                    Retry closing
+                  </button>
+                )}
+              </div>
+            )}
             {error && (
               <div className="notice bad" role="alert">
                 <span>{error}</span>
@@ -1156,7 +1232,7 @@ export default function App() {
                 onChange={(e) => setMode(e.target.value)}
               >
                 <option value="coder">Build</option>
-                <option value="researcher">Research</option>
+                <option value="planner">Plan</option>
                 <option value="reviewer">Review</option>
                 <option value="tester">Test</option>
               </select>
@@ -1232,7 +1308,9 @@ export default function App() {
               {git.branch}
             </button>
           )}
-          <span className="version">v{health?.version || "0.19.0"}</span>
+          <span className="version">
+            {health?.version ? `v${health.version}` : "Connecting"}
+          </span>
         </footer>
       </main>
       {panel && (

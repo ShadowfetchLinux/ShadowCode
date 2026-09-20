@@ -202,12 +202,12 @@ impl Store {
         let needle = format!(
             "%{}%",
             search
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_")
+                .replace('!', "!!")
+                .replace('%', "!%")
+                .replace('_', "!_")
         );
-        self.query("SELECT s.* FROM sessions s WHERE s.title LIKE ? ESCAPE '\' OR s.workspace LIKE ? ESCAPE '\'
-            OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '\')
+        self.query("SELECT s.* FROM sessions s WHERE s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
+            OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '!')
             ORDER BY s.updated_at DESC LIMIT ?", params![needle,needle,needle,limit.clamp(1,10000)])
     }
     pub fn rename_session(&self, sid: &str, title: &str) -> Result<()> {

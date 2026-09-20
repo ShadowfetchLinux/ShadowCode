@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **60 native
+`cargo fmt --all --check`, Clippy with warnings denied, and all **61 native
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -24,6 +24,8 @@ integration tests** pass on the development machine. The suite covers:
   batches, bounded process output, concurrent commands, and process-group cleanup.
 - Application commands for onboarding, trusted/read-only projects, credentials,
   sessions, fresh-task approvals, and deletion after a project folder is removed.
+- Nonempty session listing and literal search across titles and saved prompts,
+  including `%`, `_`, `!`, and backslash characters.
 - Manual terminal/agent workspace exclusion, cancellation of a terminal's child
   process during shutdown, and attribution to its original session after navigation.
 - Git staging/discard of individual hunks, stale-hunk rejection, literal filenames,
@@ -39,6 +41,32 @@ LD_LIBRARY_PATH=/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib cargo test --works
 ```
 
 The pinned CI toolchain does not require this host-specific workaround.
+
+## Native window
+
+The Rust/Tauri executable runs the embedded interface through IPC without a
+Python service or browser launcher. `scripts/test-native-desktop.mjs` exercises
+the actual WebKit window under Xvfb with an isolated profile and a scripted
+compatible model. It submits a task, approves a terminal command, independently
+checks the file written by the agent, reloads the saved conversation, cancels a
+stalled request, and closes the application while a terminal child is running.
+The test verifies process cleanup and captures light, dark, approval, completion,
+and compact-window screenshots for inspection.
+
+The first window run exposed a SQLite LIKE escape bug that appeared only after
+sessions existed. A regression now covers real session listing and literal
+search. Visual inspection also found a cancellation transcript race and an open
+sidebar obscuring a resized compact window; the window test checks both.
+Axe WCAG 2 A/AA and 2.1 AA checks pass in light, dark, and compact workspace
+views. The compact check caught the Review button losing its accessible name
+when its text was hidden; the control now retains an explicit label.
+Eleven interface unit tests cover ordered replay, pagination, stream finalization,
+listener cleanup, interruption, and native tool cards. The seven existing browser
+tests continue to pass through the legacy transport.
+
+OS dialog interaction, notification delivery, default-profile single-instance
+behavior, broader stress/accessibility coverage, real models through the native
+window, and final release packages still need their release-gate checks.
 
 ## Real local models
 
@@ -66,5 +94,5 @@ the probe asserts that fresh inspection actually occurred.
 
 These small coding probes establish tool interoperability, recovery from a real
 compiler failure, continuation, and rewind. They do not establish performance
-on large repositories or native-window usability. Desktop/UI tests, integrations,
+on large repositories or complete native-window usability. Broader desktop/UI tests, integrations,
 release artifact checks, and installation remain mandatory before release.

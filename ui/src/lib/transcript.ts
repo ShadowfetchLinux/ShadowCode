@@ -16,8 +16,8 @@ export const emptyTranscript = (): Transcript => ({
   plan: [],
 });
 
-/** The event ID, not the array length, is the replay boundary. Model events are
- * complete responses; tool calls carry IDs so parallel tools cannot cross-wire. */
+/** The event ID is the replay boundary. Native streaming messages and parallel
+ * tool calls carry their own IDs; a final message replaces its streamed text. */
 export function applyEvent(state: Transcript, event: EventRow): Transcript {
   if (event.id && event.id <= state.cursor) return state;
   const p = event.payload;
@@ -27,14 +27,58 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let plan = state.plan;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
+  if (event.type === "user.message") {
+    items = [...items, { kind: "user", text, taskId }];
+    stage = "QUEUED";
+  }
   if (event.type === "agent.started") {
-    items = [...items, { kind: "user", text: String(p.task || "") }];
+    if (
+      !taskId ||
+      !items.some((item) => item.kind === "user" && item.taskId === taskId)
+    )
+      items = [...items, { kind: "user", text: String(p.task || ""), taskId }];
     stage = "UNDERSTAND";
     plan = [];
     usage = {};
   }
-  if (event.type === "model.delta" && text)
-    items = [...items, { kind: "agent", text }];
+  if (
+    ["model.stream", "model.delta", "model.stream_end"].includes(event.type)
+  ) {
+    const messageId = String(p.message_id || "");
+    const index = messageId
+      ? items.findIndex(
+          (item) =>
+            item.kind === "agent" &&
+            item.messageId === messageId &&
+            item.taskId === taskId,
+        )
+      : -1;
+    const previous = index < 0 ? undefined : items[index];
+    if (event.type === "model.stream_end") {
+      if (previous?.kind === "agent") {
+        items = [...items];
+        items[index] = {
+          ...previous,
+          live: false,
+          who: "Interrupted response",
+        };
+      }
+    } else if (text) {
+      const next: ChatItem = {
+        kind: "agent",
+        taskId,
+        messageId: messageId || undefined,
+        text:
+          event.type === "model.stream" && previous?.kind === "agent"
+            ? previous.text + text
+            : text,
+        live: event.type === "model.stream",
+      };
+      items = [...items];
+      if (index < 0) items.push(next);
+      else items[index] = next;
+    }
+  }
   if (event.type === "tool.started") {
     items = [
       ...items,
@@ -62,19 +106,31 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
         (p.call_id ? i.callId === p.call_id : i.tool === p.tool),
     );
     const args = p.arguments as Record<string, unknown> | undefined;
+    const previous = index >= 0 ? items[index] : undefined;
     const card: ChatItem = {
       kind: "tool",
       tool: String(p.tool),
       text: String(p.output_preview || p.error || ""),
-      fullOutput: String(p.output_full || p.output_preview || p.error || ""),
+      fullOutput: String(
+        p.output_full ||
+          (p.output ? JSON.stringify(p.output, null, 2) : "") ||
+          p.output_preview ||
+          p.error ||
+          "",
+      ),
       live: false,
       ok: Boolean(p.success),
-      collapsed: true,
+      collapsed: previous?.kind === "tool" ? previous.collapsed : true,
       headline: String(p.headline || p.tool),
       icon: String(p.icon || ""),
       taskId,
       callId: String(p.call_id || ""),
-      path: String(args?.path || args?.dest || ""),
+      path: String(
+        args?.path ||
+          args?.dest ||
+          (previous?.kind === "tool" ? previous.path : "") ||
+          "",
+      ),
     };
     items = [...items];
     if (index < 0) items.push(card);

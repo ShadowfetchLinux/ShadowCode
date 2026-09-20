@@ -122,7 +122,7 @@ impl Service {
         match (request.method.as_str(), path) {
             ("GET", "/api/version") => {
                 return Ok(
-                    json!({"name":"ShadowCode","version":crate::VERSION,"runtime":"rust","transport":"native"}),
+                    json!({"name":"ShadowCode","version":crate::VERSION,"runtime":"rust","transport":"native","pid":std::process::id()}),
                 )
             }
             ("GET", "/api/health") => {
@@ -354,7 +354,7 @@ impl Service {
                 );
                 let purpose = text("purpose");
                 let mode = match purpose {
-                    "planner" | "plan" => "plan",
+                    "planner" | "plan" | "researcher" => "plan",
                     "reviewer" | "review" => "review",
                     _ => "code",
                 };
@@ -622,7 +622,7 @@ impl Service {
                 ("POST", Some("cancel")) => return Ok(json!(self.engine.cancel(&job.id).await?)),
                 ("GET", Some("events")) => {
                     return Ok(
-                        json!({"events":store.events_after(&job.session_id,q("after").parse().unwrap_or(0),None,query_limit(&query,512,10000))?,"job":job}),
+                        json!({"events":store.events_after(&job.session_id,q("after").parse().unwrap_or(0),job.finished_at.map(|_|job.event_cursor),query_limit(&query,512,2000))?,"job":job}),
                     )
                 }
                 _ => {}
