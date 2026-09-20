@@ -53,22 +53,30 @@ pub enum Command {
     },
     /// List managed worktrees, or create an isolated branch at a local commit.
     Worktree {
-        #[arg(long,conflicts_with_all=["inspect","remove","recovery","restore"])]
+        #[arg(long,conflicts_with_all=["inspect","remove","recovery","restore","review_return","return_changes"])]
         create: bool,
-        #[arg(long, conflicts_with_all = ["remove","recovery","restore"])]
+        #[arg(long, conflicts_with_all = ["remove","recovery","restore","review_return","return_changes"])]
         inspect: Option<String>,
-        #[arg(long, requires = "hash", conflicts_with_all = ["recovery","restore"])]
+        #[arg(long, requires = "hash", conflicts_with_all = ["recovery","restore","review_return","return_changes"])]
         remove: Option<String>,
         #[arg(long, requires = "remove")]
         hash: Option<String>,
         /// Review retained commits for a missing managed checkout.
-        #[arg(long, conflicts_with = "restore")]
+        #[arg(long, conflicts_with_all = ["restore","review_return","return_changes"])]
         recovery: Option<String>,
         /// Restore a reviewed commit to a separate checkout, retaining original metadata.
-        #[arg(long, requires = "recovery_hash")]
+        #[arg(long, requires = "recovery_hash", conflicts_with_all = ["review_return","return_changes"])]
         restore: Option<String>,
         #[arg(long, requires = "restore")]
         recovery_hash: Option<String>,
+        /// Review committed changes before returning them to the source project.
+        #[arg(long, conflicts_with = "return_changes")]
+        review_return: Option<String>,
+        /// Prepare a reviewed merge in the source checkout without committing.
+        #[arg(long, requires = "return_hash")]
+        return_changes: Option<String>,
+        #[arg(long, requires = "return_changes")]
+        return_hash: Option<String>,
         #[arg(long, default_value = "HEAD", requires = "create")]
         reference: String,
     },

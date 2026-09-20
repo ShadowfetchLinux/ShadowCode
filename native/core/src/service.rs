@@ -213,6 +213,49 @@ impl Service {
                     .await?
                 ));
             }
+            ("POST", "/api/worktrees/review-return") => {
+                let workspace = self.workspace()?;
+                ensure!(
+                    Config::load(self.engine.paths(), Some(&workspace))?.is_trusted(&workspace),
+                    "Trust the source project before reviewing returned changes"
+                );
+                return Ok(json!(
+                    crate::worktrees::review_return(
+                        self.engine.paths(),
+                        &workspace,
+                        text("id"),
+                        CancellationToken::new()
+                    )
+                    .await?
+                ));
+            }
+            ("POST", "/api/worktrees/return") => {
+                let ws = self.mutable_workspace()?;
+                let reviewed = crate::worktrees::review_return(
+                    self.engine.paths(),
+                    &ws.path,
+                    text("id"),
+                    ws.reservation.cancellation(),
+                )
+                .await?;
+                let _target = self.engine.reserve_workspace(&reviewed.record.path)?;
+                let _source_background =
+                    self.engine.background().reserve_idle_workspace(&ws.path)?;
+                let _target_background = self
+                    .engine
+                    .background()
+                    .reserve_idle_workspace(&reviewed.record.path)?;
+                let record = crate::worktrees::return_changes(
+                    self.engine.paths(),
+                    &ws.path,
+                    text("id"),
+                    text("hash"),
+                    ws.reservation.cancellation(),
+                )
+                .await?;
+                store.add_event("worktree.returned", &json!(record), None, None)?;
+                return Ok(json!(record));
+            }
             ("POST", "/api/worktrees/recovery") => {
                 let workspace = self.workspace()?;
                 ensure!(

@@ -94,8 +94,12 @@ forwards ordinary shutdown signals, waits for native cleanup, and preserves the
 payload's exit status. Force-killing the wrapper still reports its signal status;
 the native child observes wrapper loss and shuts down.
 
-See [native worktrees](NATIVE_WORKTREES.md) for `worktree --create` and running
-tasks in a separate branch while preserving source checkout edits.
+See [native worktrees](NATIVE_WORKTREES.md) for creation, reviewed removal,
+missing-checkout recovery and reviewed return of committed work.
+`worktree --review-return ID` inspects incoming changes;
+`worktree --return-changes ID --return-hash HASH` prepares them in the source
+index without committing. Conflicts return a nonzero exit status and preserve
+the Git merge state for explicit resolution or abort.
 
 ## Saved work and settings
 

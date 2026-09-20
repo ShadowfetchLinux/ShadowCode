@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Reviewed CLI worktree return prepares incoming commits in the source index
+  without committing. Stale reviews and active work are rejected; conflicts and
+  ignored local files are preserved for explicit resolution.
+
 - CI now exercises 200 native tasks, stalled-provider cancellations and output
   floods while checking memory, descriptors, child cleanup and history integrity.
 

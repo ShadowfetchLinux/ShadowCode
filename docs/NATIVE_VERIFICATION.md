@@ -304,6 +304,20 @@ these transitions. Assertions inspect fresh complete frames because incremental
 ANSI updates can split words. This covers resize recovery; broader picker
 navigation, visual review and sustained terminal stress remain open.
 
+## Reviewed return of worktree commits
+
+Nine worktree tests pass. Return-specific scenarios exercise diverged branches,
+source HEAD preservation until a separate commit, stale hashes after source
+commits, dirty/untracked files, active worktree reservations, source background
+processes, already-integrated commits, conflicts retained for manual resolution
+or abort, ignored-file collisions and changed source repository roots. Testing
+found that Git's `--no-overwrite-ignore` alone did not prevent an ignored-file
+overwrite in this merge path; explicit incoming-path/ignored-path intersection
+checks now reject it before mutation. Original worktree commits remain intact.
+The native CLI passes 19 scenario groups / 32 scripted model requests, including
+review, stale-hash rejection, uncommitted return and a separate merge commit.
+Clippy and the native build pass. Desktop return controls remain open.
+
 ## Missing-worktree committed recovery
 
 Six worktree tests pass, including a real Git checkout with an unmerged commit

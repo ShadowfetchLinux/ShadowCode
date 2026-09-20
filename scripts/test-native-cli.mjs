@@ -404,6 +404,19 @@ try {
   assert.equal(fixtureGit(["rev-parse",missing.branch]).trim(),missing.base_commit);
   checks.push("missing worktree reviewed rescue with stale-hash rejection and original metadata retained");
 
+  await writeFile(path.join(rescued.path,"returned.txt"),"reviewed return\n");
+  for(const args of [["add","returned.txt"],["commit","-qm","Worktree result"]])execFileSync("git",["-c","core.hooksPath=/dev/null","-c","user.name=Worktree Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd:rescued.path});
+  fixtureGit(["add","README.md"]);fixtureGit(["commit","-qm","Retain source edits"]);
+  const returnReview=await cli(["worktree","--review-return",rescued.id],0,{workspace:isolatedSource});
+  assert.ok(returnReview.diff.includes("reviewed return"));
+  assert.match((await cli(["worktree","--return-changes",rescued.id,"--return-hash","stale"],1,{workspace:isolatedSource})).error,/changed/);
+  assert.equal((await cli(["worktree","--return-changes",rescued.id,"--return-hash",returnReview.hash],0,{workspace:isolatedSource})).state,"merge_pending");
+  assert.equal(fixtureGit(["rev-parse","HEAD"]).trim(),returnReview.source_head);
+  assert.equal(await readFile(path.join(isolatedSource,"returned.txt"),"utf8"),"reviewed return\n");
+  assert.equal(await readFile(path.join(isolatedSource,"README.md"),"utf8"),"source local edits\n");
+  fixtureGit(["commit","-qm","Reviewed integration"]);
+  checks.push("reviewed worktree return preserves divergent source work and requires a separate commit");
+
   // Seed only this disposable, stopped profile. Recent-list limits must not hide
   // older IDs or force fetching multi-megabyte job results to resolve a prefix.
   const historyDb = new DatabaseSync(path.join(profile, "state/shadow-agent.db"));

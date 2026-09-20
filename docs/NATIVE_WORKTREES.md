@@ -64,8 +64,8 @@ removal, just as with ordinary Git operations. Damaged checkout paths or missing
 inspection; the recovery record remains. For a missing path whose Git
 registration survives, use the reviewed rescue below.
 
-Carrying uncommitted changes into an isolated checkout, reviewed return/merge
-operations and recovery controls for missing/damaged checkouts remain part of the
+Carrying uncommitted changes into an isolated checkout, desktop return controls
+and repair of damaged checkouts remain part of the
 [native migration gates](NATIVE_MIGRATION.md).
 
 Inventory and individual actions share the same bounded, non-following record
@@ -99,3 +99,38 @@ commit, together with the uncommitted-file limitation. **Restore in new worktree
 creates the separate checkout; **Cancel recovery** closes the review without
 changes. Errors clear stale reviews. Use **Open worktree** on the newly listed
 checkout to enter the usual project trust flow.
+
+## Review and return committed changes
+
+```sh
+shadowcode --workspace /source/project worktree --review-return FULL_WORKTREE_ID
+shadowcode --workspace /source/project worktree --return-changes FULL_WORKTREE_ID --return-hash REVIEW_HASH
+```
+
+The review includes the exact source/worktree branches and commits, their merge
+base, and the worktree's incoming diff from that base. This is the incoming
+branch diff, not a promise of a conflict-free merge. Reviews larger than the
+64 KB Git-output limit must be handled through ordinary Git review tools.
+Both checkouts must be attached to branches, free of tracked/untracked changes
+and unfinished Git operations. Locked worktrees and already-integrated commits
+are rejected. The source must be trusted and writable. Active tasks/manual
+operations or background processes in either checkout block the return.
+
+The return rechecks the review hash, then prepares `git merge --no-commit --no-ff`
+in the source checkout. HEAD stays unchanged: review the staged result and commit
+separately using the source project's normal Git review tools. Git preserves
+nonconflicting source-branch work when histories have diverged. Conflicts remain
+in the source files/index for explicit resolution; the result is
+`needs_attention`, with a nonzero CLI exit status. Inspect `git status`, resolve
+and commit, or run `git merge --abort` in the source project to abandon the merge.
+Interrupted operations retain a `returning` recovery record explaining what was
+attempted. No reset, auto-stash, automatic commit, branch deletion or checkout
+removal is performed. Ignored source files cannot be overwritten by the merge.
+The worktree branch and committed contents remain available throughout.
+
+Git hooks and filesystem-monitor hooks are disabled for these operations; Git's
+configured merge drivers and checkout filters still apply. Keep external Git or
+filesystem writers idle during review and return, as with ordinary Git merges.
+After committing or aborting, the record's last-operation status is historical;
+future actions inspect the actual Git state again. Dedicated desktop return
+controls remain in development.

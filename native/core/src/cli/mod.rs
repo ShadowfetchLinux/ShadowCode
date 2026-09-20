@@ -870,8 +870,13 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 });
             }
         }
-        Command::Worktree {create,reference,inspect,remove,hash,recovery,restore,recovery_hash}=>{
-            if let Some(id)=restore {backend.call("POST","/api/worktrees/restore",json!({"id":id,"hash":recovery_hash})).await?}
+        Command::Worktree {create,reference,inspect,remove,hash,recovery,restore,recovery_hash,review_return,return_changes,return_hash}=>{
+            if let Some(id)=return_changes {
+                let value=backend.call("POST","/api/worktrees/return",json!({"id":id,"hash":return_hash})).await?;
+                return Ok(Outcome{code:if value["state"]=="merge_pending" {0}else{1},value,raw:None});
+            }
+            else if let Some(id)=review_return {backend.call("POST","/api/worktrees/review-return",json!({"id":id})).await?}
+            else if let Some(id)=restore {backend.call("POST","/api/worktrees/restore",json!({"id":id,"hash":recovery_hash})).await?}
             else if let Some(id)=recovery {backend.call("POST","/api/worktrees/recovery",json!({"id":id})).await?}
             else if let Some(id)=remove {backend.call("POST","/api/worktrees/remove",json!({"id":id,"hash":hash})).await?}
             else if let Some(id)=inspect {backend.call("POST","/api/worktrees/inspect",json!({"id":id})).await?}

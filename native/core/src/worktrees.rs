@@ -192,6 +192,7 @@ pub struct Inspection {
     pub current_branch: String,
     pub status: String,
     pub can_remove: bool,
+    pub locked: bool,
     pub reason: String,
     pub hash: String,
 }
@@ -337,6 +338,7 @@ pub async fn inspect(
         current_branch,
         status,
         can_remove,
+        locked,
         reason,
         hash,
     })
@@ -507,4 +509,187 @@ pub async fn restore(
     // Commit objects are immutable. Create from the reviewed commit, never a
     // mutable branch name, and leave the original recovery evidence untouched.
     create(paths, source, &review.commit, cancel).await
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ReturnReview {
+    pub record: Record,
+    pub source_head: String,
+    pub source_branch: String,
+    pub worktree_head: String,
+    pub worktree_branch: String,
+    pub merge_base: String,
+    pub diff: String,
+    pub hash: String,
+}
+pub async fn review_return(
+    paths: &AppPaths,
+    source: &Path,
+    id: &str,
+    cancel: CancellationToken,
+) -> Result<ReturnReview> {
+    use sha2::{Digest, Sha256};
+    let inspected = inspect(paths, source, id, cancel.clone()).await?;
+    let source_top = git(source, &["rev-parse", "--show-toplevel"], cancel.clone()).await?;
+    ensure!(
+        Path::new(&source_top).canonicalize()? == Workspace::open(source)?.path,
+        "Source checkout repository root changed"
+    );
+    ensure!(
+        !inspected.locked,
+        "Unlock the worktree deliberately before returning changes"
+    );
+    ensure!(
+        !inspected.current_branch.is_empty(),
+        "Attach the worktree to a branch before returning changes"
+    );
+    for checkout in [source, inspected.record.path.as_path()] {
+        let status = git(
+            checkout,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+            cancel.clone(),
+        )
+        .await?;
+        ensure!(status.is_empty(), "Commit or preserve tracked and untracked changes in both checkouts before returning work");
+        for marker in [
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "rebase-merge",
+            "rebase-apply",
+        ] {
+            let marker_path = git(
+                checkout,
+                &["rev-parse", "--path-format=absolute", "--git-path", marker],
+                cancel.clone(),
+            )
+            .await?;
+            ensure!(
+                !Path::new(&marker_path).try_exists()?,
+                "Finish the existing Git operation before returning work"
+            );
+        }
+    }
+    let source_head = git(source, &["rev-parse", "--verify", "HEAD"], cancel.clone()).await?;
+    let source_branch = git(source, &["branch", "--show-current"], cancel.clone()).await?;
+    ensure!(
+        !source_branch.is_empty(),
+        "Attach the source checkout to a branch before returning changes"
+    );
+    let merge_base = git(
+        source,
+        &["merge-base", &source_head, &inspected.head],
+        cancel.clone(),
+    )
+    .await?;
+    ensure!(
+        merge_base != inspected.head,
+        "These worktree commits are already present in the source branch"
+    );
+    // Git's no-overwrite-ignore behavior is not sufficient for every merge
+    // strategy. Reject incoming paths overlapping ignored files/directories.
+    let incoming = git(
+        source,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            &merge_base,
+            &inspected.head,
+            "--",
+        ],
+        cancel.clone(),
+    )
+    .await?;
+    let ignored = git(
+        source,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ],
+        cancel.clone(),
+    )
+    .await?;
+    for local in ignored.split('\0').filter(|s| !s.is_empty()) {
+        let local = local.trim_end_matches('/');
+        ensure!(!incoming.split('\0').filter(|s| !s.is_empty()).any(|path| path == local || path.starts_with(&format!("{local}/")) || local.starts_with(&format!("{path}/"))), "Incoming changes overlap ignored source files at {local}; preserve them before returning work");
+    }
+    let diff = git(
+        source,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--binary",
+            &merge_base,
+            &inspected.head,
+            "--",
+        ],
+        cancel,
+    )
+    .await?;
+    let mut review = ReturnReview {
+        record: inspected.record,
+        source_head,
+        source_branch,
+        worktree_head: inspected.head,
+        worktree_branch: inspected.current_branch,
+        merge_base,
+        diff,
+        hash: String::new(),
+    };
+    review.hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&review)?));
+    Ok(review)
+}
+/// Prepare a merge for the existing source review/commit flow. Never move HEAD,
+/// auto-commit, reset, stash, prune, or discard conflicts on the user's behalf.
+pub async fn return_changes(
+    paths: &AppPaths,
+    source: &Path,
+    id: &str,
+    expected_hash: &str,
+    cancel: CancellationToken,
+) -> Result<Record> {
+    let _guard = tokio::select! {guard=CREATION.lock()=>guard,_=cancel.cancelled()=>anyhow::bail!("Worktree return cancelled")};
+    let review = review_return(paths, source, id, cancel.clone()).await?;
+    ensure!(
+        review.hash == expected_hash,
+        "Branches or review changed; inspect the return again"
+    );
+    let (records, _) = roots(paths)?;
+    let mut record = review.record;
+    record.state = "returning".into();
+    record.detail = format!("Preparing reviewed merge of {} into {} at {}; inspect source Git status after interruption", review.worktree_head, review.source_branch, review.source_head);
+    save(&records, &record)?;
+    let merged = git(
+        source,
+        &[
+            "merge",
+            "--no-commit",
+            "--no-ff",
+            "--no-edit",
+            "--no-overwrite-ignore",
+            "--no-autostash",
+            &review.worktree_head,
+        ],
+        cancel,
+    )
+    .await;
+    match merged {
+        Ok(_) => {
+            record.state = "merge_pending".into();
+            record.detail = "Changes returned to the source index without committing. Review and commit in the source project, or use Git merge --abort to abandon this merge. The worktree and branch remain intact.".into();
+        }
+        Err(error) => {
+            record.state = "needs_attention".into();
+            record.detail = format!("Return stopped: {error:#}. Inspect source Git status; resolve any conflicts and commit, or use Git merge --abort. No automatic reset or cleanup was performed.").chars().take(2000).collect();
+        }
+    }
+    save(&records, &record)?;
+    Ok(record)
 }

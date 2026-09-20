@@ -496,3 +496,246 @@ async fn missing_checkout_rescue_retains_commits_index_and_original_registration
     );
     service.engine.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn reviewed_return_preserves_diverged_source_and_requires_a_separate_commit() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths, json!({"trusted_workspaces":[project]})).unwrap();
+    let service = Service::open(paths.clone(), Some(project.clone())).unwrap();
+    let record = worktrees::create(&paths, &project, "HEAD", CancellationToken::new())
+        .await
+        .unwrap();
+    fs::write(record.path.join("incoming.txt"), "incoming work\n").unwrap();
+    git(&record.path, &["add", "."]);
+    git(&record.path, &["commit", "-qm", "Incoming"]);
+    let first = operation(
+        &service,
+        "/api/worktrees/review-return",
+        json!({"id":record.id}),
+    )
+    .await
+    .unwrap();
+    assert!(first["diff"].as_str().unwrap().contains("incoming work"));
+    fs::write(project.join("source.txt"), "source branch work\n").unwrap();
+    git(&project, &["add", "."]);
+    git(&project, &["commit", "-qm", "Source diverged"]);
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    assert!(operation(
+        &service,
+        "/api/worktrees/return",
+        json!({"id":record.id,"hash":first["hash"]})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("changed"));
+    assert!(!project.join("incoming.txt").exists());
+    let review = operation(
+        &service,
+        "/api/worktrees/review-return",
+        json!({"id":record.id}),
+    )
+    .await
+    .unwrap();
+    let busy = service.engine.reserve_workspace(&record.path).unwrap();
+    assert!(operation(
+        &service,
+        "/api/worktrees/return",
+        json!({"id":record.id,"hash":review["hash"]})
+    )
+    .await
+    .is_err());
+    drop(busy);
+    fs::write(project.join("untracked.txt"), "preserve me").unwrap();
+    assert!(operation(
+        &service,
+        "/api/worktrees/return",
+        json!({"id":record.id,"hash":review["hash"]})
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        fs::read_to_string(project.join("untracked.txt")).unwrap(),
+        "preserve me"
+    );
+    fs::remove_file(project.join("untracked.txt")).unwrap();
+    let returned = operation(
+        &service,
+        "/api/worktrees/return",
+        json!({"id":record.id,"hash":review["hash"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(returned["state"], "merge_pending");
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        git(&project, &["rev-parse", "MERGE_HEAD"]),
+        review["worktree_head"]
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("source.txt")).unwrap(),
+        "source branch work\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("incoming.txt")).unwrap(),
+        "incoming work\n"
+    );
+    assert!(git(&record.path, &["status", "--porcelain"]).is_empty());
+    assert!(operation(
+        &service,
+        "/api/worktrees/review-return",
+        json!({"id":record.id})
+    )
+    .await
+    .is_err());
+    git(&project, &["commit", "-qm", "Reviewed return"]);
+    assert_eq!(
+        git(&project, &["rev-list", "--parents", "-n", "1", "HEAD"])
+            .split_whitespace()
+            .count(),
+        3
+    );
+    assert!(operation(
+        &service,
+        "/api/worktrees/review-return",
+        json!({"id":record.id})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("already present"));
+    service.engine.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn reviewed_return_preserves_conflicts_for_resolution_or_abort() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths, json!({"trusted_workspaces":[project]})).unwrap();
+    let service = Service::open(paths.clone(), Some(project.clone())).unwrap();
+    let record = worktrees::create(&paths, &project, "HEAD", CancellationToken::new())
+        .await
+        .unwrap();
+    for (checkout, text) in [
+        (&project, "source version\n"),
+        (&record.path, "worktree version\n"),
+    ] {
+        fs::write(checkout.join("tracked.txt"), text).unwrap();
+        git(checkout, &["add", "."]);
+        git(checkout, &["commit", "-qm", "Divergent edit"]);
+    }
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    let review = operation(
+        &service,
+        "/api/worktrees/review-return",
+        json!({"id":record.id}),
+    )
+    .await
+    .unwrap();
+    let result = operation(
+        &service,
+        "/api/worktrees/return",
+        json!({"id":record.id,"hash":review["hash"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["state"], "needs_attention");
+    assert!(result["detail"].as_str().unwrap().contains("merge --abort"));
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
+    assert!(git(&project, &["status", "--porcelain"]).contains("UU tracked.txt"));
+    let conflict = fs::read_to_string(project.join("tracked.txt")).unwrap();
+    assert!(conflict.contains("source version") && conflict.contains("worktree version"));
+    assert_eq!(
+        git(&record.path, &["rev-parse", "HEAD"]),
+        review["worktree_head"]
+    );
+    git(&project, &["merge", "--abort"]);
+    assert_eq!(
+        fs::read_to_string(project.join("tracked.txt")).unwrap(),
+        "source version\n"
+    );
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reviewed_return_does_not_overwrite_ignored_source_files() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths, json!({"trusted_workspaces":[project]})).unwrap();
+    let service = Service::open(paths.clone(), Some(project.clone())).unwrap();
+    let record = worktrees::create(&paths, &project, "HEAD", CancellationToken::new())
+        .await
+        .unwrap();
+    fs::write(record.path.join("private-cache"), "incoming tracked file").unwrap();
+    git(&record.path, &["add", "private-cache"]);
+    git(&record.path, &["commit", "-qm", "Incoming path"]);
+    fs::write(project.join(".git/info/exclude"), "private-cache\n").unwrap();
+    let review = operation(
+        &service,
+        "/api/worktrees/review-return",
+        json!({"id":record.id}),
+    )
+    .await
+    .unwrap();
+    let config = Config::load(&paths, Some(&project)).unwrap();
+    let background = service
+        .engine
+        .background()
+        .start(&project, &config, None, "source-server", "sleep 60")
+        .unwrap();
+    assert!(operation(
+        &service,
+        "/api/worktrees/return",
+        json!({"id":record.id,"hash":review["hash"]})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("background"));
+    service
+        .engine
+        .background()
+        .stop(&background.id)
+        .await
+        .unwrap();
+    fs::write(project.join("private-cache"), "local ignored contents").unwrap();
+    let result = operation(
+        &service,
+        "/api/worktrees/return",
+        json!({"id":record.id,"hash":review["hash"]}),
+    )
+    .await
+    .unwrap_err();
+    assert!(result.to_string().contains("ignored source files"));
+    assert_eq!(
+        fs::read_to_string(project.join("private-cache")).unwrap(),
+        "local ignored contents"
+    );
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), review["source_head"]);
+    assert_eq!(
+        fs::read_to_string(record.path.join("private-cache")).unwrap(),
+        "incoming tracked file"
+    );
+    let redirected = root.path().join("redirected");
+    fs::create_dir(&redirected).unwrap();
+    git(
+        &project,
+        &["config", "core.worktree", redirected.to_str().unwrap()],
+    );
+    assert!(operation(
+        &service,
+        "/api/worktrees/review-return",
+        json!({"id":record.id})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("root changed"));
+    service.engine.shutdown().await.unwrap();
+}
