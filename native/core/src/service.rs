@@ -213,6 +213,40 @@ impl Service {
                     .await?
                 ));
             }
+            ("POST", "/api/worktrees/recovery") => {
+                let workspace = self.workspace()?;
+                ensure!(
+                    Config::load(self.engine.paths(), Some(&workspace))?.is_trusted(&workspace),
+                    "Trust the source project before inspecting recovery"
+                );
+                return Ok(json!(
+                    crate::worktrees::recovery(
+                        self.engine.paths(),
+                        &workspace,
+                        text("id"),
+                        CancellationToken::new()
+                    )
+                    .await?
+                ));
+            }
+            ("POST", "/api/worktrees/restore") => {
+                let ws = self.mutable_workspace()?;
+                let record = crate::worktrees::restore(
+                    self.engine.paths(),
+                    &ws.path,
+                    text("id"),
+                    text("hash"),
+                    ws.reservation.cancellation(),
+                )
+                .await?;
+                store.add_event(
+                    "worktree.restored",
+                    &json!({"original_id":text("id"),"checkout":record}),
+                    None,
+                    None,
+                )?;
+                return Ok(json!(record));
+            }
             ("POST", "/api/worktrees") => {
                 let ws = self.mutable_workspace()?;
                 let reference = body["reference"].as_str().unwrap_or("HEAD");

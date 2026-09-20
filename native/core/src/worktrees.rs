@@ -405,3 +405,106 @@ pub async fn remove(
         }
     }
 }
+
+/// A rescue creates a new checkout; it never prunes the missing checkout's
+/// registration or index, which may still contain recoverable staged changes.
+#[derive(Clone, Debug, Serialize)]
+pub struct Recovery {
+    pub record: Record,
+    pub commit: String,
+    pub branch: String,
+    pub warning: String,
+    pub hash: String,
+}
+pub async fn recovery(
+    paths: &AppPaths,
+    source: &Path,
+    id: &str,
+    cancel: CancellationToken,
+) -> Result<Recovery> {
+    use sha2::{Digest, Sha256};
+    let record = read_record(paths, source, id)?;
+    match fs::symlink_metadata(&record.path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => anyhow::bail!(
+            "Checkout path still exists or cannot be inspected; preserve it before recovery"
+        ),
+    }
+    let common = PathBuf::from(
+        git(
+            source,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cancel.clone(),
+        )
+        .await?,
+    )
+    .canonicalize()?;
+    ensure!(
+        common == record.common_directory,
+        "Source repository identity changed"
+    );
+    let registered = git(
+        source,
+        &["worktree", "list", "--porcelain", "-z"],
+        cancel.clone(),
+    )
+    .await?;
+    let expected = format!(
+        "worktree {}",
+        record
+            .path
+            .to_str()
+            .context("Worktree path must be UTF-8")?
+    );
+    let block = registered
+        .split("\0\0")
+        .find(|block| block.split('\0').any(|field| field == expected))
+        .context(
+            "Missing checkout registration is unavailable; inspect retained branches manually",
+        )?;
+    ensure!(!block.split('\0').any(|field| field == "locked" || field.starts_with("locked ")), "Worktree is locked; it may be on an unavailable device. Review its location before recovery");
+    let commit = block
+        .split('\0')
+        .find_map(|field| field.strip_prefix("HEAD "))
+        .context("Registered checkout has no retained commit")?
+        .to_string();
+    ensure!(
+        matches!(commit.len(), 40 | 64) && commit.bytes().all(|b| b.is_ascii_hexdigit()),
+        "Invalid retained commit"
+    );
+    let resolved = git(
+        source,
+        &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
+        cancel,
+    )
+    .await?;
+    ensure!(resolved == commit, "Retained commit is unavailable");
+    let branch = block
+        .split('\0')
+        .find_map(|field| field.strip_prefix("branch refs/heads/"))
+        .unwrap_or("")
+        .to_string();
+    let hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(
+            &serde_json::json!({"record":record,"registration":block})
+        )?)
+    );
+    Ok(Recovery { record, commit, branch, hash, warning:"Creates a separate checkout from the retained commit. Missing uncommitted files are not reconstructed. The original branch, registration, index and recovery record remain intact for manual recovery.".into() })
+}
+pub async fn restore(
+    paths: &AppPaths,
+    source: &Path,
+    id: &str,
+    expected_hash: &str,
+    cancel: CancellationToken,
+) -> Result<Record> {
+    let review = recovery(paths, source, id, cancel.clone()).await?;
+    ensure!(
+        review.hash == expected_hash,
+        "Recovery state changed; inspect it again before restoring"
+    );
+    // Commit objects are immutable. Create from the reviewed commit, never a
+    // mutable branch name, and leave the original recovery evidence untouched.
+    create(paths, source, &review.commit, cancel).await
+}

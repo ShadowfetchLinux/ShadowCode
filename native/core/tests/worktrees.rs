@@ -397,3 +397,102 @@ async fn worktree_inspection_rejects_detached_heads_symlinks_and_forged_paths() 
     assert!(worktrees::list(&paths, &project).is_err());
     assert!(project.join("tracked.txt").exists());
 }
+
+#[tokio::test]
+async fn missing_checkout_rescue_retains_commits_index_and_original_registration() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths, json!({"trusted_workspaces":[project]})).unwrap();
+    let service = Service::open(paths.clone(), Some(project.clone())).unwrap();
+    let record = worktrees::create(&paths, &project, "HEAD", CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        worktrees::recovery(&paths, &project, &record.id, CancellationToken::new())
+            .await
+            .is_err()
+    );
+    fs::write(record.path.join("retained.txt"), "unmerged commit\n").unwrap();
+    git(&record.path, &["add", "."]);
+    git(&record.path, &["commit", "-qm", "Retained work"]);
+    let commit = git(&record.path, &["rev-parse", "HEAD"]);
+    fs::write(
+        record.path.join("tracked.txt"),
+        "staged recovery evidence\n",
+    )
+    .unwrap();
+    git(&record.path, &["add", "tracked.txt"]);
+    let index = git(
+        &record.path,
+        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+    );
+    let index_bytes = fs::read(&index).unwrap();
+    let record_file = paths
+        .data
+        .join("managed-worktrees/records")
+        .join(format!("{}.json", record.id));
+    let record_bytes = fs::read(&record_file).unwrap();
+    let saved = root.path().join("saved-checkout");
+    fs::rename(&record.path, &saved).unwrap();
+    git(
+        &project,
+        &["worktree", "lock", record.path.to_str().unwrap()],
+    );
+    assert!(
+        worktrees::recovery(&paths, &project, &record.id, CancellationToken::new())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("locked")
+    );
+    git(
+        &project,
+        &["worktree", "unlock", record.path.to_str().unwrap()],
+    );
+    let review = operation(&service, "/api/worktrees/recovery", json!({"id":record.id}))
+        .await
+        .unwrap();
+    assert_eq!(review["commit"], commit);
+    assert_eq!(review["branch"], record.branch);
+    assert!(operation(
+        &service,
+        "/api/worktrees/restore",
+        json!({"id":record.id,"hash":"stale"})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("changed"));
+    assert_eq!(worktrees::list(&paths, &project).unwrap().len(), 1);
+    let restored = operation(
+        &service,
+        "/api/worktrees/restore",
+        json!({"id":record.id,"hash":review["hash"]}),
+    )
+    .await
+    .unwrap();
+    let new_path = Path::new(restored["path"].as_str().unwrap());
+    assert_ne!(new_path, record.path);
+    assert_eq!(git(new_path, &["rev-parse", "HEAD"]), commit);
+    assert_eq!(
+        fs::read_to_string(new_path.join("retained.txt")).unwrap(),
+        "unmerged commit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(new_path.join("tracked.txt")).unwrap(),
+        "committed\n"
+    );
+    assert_eq!(fs::read(index).unwrap(), index_bytes);
+    assert_eq!(fs::read(record_file).unwrap(), record_bytes);
+    assert_eq!(git(&project, &["rev-parse", &record.branch]), commit);
+    assert!(
+        git(&project, &["worktree", "list", "--porcelain"]).contains(record.path.to_str().unwrap())
+    );
+    assert_eq!(
+        fs::read_to_string(saved.join("tracked.txt")).unwrap(),
+        "staged recovery evidence\n"
+    );
+    service.engine.shutdown().await.unwrap();
+}

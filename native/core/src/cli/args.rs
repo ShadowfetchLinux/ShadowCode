@@ -53,14 +53,22 @@ pub enum Command {
     },
     /// List managed worktrees, or create an isolated branch at a local commit.
     Worktree {
-        #[arg(long,conflicts_with_all=["inspect","remove"])]
+        #[arg(long,conflicts_with_all=["inspect","remove","recovery","restore"])]
         create: bool,
-        #[arg(long, conflicts_with = "remove")]
+        #[arg(long, conflicts_with_all = ["remove","recovery","restore"])]
         inspect: Option<String>,
-        #[arg(long, requires = "hash")]
+        #[arg(long, requires = "hash", conflicts_with_all = ["recovery","restore"])]
         remove: Option<String>,
         #[arg(long, requires = "remove")]
         hash: Option<String>,
+        /// Review retained commits for a missing managed checkout.
+        #[arg(long, conflicts_with = "restore")]
+        recovery: Option<String>,
+        /// Restore a reviewed commit to a separate checkout, retaining original metadata.
+        #[arg(long, requires = "recovery_hash")]
+        restore: Option<String>,
+        #[arg(long, requires = "restore")]
+        recovery_hash: Option<String>,
         #[arg(long, default_value = "HEAD", requires = "create")]
         reference: String,
     },

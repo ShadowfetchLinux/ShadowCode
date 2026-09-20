@@ -870,8 +870,10 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 });
             }
         }
-        Command::Worktree {create,reference,inspect,remove,hash}=>{
-            if let Some(id)=remove {backend.call("POST","/api/worktrees/remove",json!({"id":id,"hash":hash})).await?}
+        Command::Worktree {create,reference,inspect,remove,hash,recovery,restore,recovery_hash}=>{
+            if let Some(id)=restore {backend.call("POST","/api/worktrees/restore",json!({"id":id,"hash":recovery_hash})).await?}
+            else if let Some(id)=recovery {backend.call("POST","/api/worktrees/recovery",json!({"id":id})).await?}
+            else if let Some(id)=remove {backend.call("POST","/api/worktrees/remove",json!({"id":id,"hash":hash})).await?}
             else if let Some(id)=inspect {backend.call("POST","/api/worktrees/inspect",json!({"id":id})).await?}
             else {backend.call(if *create {"POST"}else{"GET"},"/api/worktrees",json!({"reference":reference})).await?}
         },

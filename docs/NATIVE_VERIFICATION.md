@@ -278,6 +278,19 @@ these transitions. Assertions inspect fresh complete frames because incremental
 ANSI updates can split words. This covers resize recovery; broader picker
 navigation, visual review and sustained terminal stress remain open.
 
+## Missing-worktree committed recovery
+
+Six worktree tests pass, including a real Git checkout with an unmerged commit
+and staged changes moved away from its managed path. Recovery refuses existing
+paths, locked registrations and stale hashes. Reviewed restoration creates a
+separate checkout at the retained commit; the original index and recovery record
+are byte-for-byte unchanged, and the original branch, registration and moved
+files remain. The native executable passes 18 CLI scenario groups / 32 scripted
+model requests, including recovery preview, stale-hash rejection and restoration.
+Clippy and the native build pass. This restores committed work only; automatic
+reconstruction of missing uncommitted files is not claimed. Desktop rescue and
+damaged-path repair remain open.
+
 ## Desktop worktree controls
 
 The native Settings panel creates and lists worktrees, opens the normal trust

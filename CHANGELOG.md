@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Native development: reviewed CLI rescue for missing worktrees restores retained
+  commits into a new checkout while preserving the original branch, index and
+  registration; missing uncommitted files are not reconstructed.
+
 - Desktop Settings adds worktree creation, opening through project trust,
   inspection and reviewed removal. Actions bind to the displayed source project;
   dirty or stale reviews cannot authorize removal.

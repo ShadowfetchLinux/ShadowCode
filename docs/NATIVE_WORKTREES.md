@@ -60,8 +60,9 @@ checks; removal never uses `--force` or deletes branches. Unmerged commits remai
 on the preserved branch. Source files and selection remain unchanged.
 
 Files deliberately changed by external programs should be preserved before
-removal, just as with ordinary Git operations. Missing or damaged checkout
-registrations still require manual inspection; the recovery record remains.
+removal, just as with ordinary Git operations. Damaged checkout paths or missing Git registrations still require manual
+inspection; the recovery record remains. For a missing path whose Git
+registration survives, use the reviewed rescue below.
 
 Carrying uncommitted changes into an isolated checkout, reviewed return/merge
 operations and recovery controls for missing/damaged checkouts remain part of the
@@ -70,3 +71,25 @@ operations and recovery controls for missing/damaged checkouts remain part of th
 Inventory and individual actions share the same bounded, non-following record
 reader. A record whose filename, managed path or branch identity has changed is
 rejected before it can be presented as a usable worktree.
+
+## Rescue a missing checkout's committed work
+
+```sh
+shadowcode --workspace /path/to/repository worktree --recovery FULL_WORKTREE_ID
+shadowcode --workspace /path/to/repository worktree --restore FULL_WORKTREE_ID --recovery-hash REVIEW_HASH
+```
+
+The review resolves the missing checkout's registered HEAD, including commits
+not merged into the source project. Restoration creates a **new** managed branch
+and checkout from that exact commit. It does not reconstruct missing uncommitted
+files. The original branch, registration, index and recovery record remain
+untouched so staged changes or a moved checkout can still be recovered manually.
+No global Git prune, forced removal or branch reset is performed.
+
+An existing path (including a symlink), locked registration, changed repository,
+missing commit, unavailable registration or stale review blocks rescue. A locked
+worktree may be on an unavailable device; inspect its location before unlocking.
+Trust and writable/idle source requirements also apply. Open and trust the new
+checkout explicitly. The original record remains in the active inventory until
+its underlying checkout is repaired and reviewed for removal. Dedicated desktop
+rescue controls and automatic repair of damaged paths remain open.

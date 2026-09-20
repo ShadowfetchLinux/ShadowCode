@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -391,6 +391,18 @@ try {
   assert.equal((await cli(["worktree"],0,{workspace:isolatedSource})).worktrees.length,0);
   assert.equal(fixtureGit(["rev-parse",isolated.branch]).trim(),isolated.base_commit);
   checks.push("native worktree creation, inventory, trust, isolated model task, reviewed clean removal and preserved branch");
+
+  const missing=await cli(["worktree","--create"],0,{workspace:isolatedSource});
+  await rename(missing.path,path.join(scratch,"retained-missing-checkout"));
+  const recovery=await cli(["worktree","--recovery",missing.id],0,{workspace:isolatedSource});
+  assert.equal(recovery.commit,missing.base_commit);
+  assert.match((await cli(["worktree","--restore",missing.id,"--recovery-hash","stale"],1,{workspace:isolatedSource})).error,/changed/);
+  const rescued=await cli(["worktree","--restore",missing.id,"--recovery-hash",recovery.hash],0,{workspace:isolatedSource});
+  assert.notEqual(rescued.path,missing.path);
+  assert.equal(await readFile(path.join(rescued.path,"README.md"),"utf8"),"fixture-read-value committed\n");
+  assert.ok(fixtureGit(["worktree","list","--porcelain"]).includes(missing.path));
+  assert.equal(fixtureGit(["rev-parse",missing.branch]).trim(),missing.base_commit);
+  checks.push("missing worktree reviewed rescue with stale-hash rejection and original metadata retained");
 
   // Seed only this disposable, stopped profile. Recent-list limits must not hide
   // older IDs or force fetching multi-megabyte job results to resolve a prefix.
