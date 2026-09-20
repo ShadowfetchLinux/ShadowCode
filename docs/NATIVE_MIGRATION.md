@@ -146,6 +146,10 @@ The remaining orchestration/integrations, full desktop interaction/stress
 coverage, and release packaging are still in progress. The native
 branch is not yet a replacement for the 0.19 release.
 
+The [native MCP transport foundation](NATIVE_MCP.md) now has a bounded Rust stdio
+client and subprocess regressions. MCP application activation, agent-tool
+integration, HTTP transport and server migration remain open requirements.
+
 AppImage extraction now uses a source-pinned runtime patch with private
 per-invocation directories, signal forwarding, and checked cleanup. A dedicated
 regression exercises concurrent owners/clients, deferred WebKit resources,

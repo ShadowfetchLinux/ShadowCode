@@ -13,6 +13,8 @@ pub mod events;
 pub mod hooks;
 #[cfg(unix)]
 pub mod lifecycle;
+#[cfg(unix)]
+pub mod mcp;
 pub mod model_registry;
 pub mod models;
 pub mod patch;

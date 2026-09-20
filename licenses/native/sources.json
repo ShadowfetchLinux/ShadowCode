@@ -195,6 +195,14 @@
       "archiveFile": "rustc-1.95.0-x86_64-unknown-linux-gnu/rustc/share/doc/rust/COPYRIGHT-library.html",
       "archiveSha256": "8426a3d170a5879f5682f5fbdd024a1779b3951e7baba685af2d6dc32a6dfc15",
       "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1"
+    },
+    {
+      "packages": [
+        "rmcp@3.4.0"
+      ],
+      "file": "rmcp-3.4.0/LICENSE",
+      "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/fd7811fdaa9fefa1c8034534b4d7a31c97204f89/LICENSE",
+      "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a"
     }
   ]
 }
