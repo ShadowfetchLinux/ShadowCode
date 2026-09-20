@@ -25,7 +25,8 @@ not navigate an attached desktop. New tasks queue behind active work in that pro
 - Enter sends; Alt-Enter or Ctrl-J adds a newline. Bracketed paste inserts text
   without submitting it. Up/Down recall sent prompts; Left/Right and deletion
   respect Unicode graphemes. The composer holds at most 64 KB.
-- F1 opens help; Esc closes a dialog.
+- F1 opens help; Esc closes a dialog. Page Up/Down scroll help and trust
+  details; Home returns to the start. Scrolling stays in range after resizing.
 - F2 selects a model. F3 or Ctrl-L cycles Build, Plan, Review and Test routing.
   Plan and Review retain the engine's read-only permissions.
 - Ctrl-P selects saved conversations. Type to filter the recent list; Ctrl-R
@@ -33,7 +34,8 @@ not navigate an attached desktop. New tasks queue behind active work in that pro
 - Ctrl-N starts a conversation. Ctrl-G selects a known project;
   `/open /absolute/path` opens another. Project switching requires all work owned
   by this terminal to finish or stop first, including tasks in other conversations.
-- Ctrl-T shows the exact project before Enter confirms trust.
+- Ctrl-T shows the exact project before Enter confirms trust. A queued project
+  change invalidates that confirmation; reopen the dialog to review the new path.
 - F4 opens the pending approval. It defaults to **Deny**. Tab changes the choice;
   Enter applies it to the reviewed request. Page Up/Down scroll the exact request.
   Typing in the composer never approves anything. An oversized request cannot be

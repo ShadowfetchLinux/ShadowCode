@@ -48,6 +48,33 @@ fn block(title: impl Into<Line<'static>>, accent: Color) -> Block<'static> {
         .title(title)
 }
 const HELP:&str="ShadowCode · native terminal\n\nEnter              Send task / queue a follow-up\nAlt-Enter / Ctrl-J  Insert newline\nF1                 Keyboard help\nF2                 Model picker\nF3 / Ctrl-L        Build / Plan / Review / Test\nF4                 Review pending approval (defaults to Deny)\nTab                Slash command picker\nCtrl-P             Saved conversations\nCtrl-G             Projects\nCtrl-N             New conversation\nCtrl-T             Review project trust\nCtrl-O             Expand / collapse tool output\nPage Up / Down     Scroll conversation\nCtrl-B / Ctrl-F    Older saved history / return to live\nUp / Down          Recall sent prompts\nCtrl-C / Esc       Stop selected task\nCtrl-Q / Ctrl-D    Quit\n\nApproval dialog: Tab selects Deny or Allow; Enter applies.\nPage Up / Down scrolls the exact request. Esc closes it.\nSession picker: type to filter; Ctrl-R searches saved history.\n/export /absolute/file.md exports the full conversation.\n/open /absolute/project switches project after owned work ends.\n\nClosing this terminal cancels its unfinished owned tasks.\nWhen attached to another engine, unrelated tasks continue.";
+fn trust_text(path: &std::path::Path) -> String {
+    format!("Trust this exact project?\n\n{}\n\nProject instructions and enabled integrations can influence model tasks. Command approvals still apply.",display(&path.display().to_string()))
+}
+pub(super) fn clamp_dialog_scroll(area: Rect, app: &mut App) {
+    let popup = modal(area);
+    let width = popup.width.saturating_sub(2) as usize;
+    let height = popup.height.saturating_sub(2) as usize;
+    match &mut app.overlay {
+        Overlay::Help { scroll } => {
+            *scroll = (*scroll).min(wrap(HELP, width, 10_000).len().saturating_sub(height))
+        }
+        Overlay::Trust { path, scroll } => {
+            *scroll = (*scroll).min(
+                wrap(&trust_text(path), width, 10_000)
+                    .len()
+                    .saturating_sub(height),
+            )
+        }
+        Overlay::Approval { text, scroll, .. } => {
+            *scroll = (*scroll).min(
+                (wrap(text, width, 128_001).len() + usize::from(text.len() > 128_000))
+                    .saturating_sub(height),
+            )
+        }
+        _ => {}
+    }
+}
 pub(super) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let light = app.view.theme == "light";
@@ -233,20 +260,91 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     );
     let inner_width = popup.width.saturating_sub(2) as usize;
     let height = popup.height.saturating_sub(2) as usize;
-    let (title,rows)=match &app.overlay {
-        Overlay::Help=>(" Keyboard help · Esc closes ".to_string(),wrap(HELP,inner_width,200)),
-        Overlay::Trust=>(" Trust project · Enter confirms · Esc cancels ".into(),wrap(&format!("Trust this exact project?\n\n{}\n\nProject instructions and enabled integrations can influence model tasks. Command approvals still apply.",display(&app.view.workspace.display().to_string())),inner_width,200)),
-        Overlay::Approval{id,text,allow,scroll}=>{
-            let current=app.view.approvals.iter().any(|a|a["id"]==*id);let too_large=text.len()>128_000;
-            let title=format!(" {} · Tab switches · Enter applies · Esc closes ",if !current{"Request no longer pending"}else if *allow{"ALLOW"}else{"DENY"});
-            let mut rows=if too_large{vec!["Request exceeds terminal review limit; Allow is disabled.".into()]}else{vec![]};rows.extend(wrap(text,inner_width,128_001));let max=rows.len().saturating_sub(height);(title,rows.into_iter().skip((*scroll).min(max)).collect())
+    let (title, rows) = match &app.overlay {
+        Overlay::Help { scroll } => (
+            " Help · PgUp/PgDn · Home · Esc ".to_string(),
+            wrap(HELP, inner_width, 10_000)
+                .into_iter()
+                .skip(*scroll)
+                .collect(),
+        ),
+        Overlay::Trust { path, scroll } => (
+            if path == &app.view.workspace {
+                " Trust · Enter confirms · PgUp/PgDn · Esc "
+            } else {
+                " Project changed · Esc to review again "
+            }
+            .into(),
+            wrap(&trust_text(path), inner_width, 10_000)
+                .into_iter()
+                .skip(*scroll)
+                .collect(),
+        ),
+        Overlay::Approval {
+            id,
+            text,
+            allow,
+            scroll,
+        } => {
+            let current = app.view.approvals.iter().any(|a| a["id"] == *id);
+            let too_large = text.len() > 128_000;
+            let title = format!(
+                " {} · Tab switches · Enter applies · Esc closes ",
+                if !current {
+                    "Request no longer pending"
+                } else if *allow {
+                    "ALLOW"
+                } else {
+                    "DENY"
+                }
+            );
+            let mut rows = if too_large {
+                vec!["Request exceeds terminal review limit; Allow is disabled.".into()]
+            } else {
+                vec![]
+            };
+            rows.extend(wrap(text, inner_width, 128_001));
+            let max = rows.len().saturating_sub(height);
+            (title, rows.into_iter().skip((*scroll).min(max)).collect())
         }
-        Overlay::Picker{kind,query,selected}=>{
-            let choices=app.choices(*kind,&query.text);let start=selected.saturating_sub(height.saturating_sub(3));let mut rows=vec![format!("Filter: {}",display(&query.text)),"↑↓ choose · Enter selects · Esc closes · Ctrl-R searches sessions".into()];
-            if choices.is_empty(){rows.push(if app.view.busy{"Loading…"}else{"No matching entries"}.into());}
-            rows.extend(choices.iter().enumerate().skip(start).take(height.saturating_sub(2)).map(|(i,c)|format!("{} {}",if i==*selected{"›"}else{" "},display(&c.label))));(format!(" {kind:?} "),rows)
+        Overlay::Picker {
+            kind,
+            query,
+            selected,
+        } => {
+            let choices = app.choices(*kind, &query.text);
+            let start = selected.saturating_sub(height.saturating_sub(3));
+            let mut rows = vec![
+                format!("Filter: {}", display(&query.text)),
+                "↑↓ choose · Enter selects · Esc closes · Ctrl-R searches sessions".into(),
+            ];
+            if choices.is_empty() {
+                rows.push(
+                    if app.view.busy {
+                        "Loading…"
+                    } else {
+                        "No matching entries"
+                    }
+                    .into(),
+                );
+            }
+            rows.extend(
+                choices
+                    .iter()
+                    .enumerate()
+                    .skip(start)
+                    .take(height.saturating_sub(2))
+                    .map(|(i, c)| {
+                        format!(
+                            "{} {}",
+                            if i == *selected { "›" } else { " " },
+                            display(&c.label)
+                        )
+                    }),
+            );
+            (format!(" {kind:?} "), rows)
         }
-        Overlay::None=>unreachable!(),
+        Overlay::None => unreachable!(),
     };
     frame.render_widget(
         Paragraph::new(
@@ -269,6 +367,43 @@ mod tests {
             vec!["a界", "e\u{301}", "👩‍💻"]
         );
         assert_eq!(wrap(&"x\n".repeat(100_000), 20, 400).len(), 400);
+    }
+    #[test]
+    fn compact_dialogs_reveal_the_last_line_and_clamp_after_resize() {
+        let mut app = App::new(Default::default());
+        app.overlay = Overlay::Help { scroll: usize::MAX };
+        let backend = ratatui::backend::TestBackend::new(36, 12);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                clamp_dialog_scroll(f.area(), &mut app);
+                draw(f, &app)
+            })
+            .unwrap();
+        let content = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(
+            content.contains("tasks continue."),
+            "The bottom of help must remain reachable: {content}"
+        );
+        let previous = match app.overlay {
+            Overlay::Help { scroll } => scroll,
+            _ => unreachable!(),
+        };
+        clamp_dialog_scroll(Rect::new(0, 0, 120, 80), &mut app);
+        assert!(matches!(app.overlay, Overlay::Help { scroll: 0 }));
+        assert!(previous > 0);
+        app.overlay = Overlay::Trust {
+            path: std::path::PathBuf::from(format!("/{}", "long-path/".repeat(100))),
+            scroll: usize::MAX,
+        };
+        clamp_dialog_scroll(Rect::new(0, 0, 36, 12), &mut app);
+        assert!(matches!(app.overlay,Overlay::Trust{scroll,..} if scroll>0 && scroll<1000));
     }
     #[test]
     fn renders_compact_and_full_terminals() {

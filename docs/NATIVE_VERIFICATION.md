@@ -268,7 +268,10 @@ Unicode wrapping and small screens, safe approval selection, queue-full draft
 retention, workflow ownership and exclusive older-history pages. Clippy and the
 full 216-test suite pass. The existing 15 CLI groups / 30 model requests also pass.
 Dependency notice generation now covers 575 application dependencies. Terminal
-picker/navigation, resize, visual and sustained stress coverage remain open.
+picker/navigation, visual and sustained stress coverage remain open. Two further
+regression tests verify compact-dialog scrolling/resizing and trust confirmation
+bound to the displayed project; all ten library tests pass after that fix. Broader
+real-terminal resize coverage remains open.
 
 ## Native CLI
 

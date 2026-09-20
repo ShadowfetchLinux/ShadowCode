@@ -53,7 +53,7 @@ pub(super) enum Action {
     Catalog(ListKind, String),
     Cancel,
     Decide(String, bool),
-    Trust,
+    Trust(PathBuf),
     Older,
     Latest,
 }
@@ -545,7 +545,11 @@ impl Worker {
                 );
                 self.call("POST",format!("/api/approvals/{id}"),json!({"session_id":self.view.session,"decision":if approved{"approve"}else{"deny"}})).await?;
             }
-            Action::Trust => {
+            Action::Trust(path) => {
+                ensure!(
+                    path == self.view.workspace,
+                    "Project changed; review its trust again"
+                );
                 self.call(
                     "POST",
                     "/api/projects/trust",

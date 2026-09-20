@@ -52,7 +52,9 @@ impl Drop for Screen {
 enum Overlay {
     #[default]
     None,
-    Help,
+    Help {
+        scroll: usize,
+    },
     Picker {
         kind: ListKind,
         query: Editor,
@@ -64,7 +66,10 @@ enum Overlay {
         allow: bool,
         scroll: usize,
     },
-    Trust,
+    Trust {
+        path: PathBuf,
+        scroll: usize,
+    },
 }
 struct App {
     view: View,
@@ -130,13 +135,33 @@ impl App {
             }
             let overlay = std::mem::take(&mut self.overlay);
             self.overlay = match overlay {
-                Overlay::Help => Overlay::Help,
-                Overlay::Trust => {
-                    if key.code == KeyCode::Enter {
-                        self.send(tx, Action::Trust);
+                Overlay::Help { mut scroll } => {
+                    if key.code == KeyCode::PageDown {
+                        scroll = scroll.saturating_add(10);
+                    }
+                    if key.code == KeyCode::PageUp {
+                        scroll = scroll.saturating_sub(10);
+                    }
+                    if key.code == KeyCode::Home {
+                        scroll = 0;
+                    }
+                    Overlay::Help { scroll }
+                }
+                Overlay::Trust { path, mut scroll } => {
+                    if key.code == KeyCode::PageDown {
+                        scroll = scroll.saturating_add(10);
+                    }
+                    if key.code == KeyCode::PageUp {
+                        scroll = scroll.saturating_sub(10);
+                    }
+                    if key.code == KeyCode::Home {
+                        scroll = 0;
+                    }
+                    if key.code == KeyCode::Enter && path == self.view.workspace {
+                        self.send(tx, Action::Trust(path));
                         Overlay::None
                     } else {
-                        Overlay::Trust
+                        Overlay::Trust { path, scroll }
                     }
                 }
                 Overlay::Approval {
@@ -231,7 +256,12 @@ impl App {
                     self.scroll = 0;
                     self.send(tx, Action::Latest);
                 }
-                KeyCode::Char('t') => self.overlay = Overlay::Trust,
+                KeyCode::Char('t') => {
+                    self.overlay = Overlay::Trust {
+                        path: self.view.workspace.clone(),
+                        scroll: 0,
+                    }
+                }
                 KeyCode::Char('j') => self.editor.insert("\n"),
                 // Ctrl-M is indistinguishable from Enter in legacy terminals.
                 KeyCode::Char('l') => self.mode = (self.mode + 1) % 4,
@@ -242,7 +272,7 @@ impl App {
             return false;
         }
         match key.code {
-            KeyCode::F(1) => self.overlay = Overlay::Help,
+            KeyCode::F(1) => self.overlay = Overlay::Help { scroll: 0 },
             KeyCode::F(2) => self.picker(tx, ListKind::Models),
             KeyCode::F(3) => self.mode = (self.mode + 1) % 4,
             KeyCode::F(4) => {
@@ -272,7 +302,7 @@ impl App {
                 match input.as_str() {
                     "/quit" | "/exit" => return true,
                     "/help" => {
-                        self.overlay = Overlay::Help;
+                        self.overlay = Overlay::Help { scroll: 0 };
                         self.editor.take();
                     }
                     "/sessions" => {
@@ -370,7 +400,7 @@ pub(super) async fn run(
     let mut ended = false;
     let result:Result<()>=async {
         loop {
-            terminal.draw(|frame|render::draw(frame,&app))?;
+            terminal.draw(|frame|{render::clamp_dialog_scroll(frame.area(),&mut app);render::draw(frame,&app)})?;
             tokio::select! {
                 event=events.next()=>match event.context("Terminal input closed")?? {
                     Event::Key(key) if app.key(key,&tx)=>break,
@@ -427,6 +457,33 @@ mod tests {
         app.key(key(KeyCode::Tab), &tx);
         app.key(key(KeyCode::Enter), &tx);
         assert!(matches!(rx.try_recv().unwrap(),Action::Decide(id,true) if id=="replacement"));
+    }
+    #[test]
+    fn trust_confirmation_is_bound_to_the_reviewed_project() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut app = App::new(View {
+            workspace: PathBuf::from("/first"),
+            ..Default::default()
+        });
+        app.key(
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+            &tx,
+        );
+        app.view.workspace = PathBuf::from("/second");
+        app.key(key(KeyCode::Enter), &tx);
+        assert!(rx.try_recv().is_err());
+        assert!(
+            matches!(&app.overlay,Overlay::Trust{path,..} if path.as_path()==std::path::Path::new("/first"))
+        );
+        app.key(key(KeyCode::Esc), &tx);
+        app.key(
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+            &tx,
+        );
+        app.key(key(KeyCode::Enter), &tx);
+        assert!(
+            matches!(rx.try_recv().unwrap(),Action::Trust(path) if path.as_path()==std::path::Path::new("/second"))
+        );
     }
     #[test]
     fn full_queue_preserves_prompt_and_modes_use_engine_roles() {
