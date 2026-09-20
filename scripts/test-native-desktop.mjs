@@ -588,6 +588,30 @@ try {
   });
   await until("Background cancellation visible", () => execute("return !!document.querySelector('.bg-task .st-cancelled')"));
   await click('button.drawer-close');
+  // Return a committed worktree change after the source background process stops.
+  const returnGit=async(cwd,args)=>(await promisify(execFile)("git",["-c","core.hooksPath=/dev/null","-c","user.name=Desktop Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd})).stdout.trim();
+  await returnGit(project,["add","."]);await returnGit(project,["commit","-qm","Preserve source fixture state"]);
+  await writeFile(path.join(restoredWorktree.path,"returned-window.txt"),"reviewed desktop return\n");
+  await returnGit(restoredWorktree.path,["add","returned-window.txt"]);await returnGit(restoredWorktree.path,["commit","-qm","Reviewed worktree result"]);
+  const sourceHeadBeforeReturn=await returnGit(project,["rev-parse","HEAD"]);
+  await openSettings();await clickButton("Worktrees");
+  await until("Return card ready",()=>execute("return !!document.querySelector(arguments[0])",[`[data-worktree-id="${restoredWorktree.id}"]`]));
+  const returnButton=await wd("POST",`/session/${session}/element`,{using:"xpath",value:`//article[@data-worktree-id='${restoredWorktree.id}']//button[normalize-space(.)='Review return']`});
+  await wd("POST",`/session/${session}/element/${returnButton["element-6066-11e4-a52e-4f735466cecf"]}/click`,{});
+  await until("Return review focused",()=>execute("return document.activeElement?.getAttribute('aria-label')==='Review returned changes'"));
+  assert.ok(await execute("return document.querySelector('[aria-label=\"Incoming worktree diff\"]').textContent.includes('+reviewed desktop return')"));
+  await screenshot("worktree-return");await accessibility("worktree-return");
+  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktree-return-dark");await execute("document.documentElement.dataset.theme='light'");
+  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktree-return-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
+  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
+  await clickButton("Prepare merge in source");
+  await until("Returned merge pending",async()=>(await api("GET","/api/worktrees")).worktrees.some(w=>w.id===restoredWorktree.id&&w.state==="merge_pending"));
+  assert.equal(await readFile(path.join(project,"returned-window.txt"),"utf8"),"reviewed desktop return\n");
+  assert.equal(await returnGit(project,["rev-parse","HEAD"]),sourceHeadBeforeReturn);
+  await until("Open source available",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Open source project'&&!b.disabled)"));
+  await clickButton("Close");
+  await returnGit(project,["merge","--abort"]);
+  assert.equal(await returnGit(project,["rev-parse","HEAD"]),sourceHeadBeforeReturn);
   backgroundToolMode="start";
   await type('textarea[aria-label="Message ShadowCode"]', "Start the managed project watcher and read its log.");
   await click('button[aria-label="Send task"]');
@@ -789,7 +813,7 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, missing checkout rescue, preserved original metadata and light/dark/compact accessibility",
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, missing checkout rescue, reviewed return without committing, preserved original metadata and light/dark/compact accessibility",
     "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {

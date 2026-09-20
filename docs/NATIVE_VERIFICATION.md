@@ -316,7 +316,20 @@ overwrite in this merge path; explicit incoming-path/ignored-path intersection
 checks now reject it before mutation. Original worktree commits remain intact.
 The native CLI passes 19 scenario groups / 32 scripted model requests, including
 review, stale-hash rejection, uncommitted return and a separate merge commit.
-Clippy and the native build pass. Desktop return controls remain open.
+Clippy and the native build pass. Desktop return is verified separately below.
+
+## Desktop worktree return review
+
+The native Settings panel shows the incoming diff, exact source and worktree
+commits, source path, and explicit no-commit/conflict behavior. UI tests cover
+focused review, exact source/ID/hash submission and a conflict response displayed
+as an error rather than success. All 25 UI tests and seven browser scenarios pass.
+The native-window probe commits an incoming file in an isolated checkout, opens
+its desktop review, prepares the merge, verifies the returned file and unchanged
+source HEAD, and explicitly aborts through Git. The source-open control becomes
+available after the return. Light/dark/compact accessibility reports contain zero
+violations; the captured return review is visually inspected. This UI test does
+not claim automatic conflict resolution or automatic committing.
 
 ## Missing-worktree committed recovery
 

@@ -117,6 +117,16 @@ export type ManagedWorktree = {
   created_at: number;
   detail: string;
 };
+export type WorktreeReturnReview = {
+  record: ManagedWorktree;
+  source_head: string;
+  source_branch: string;
+  worktree_head: string;
+  worktree_branch: string;
+  merge_base: string;
+  diff: string;
+  hash: string;
+};
 export type WorktreeRecovery = {
   record: ManagedWorktree;
   commit: string;
@@ -490,6 +500,17 @@ export const api = {
     send<WorktreeInspection>("/api/worktrees/inspect", "POST", {
       workspace,
       id,
+    }),
+  reviewWorktreeReturn: (workspace: string, id: string) =>
+    send<WorktreeReturnReview>("/api/worktrees/review-return", "POST", {
+      workspace,
+      id,
+    }),
+  returnWorktreeChanges: (workspace: string, id: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/return", "POST", {
+      workspace,
+      id,
+      hash,
     }),
   worktreeRecovery: (workspace: string, id: string) =>
     send<WorktreeRecovery>("/api/worktrees/recovery", "POST", {

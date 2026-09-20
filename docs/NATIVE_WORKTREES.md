@@ -64,8 +64,8 @@ removal, just as with ordinary Git operations. Damaged checkout paths or missing
 inspection; the recovery record remains. For a missing path whose Git
 registration survives, use the reviewed rescue below.
 
-Carrying uncommitted changes into an isolated checkout, desktop return controls
-and repair of damaged checkouts remain part of the
+Carrying uncommitted changes into an isolated checkout and repair of damaged
+checkouts remain part of the
 [native migration gates](NATIVE_MIGRATION.md).
 
 Inventory and individual actions share the same bounded, non-following record
@@ -132,5 +132,13 @@ Git hooks and filesystem-monitor hooks are disabled for these operations; Git's
 configured merge drivers and checkout filters still apply. Keep external Git or
 filesystem writers idle during review and return, as with ordinary Git merges.
 After committing or aborting, the record's last-operation status is historical;
-future actions inspect the actual Git state again. Dedicated desktop return
-controls remain in development.
+future actions inspect the actual Git state again.
+
+In **Settings → Worktrees**, choose **Review return**. The focused review shows
+both branches and commits, the source path, and a keyboard-scrollable incoming
+diff. **Keep changes isolated** cancels the review. **Prepare merge in source**
+requires that exact review and creates no commit. The resulting card explains
+whether the merge is pending or needs attention; **Open source project** takes
+you to the checkout where you can review, resolve conflicts and commit. A failed
+or stale action clears the review and displays an error rather than a success
+notice.

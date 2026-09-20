@@ -4,6 +4,7 @@ import {
   type ManagedWorktree,
   type WorktreeInspection,
   type WorktreeRecovery,
+  type WorktreeReturnReview,
 } from "../api";
 export function WorktreeSettings({
   onOpen,
@@ -20,6 +21,9 @@ export function WorktreeSettings({
   const [error, setError] = useState("");
   const [review, setReview] = useState<WorktreeInspection | null>(null);
   const [recovery, setRecovery] = useState<WorktreeRecovery | null>(null);
+  const [returnReview, setReturnReview] = useState<WorktreeReturnReview | null>(
+    null,
+  );
   const reviewRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let live = true;
@@ -42,21 +46,25 @@ export function WorktreeSettings({
     };
   }, []);
   useLayoutEffect(() => {
-    if (review || recovery) {
+    if (review || recovery || returnReview) {
       reviewRef.current?.scrollIntoView({ block: "nearest" });
       reviewRef.current?.focus({ preventScroll: true });
     }
-  }, [review, recovery]);
+  }, [review, recovery, returnReview]);
   async function refresh() {
     const data = await api.worktrees();
     setWorkspace(data.workspace);
     setRecords(data.worktrees);
     setReview(null);
     setRecovery(null);
+    setReturnReview(null);
   }
   async function perform(action: () => Promise<void>) {
     setBusy(true);
     setError("");
+    setReview(null);
+    setRecovery(null);
+    setReturnReview(null);
     try {
       await action();
     } catch (e) {
@@ -123,12 +131,19 @@ export function WorktreeSettings({
         </button>
       </div>
       {loading && <p role="status">Loading worktrees…</p>}
+      {busy && (
+        <p role="status">Working on the requested worktree operation…</p>
+      )}
       {!loading && !records.length && !error && (
         <p className="hint">No managed worktrees for this project yet.</p>
       )}
       <div className="worktree-list">
         {records.map((record) => (
-          <article className="worktree-card" key={record.id}>
+          <article
+            className="worktree-card"
+            key={record.id}
+            data-worktree-id={record.id}
+          >
             <strong>{record.branch}</strong>
             <span className="hint">{record.state.replaceAll("_", " ")}</span>
             <code className="worktree-path">{record.path}</code>
@@ -142,6 +157,32 @@ export function WorktreeSettings({
               >
                 Open worktree
               </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy}
+                onClick={() =>
+                  void perform(async () =>
+                    setReturnReview(
+                      await api.reviewWorktreeReturn(workspace, record.id),
+                    ),
+                  )
+                }
+              >
+                Review return
+              </button>
+              {(record.state === "merge_pending" ||
+                record.state === "needs_attention" ||
+                record.state === "returning") && (
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busy || !onOpen}
+                  onClick={() => onOpen?.(workspace)}
+                >
+                  Open source project
+                </button>
+              )}
               <button
                 type="button"
                 className="ghost"
@@ -174,6 +215,75 @@ export function WorktreeSettings({
           </article>
         ))}
       </div>
+      {returnReview && (
+        <div
+          className="worktree-review"
+          ref={reviewRef}
+          tabIndex={-1}
+          role="region"
+          aria-label="Review returned changes"
+        >
+          <h4>Return committed changes</h4>
+          <p>
+            From <strong>{returnReview.worktree_branch}</strong>
+          </p>
+          <code className="worktree-path">{returnReview.worktree_head}</code>
+          <p>
+            Into <strong>{returnReview.source_branch}</strong>
+          </p>
+          <code className="worktree-path">{returnReview.record.source}</code>
+          <code className="worktree-path">{returnReview.source_head}</code>
+          <p>Incoming changes since the common ancestor:</p>
+          <pre tabIndex={0} role="region" aria-label="Incoming worktree diff">
+            {returnReview.diff || "No file-content differences."}
+          </pre>
+          <p>
+            This prepares a merge in the source project without committing.
+            Review and commit there afterward. Conflicts remain for resolution;
+            use Git merge --abort to abandon the merge. The worktree and branch
+            are kept.
+          </p>
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={() => setReturnReview(null)}
+            >
+              Keep changes isolated
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void perform(async () => {
+                  const result = await api.returnWorktreeChanges(
+                    workspace,
+                    returnReview.record.id,
+                    returnReview.hash,
+                  );
+                  await refresh();
+                  if (result.state === "merge_pending")
+                    onToast(
+                      "Changes returned; review and commit in the source project",
+                      "ok",
+                    );
+                  else {
+                    setError(result.detail);
+                    onToast(
+                      "Return needs attention in the source project",
+                      "err",
+                    );
+                  }
+                })
+              }
+            >
+              Prepare merge in source
+            </button>
+          </div>
+        </div>
+      )}
       {recovery && (
         <div
           className="worktree-review"

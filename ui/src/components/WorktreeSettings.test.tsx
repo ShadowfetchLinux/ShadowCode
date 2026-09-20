@@ -17,6 +17,8 @@ vi.mock("../api", () => ({
     removeWorktree: vi.fn(),
     worktreeRecovery: vi.fn(),
     restoreWorktree: vi.fn(),
+    reviewWorktreeReturn: vi.fn(),
+    returnWorktreeChanges: vi.fn(),
   },
 }));
 const record: ManagedWorktree = {
@@ -146,4 +148,47 @@ it("reviews recovery explicitly and rejects stale recovery without reuse", async
     screen.queryByRole("region", { name: "Review worktree recovery" }),
   ).toBeNull();
   expect(api.removeWorktree).not.toHaveBeenCalled();
+});
+
+it("shows the incoming diff and reports merge conflicts as needing attention", async () => {
+  vi.mocked(api.reviewWorktreeReturn).mockResolvedValue({
+    record,
+    source_head: "source-commit",
+    source_branch: "main",
+    worktree_head: "incoming-commit",
+    worktree_branch: record.branch,
+    merge_base: "base",
+    diff: "+ reviewed change",
+    hash: "return-hash",
+  });
+  vi.mocked(api.returnWorktreeChanges).mockResolvedValue({
+    ...record,
+    state: "needs_attention",
+    detail: "Resolve the source conflict or use Git merge --abort.",
+  });
+  const toast = vi.fn();
+  render(<WorktreeSettings onToast={toast} />);
+  fireEvent.click(await screen.findByText("Review return"));
+  const region = await screen.findByRole("region", {
+    name: "Review returned changes",
+  });
+  expect(document.activeElement).toBe(region);
+  expect(
+    screen.getByRole("region", { name: "Incoming worktree diff" }).textContent,
+  ).toContain("+ reviewed change");
+  expect(api.returnWorktreeChanges).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("Prepare merge in source"));
+  await screen.findByRole("alert");
+  expect(api.returnWorktreeChanges).toHaveBeenCalledWith(
+    "/source",
+    "managed",
+    "return-hash",
+  );
+  expect(toast).toHaveBeenCalledWith(
+    "Return needs attention in the source project",
+    "err",
+  );
+  expect(
+    screen.queryByRole("region", { name: "Review returned changes" }),
+  ).toBeNull();
 });
