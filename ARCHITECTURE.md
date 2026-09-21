@@ -1,12 +1,13 @@
 # ShadowCode architecture
 
-ShadowCode 0.19.0 has one Python harness shared by the CLI, TUI, desktop API,
-and MCP server. React is a client of that harness.
+Native 0.20 is a Rust engine with a Tauri desktop, a private Unix-socket CLI,
+and the existing React visual design. The 0.19 Python harness remains the last
+supported release until the [native gates](docs/NATIVE_MIGRATION.md) are proved.
 
 ```text
-CLI / TUI / React desktop / MCP
+CLI / TUI / Tauri desktop / MCP
                 |
-       AgentRunner + runtime
+          Native Engine
                 |
   Context / Plan / Tools / Permissions / Verify
                 |
@@ -15,91 +16,78 @@ CLI / TUI / React desktop / MCP
  Ollama / OpenAI-compatible / local / mock
 ```
 
-## Runtime and persistence
+## Native runtime (0.20)
 
-`agent/loop.py` drives understand → plan → inspect/act → observe → verify.
-The verifier can request a fix cycle. Tool calls and observed results produce
-structured events; final status reflects verification and cancellation.
-`planning/plan.py` supplies typed plan phases. Plans are emitted after automatic
-progress and explicit model updates, including in the final event.
+`native/core` owns understand → plan → inspect/act → observe → verify. The
+verifier can request a fix cycle. Tool calls and observed results produce
+structured events; final status reflects verification, cancellation, and
+restart interruption. Plans are emitted after automatic progress and explicit
+model updates.
 
-`store.py` uses SQLite for sessions, tasks, events, models, projects, pins, and
-`desktop_jobs`. Schema changes are additive. Events have monotonically increasing
-IDs and an index on `(session_id, id)`.
+`store.rs` uses SQLite for sessions, tasks, events, models, projects, pins,
+jobs, goals, notes, and background processes. Schema changes are additive
+(`user_version` 24). Events have monotonically increasing IDs and an index on
+`(session_id, id)`. Restart recovery marks unfinished jobs interrupted and
+writes a durable `agent.completed` event so history and export see the stop.
 
-`runtime.py` owns desktop/MCP jobs and worker threads. A task gets an event cursor
-before its worker starts. A workspace admits one active job per manager. Cancellation
-sets a durable request and releases pending approvals; terminal status follows
-worker exit. Finished records persist. On service startup, unfinished records are
-marked interrupted; a worker cannot continue across process termination.
+`engine.rs` owns desktop/CLI/MCP jobs. A workspace admits one active agent job
+plus queued follow-ups. Cancellation sets a durable request and releases pending
+approvals; terminal status follows worker exit. A profile lock prevents a second
+manager from recovering live jobs. The desktop may attach to a persistent
+headless/TUI engine; closing an attached window leaves that work running.
 
-`jobs.py` is the separate legacy CLI background-job implementation, using
-`jobs.db`. It is not the desktop job store. Run one desktop API service per XDG
-profile; multiple independent API/MCP managers are not a distributed scheduler.
+Filesystem tools resolve paths with directory capabilities. Shell classification
+is a policy check, not kernel isolation. See [SECURITY.md](SECURITY.md).
 
 ## Session continuity
 
-Activating a session explicitly changes the API workspace, checks that its folder
-exists, and returns its tasks, event history, and last event ID. Follow-up tasks
-hydrate up to 24 recent prompt/result events within a bounded character budget.
-Branched sessions copy the event history. Old tool calls are not replayed into a
-new model request. Project memory is a separate source of context.
+Activating a session changes the selected workspace, checks that its folder
+exists, and returns a bounded recent page plus `history_page` cursors on the
+native desktop. Follow-up tasks hydrate a complete tool-call/result tape when
+one exists; interrupted calls are never blindly replayed. Old tool calls are
+not re-executed. Project notes are a separate context source.
 
-The desktop hydrates the saved transcript and asks for the current/latest job.
-SSE requests begin after the hydrated cursor. `Last-Event-ID` and the `after`
-query parameter support reconnects. The server reads ascending pages, drains
-remaining events, then emits `job.done`. There is no fixed-length-array cursor.
-The client ignores duplicate event IDs and matches parallel tool results by
-call ID. A connection error keeps the task running and enables polling fallback.
+The desktop hydrates the saved page and asks for the current/latest job. Native
+event delivery is durable-fetch plus a bounded wakeup feed. Duplicate event IDs
+are ignored. A connection error keeps the task running and retries from the
+last cursor. `job.done` is synthesized from persisted job status after the
+durable completion event.
 
 ## Frontend
 
 - `App.tsx`: application state, project activation, composer, shortcuts, panels.
-- `components/Sidebar.tsx`: projects, task search, pinned tasks.
-- `hooks/useConversation.ts`: stream lifecycle, reconnects, terminal snapshots.
+- `hooks/useConversation.ts`: stream lifecycle, reconnects, paged history.
 - `lib/transcript.ts`: pure event reducer and replay.
-- `components/Markdown.tsx`: safe Markdown, code copy; no raw HTML or remote image
-  loading from model output.
+- `lib/jobEvents.ts`: native catch-up and adjacent stream compaction.
+- `components/Markdown.tsx`: safe Markdown; no raw HTML, remote images, or
+  non-http(s) link schemes from model output.
 - `components/Dialog.tsx`: modal focus containment and restoration.
-- `components/Drawer.tsx`: files, staged/unstaged review, bounded terminal,
-  task management, goals, skills, health, and background processes.
-- `index.css`: shared controls; `workspace.css`: workspace layout and themes.
+- `components/Drawer.tsx`: files, review, terminal, goals, skills, health,
+  background processes.
+- `index.css` / `workspace.css`: shared controls, layout, and themes.
 
-Task selection, pins, sidebar visibility, and unsent text drafts live in local
+Task selection, pins, sidebar visibility, and unsent drafts live in local
 browser storage. Durable agent work and history live in SQLite. Scroll following
-stops when the user reads older content. Appearance follows saved app settings.
+stops when the user reads older content.
 
-## Review and permissions
+## 0.19 Python harness
 
-`review.py` invokes Git with literal pathspecs, no external diff driver, a timeout,
-and NUL-delimited status parsing. New text files get bounded previews. Staged and
-unstaged diffs stay separate. Hunk mutations compare the supplied hunk to the
-current diff before applying it. New files are staged whole.
-
-The HTTP API accepts loopback hostnames and same-origin browser requests, blocks
-cross-site access, and adds CSP/frame/content-type protections. CLI requests
-without Origin remain supported. Direct workspace mutations honor read-only
-permissions and reject writes while a desktop task owns that workspace.
-
-Filesystem tools use `WorkspaceSandbox` path resolution. Shell command controls
-are policy checks, not kernel isolation. See [SECURITY.md](SECURITY.md).
+The supported release still uses `agent/loop.py`, FastAPI on loopback, and the
+same React client over HTTP/SSE. `runtime.py` owns desktop/MCP jobs; `jobs.py`
+is a separate legacy CLI background-job store. See the 0.19 user guide and
+[SECURITY.md](SECURITY.md) for that API's host/origin rules.
 
 ## Distribution
 
-`resources.py` locates assets in source, a wheel's `_assets`, or PyInstaller's
-bundle. Wheels include the compiled UI. PyInstaller produces a portable directory;
-`build-linux.sh` wraps it as an x86_64 AppImage and archive. The standalone launcher
-keeps its AppImage mount/extraction alive while serving the API. The browser uses
-a separate profile and the existing `shadow-agent` desktop identity.
-
-Source installations use an isolated `.venv`. AppImage installation writes a
-stable `~/Applications/ShadowCode.AppImage` link and replaces the launcher after
-validating the executable. Neither path migrates or deletes user configuration.
+Native packages embed the compiled interface and a Rust executable. They contain
+no Python interpreter or browser launcher. The 0.19 AppImage still bundles
+Python. Neither installer migrates or deletes user configuration. Verify
+downloads against `SHA256SUMS`.
 
 ## Verification
 
-Python tests cover the harness, APIs, database migration, cursor replay, recovery,
-cancellation, workspace selection, origin checks, and Git review. Vitest exercises
-the reducer. Playwright uses a temporary XDG profile and the real API with a mock
-model; it covers workflow, reload/reconnect, responsive layout, and accessibility.
-A local-model smoke test supplements deterministic tests before a release.
+Native unit/integration tests cover migration, recovery, path confinement,
+approvals, provider streams, MCP, worktrees, and process cleanup. Vitest covers
+the reducer, job stream, and Markdown safety. Playwright and the native WebKit
+window suite exercise workflow, reload/reconnect, and accessibility. Recorded
+outcomes live in [docs/NATIVE_VERIFICATION.md](docs/NATIVE_VERIFICATION.md).

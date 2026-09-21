@@ -103,8 +103,10 @@ provider receives the task context sent by the harness. Cloud providers may
 therefore receive project content; local providers keep inference on the machine.
 
 The UI renders Markdown without executing raw HTML. It does not automatically
-load remote images embedded in model responses. External links open with
-`noopener noreferrer`.
+load remote images embedded in model responses. Only fragment links and
+absolute `http`/`https` URLs without embedded credentials stay clickable;
+`javascript:`, `data:`, `file:`, and relative hrefs render as text. Allowed
+external links open with `noopener noreferrer`.
 
 ## Releases
 

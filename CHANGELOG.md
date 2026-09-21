@@ -2,6 +2,11 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Independent audit: Markdown keeps only fragment and credential-free http(s)
+  links clickable; compatible streams continue unindexed tool-argument deltas
+  and ignore repeated call ids/names; restart recovery writes a durable
+  interrupted completion event.
+
 - The desktop previews a very large Markdown response before rendering all of
   it, with an explicit control to expand the complete durable response.
 
