@@ -34,6 +34,9 @@ merge-readiness. Crate, Tauri, AppImage, and Debian versions are still
   upload.
 - Packaging constructs its own PATH and ignores host `/usr/local/bin` and
   Hermes node hijacks. The caller does not sanitize PATH.
+- The live-WAL interoperability test drives the writer with system
+  `python3` and stdlib `sqlite3`. It does not require Node 22 `node:sqlite`
+  (Ubuntu `/usr/bin/node` is often 18).
 - Shell execution is a lexical word list. **It is not an OS sandbox.**
   Checkpoints cover native file-tool changes, not arbitrary shell or Git side
   effects.

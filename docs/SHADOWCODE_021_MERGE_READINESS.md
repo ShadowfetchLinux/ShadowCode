@@ -11,7 +11,7 @@ Package and crate version remain **0.20.0**.
 | BASE QUALIFICATION COMMIT | `c4efa493d78f68873eca9b3b4d86c63e6c96bd76` |
 | Qualification ancestry | includes `7970c45` and PATH sanitizer `c4efa49` |
 | Branch | `release/shadowcode-0.21-merge-ready` |
-| FINAL CANDIDATE COMMIT | *(filled after commit)* |
+| FINAL CANDIDATE COMMIT | *(branch tip after merge-readiness commits; filled after push)* |
 | Main | not checked out, not merged, not force-pushed; `origin/main` stayed `ab5e7c8` |
 | Qualification branch | left in place |
 | VERSION DECISION | **keep 0.20.0** |
@@ -68,23 +68,27 @@ Existing `c4efa49` helper **meets the gate**. Verified, not rewritten.
 - Ordinary `/usr/bin` + `/bin` remain
 - Missing `node` fails clearly from `native-packaging-env.sh`
 
-Acceptance: AppImage+deb built with dirty caller PATH
-`/usr/local/bin` → `/root/.hermes/node/bin/node` **without** manual PATH
-edit. Packager logged
-`Using sanitized packaging PATH: …` and omitted `/usr/local/bin`.
+Acceptance: AppImage+deb built from a clean worktree of `79bea63` with dirty
+caller PATH `/usr/local/bin` → `/root/.hermes/node/bin/node` **without**
+manual PATH edit. Packager logged
+`Using sanitized packaging PATH: /tmp/sc-021-merge-ready-gate/target/debug:…nvm…:/usr/bin:/bin:/usr/sbin:/sbin`
+and omitted `/usr/local/bin`. Host Hermes link left on disk.
 
 `PATH="/usr/local/bin:/snap/bin:/usr/bin:/bin" node --test scripts/test-native-packaging-env.mjs`:
-**4 passed**, including live `linuxdeploy --list-plugins`.
+**4 passed**, including live `linuxdeploy --list-plugins` after the bundle
+cache existed. Before linuxdeploy was cached: 3 passed, 1 skipped (honest).
 
 ## APPIMAGE RESULT
 
-Two clean dirty-PATH builds. Isolated smoke only. `~/Applications` untouched
+Three dirty-PATH AppImage+deb builds (two earlier this pass, one from the
+clean worktree). Isolated smoke only. `~/Applications` untouched
 (primary `ShadowCode-0.20.0-x86_64.AppImage` mtime 2026-09-20 22:53).
 
 | Run | SHA-256 | Bytes | `--version` |
 | --- | --- | --- | --- |
 | 1 | `35f836245ce9c7eec026d073776f2ffae1c0a6598d683032e51835162c9c9196` | 87_620_088 | ShadowCode 0.20.0 |
 | 2 | `d4fe7f2118fb3188aae9ebf774d11fba3240d52ab23339108115ded9058c7e33` | 87_620_088 | ShadowCode 0.20.0 |
+| 3 (clean worktree) | `315cf14d2dc0f99e6f04f44ad121ce72542c059a4e34ef18d1d1db7da3c89e76` | 88_877_560 | ShadowCode 0.20.0 |
 
 Checksums differ across runs (AppImage runtime MD5 embed / squashfs). The
 **process** is repeatable without PATH surgery; bit-identical artifacts are
@@ -98,6 +102,7 @@ exit 0. Isolated window launch 4 s then SIGTERM: alive.
 | --- | --- | --- | --- |
 | 1 | `fe274ee14eef51fd143cea78c178865dc58db14b728601aded420c35bf1646f2` | 12_498_160 | 0.20.0 |
 | 2 | `55338f7252b9d3a640fe7623456c3129ff80eeaa9accd4c40b95d59b6f403daa` | *(rebuilt)* | 0.20.0 |
+| 3 (clean worktree) | `4cf2b35be6376e8761d45d73994c8a77471a3b8b3b88932a25570f1718053ebb` | 12_498_202 | 0.20.0 |
 
 Package name `shadow-code`. Depends:
 `git, libwebkit2gtk-4.1-0, libgtk-3-0` (runtime, not `-dev`).
@@ -175,22 +180,35 @@ Task: inspect broken `add.mjs` (`a - b`), edit, run `node add.test.mjs`.
 
 ## Quality gate counts
 
-Unrun checks are not marked passed. Stress-suite counts below; clean-worktree
-recount is recorded after the candidate commit.
+Unrun checks are not marked passed.
+
+Clean worktree `/tmp/sc-021-merge-ready-gate` at `79bea63` plus the live-WAL
+writer fix (python3). `cargo test --workspace --offline --lib --tests --bins`
+requires `target/debug/shadowcode` first (`qualification_real` asserts the
+file). Isolated `CARGO_TARGET_DIR` is **not** equivalent: those tests look
+at `native/core/../../target/debug/shadowcode`.
 
 | Suite | Command | Count |
 | --- | --- | --- |
-| RUST TEST COUNT | `cargo test --workspace --offline --lib --tests --bins` | **287 passed**, 0 failed, 0 ignored (stress 16- and 32-thread) |
-| UI TEST COUNT | `npm --prefix ui test` | **40 passed**, 10 files |
-| E2E COUNT | `npm --prefix ui run test:e2e` | **7 passed** |
+| RUST TEST COUNT | `cargo build -p shadowcode-desktop --offline --locked` then `cargo test --workspace --offline --lib --tests --bins -- --test-threads=16` | **287 passed**, 0 failed, 0 ignored, 32 suites |
+| Prior stress (dirty tree, 16- and 32-thread) | same cargo test filter | **287 passed**, 0 failed |
+| UI TEST COUNT | `npx vitest run` / `npm --prefix ui test` | **40 passed**, 10 files |
+| E2E COUNT | `npx playwright test` (worktree needed `.venv` symlink for `serve-test-ui.py`) | **7 passed** |
 | CLIPPY RESULT | `cargo clippy --workspace --all-targets --offline -- -D warnings` | pass (rust-dev extract) |
 | RUSTFMT RESULT | `cargo fmt --all -- --check` | pass (rust-dev extract) |
-| TYPESCRIPT RESULT | `tsc --noEmit` via `ui` production build | pass |
+| TYPESCRIPT RESULT | `npx tsc --noEmit` | pass |
+| UI production build | `npx vite build` | pass |
 | NATIVE BUILD RESULT | `tauri build --no-bundle` inside `build-native.mjs` | pass |
-| Installer checksums | `bash scripts/test-install-appimage.sh` | pass |
-| Packaging env | `node --test scripts/test-native-packaging-env.mjs` | 4 passed |
-| 6 h soak | not completed | — |
-| `dpkg -i` | not run | — |
+| AppImage | dirty-PATH `node scripts/build-native.mjs` | pass; `--version` ShadowCode 0.20.0 |
+| Debian | same build | `shadow-code` 0.20.0; no `dpkg -i` |
+| Package inspect | `node scripts/check-native-package.mjs APPIMAGE DEB` | pass |
+| Isolated AppImage smoke | `node scripts/qualification/package-smoke.mjs` | doctor exit 0; window 4 s alive; `~/Applications` untouched |
+| Doctor smoke | isolated `--profile` `--json doctor` on debug `shadowcode` | exit 0 |
+| Installer checksums | `bash scripts/test-install-appimage.sh` | pass (disposable `$HOME`) |
+| Packaging env | `node --test scripts/test-native-packaging-env.mjs` | **4 passed** after linuxdeploy cache |
+| Native GTK WebDriver suite | `node scripts/test-native-desktop.mjs` | **not run** (primary AppImage already open) |
+| 6 h soak | requested 21600 s | **not completed** (3696 s active) |
+| `dpkg -i` | — | **not run** |
 
 ## VERSION DECISION
 
@@ -203,6 +221,11 @@ automatic consequence of the branch name.
 
 - Compact could fail a 4096-token tester request that already fit, by
   inserting a keep-list note (the parallel-load flake).
+- `live_wal_commits_from_another_process_are_visible_without_database_changes`
+  failed on a sanitized PATH (`/usr/bin/node` v18 has no `node:sqlite`).
+  That is a test-host defect, not a product SQLite bug. The writer is now
+  `python3` + stdlib `sqlite3`. Alone 8/8 and `--test-threads=8` ×12 on
+  `PATH=/usr/bin:/bin`. The 4096 limit was not involved.
 
 ## REMAINING HIGH-PRIORITY ISSUES
 
@@ -228,6 +251,12 @@ automatic consequence of the branch name.
 - `dpkg -i` skipped to protect the primary install
 - rustfmt/clippy not on default PATH (rust-dev extract used; no sudo)
 - Host Hermes node hijack remains on disk; packaging no longer reads it
+- Ubuntu `/usr/bin/node` v18 cannot run `node:sqlite` writers; sanitized
+  PATH tests must not assume nvm Node 22
+- `qualification_real` needs a prior `cargo build` of `shadowcode`; a
+  blank tree with only `cargo test --lib --tests --bins` is 3 missing-binary
+  failures, not product regressions
+- Full `test-native-desktop.mjs` WebDriver suite not run this pass
 
 ## RELEASE BLOCKERS
 
@@ -248,4 +277,12 @@ until a human explicitly accepts the documented limitations and bumps.
 
 ## COMMIT SHA
 
-*(filled after commit and push)*
+*(filled after the merge-readiness tip commit)*
+
+## SECOND AUDIT (merge-ready vs qualification `c4efa49`)
+
+Justified: compact restore-if-original-fits; tester-route budget tests;
+python3 live-WAL writer; qualification p5/p6/p8 scripts; changelog;
+this report; journal addendum. No product UI/features. No hardcoded
+developer home. No debug leftovers in product code. Qualification
+branch and evidence left in place.

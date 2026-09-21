@@ -235,24 +235,34 @@ async fn database_paths_and_sidecars_are_confined_without_creating_missing_files
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_wal_commits_from_another_process_are_visible_without_database_changes() {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use std::io::{BufRead, BufReader, Write};
     let (_root, ws) = fixture();
     let path = ws.path.join("live.db");
-    let mut child = tokio::process::Command::new("node")
+    // python3 + stdlib sqlite3: Ubuntu /usr/bin/node is often 18 and has no
+    // node:sqlite, which made this look like a parallel flake on sanitized PATH.
+    let mut child = std::process::Command::new("python3")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/sqlite-writer.mjs"
+            "/tests/fixtures/sqlite-writer.py"
         ))
         .arg(&path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
+        .stderr(std::process::Stdio::piped())
         .spawn()
-        .unwrap();
+        .expect("python3 must be on PATH to drive the live-WAL writer");
     let mut input = child.stdin.take().unwrap();
-    let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
-    assert_eq!(output.next_line().await.unwrap().as_deref(), Some("ready"));
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut ready = String::new();
+    output.read_line(&mut ready).unwrap();
+    assert_eq!(ready.trim_end(), "ready", "writer stderr: {}", {
+        let mut err = String::new();
+        let _ = child
+            .stderr
+            .as_mut()
+            .map(|stderr| std::io::Read::read_to_string(stderr, &mut err));
+        err
+    });
     let contents =
         || ["", "-wal"].map(|suffix| fs::read(ws.path.join(format!("live.db{suffix}"))).unwrap());
     let before = contents();
@@ -274,11 +284,10 @@ async fn live_wal_commits_from_another_process_are_visible_without_database_chan
     );
     assert_eq!(fs::read(ws.path.join("orphan.db-wal")).unwrap(), before[1]);
     assert_eq!(fs::read(ws.path.join("orphan.db")).unwrap(), before[0]);
-    input.write_all(b"next\n").await.unwrap();
-    assert_eq!(
-        output.next_line().await.unwrap().as_deref(),
-        Some("updated")
-    );
+    writeln!(input, "next").unwrap();
+    let mut updated = String::new();
+    output.read_line(&mut updated).unwrap();
+    assert_eq!(updated.trim_end(), "updated");
     let before = contents();
     assert_eq!(
         read(
@@ -290,13 +299,9 @@ async fn live_wal_commits_from_another_process_are_visible_without_database_chan
         3
     );
     assert_eq!(contents(), before);
-    input.write_all(b"stop\n").await.unwrap();
+    writeln!(input, "stop").unwrap();
     drop(input);
-    assert!(tokio::time::timeout(Duration::from_secs(3), child.wait())
-        .await
-        .unwrap()
-        .unwrap()
-        .success());
+    assert!(child.wait().unwrap().success());
     assert_eq!(
         read(
             &ws,

@@ -341,3 +341,18 @@ task completed with recorded verification. Native keyboard: ENVIRONMENT
 LIMITATION (primary AppImage window already open).
 
 See `docs/SHADOWCODE_021_MERGE_READINESS.md`.
+
+### Live-WAL test on sanitized PATH
+
+`live_wal_commits_from_another_process_are_visible_without_database_changes`
+failed 12/12 under `cargo test --test sqlite -- --test-threads=8` when
+`PATH=/usr/bin:/bin`: `/usr/bin/node` v18.19.1 has no `node:sqlite`
+(`ERR_UNKNOWN_BUILTIN_MODULE`). Alone it passed when nvm Node 22 was on
+PATH. That is not a product leak and not a 4096-token issue. Writer
+replaced with `python3` + stdlib sqlite3. 12/12 parallel and 8/8 alone
+on sanitized PATH. Clean-worktree workspace after `cargo build -p
+shadowcode-desktop`: **287 passed / 0 failed / 0 ignored**.
+
+Clean-worktree dirty-PATH packaging run 3 succeeded; isolated doctor and
+4 s window smoke; `~/Applications` mtime unchanged. 6 h soak and native
+GTK keyboard remain ENVIRONMENT LIMITATION. Version stays **0.20.0**.
