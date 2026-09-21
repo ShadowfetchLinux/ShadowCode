@@ -407,3 +407,110 @@ fn containment_stays_optional_and_not_docker() {
         bwrap.is_some()
     );
 }
+
+#[test]
+fn keep_list_retains_objective_constraints_decisions_failures_and_plan() {
+    let mut messages = vec![
+        json!({"role":"system","content":"You are ShadowCode."}),
+        json!({"role":"user","content":"Objective: add a checksum helper. Constraint: never overwrite user work. Required: keep src/lib.rs public."}),
+        json!({"role":"assistant","content":"Decision: we will use sha256. Plan follows.","tool_calls":[{"id":"p1","function":{"name":"update_plan","arguments":"{\"steps\":[{\"id\":\"one\",\"title\":\"Write helper\"}]}"}}]}),
+        json!({"role":"tool","tool_call_id":"p1","name":"update_plan","content":json!({"success":true,"steps":[{"id":"one","title":"Write helper"}]}).to_string()}),
+        json!({"role":"assistant","content":"Writing","tool_calls":[{"id":"w1","function":{"name":"write_file","arguments":"{\"path\":\"src/checksum.rs\"}"}}]}),
+        json!({"role":"tool","tool_call_id":"w1","name":"write_file","content":json!({"success":false,"error":"Permission denied: untrusted"}).to_string()}),
+        json!({"role":"assistant","content":"Denied path is a security finding."}),
+        json!({"role":"user","content":"Current request: finish the helper without touching secrets.env"}),
+    ];
+    for i in 0..60 {
+        messages.insert(
+            messages.len() - 1,
+            json!({"role":"user","content":format!("noise follow-up {i}")}),
+        );
+        messages.insert(
+            messages.len() - 1,
+            json!({"role":"assistant","content":"read","tool_calls":[{"id":format!("n{i}"),"function":{"name":"read_file","arguments":"{\"path\":\"src/lib.rs\"}"}}]}),
+        );
+        messages.insert(
+            messages.len() - 1,
+            json!({"role":"tool","tool_call_id":format!("n{i}"),"name":"read_file","content":"fn unused(){}"}),
+        );
+    }
+    let kept = autonomy::preserve(&messages);
+    assert!(kept["intent"][0]
+        .as_str()
+        .unwrap()
+        .contains("checksum helper"));
+    assert!(kept["constraints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap().contains("never overwrite")));
+    assert!(kept["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap().contains("sha256")));
+    assert!(kept["failed_approaches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap().contains("write_file")));
+    assert!(kept["unresolved"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap() == "write_file"));
+    assert!(kept["file_locations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap().contains("checksum.rs")));
+    assert!(
+        kept["security"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("denied"))
+            || kept["failed_approaches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str().unwrap().contains("denied"))
+    );
+    let before = context::estimate_tokens(&json!(messages));
+    let result = context::compact(&mut messages, &[], 4096, 0.7)
+        .unwrap()
+        .unwrap();
+    assert!(result["omitted_messages"].as_u64().unwrap() > 10);
+    let tape = serde_json::to_string(&messages).unwrap();
+    assert!(tape.contains("checksum helper") || tape.contains("never overwrite"));
+    assert!(tape.contains("Current request: finish the helper"));
+    assert!(context::estimate_tokens(&json!(messages)) < before);
+    context::validate_pairs(&messages).unwrap();
+}
+
+#[test]
+fn repeated_compact_under_context_pressure_keeps_the_task() {
+    let mut messages = conversation(80);
+    messages[1] = json!({"role":"user","content":"Objective: implement feature X. Constraint: never overwrite user work."});
+    messages.push(json!({"role":"assistant","content":"Decision: we will use the tester route."}));
+    messages.push(json!({"role":"user","content":"Continue feature X and verify it"}));
+    let schemas = shadowcode_core::tools::schemas();
+    for _ in 0..8 {
+        let _ = context::compact(&mut messages, &schemas, 4096, 0.55).unwrap();
+        context::validate_pairs(&messages).unwrap();
+    }
+    let tape = serde_json::to_string(&messages).unwrap();
+    assert!(
+        tape.contains("feature X") || tape.contains("never overwrite"),
+        "repeated compact forgot the task"
+    );
+    assert_eq!(
+        messages.last().unwrap()["content"],
+        "Continue feature X and verify it"
+    );
+    let budget = autonomy::account(&messages, &schemas, 4096).unwrap();
+    eprintln!(
+        "context_pressure fits={} used={} remaining={}",
+        budget["fits"], budget["used_estimated_tokens"], budget["remaining"]
+    );
+}

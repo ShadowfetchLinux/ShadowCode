@@ -670,3 +670,109 @@ async fn missing_provider_usage_is_estimated_and_still_enforces_the_budget() {
     assert!(result.usage.total_tokens > 1);
     engine.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn runaway_same_tool_pauses_but_changing_arguments_continue() {
+    let server = support::server(|index, _| {
+        let path = format!("file-{index}.txt");
+        (
+            response(
+                "loop",
+                json!([tool(
+                    "same",
+                    "read_file",
+                    json!({"path": if index < 6 { "same.txt" } else { &path }})
+                )]),
+            ),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    fs::write(root.path().join("project").join("same.txt"), "x").unwrap();
+    let job = engine
+        .start(request(root.path(), "Read same.txt forever", None))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "failed", "{}", result.summary);
+    assert!(
+        result.summary.contains("repeated the same tool") || result.summary.contains("loop"),
+        "{}",
+        result.summary
+    );
+    let events = engine.store().recent_events(&job.session_id, 200).unwrap();
+    let warnings: Vec<&str> = events
+        .iter()
+        .filter(|e| e["type"] == "runaway.warning")
+        .filter_map(|e| e["payload"]["action"].as_str())
+        .collect();
+    assert!(warnings.contains(&"warn"), "{warnings:?}");
+    assert!(warnings.contains(&"replan"), "{warnings:?}");
+    engine.shutdown().await.unwrap();
+
+    let diverse = support::server(|index, _| {
+        (
+            if index < 6 {
+                response(
+                    "reading",
+                    json!([tool(
+                        "r",
+                        "read_file",
+                        json!({"path": format!("n{index}.txt")})
+                    )]),
+                )
+            } else {
+                response("Legitimate iteration finished.", json!([]))
+            },
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&diverse.endpoint);
+    for i in 0..6 {
+        fs::write(root.path().join("project").join(format!("n{i}.txt")), "ok").unwrap();
+    }
+    let job = engine
+        .start(request(root.path(), "Read several files", None))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "completed", "{}", result.summary);
+    let events = engine.store().recent_events(&job.session_id, 200).unwrap();
+    assert!(
+        events.iter().all(|e| e["type"] != "runaway.warning"),
+        "changing read paths must not trip runaway"
+    );
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn model_success_claim_without_tests_is_not_verified() {
+    let server = support::server(|_, _| {
+        (
+            response(
+                "All tests passed. The feature is correctly implemented.",
+                json!([]),
+            ),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let job = engine
+        .start(request(root.path(), "Say the tests passed", None))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "completed", "{}", result.summary);
+    let summary = engine
+        .store()
+        .last_task_event(&job.task_id, "verification.summary")
+        .unwrap()
+        .unwrap();
+    assert_eq!(summary["payload"]["verified"], false);
+    assert_eq!(summary["payload"]["unverified_claim"], true);
+    assert_eq!(summary["payload"]["claim"], "model_claim");
+    engine.shutdown().await.unwrap();
+}
