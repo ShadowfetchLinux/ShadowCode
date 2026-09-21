@@ -902,3 +902,12 @@ before the asynchronous inventory loaded; it now waits for that exact card befor
 clicking, matching the existing return-flow readiness check. Broader moved-path
 and lost-metadata recovery, final package/release checks and installation remain
 open.
+
+CI run 35546885309 passed the Rust suite, CLI, sustained stress, terminal and MCP
+checks, then failed a native-window click on `Remove python-expert`: the backend
+installation check completed before the refreshed button appeared. The window
+harness now waits for a visible, enabled button with the exact label before
+issuing one WebDriver click. It does not retry mutations or relax assertions.
+The full native-window rerun with this readiness helper passes with 29 model
+requests, including plugin installation/removal, worktree copy and connection
+repair. The replacement GitHub pipeline remains unverified until it completes.

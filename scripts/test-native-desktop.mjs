@@ -243,6 +243,7 @@ async function click(selector) {
   await wd("POST", `/session/${session}/element/${await element(selector)}/click`, {});
 }
 async function clickButton(text) {
+  await until(`Button ready: ${text}`, () => execute("return [...document.querySelectorAll('button')].some(button => button.textContent.replace(/\\s+/g, ' ').trim() === arguments[0] && !button.disabled && button.getClientRects().length > 0)", [text]));
   const found = await wd("POST", `/session/${session}/element`, { using: "xpath", value: `//button[normalize-space(.)='${text}']` });
   await wd("POST", `/session/${session}/element/${found["element-6066-11e4-a52e-4f735466cecf"]}/click`, {});
 }
