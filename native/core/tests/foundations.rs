@@ -405,8 +405,21 @@ fn job_recovery_is_durable_and_usage_is_idempotent() {
     assert!(store.delete_session(sid).is_err());
     assert_eq!(store.recover_jobs().unwrap(), 1);
     assert_eq!(store.recover_jobs().unwrap(), 0);
-    assert_eq!(store.job("job").unwrap().unwrap()["status"], "interrupted");
+    let recovered = store.job("job").unwrap().unwrap();
+    assert_eq!(recovered["status"], "interrupted");
     assert_eq!(store.task(&tid).unwrap().unwrap()["status"], "interrupted");
+    let completed: Vec<_> = store
+        .recent_events(sid, 20)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event["type"] == "agent.completed")
+        .collect();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0]["task_id"], tid);
+    assert_eq!(completed[0]["payload"]["interrupted"], true);
+    assert_eq!(completed[0]["payload"]["summary"], recovered["summary"]);
+    assert_eq!(recovered["event_cursor"], completed[0]["id"]);
+    assert_eq!(recovered["result"]["interrupted"], true);
     for _ in 0..2 {
         store
             .finish_task(&tid, "completed", "ok", &json!({"total_tokens":10}))
@@ -421,6 +434,45 @@ fn job_recovery_is_durable_and_usage_is_idempotent() {
     assert_eq!(usage["total_tokens"], 10);
     assert!(store.delete_session(sid).unwrap());
     assert!(store.job("job").unwrap().is_none());
+}
+
+#[test]
+fn recovering_many_jobs_writes_one_completion_event_each() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("db")).unwrap();
+    let session = store.create_session(root.path(), "mock", "").unwrap();
+    let sid = session["id"].as_str().unwrap();
+    for index in 0..64 {
+        let tid = store.create_task(sid, &format!("task-{index}")).unwrap();
+        store
+            .save_job(&json!({
+                "id": format!("job-{index}"),
+                "session_id": sid,
+                "task_id": tid,
+                "status": if index % 3 == 0 { "queued" } else if index % 3 == 1 { "running" } else { "cancelling" }
+            }))
+            .unwrap();
+    }
+    assert_eq!(store.recover_jobs().unwrap(), 64);
+    assert_eq!(store.recover_jobs().unwrap(), 0);
+    let completed: Vec<_> = store
+        .recent_events(sid, 200)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event["type"] == "agent.completed")
+        .collect();
+    assert_eq!(completed.len(), 64);
+    assert!(completed
+        .iter()
+        .all(|event| event["payload"]["interrupted"] == true));
+    assert_eq!(
+        completed
+            .iter()
+            .map(|event| event["task_id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        64
+    );
 }
 
 #[test]

@@ -615,19 +615,33 @@ impl Store {
             job["status"] = json!("interrupted");
             job["finished_at"] = json!(now());
             job["summary"]=json!("The application stopped before this task finished. Review its changes, then continue.");
-            tx.execute(
-                "UPDATE desktop_jobs SET payload=? WHERE id=?",
-                params![job.to_string(), job["id"].as_str()],
-            )?;
+            let result = json!({
+                "success": false,
+                "cancelled": false,
+                "interrupted": true,
+                "summary": job["summary"],
+                "usage": job.get("usage").cloned().unwrap_or(json!({}))
+            });
+            job["result"] = result.clone();
             if let Some(tid) = job["task_id"].as_str() {
-                finish_task_on(
+                let sid = finish_task_on(
                     &tx,
                     tid,
                     "interrupted",
                     job["summary"].as_str().unwrap_or("Task interrupted"),
                     &job["usage"],
                 )?;
+                let ts = now();
+                tx.execute(
+                    "INSERT INTO events(ts,type,session_id,task_id,payload) VALUES(?,'agent.completed',?,?,?)",
+                    params![ts, sid, tid, result.to_string()],
+                )?;
+                job["event_cursor"] = json!(tx.last_insert_rowid());
             }
+            tx.execute(
+                "UPDATE desktop_jobs SET payload=? WHERE id=?",
+                params![job.to_string(), job["id"].as_str()],
+            )?;
         }
         tx.commit()?;
         Ok(jobs.len())
