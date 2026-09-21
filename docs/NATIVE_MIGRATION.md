@@ -191,7 +191,9 @@ Implemented foundation:
   package, runtime-source and packaged-app checks before it publishes checksummed
   AppImage, Debian and retained-runtime-source artifacts. The
   downloaded CI artifacts pass checksum and package inspection locally, and the
-  AppImage passes the full native-window workflow on both machines. Separate
+  AppImage passes the full native-window workflow on both machines. The release
+  workflow also runs the installer in a disposable home, proving checksum refusal,
+  atomic Applications replacement and profile-data preservation. Separate
   local AppImage probes exercise actual Ollama gpt-oss and Qwen coding tasks,
   approvals, saved continuation, streaming cancellation, and checkpoint rewind.
 

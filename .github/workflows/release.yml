@@ -66,6 +66,8 @@ jobs:
         run: |
           cd target/release/bundle
           sha256sum appimage/*.AppImage appimage/*runtime-sources.tar.gz deb/*.deb > SHA256SUMS
+      - name: Verify installer replacement and checksum refusal
+        run: bash scripts/test-install-appimage.sh
       - name: Publish checked native artifacts
         env:
           GH_TOKEN: ${{ github.token }}

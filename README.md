@@ -1,6 +1,6 @@
 # ShadowCode
 
-![version](https://img.shields.io/badge/version-0.19.0-386c51) ![Python](https://img.shields.io/badge/python-3.12%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-0.20.0--dev-386c51) ![Rust](https://img.shields.io/badge/runtime-Rust%201.95-orange) ![license](https://img.shields.io/badge/license-MIT-green)
 
 **Your ideas. Your models. Your machine.**
 
@@ -31,21 +31,22 @@ The [native desktop can also attach](docs/NATIVE_DESKTOP.md#attaching-to-a-runni
 to a running headless/TUI engine and leave its work running when the window closes.
 Development AppImage and Debian
 packages include [dependency inventories and notices](licenses/native/README.md).
-Integrations and release checks are
-still in progress under the [migration gates](docs/NATIVE_MIGRATION.md);
-0.19 remains the supported download below.
+Integrations and release checks are tracked under the [migration gates](docs/NATIVE_MIGRATION.md).
+The existing 0.19 release remains available until the native tag is verified and
+published.
 
-## Get the app
+## Native AppImage
 
-Download the **x86_64 AppImage** from the [latest release](https://github.com/ShadowfetchLinux/ShadowCode/releases/latest).
-Python and the built interface are bundled; Node.js is not needed to run it.
-The release targets **Ubuntu 24.04 or newer / glibc 2.39+**. Git and a browser
-must be installed. Chromium, Chrome, or Brave opens a dedicated app window;
-other desktop environments use their default browser.
+After the `v0.20.0` native release is tagged, download the **x86_64 AppImage**
+and its `SHA256SUMS` file from [GitHub releases](https://github.com/ShadowfetchLinux/ShadowCode/releases/latest).
+The native application embeds its interface; Python, Node.js and a browser
+launcher are not runtime dependencies. The release targets **Ubuntu 24.04 or
+newer / glibc 2.39+**. Git and a model provider such as Ollama remain external.
 
 ```bash
-chmod +x ShadowCode-0.19.0-x86_64.AppImage
-./ShadowCode-0.19.0-x86_64.AppImage --appimage-extract-and-run
+sha256sum -c SHA256SUMS
+chmod +x ShadowCode_0.20.0_amd64.AppImage
+./ShadowCode_0.20.0_amd64.AppImage --appimage-extract-and-run
 ```
 
 Extraction mode works without FUSE. To install into `~/Applications`, add a
@@ -54,15 +55,15 @@ stable `shadow` command, and replace the desktop launcher:
 ```bash
 git clone https://github.com/ShadowfetchLinux/ShadowCode.git
 cd ShadowCode
-./scripts/install-appimage.sh /path/to/ShadowCode-0.19.0-x86_64.AppImage
+./scripts/install-appimage.sh /path/to/ShadowCode_0.20.0_amd64.AppImage
 ```
 
-Verify the download against the release's `SHA256SUMS` before installing.
-The installer replaces older ShadowCode AppImages only after the new executable
-passes its version check. It preserves settings, keys, memory, and task history.
-A portable `.tar.gz` is also available; extract it and run `ShadowCode/shadowcode`.
+Keep `SHA256SUMS` beside the download and the installer verifies its matching
+entry automatically. It replaces older ShadowCode AppImages only after the new
+executable starts, preserves settings, keys, memory and task history, and refuses
+a changed download before it can alter the installed application.
 
-## What's new in 0.19.0
+## Native 0.20 highlights
 
 - **A focused workspace.** Persistent projects and tasks, search, pinned tasks,
   a refined light/dark interface, and responsive layouts. Files, review, terminal,
@@ -78,30 +79,32 @@ A portable `.tar.gz` is also available; extract it and run `ShadowCode/shadowcod
   their names. Cancellation remains pending until the worker stops.
 - **Review with evidence.** Untracked file previews, separate staged/unstaged
   views, literal filenames, and protection against stale hunk application.
-- **A complete Linux release.** AppImage, portable archive, Python wheel, checksums,
-  installation scripts, CI, and release automation. MCP is now a declared
-  dependency, so a fresh install includes the advertised server.
-- **A tighter local API.** Same-origin browser access, host validation, read-only
-  enforcement for direct workspace edits, and guards against competing jobs
-  or manual edits during a task.
+- **A standalone native app.** Rust engine, embedded interface, AppImage and Debian
+  packages, checksums, dependency notices, private local IPC, and native CLI/TUI.
+- **Local coding workflows.** Durable queues, goals, model routing, approvals,
+  worktrees, background processes, MCP, project skills and hooks all share one
+  local task engine.
 
 See [CHANGELOG.md](CHANGELOG.md) for the release history and
 [the user guide](docs/USER_GUIDE.md) for workflows and recovery.
 
-## From source
+## Native development build
 
-Requires Python 3.12+ and Node.js 20.19+ or 22.12+.
+Requires Rust 1.95, Node 22+, and the packages listed in the [native desktop
+guide](docs/NATIVE_DESKTOP.md#build-and-run).
 
 ```bash
 git clone https://github.com/ShadowfetchLinux/ShadowCode.git
 cd ShadowCode
-./scripts/install-linux.sh
-~/.local/bin/shadow ui
+npm --prefix ui ci
+npm --prefix ui run build
+cargo build -p shadowcode-desktop --locked
+./target/debug/shadowcode --profile /tmp/shadowcode-dev --workspace /path/to/project
 ```
 
-Dependencies live in the checkout's `.venv`; the installer does not uninstall
-system Python packages. Re-run it after updating the checkout. Keep the checkout
-in place while using a source installation.
+`--profile` keeps development data separate from the installed application. See
+the [native migration guide](docs/NATIVE_MIGRATION.md) for validation and release
+requirements.
 
 ## Choose a model
 
@@ -145,25 +148,23 @@ Approval cards require their explicit Allow or Deny buttons.
 ## CLI and integrations
 
 ```bash
-shadow tui                         # terminal UI
-shadow run "Explain this workspace"
-shadow run --json "Review this workspace"
-shadow ui --no-browser             # loopback API + built interface
-shadow sessions                    # task history
-shadow export --format md
-shadow goal "Improve test coverage" --run
-shadow goals
-shadow doctor
-shadow update --check
-shadow mcp serve                   # MCP over stdio
-shadow mcp serve --http 127.0.0.1:7431
-shadow mcp register                # client configuration snippets
+shadowcode tui                     # native terminal UI
+shadowcode run "Explain this workspace"
+shadowcode run --json "Review this workspace"
+shadowcode ui                      # native desktop window
+shadowcode sessions                # task history
+shadowcode export --format md
+shadowcode goal "Improve test coverage" --run
+shadowcode goals
+shadowcode doctor
+shadowcode mcp serve               # MCP over stdio
+shadowcode mcp serve --http 127.0.0.1:7431
+shadowcode mcp register            # client configuration snippets
 ```
 
-`shadow update` updates a clean **source checkout**. AppImage users install the
-next release with `install-appimage.sh`; it does not rewrite the running image.
-The source CLI starts the TUI in a terminal and the desktop otherwise. The
-standalone executable opens the desktop with no arguments; use `tui` explicitly.
+AppImage users install the next release with `install-appimage.sh`; it does not
+rewrite the running image. The standalone executable opens the desktop with no
+arguments; use `tui` explicitly for the terminal interface.
 
 Slash commands include `/help`, `/model`, `/plan`, `/diff`, `/review`, `/test`,
 `/git`, `/goal`, `/goals`, `/memory`, `/skills`, `/sessions`, `/new`, `/branch`,

@@ -10,6 +10,6 @@ Downloads:
 
 The Linux binaries target x86_64, Ubuntu 24.04+ / glibc 2.39+. Git and model providers such as Ollama remain external. User data remains in the existing `shadow-agent` XDG directories.
 
-Verify `SHA256SUMS` before installing. From a source checkout, use `scripts/install-appimage.sh /path/to/ShadowCode_0.20.0_amd64.AppImage`. It checks the application version, installs to `~/Applications`, updates the desktop launcher, and removes older ShadowCode AppImages only after the new build is ready. Existing profile data is preserved.
+Verify `SHA256SUMS` before installing. Keep it beside the downloaded AppImage so `scripts/install-appimage.sh /path/to/ShadowCode_0.20.0_amd64.AppImage` verifies the matching SHA-256 entry automatically. The installer checks the application version, installs to `~/Applications`, updates the desktop launcher, and removes older ShadowCode AppImages only after the new build is ready. Existing profile data is preserved.
 
 Release publishing runs native Rust, UI, terminal, MCP, stress, real-window, package inspection, runtime-rebuild, and packaged-app checks before uploading artifacts. The shell is a user-level process, not an OS sandbox; review model-generated changes and verification evidence.
