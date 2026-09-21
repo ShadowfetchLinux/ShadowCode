@@ -14,6 +14,47 @@ type Dependencies = {
   subscribe: (wake: () => void) => Promise<() => void>;
 };
 
+/** Coalesce only adjacent text fragments within one fetched page. Keeping the
+ * last durable ID preserves reconnect progress; the stored rows stay intact. */
+export function compactStreamRows(
+  events: EventRow[],
+  after: number,
+): EventRow[] {
+  const result: EventRow[] = [];
+  let cursor = after;
+  for (const event of events) {
+    if (!event.id || event.id <= cursor) continue;
+    cursor = event.id;
+    const previous = result.at(-1);
+    const text = event.payload?.text;
+    const message = event.payload?.message_id;
+    if (
+      event.type === "model.stream" &&
+      previous?.type === "model.stream" &&
+      event.task_id === previous.task_id &&
+      event.session_id === previous.session_id &&
+      typeof message === "string" &&
+      message.length > 0 &&
+      message === previous.payload?.message_id &&
+      typeof text === "string" &&
+      typeof previous.payload?.text === "string" &&
+      previous.payload.text.length + text.length <= 65536 &&
+      Object.keys(event.payload).every(
+        (key) => key === "text" || key === "message_id",
+      ) &&
+      Object.keys(previous.payload).every(
+        (key) => key === "text" || key === "message_id",
+      )
+    ) {
+      result[result.length - 1] = {
+        ...event,
+        payload: { ...event.payload, text: previous.payload.text + text },
+      };
+    } else result.push(event);
+  }
+  return result;
+}
+
 /** Notifications wake the reader; only ordered, durable rows update the UI. */
 export function nativeJobStream(after: number, deps: Dependencies): JobStream {
   let closed = false;
@@ -51,7 +92,7 @@ export function nativeJobStream(after: number, deps: Dependencies): JobStream {
           connected = true;
           source.onopen?.();
         }
-        for (const event of page.events) {
+        for (const event of compactStreamRows(page.events, cursor)) {
           if (closed) return;
           if (event.id && event.id > cursor) {
             source.onmessage?.({ data: JSON.stringify(event) });

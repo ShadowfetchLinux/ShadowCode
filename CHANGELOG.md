@@ -3,7 +3,9 @@
 ## 0.20.0 — native development (unreleased)
 
 - Live response updates reuse unchanged Markdown messages instead of reparsing
-  earlier answers and code blocks on every update.
+  earlier answers and code blocks on every update. Native catch-up combines
+  adjacent fragments of the same response while preserving durable cursors and
+  task/completion boundaries.
 
 - Native desktop saved-history pages support older/newer/latest navigation
   without loading thousands of events or tasks at once. Live work continues

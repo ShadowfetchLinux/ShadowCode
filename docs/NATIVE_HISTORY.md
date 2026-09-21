@@ -40,6 +40,16 @@ cap the number or size of live messages. A regression test counts real Markdown
 parser calls across 100 updates and checks that the updated response and earlier
 formatted content remain visible.
 
+Adjacent native `model.stream` fragments from one response are combined within
+a fetched event page before reaching the transcript. Different tasks, sessions,
+response IDs, non-text events and additional payload metadata keep their original
+boundaries. Each combined fragment is limited to 65,536 JavaScript UTF-16 code
+units; a larger original fragment passes through unchanged. This is a replay
+optimization, not a content limit. The final durable event ID remains the
+reconnect cursor, and the original 512-row page size still controls catch-up.
+Tests compare compacted and original replay, including Unicode, duplicate rows,
+large fragments and a completed job spanning two pages.
+
 ## Service contract
 
 The desktop requests `GET /api/sessions/ID?view=window` or

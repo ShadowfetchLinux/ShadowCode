@@ -955,3 +955,14 @@ JSON export explicitly: the command palette now exposes **Export this task as
 JSON**, while Markdown remains the readable summary. The browser regression
 checks this action selects `format=json`; native OS save-dialog interaction
 remains in the separate desktop integration gate.
+
+## Native stream catch-up rendering
+
+Adjacent text fragments from one response are compacted within a fetched page
+before transcript rendering, without changing stored events. The regression
+suite compares original and compacted replay, Unicode content, duplicate rows,
+response/task/metadata boundaries, bounded merging and a two-page completed job.
+All 34 UI tests and the rebuilt native window suite passed locally. The native
+window run includes the 12,000-event, 94-page history fixture and its three
+accessibility layouts. This is rendering/replay evidence, not a measurement of
+constant memory during an indefinitely growing live conversation.
