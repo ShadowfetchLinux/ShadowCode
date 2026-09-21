@@ -280,9 +280,21 @@ try {
   await delay(200);
   assert.equal((await cli(["approvals"])).approvals[0].id, approval.id);
   tui.child.stdin.write("\x7f");
+  const openingApproval = tui.output.stdout.length;
   tui.child.stdin.write("\x1bOS");
-  await delay(150);
-  tui.child.stdin.write("\t\r");
+  await until("terminal approval dialog", () =>
+    tui.output.stdout
+      .slice(openingApproval)
+      .includes("DENY · Tab switches"),
+  );
+  const switchingApproval = tui.output.stdout.length;
+  tui.child.stdin.write("\t");
+  await until("terminal approval allow state", () =>
+    tui.output.stdout
+      .slice(switchingApproval)
+      .includes("ALLOW · Tab switches"),
+  );
+  tui.child.stdin.write("\r");
   await until(
     "approved exact command",
     async () =>

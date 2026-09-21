@@ -304,6 +304,12 @@ these transitions. Assertions inspect fresh complete frames because incremental
 ANSI updates can split words. This covers resize recovery; broader picker
 navigation, visual review and sustained terminal stress remain open.
 
+The approval phase now waits for the terminal's rendered **DENY** dialog and
+then its rendered **ALLOW** state before sending Enter. This replaced a fixed
+delay that could race the terminal's asynchronous approval refresh on a clean
+CI runner. The repaired PTY probe passes all eight fixture-model requests and
+the workspace Clippy check remains clean.
+
 ## Reviewed copy of uncommitted work
 
 Twelve real-Git worktree tests pass. Copy scenarios verify distinct staged and
