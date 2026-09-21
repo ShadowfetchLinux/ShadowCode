@@ -178,9 +178,15 @@ The runtime regression checks concurrent owners, deferred resources, signals,
 cleanup, `nohup`, and long paths. The packaged window test also checks repeated
 default-profile activation using isolated XDG storage and a private DBus session.
 
-If linuxdeploy aborts while scanning an inaccessible symlink in a PATH directory,
-remove that directory from PATH for the packaging command; the application does
-not require that tool. No global PATH change is needed.
+`scripts/build-native.mjs` constructs a deterministic packaging PATH before
+spawning cargo, Tauri, or linuxdeploy. It keeps `/usr/bin`, `/bin`, `/usr/sbin`,
+`/sbin`, the Node directory that launched the script, rust-dev extract bins when
+present, and `target/{release,debug,.tauri}`. It drops `/usr/local/bin`,
+`/snap/bin`, and any directory whose `node`/`npm` resolves into Hermes or
+`/root`. The calling shell does not need to sanitize PATH; a dirty host PATH
+that includes `/usr/local/bin/node` → `/root/.hermes/...` is ignored. The same
+helper is used by `scripts/native-runtime.mjs` and `scripts/build-linux.sh`.
+Prove it with `node --test scripts/test-native-packaging-env.mjs`.
 
 ## Desktop integration
 

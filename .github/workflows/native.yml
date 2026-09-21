@@ -3,7 +3,7 @@ on:
   push:
     branches: [native-0.20]
   pull_request:
-    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'scripts/*native*.mjs', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml', '.github/workflows/release.yml']
+    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'scripts/*native*.mjs', 'scripts/native-packaging-env.sh', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml', '.github/workflows/release.yml']
 permissions:
   contents: read
 jobs:
@@ -72,6 +72,8 @@ jobs:
       - run: cargo +1.95.0 build --release -p shadowcode-core --examples --locked
       - name: Check pinned-source failures and mirror recovery
         run: node --test scripts/test-native-source-fetch.mjs
+      - name: Prove packaging PATH ignores host node hijacks
+        run: node --test scripts/test-native-packaging-env.mjs
       - name: Build native development packages with dependency notices
         run: node scripts/build-native.mjs
       - name: Inspect both packages

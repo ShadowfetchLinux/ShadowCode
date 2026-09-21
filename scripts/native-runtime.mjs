@@ -14,6 +14,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { applyPackagingPath } from "./native-packaging-env.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const exec = promisify(execFile);
 const sha = (value) => createHash("sha256").update(value).digest("hex");
@@ -45,6 +46,7 @@ async function command(binary, args) {
   });
 }
 export async function buildRuntime() {
+  applyPackagingPath(root);
   const recipe = path.join(root, "packaging/native-runtime");
   const files = [
     "manifest.json",

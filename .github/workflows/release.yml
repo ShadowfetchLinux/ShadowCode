@@ -48,6 +48,7 @@ jobs:
       - name: Build and inspect release packages
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          node --test scripts/test-native-packaging-env.mjs
           node scripts/build-native.mjs
           node scripts/check-native-package.mjs "target/release/bundle/appimage/ShadowCode_${VERSION}_amd64.AppImage" "target/release/bundle/deb/ShadowCode_${VERSION}_amd64.deb"
           node scripts/test-native-runtime-sources.mjs

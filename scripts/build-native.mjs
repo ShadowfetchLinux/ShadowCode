@@ -6,8 +6,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { applicationNotices, appdirNotices } from "./native-notices.mjs";
+import { applyPackagingPath } from "./native-packaging-env.mjs";
 import { buildRuntime, runtimeNotices } from "./native-runtime.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
+const packagingPath = applyPackagingPath(root);
+console.log(`Using sanitized packaging PATH: ${packagingPath}`);
 const cli = path.join(root, "ui/node_modules/@tauri-apps/cli/tauri.js");
 const exec = promisify(execFile);
 async function command(binary, args, env = {}) {

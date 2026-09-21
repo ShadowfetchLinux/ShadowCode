@@ -333,8 +333,10 @@ qualification rewrite of the 4096 tester route.
 - SHA-256 `c12520e9edd0d6f4f5173446d03bec86ecb4f016d3d8a0a17c944af2ac0ebb96`
 - First `linuxdeploy` failures: PATH contained `/snap/bin` (missing) and
   `/usr/local/bin/node` → `/root/.hermes/node/bin/node` (**Permission
-  denied**). Documented workaround: sanitize PATH. **No sudo. No product
-  change.**
+  denied**). That host workaround is **replaced**: packagers now construct
+  PATH themselves (`scripts/native-packaging-env.mjs`). **No sudo.** The
+  human does not sanitize PATH. Dirty-PATH proof:
+  `node --test scripts/test-native-packaging-env.mjs` (see addendum).
 - `--appimage-extract-and-run --version` → `ShadowCode 0.20.0`
 - Isolated `--json doctor` exit 0
 - `--appimage-extract` contains `usr/bin/shadowcode` and desktop file
@@ -389,7 +391,8 @@ or loosened.
 | `-dev` packages | host has `libwebkit2gtk-4.1-dev` for **building**; packaged deb does **not** Depend on `-dev` |
 | Providers | none required at startup; ollama optional at `127.0.0.1:11434` |
 
-linuxdeploy PATH scan is a **build-host** hazard, not a runtime Depend.
+linuxdeploy PATH scan was a **build-host** hazard; the packager now
+ignores the caller PATH. Still not a runtime Depend.
 
 If a future builder lacks WebKit/GTK headers, the apt line (do not run
 here without the user) is:
@@ -508,9 +511,9 @@ harness/docs land; working tree empty): Rust **282 passed / 0 failed /
 | Class | Items |
 | --- | --- |
 | **RELEASE BLOCKER** | None confirmed against the 0.21 *architecture* on this host. Silent replay, false verification, and casual git destruction did **not** reproduce. |
-| **HIGH PRIORITY NON-BLOCKER** | 4096-token tester-route flake under load; 100k full-tape reconstruct cost if a future UI path replays everything; linuxdeploy PATH hygiene on this workstation; denial vs cancel still share an error string (pre-existing). |
+| **HIGH PRIORITY NON-BLOCKER** | 4096-token tester-route flake under load (not re-run this addendum); 100k full-tape reconstruct cost if a future UI path replays everything; denial vs cancel still share an error string (pre-existing). linuxdeploy PATH hygiene is **fixed in the packager** (see addendum). |
 | **KNOWN LIMITATION** | Shell policy is a word list; compact is O(n); 5M events not inserted; P15 port-conflict/workspace-delete matrix incomplete; vendor-specific provider processes beyond ollama+fixtures. |
-| **ENVIRONMENT LIMITATION** | 6-hour leak hunt not run; keyboard-only **native GTK** session not run; `dpkg -i` skipped to protect the primary install; linuxdeploy cannot stat `/usr/local/bin/node` → `/root/.hermes/...`; rustfmt/clippy not on default PATH (extract used). |
+| **ENVIRONMENT LIMITATION** | 6-hour leak hunt not run this addendum; keyboard-only **native GTK** session not run this addendum; `dpkg -i` skipped to protect the primary install; rustfmt/clippy not on default PATH (extract used). Host Hermes node hijack remains on disk; packaging no longer reads that PATH entry. |
 | **FUTURE WORK** | Virtualize only if a product path reconstructs ≥50k messages in the window; optional 5M/6h CI job; capability-based tool hiding (already rejected this cycle). |
 
 A human may still ship 0.21 later. This report **rejects** treating
@@ -535,10 +538,24 @@ QUAL_SCALE=1 npm --prefix ui exec -- vitest run src/lib/transcript.scale.test.ts
 cargo run -p shadowcode-core --offline --release --example qualification_sqlite -- 1000000
 node scripts/qualification/lab.mjs
 node scripts/qualification/remaining.mjs
-# packaging: omit /usr/local/bin and /snap/bin from PATH
-PATH="$HOME/.nvm/versions/node/v22.22.3/bin:/usr/bin:/bin" APPIMAGE_EXTRACT_AND_RUN=1 \
+# packaging: caller PATH may be dirty; the script sanitizes it
+PATH="/usr/local/bin:/snap/bin:/usr/bin:/bin" APPIMAGE_EXTRACT_AND_RUN=1 \
   node scripts/build-native.mjs
+node --test scripts/test-native-packaging-env.mjs
 ```
+
+## Packaging PATH addendum (2026-09-21 later)
+
+**Gate: packager PATH hygiene. Version still 0.20.0. Main untouched.**
+
+| Check | Result |
+| --- | --- |
+| Reproduced host failure | `PATH=/usr/local/bin:/snap/bin:/usr/bin:/bin` + `linuxdeploy --list-plugins` → exit 127, `Permission denied: "/usr/local/bin/node"` |
+| Sanitizer | `scripts/native-packaging-env.mjs` builds PATH; does not inherit caller PATH |
+| Applied in | `build-native.mjs` (before cargo/Tauri/linuxdeploy), `native-runtime.mjs` `buildRuntime`, `build-linux.sh` |
+| Dirty-PATH test | `PATH="/usr/local/bin:/snap/bin:/usr/bin:/bin" node --test scripts/test-native-packaging-env.mjs` |
+| Full AppImage/deb rebuild this addendum | not required to prove the PATH scan; existing 0.20.0 bundles left in `target/`; `~/Applications` not written |
+| 4096-token flake / native a11y / longer soak | not re-run; not claimed |
 
 ## Stop condition
 

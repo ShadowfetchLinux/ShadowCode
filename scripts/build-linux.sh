@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Do not inherit /usr/local/bin/node → Hermes; linuxdeploy/appimagetool scan PATH.
+# shellcheck source=native-packaging-env.sh
+source "$ROOT/scripts/native-packaging-env.sh"
+shadowcode_apply_packaging_path "$ROOT"
 cd "$ROOT"
 PYTHON="${SHADOW_BUILD_PYTHON:-$ROOT/.venv/bin/python}"
 VERSION="$("$PYTHON" -c 'from shadow_agent import __version__; print(__version__)')"

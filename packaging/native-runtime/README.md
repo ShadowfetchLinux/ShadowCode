@@ -46,6 +46,10 @@ texts, patch, build recipe, inventories, compiler information, and a receipt.
 Package verification compares the final runtime's `.text` section with the
 source-built runtime, since AppImage tooling modifies metadata in other sections.
 
+Packaging scripts apply `scripts/native-packaging-env.mjs` before invoking
+container tools or linuxdeploy, so a dirty caller PATH cannot make linuxdeploy
+stat `/usr/local/bin/node` → `/root/.hermes/...`.
+
 `build-native.mjs` also emits `ShadowCode_<version>_appimage-runtime-sources.tar.gz`
 next to the AppImage. It contains upstream sources, distribution patches, build
 recipes, a linker map, debug symbols, and the matching receipt. Rebuild the runtime

@@ -31,6 +31,7 @@ wheel, source distribution, portable archive, or browser launcher.
    environment, run:
 
    ```sh
+   node --test scripts/test-native-packaging-env.mjs
    node scripts/build-native.mjs
    node scripts/check-native-package.mjs \
      target/release/bundle/appimage/ShadowCode_VERSION_amd64.AppImage \
@@ -39,6 +40,9 @@ wheel, source distribution, portable archive, or browser launcher.
    node scripts/test-native-runtime.mjs
    bash scripts/test-install-appimage.sh
    ```
+
+   `build-native.mjs` sanitizes PATH internally (see [desktop packaging](NATIVE_DESKTOP.md)).
+   Do not require a hand-edited PATH to hide `/usr/local/bin` or Hermes.
 
    Package inspection verifies the absence of Python/Node sidecars, package
    notices and their digests. The installer test uses a disposable home to prove

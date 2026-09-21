@@ -280,3 +280,34 @@ Inspectable names stay `intent[0]`, `unresolved`, `failed_approaches`.
 Clean-tree re-run after the qualification commits: Rust 282, UI 40.
 
 See `docs/SHADOWCODE_021_QUALIFICATION_REPORT.md`.
+
+## Qualification addendum — packaging PATH (2026-09-21 later)
+
+Must-fix before release: linuxdeploy plugin discovery walks PATH and
+`boost::filesystem::status` dies on this host's
+`/usr/local/bin/node` → `/root/.hermes/node/bin/node` (Permission denied,
+exit 127 on `--list-plugins`). That was a **build-host** hazard. The previous
+qualification workaround asked the human to omit `/usr/local/bin` and
+`/snap/bin`. That is not acceptable for a release packager.
+
+**Product/build-tooling change (not a version bump):**
+`scripts/native-packaging-env.mjs` constructs PATH from known-good dirs
+only (Node that launched the script, rust-dev extract if present,
+`target/{release,debug,.tauri}`, then `/usr/bin` `/bin` `/usr/sbin`
+`/sbin`). It never inherits the caller PATH and rejects `/usr/local/bin`,
+`/snap/bin`, Hermes, and `/root` node hijacks.
+`scripts/build-native.mjs` applies this before cargo/Tauri/linuxdeploy.
+`scripts/native-runtime.mjs` applies it at the start of `buildRuntime`.
+`scripts/build-linux.sh` sources `scripts/native-packaging-env.sh` (same
+helper via `--print`).
+
+**Proof (dirty caller PATH, no human sanitize):**
+`PATH="/usr/local/bin:/snap/bin:/usr/bin:/bin" node --test scripts/test-native-packaging-env.mjs`
+- Unsanitized `linuxdeploy --list-plugins` fails on
+  `Permission denied: "/usr/local/bin/node"`.
+- After `applyPackagingPath`, the same invocation lists plugins and does
+  not mention Permission denied.
+Version remains **0.20.0**. Main was not merged.
+
+The 4096-token tester-route flake, native GTK keyboard pass, and a longer
+leak soak were not part of this PATH fix and are not claimed here.
