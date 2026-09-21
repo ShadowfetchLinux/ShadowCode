@@ -913,6 +913,7 @@ impl Engine {
             )?;
         }
         let mut repeated = HashMap::new();
+        let mut prose_claims = 0usize;
         if let Some(workflow) = &job.workflow {
             let mut selected = json!(workflow);
             selected["effective_mode"] = json!(job.mode);
@@ -980,8 +981,10 @@ impl Engine {
                 let message_id = crate::id();
                 let mut pending = String::new();
                 let mut partial = String::new();
+                let mut visible_emitted = String::new();
                 let mut flushed = Instant::now();
                 let mut event_error = None;
+                let mut text_loop_hit = false;
                 let response = model
                     .chat(
                         &crate::vision::hydrate_for_provider(
@@ -992,8 +995,36 @@ impl Engine {
                         &schemas,
                         running.cancel.clone(),
                         |delta| {
+                        if text_loop_hit {
+                            return;
+                        }
                         partial.push_str(delta);
-                        pending.push_str(delta);
+                        if autonomy::text_loop_stats(&partial).is_some_and(|(_, count)| {
+                            matches!(
+                                autonomy::runaway_action(count),
+                                autonomy::RunawayAction::Pause
+                            )
+                        }) {
+                            // Stop feeding the UI, but do not cancel the task token —
+                            // finish() would mark a deliberate loop pause as cancelled.
+                            text_loop_hit = true;
+                            return;
+                        }
+                        let visible = autonomy::public_assistant_text(&partial);
+                        if visible.starts_with(&visible_emitted) {
+                            pending.push_str(&visible[visible_emitted.len()..]);
+                            visible_emitted = visible;
+                        } else if let Err(error) = events.emit(
+                            "model.delta",
+                            json!({"text":visible,"message_id":message_id,"complete":false}),
+                        ) {
+                            event_error = Some(error);
+                            running.cancel.cancel();
+                            return;
+                        } else {
+                            pending.clear();
+                            visible_emitted = visible;
+                        }
                         if pending.len() >= 4000 || flushed.elapsed() >= Duration::from_millis(80) {
                             if let Err(error) = events.emit(
                                 "model.stream",
@@ -1017,7 +1048,28 @@ impl Engine {
                     )?;
                 }
                 match response {
-                    Ok(response) => {
+                    Ok(mut response) => {
+                        response.text = autonomy::public_assistant_text(&response.text);
+                        if text_loop_hit {
+                            if let Some((unit, count)) = autonomy::text_loop_stats(
+                                if response.text.is_empty() {
+                                    &partial
+                                } else {
+                                    &response.text
+                                },
+                            ) {
+                                events.emit(
+                                    "runaway.warning",
+                                    json!({"kind":"assistant_text","action":"pause","repeats":count,"sample":crate::tools::truncate(&unit,120)}),
+                                )?;
+                            } else {
+                                events.emit(
+                                    "runaway.warning",
+                                    json!({"kind":"assistant_text","action":"pause","repeats":5,"sample":"assistant text"}),
+                                )?;
+                            }
+                            bail!("Model repeated the same assistant text without making progress; paused to prevent a loop");
+                        }
                         if !response.text.is_empty() {
                             events.emit("model.delta",json!({"text":response.text,"message_id":message_id,"complete":true}))?;
                         }
@@ -1048,7 +1100,8 @@ impl Engine {
                             continue;
                         }
                         if !partial.is_empty() {
-                            messages.push(json!({"role":"assistant","content":format!("{partial}\n[Response interrupted; no partial tool call was executed.]")}));
+                            let interrupted = autonomy::public_assistant_text(&partial);
+                            messages.push(json!({"role":"assistant","content":format!("{interrupted}\n[Response interrupted; no partial tool call was executed.]")}));
                             self.0.store.save_messages(&job.id, &messages)?;
                         }
                         tools
@@ -1100,6 +1153,7 @@ impl Engine {
                 );
             }
             if !response.tool_calls.is_empty() {
+                prose_claims = 0;
                 ensure!(response.tool_calls.len()<=32,"Model requested more than 32 tools in one response; no calls from that response were executed");
                 let mut replan = false;
                 for call in &response.tool_calls {
@@ -1132,6 +1186,34 @@ impl Engine {
                     continue;
                 }
             }
+            if let Some((unit, count)) = autonomy::text_loop_stats(&response.text) {
+                match autonomy::runaway_action(count) {
+                    autonomy::RunawayAction::Continue => {}
+                    autonomy::RunawayAction::Warn => {
+                        events.emit(
+                            "runaway.warning",
+                            json!({"kind":"assistant_text","action":"warn","repeats":count,"sample":crate::tools::truncate(&unit,120)}),
+                        )?;
+                    }
+                    autonomy::RunawayAction::Replan => {
+                        events.emit(
+                            "runaway.warning",
+                            json!({"kind":"assistant_text","action":"replan","repeats":count,"sample":crate::tools::truncate(&unit,120)}),
+                        )?;
+                        messages.push(json!({"role":"assistant","content":crate::tools::truncate(&response.text,1500)}));
+                        messages.push(json!({"role":"system","content":"Loop check: the assistant text repeated without new evidence or a tool call. Stop repeating. Use a tool or give one concise final answer. This is a process note, not a new user instruction."}));
+                        self.0.store.save_messages(&job.id, &messages)?;
+                        continue;
+                    }
+                    autonomy::RunawayAction::Pause => {
+                        events.emit(
+                            "runaway.warning",
+                            json!({"kind":"assistant_text","action":"pause","repeats":count,"sample":crate::tools::truncate(&unit,120)}),
+                        )?;
+                        bail!("Model repeated the same assistant text without making progress; paused to prevent a loop");
+                    }
+                }
+            }
             let mut assistant = json!({"role":"assistant","content":response.text});
             if !response.tool_calls.is_empty() {
                 assistant["tool_calls"]=json!(response.tool_calls.iter().map(|call|json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}})).collect::<Vec<_>>());
@@ -1143,6 +1225,32 @@ impl Engine {
                     !response.text.trim().is_empty(),
                     "Model returned an empty response without a tool call"
                 );
+                if autonomy::claims_command_execution(&response.text) {
+                    prose_claims += 1;
+                    match autonomy::runaway_action(prose_claims) {
+                        autonomy::RunawayAction::Pause => {
+                            events.emit(
+                                "runaway.warning",
+                                json!({"kind":"prose_command","action":"pause","repeats":prose_claims}),
+                            )?;
+                            bail!("Model described running a command but never called a tool; paused so a human can continue");
+                        }
+                        action => {
+                            let label = match action {
+                                autonomy::RunawayAction::Warn => "warn",
+                                autonomy::RunawayAction::Replan => "replan",
+                                _ => "nudge",
+                            };
+                            events.emit(
+                                "runaway.warning",
+                                json!({"kind":"prose_command","action":label,"repeats":prose_claims}),
+                            )?;
+                            messages.push(json!({"role":"system","content":"Execution check: you described running a command in prose but did not emit a tool call. Use an available tool now, or clearly explain that you cannot perform the action with the tools you have. Do not invent command output. This is a process note, not a new user instruction."}));
+                            self.0.store.save_messages(&job.id, &messages)?;
+                            continue;
+                        }
+                    }
+                }
                 if requires_inspection && !inspected {
                     ensure!(completion_retries<running.config.agent.max_fix_retries,"The model did not inspect the current workspace as requested. Its answer has not been verified against current files.");
                     completion_retries += 1;

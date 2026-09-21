@@ -243,6 +243,143 @@ pub fn runaway_action(repeats: usize) -> RunawayAction {
     }
 }
 
+/// Collapse Gemma/Ollama thinking-channel markup so the transcript keeps the
+/// answer and hides private scratch (`thought`, `<channel|>`, analysis tags).
+pub fn public_assistant_text(text: &str) -> String {
+    let mut out = text.to_owned();
+    // XML-ish channel / thinking wrappers and bare close tags.
+    let tag = regex::Regex::new(
+        r"(?is)</?(?:\|)?(?:channel|think(?:ing)?|redacted[_-]?reasoning|analysis|reasoning)(?:\|)?[^>\n]*>",
+    )
+    .expect("thinking tag regex");
+    out = tag.replace_all(&out, "").into_owned();
+    // Standalone channel markers that never formed a closed tag.
+    let bare = regex::Regex::new(r"(?i)<\|?channel\|?>")
+        .expect("bare channel regex");
+    out = bare.replace_all(&out, "").into_owned();
+    // Line-leading thinking labels dumped into content by local models.
+    let labeled = regex::Regex::new(
+        r"(?im)^[ \t]*(?:thought|thinking|analysis|reasoning)\b[^\n]*\n?",
+    )
+    .expect("thinking label regex");
+    out = labeled.replace_all(&out, "").into_owned();
+    // Inline "thought …" prefixes before the real sentence.
+    let inline = regex::Regex::new(r"(?i)\bthought\b[ \t]*")
+        .expect("inline thought regex");
+    out = inline.replace_all(&out, "").into_owned();
+    let blank = regex::Regex::new(r"\n{3,}").expect("blank collapse regex");
+    blank.replace_all(out.trim(), "\n\n").into_owned()
+}
+
+fn normalize_loop_unit(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+/// Strongest repeated paragraph/sentence/phrase in assistant text.
+/// Returns `(normalized_unit, occurrences)` when a non-trivial unit repeats.
+pub fn text_loop_stats(text: &str) -> Option<(String, usize)> {
+    let mut best: Option<(String, usize)> = None;
+    let mut consider = |unit: String, count: usize| {
+        if unit.chars().count() < 12 || count < 3 {
+            return;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(_, previous)| count > *previous)
+        {
+            best = Some((unit, count));
+        }
+    };
+
+    let lines: Vec<String> = text
+        .lines()
+        .map(normalize_loop_unit)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let mut index = 0;
+    while index < lines.len() {
+        let mut end = index + 1;
+        while end < lines.len() && lines[end] == lines[index] {
+            end += 1;
+        }
+        consider(lines[index].clone(), end - index);
+        index = end;
+    }
+
+    let mut frequencies: BTreeMap<String, usize> = BTreeMap::new();
+    for paragraph in text.split("\n\n") {
+        let key = normalize_loop_unit(paragraph);
+        if key.chars().count() >= 12 {
+            *frequencies.entry(key).or_insert(0) += 1;
+        }
+    }
+    for (unit, count) in frequencies {
+        consider(unit, count);
+    }
+
+    let collapsed = normalize_loop_unit(text);
+    if collapsed.chars().count() >= 60 {
+        let chars: Vec<char> = collapsed.chars().collect();
+        let max_len = chars.len().min(96);
+        for len in (16..=max_len).rev() {
+            if chars.len() < len * 3 {
+                continue;
+            }
+            let candidate: String = chars[..len].iter().collect();
+            if candidate.split_whitespace().count() < 3 {
+                continue;
+            }
+            let mut count = 0usize;
+            let mut cursor = 0usize;
+            while cursor + len <= chars.len() {
+                let slice: String = chars[cursor..cursor + len].iter().collect();
+                if slice == candidate {
+                    count += 1;
+                    cursor += len;
+                    while cursor < chars.len() && chars[cursor].is_whitespace() {
+                        cursor += 1;
+                    }
+                } else {
+                    break;
+                }
+            }
+            if count >= 3 {
+                consider(candidate, count);
+                break;
+            }
+        }
+    }
+
+    best
+}
+
+/// First-person claims that a shell/desktop command is being run in prose
+/// without a structured tool call. Advice directed at the user is ignored.
+pub fn claims_command_execution(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let first_person = regex::Regex::new(
+        r"(?i)\b(?:i(?:'m| am)?(?:\s+\w+){0,3}\s+(?:going\s+to|about\s+to)|i(?:'ll| will)|let\s+me|now\s+i(?:'ll| will)?)\s+(?:run|execute|do|set|call|invoke|issue)\b",
+    )
+    .expect("prose claim regex");
+    if first_person.is_match(&lower) {
+        return true;
+    }
+    let running = regex::Regex::new(
+        r"(?i)\b(?:running|executing|issuing)\s+(?:`[^`]+`|[a-z0-9._/-]+(?:\s+-[a-z0-9-]+)*)",
+    )
+    .expect("running claim regex");
+    if running.is_match(&lower) {
+        return true;
+    }
+    // Bare "Actually, I'll do: cmd …" lines seen from abliterated local models.
+    let do_colon = regex::Regex::new(r"(?i)\bi(?:'ll| will)\s+do\s*:")
+        .expect("do-colon claim regex");
+    do_colon.is_match(&lower)
+}
+
 pub fn capability_profile(provider: &str, context_limit: usize) -> CapabilityProfile {
     capability_profile_for(provider, "", context_limit)
 }
@@ -699,6 +836,43 @@ mod tests {
         assert_eq!(runaway_action(3), RunawayAction::Warn);
         assert_eq!(runaway_action(4), RunawayAction::Replan);
         assert_eq!(runaway_action(5), RunawayAction::Pause);
+    }
+
+    #[test]
+    fn thinking_channels_are_stripped_but_answers_remain() {
+        let raw = "thought <channel|>I'll set all three monitors to green.\n</channel>\nAll three displays are solid green.";
+        let visible = public_assistant_text(raw);
+        assert!(!visible.to_ascii_lowercase().contains("thought"));
+        assert!(!visible.contains("<channel"));
+        assert!(visible.contains("All three displays are solid green."));
+        assert_eq!(
+            public_assistant_text("Fixed the typo in main.rs."),
+            "Fixed the typo in main.rs."
+        );
+    }
+
+    #[test]
+    fn repeated_paragraphs_trip_text_loop_stats() {
+        let spam = "Actually, I'll do: xpaper -bg\n".repeat(8);
+        let (unit, count) = text_loop_stats(&spam).expect("loop");
+        assert!(unit.contains("xpaper"));
+        assert!(count >= 5, "{count}");
+        assert!(text_loop_stats("Short unique answer about the edit.").is_none());
+        let normal = "First I read the file.\n\nThen I patched the helper.\n\nFinally I ran cargo test.";
+        assert!(text_loop_stats(normal).is_none());
+    }
+
+    #[test]
+    fn prose_command_claims_are_detected() {
+        assert!(claims_command_execution(
+            "Actually, I'll do: xpaper -bg green on each monitor"
+        ));
+        assert!(claims_command_execution("I'll run xset root solid green now."));
+        assert!(claims_command_execution("Running `feh --bg-fill green.png`."));
+        assert!(!claims_command_execution(
+            "You can run cargo test after reviewing the diff."
+        ));
+        assert!(!claims_command_execution("Updated README with install steps."));
     }
 
     #[test]

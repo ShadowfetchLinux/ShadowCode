@@ -38,10 +38,9 @@ fn request(root: &Path, task: &str, session_id: Option<String>) -> StartRequest 
         model: None,
         mode: "code".into(),
         queue: false,
+        images: Vec::new(),
     }
-
-            images: Vec::new(),
-        }
+}
 async fn wait(engine: &Engine, id: &str) -> Job {
     tokio::time::timeout(Duration::from_secs(8), engine.wait(id))
         .await
@@ -746,6 +745,129 @@ async fn runaway_same_tool_pauses_but_changing_arguments_continue() {
         events.iter().all(|e| e["type"] != "runaway.warning"),
         "changing read paths must not trip runaway"
     );
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn repeated_assistant_text_without_tools_pauses() {
+    let spam = "Actually, I'll do: xpaper -bg\n".repeat(8);
+    let server = support::server(move |_, _| (response(&spam, json!([])), Duration::ZERO)).await;
+    let (root, engine) = setup(&server.endpoint);
+    let job = engine
+        .start(request(
+            root.path(),
+            "Set three monitors to solid green",
+            None,
+        ))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "failed", "{}", result.summary);
+    assert!(
+        result.summary.contains("assistant text") || result.summary.contains("loop"),
+        "{}",
+        result.summary
+    );
+    let events = engine.store().recent_events(&job.session_id, 200).unwrap();
+    assert!(
+        events.iter().any(|e| {
+            e["type"] == "runaway.warning" && e["payload"]["kind"] == "assistant_text"
+        }),
+        "{events:?}"
+    );
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn thinking_channel_markup_is_hidden_from_transcript_events() {
+    let server = support::server(|_, _| {
+        (
+            response(
+                "thought <channel|>private plan\n</channel>\nFixed the typo in main.rs.",
+                json!([]),
+            ),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let job = engine
+        .start(request(root.path(), "Fix the typo", None))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "completed", "{}", result.summary);
+    assert!(result.summary.contains("Fixed the typo"));
+    assert!(!result.summary.to_ascii_lowercase().contains("thought"));
+    let events = engine.store().recent_events(&job.session_id, 200).unwrap();
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter(|e| e["type"] == "model.delta")
+        .filter_map(|e| e["payload"]["text"].as_str())
+        .collect();
+    assert!(!deltas.is_empty());
+    assert!(deltas.iter().all(|text| !text.to_ascii_lowercase().contains("thought")));
+    assert!(deltas.iter().all(|text| !text.contains("<channel")));
+    assert!(deltas.iter().any(|text| text.contains("Fixed the typo")));
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prose_command_without_tool_is_nudged_then_pauses() {
+    let server = support::server(|_, _| {
+        (
+            response(
+                "I'll run xset root solid green on all three monitors now.",
+                json!([]),
+            ),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    Config::patch(
+        engine.paths(),
+        json!({"agent":{"max_steps":8,"max_fix_retries":1}}),
+    )
+    .unwrap();
+    let job = engine
+        .start(request(root.path(), "Make the screens green", None))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "failed", "{}", result.summary);
+    assert!(
+        result.summary.contains("never called a tool") || result.summary.contains("paused"),
+        "{}",
+        result.summary
+    );
+    let events = engine.store().recent_events(&job.session_id, 200).unwrap();
+    assert!(
+        events.iter().any(|e| {
+            e["type"] == "runaway.warning" && e["payload"]["kind"] == "prose_command"
+        }),
+        "{events:?}"
+    );
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn short_normal_answer_still_completes() {
+    let server = support::server(|_, _| {
+        (
+            response("Updated README with the install steps.", json!([])),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let job = engine
+        .start(request(root.path(), "Summarize the change", None))
+        .await
+        .unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "completed", "{}", result.summary);
+    assert!(result.summary.contains("Updated README"));
     engine.shutdown().await.unwrap();
 }
 

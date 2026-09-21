@@ -105,7 +105,11 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   ) {
     const detail =
       event.type === "runaway.warning"
-        ? `Loop ${String(p.action || "warn")}: ${String(p.tool || "tool")} repeated ${String(p.repeats || "")}`
+        ? p.kind === "assistant_text"
+          ? `Loop ${String(p.action || "warn")}: assistant text repeated ${String(p.repeats || "")}`
+          : p.kind === "prose_command"
+            ? `Loop ${String(p.action || "warn")}: model described a command without calling a tool (${String(p.repeats || "")})`
+            : `Loop ${String(p.action || "warn")}: ${String(p.tool || "tool")} repeated ${String(p.repeats || "")}`
         : event.type === "autonomy.budget"
           ? `Autonomy budget ${Math.round(Number(p.ratio || 0) * 100)}% of ${String(p.max_steps || "")} steps`
           : event.type === "context.compacted"

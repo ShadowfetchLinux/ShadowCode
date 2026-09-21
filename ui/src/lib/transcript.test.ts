@@ -317,6 +317,16 @@ describe("durable transcript", () => {
         tool: "read_file",
         repeats: 4,
       }),
+      event(4, "runaway.warning", {
+        kind: "assistant_text",
+        action: "pause",
+        repeats: 5,
+      }),
+      event(5, "runaway.warning", {
+        kind: "prose_command",
+        action: "pause",
+        repeats: 5,
+      }),
     ]);
     expect(state.items.map((item) => item.text).join("\n")).toMatch(
       /Context 1200\/8000/,
@@ -327,6 +337,14 @@ describe("durable transcript", () => {
     expect(state.items.some((item) => /Loop replan/.test(item.text))).toBe(
       true,
     );
+    expect(
+      state.items.some((item) => /assistant text repeated/.test(item.text)),
+    ).toBe(true);
+    expect(
+      state.items.some((item) =>
+        /described a command without calling a tool/.test(item.text),
+      ),
+    ).toBe(true);
   });
   it("replays 10000 stream events without dropping the last cursor", () => {
     const started = performance.now();
