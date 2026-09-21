@@ -32,8 +32,9 @@ jobs:
         run: |
           cargo +1.95.0 fmt --all --check
           cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
-          cargo +1.95.0 test --workspace --locked
+          # qualification_real spawns target/debug/shadowcode; cargo test does not build it.
           cargo +1.95.0 build -p shadowcode-desktop --locked
+          cargo +1.95.0 test --workspace --locked
       - name: Exercise native application behavior
         run: |
           node scripts/test-native-cli.mjs

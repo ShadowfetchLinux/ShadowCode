@@ -26,8 +26,9 @@ jobs:
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - run: cargo +1.95.0 fmt --all --check
       - run: cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo +1.95.0 test --workspace --locked
+      # qualification_real spawns target/debug/shadowcode; cargo test does not build it.
       - run: cargo +1.95.0 build -p shadowcode-desktop --locked
+      - run: cargo +1.95.0 test --workspace --locked
       - name: Exercise the native CLI without a display
         run: node scripts/test-native-cli.mjs
       - name: Stress repeated native tasks, cancellation, output and cleanup
