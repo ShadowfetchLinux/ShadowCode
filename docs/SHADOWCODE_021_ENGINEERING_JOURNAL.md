@@ -311,3 +311,33 @@ Version remains **0.20.0**. Main was not merged.
 
 The 4096-token tester-route flake, native GTK keyboard pass, and a longer
 leak soak were not part of this PATH fix and are not claimed here.
+
+## MERGE-READINESS (2026-09-21)
+
+Branch `release/shadowcode-0.21-merge-ready` from qualification `c4efa49`
+(ancestry includes `7970c45` and the PATH sanitizer). Main untouched.
+Version remains **0.20.0**.
+
+### Tester-route flake
+
+4096 is not too small by design for the fixture: schemas 2778 + live
+messages 483 + 512 reserve = 3773. Compact always ran because
+`hard_limit` was 38, then the keep-list note could push a fitting request
+to 4127. Fix: if the original prompt already satisfies `response_budget`,
+do not replace it with a compacted prompt that fails. Limit unchanged.
+Regression in `tester_route_budget.rs`. Alone 20/20; workspace 16- and
+32-thread stress 287/0.
+
+### Packaging
+
+Existing PATH helper accepted. Two dirty-PATH AppImage+deb builds, no
+manual PATH edit. Isolated smoke. `~/Applications` untouched.
+
+### Soak / 5M / model / a11y
+
+Active soak **3696 s**, FD delta 0, 1521/0 activity. 5M insert 2159 s,
+peak RSS 7184 KB, `reached_requested_n=true`. ollama `gpt-oss:20b` coding
+task completed with recorded verification. Native keyboard: ENVIRONMENT
+LIMITATION (primary AppImage window already open).
+
+See `docs/SHADOWCODE_021_MERGE_READINESS.md`.

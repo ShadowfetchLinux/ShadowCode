@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.21.0 — merge-ready notes (package version remains 0.20.0)
+
+This section records the 0.21 architecture that survived qualification and
+merge-readiness. Crate, Tauri, AppImage, and Debian versions are still
+**0.20.0** until a human bumps them.
+
+- Long sessions keep an inspectable layered budget and a structured keep-list
+  (intent, constraints, decisions, failures, plan). Compaction is still
+  deterministic history truncation, not a model-written summary. Compact must
+  not replace a request that already fits the hard 256-token reserve with a
+  keep-list note that no longer fits; the 4096-token tester route was not
+  raised.
+- An attached desktop can reattach to a replaced engine process without
+  starting jobs or replaying tools. GET/event catch-up is retried; mutating
+  POST is not.
+- Crash recovery classifies replay: reads may be repeated, shell and Git
+  history need confirmation, file mutations and `git_reset`/`git_clean` are
+  never auto-replayed. `recover_jobs` marks interrupted work and does not
+  execute tools.
+- Tool results that hit a byte or range budget set `truncated` and a
+  model-visible note (`next_offset` on `read_file` when applicable).
+- Autonomy caps are named profiles that never raise the configured limits.
+  Repeated identical tool calls warn, ask for a replan, then pause. Changing
+  arguments continue.
+- `verification.summary` distinguishes model claim, observed tool evidence,
+  and verified commands. Prose such as “tests passed” is not `verified`.
+- Provider streams treat malformed JSON as an error, synthesize missing tool
+  ids without inventing text, and do not execute tools on HTTP 429/500.
+- Destructive Git stays behind elevated permission plus approval. Relocated
+  worktrees are not guessed.
+- Doctor and local stats stay on the machine. There is no product telemetry
+  upload.
+- Packaging constructs its own PATH and ignores host `/usr/local/bin` and
+  Hermes node hijacks. The caller does not sanitize PATH.
+- Shell execution is a lexical word list. **It is not an OS sandbox.**
+  Checkpoints cover native file-tool changes, not arbitrary shell or Git side
+  effects.
+
 ## 0.20.0 — native development (unreleased)
 
 - 0.21 autonomy (feature branch): inspectable context budgets, structured
