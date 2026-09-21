@@ -32,20 +32,32 @@ pub struct ToolResult {
 }
 impl ToolResult {
     pub fn message(&self, name: &str, limit: usize) -> Value {
-        let content = serde_json::to_string(self).unwrap_or_default();
+        let mut payload = json!({
+            "success": self.success,
+            "output": self.output,
+            "error": self.error,
+        });
+        let redacted = crate::redaction::redact_value(&mut payload);
+        let content = serde_json::to_string(&payload).unwrap_or_default();
         let content = if content.len() > limit {
             json!({
                 "success":self.success,
                 "truncated":true,
                 "preview":truncate(&content,limit),
                 "error":self.error,
+                "redacted": redacted > 0,
                 "note":format!("Tool output was truncated to {limit} bytes. Use offset/limit, max_hits, or a narrower query; do not assume the omitted bytes.")
             })
             .to_string()
         } else {
             content
         };
-        json!({"role":"tool","tool_call_id":self.id,"name":name,"content":content})
+        let mut message = json!({"role":"tool","tool_call_id":self.id,"name":name,"content":content});
+        if redacted > 0 {
+            message["redacted"] = json!(true);
+            message["redaction_count"] = json!(redacted);
+        }
+        message
     }
 }
 #[derive(Clone)]
@@ -145,6 +157,13 @@ impl ToolExecutor {
             .lock()
             .map(|v| v.clone())
             .unwrap_or_else(|_| json!({"steps":[]}))
+    }
+    pub fn observed_hashes(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let observed = self
+            .observed
+            .lock()
+            .map_err(|_| anyhow::anyhow!("File observations lock poisoned"))?;
+        Ok(observed.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
     pub fn has_hooks(&self) -> bool {
         !self.hooks.is_empty()
@@ -417,6 +436,30 @@ impl ToolExecutor {
             return crate::sqlite::inspect(self.workspace.clone(), request, self.cancel.clone())
                 .await;
         }
+        if matches!(
+            call.name.as_str(),
+            "workspace_symbols" | "goto_definition" | "find_references"
+        ) {
+            let root = self.workspace.path.clone();
+            let name = call.name.clone();
+            let args = call.arguments.clone();
+            return tokio::task::spawn_blocking(move || {
+                let query = args["query"].as_str().or_else(|| args["symbol"].as_str()).unwrap_or("");
+                let max_hits = args["max_hits"].as_u64().unwrap_or(40) as usize;
+                match name.as_str() {
+                    "workspace_symbols" => crate::intelligence::workspace_symbols(&root, query, max_hits),
+                    "goto_definition" => crate::intelligence::goto_definition(&root, query, max_hits),
+                    "find_references" => crate::intelligence::find_references(&root, query, max_hits),
+                    _ => unreachable!(),
+                }
+            })
+            .await
+            .context("Tool worker stopped unexpectedly")?;
+        }
+        if call.name == "get_diagnostics" {
+            let path = call.arguments["path"].as_str().unwrap_or("");
+            return crate::intelligence::get_diagnostics(&self.workspace.path, path).await;
+        }
         let worker = self.clone();
         let call = call.clone();
         tokio::task::spawn_blocking(move || worker.files(&call.name, &call.arguments))
@@ -448,11 +491,57 @@ impl ToolExecutor {
         } else {
             self.workspace.path.clone()
         };
-        let mut spec = ProcessSpec::shell(command, cwd, Duration::from_secs(seconds as u64));
-        spec.output_limit = self.config.agent.max_output_bytes;
-        Ok(serde_json::to_value(
-            process::run(spec, self.cancel.clone(), None).await?,
-        )?)
+        let allow_network = self.config.permissions.network;
+        let mut sandbox_note = json!({
+            "mode": "none",
+            "note": "Shell policy is heuristic; not an OS sandbox."
+        });
+        let primary = match crate::sandbox::build_shell_profile(&cwd, command, allow_network) {
+            Ok(profile) => {
+                sandbox_note = json!({
+                    "mode": "bubblewrap",
+                    "network": profile.network,
+                    "note": "Optional bubblewrap profile; not a full OS sandbox."
+                });
+                ProcessSpec {
+                    program: profile.program.to_string_lossy().into_owned(),
+                    args: profile.args,
+                    cwd: cwd.clone(),
+                    timeout: Duration::from_secs(seconds as u64),
+                    output_limit: self.config.agent.max_output_bytes,
+                    env: Default::default(),
+                }
+            }
+            Err(error) => {
+                sandbox_note = json!({
+                    "mode": "none",
+                    "reason": format!("{error:#}"),
+                    "note": "Shell continues without bubblewrap; policy remains heuristic, not an OS sandbox."
+                });
+                let mut spec = ProcessSpec::shell(command, cwd.clone(), Duration::from_secs(seconds as u64));
+                spec.output_limit = self.config.agent.max_output_bytes;
+                spec
+            }
+        };
+        let used_bwrap = sandbox_note["mode"] == "bubblewrap";
+        let result = match process::run(primary, self.cancel.clone(), None).await {
+            Ok(result) => result,
+            Err(error) if used_bwrap => {
+                sandbox_note = json!({
+                    "mode": "fallback",
+                    "reason": format!("{error:#}"),
+                    "note": "bubblewrap failed (user namespaces may be blocked); fell back to unsandboxed shell. Not an OS sandbox."
+                });
+                let mut fallback =
+                    ProcessSpec::shell(command, cwd, Duration::from_secs(seconds as u64));
+                fallback.output_limit = self.config.agent.max_output_bytes;
+                process::run(fallback, self.cancel.clone(), None).await?
+            }
+            Err(error) => return Err(error),
+        };
+        let mut value = serde_json::to_value(result)?;
+        value["sandbox"] = sandbox_note;
+        Ok(value)
     }
     async fn git(&self, name: &str, args: &Value) -> Result<Value> {
         let mut command = vec![
@@ -563,7 +652,11 @@ impl ToolExecutor {
                 }))
             }
             "read_file" => {
-                let file = self.workspace.read(string(args, "path")?)?;
+                let path = string(args, "path")?;
+                if crate::redaction::is_secret_path(path) {
+                    return Ok(crate::redaction::secret_file_refusal(path));
+                }
+                let file = self.workspace.read(path)?;
                 self.observed
                     .lock()
                     .map_err(|_| anyhow::anyhow!("Read history lock poisoned"))?
@@ -577,9 +670,10 @@ impl ToolExecutor {
                     .skip(offset - 1)
                     .take(limit)
                     .collect::<String>();
-                let preview = truncate(&content, self.config.agent.max_output_bytes);
+                let redacted = crate::redaction::redact_text(&content);
+                let preview = truncate(&redacted.text, self.config.agent.max_output_bytes);
                 let range_truncated = offset - 1 + limit < total;
-                let byte_truncated = preview.len() < content.len();
+                let byte_truncated = preview.len() < redacted.text.len();
                 let truncated = range_truncated || byte_truncated;
                 let next_offset = if range_truncated {
                     Some(offset + limit)
@@ -595,10 +689,16 @@ impl ToolExecutor {
                     "total_lines":total,
                     "truncated":truncated,
                     "next_offset":next_offset,
-                    "note": if truncated {
-                        "Read was truncated. Continue from next_offset or raise limit; omitted lines are not in this result."
+                    "redacted": redacted.redacted,
+                    "redaction_count": redacted.count,
+                    "note": if crate::redaction::is_secret_path(&file.path) {
+                        "Secret file blocked.".into()
+                    } else if truncated {
+                        "Read was truncated. Continue from next_offset or raise limit; omitted lines are not in this result.".into()
+                    } else if redacted.redacted {
+                        "One or more secret-looking tokens were replaced with [redacted secret] before model context.".into()
                     } else {
-                        ""
+                        String::new()
                     }
                 }))
             }
@@ -953,7 +1053,11 @@ pub fn schemas() -> Vec<Value> {
         ("read_file","Read UTF-8 text with 1-based offset/limit. Returns truncated=true and next_offset when the range or byte budget is exceeded; do not assume omitted lines.",json!({"path":s,"offset":n,"limit":n}),vec!["path"]),
         ("search_files","Find filenames by substring; respects ignore rules.",json!({"query":s,"path":s}),vec!["query"]),
         ("search_text","Search text; literal by default, optional regex and file glob.",json!({"query":s,"path":s,"regex":b,"glob":s,"max_hits":n}),vec!["query"]),
-        ("search_symbol","Find likely symbol definitions by name.",json!({"query":s,"path":s}),vec!["query"]),
+        ("search_symbol","Find likely symbol definitions by name (regex heuristic).",json!({"query":s,"path":s}),vec!["query"]),
+        ("workspace_symbols","Tree-sitter workspace symbol search for Rust/TypeScript. Bounded; not a vector index.",json!({"query":s,"max_hits":n}),vec!["query"]),
+        ("goto_definition","Best-effort tree-sitter definition lookup for a symbol name.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
+        ("find_references","Tree-sitter identifier references for a symbol name. Not type-aware.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
+        ("get_diagnostics","One-shot rust-analyzer diagnostics when rust-analyzer is already installed. Does not start a persistent LSP.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_tables","List tables and CREATE TABLE definitions in a project SQLite file. Native read-only tool; no registration. SQLite may maintain WAL sidecars.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_query","Read a project SQLite file with SELECT/WITH or schema PRAGMA (table_info etc). Bind ? placeholders with params; check truncated. Unique column aliases required. SQLite may maintain WAL sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]}},"limit":n}),vec!["path","sql"]),
         ("background_start","Start a named project server/watcher under shell permissions. Continues independently after the task, including cancellation; stop it when no longer wanted. Inspect status/output before claiming readiness.",json!({"name":s,"command":s}),vec!["name","command"]),
@@ -966,7 +1070,7 @@ pub fn schemas() -> Vec<Value> {
         ("create_directory","Create a workspace directory and parents.",json!({"path":s}),vec!["path"]),
         ("move_file","Move a regular file without overwriting its destination; checkpoint both paths.",json!({"src":s,"dest":s}),vec!["src","dest"]),
         ("delete_file","Delete one regular workspace file after approval; retain a checkpoint.",json!({"path":s,"expected_hash":s}),vec!["path"]),
-        ("exec","Run a shell command after approval. This is a user process, not an OS sandbox. Output and runtime are bounded.",json!({"command":s,"cwd":s,"timeout_sec":n}),vec!["command"]),
+        ("exec","Run a shell command after approval. Uses optional bubblewrap when available; still not a full OS sandbox. Output and runtime are bounded.",json!({"command":s,"cwd":s,"timeout_sec":n}),vec!["command"]),
         ("git_status","Show repository status.",json!({}),vec![]),
         ("git_diff","Show staged or unstaged changes. External diff helpers and textconv are disabled.",json!({"staged":b}),vec![]),
         ("git_log","Show recent commits.",json!({"limit":n}),vec![]),

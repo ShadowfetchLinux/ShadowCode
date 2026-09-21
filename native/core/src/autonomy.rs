@@ -112,6 +112,7 @@ pub fn tool_class(name: &str) -> ToolClass {
 pub fn replay_class(name: &str) -> ReplayClass {
     match name {
         "list_files" | "read_file" | "search_files" | "search_text" | "search_symbol"
+        | "workspace_symbols" | "goto_definition" | "find_references" | "get_diagnostics"
         | "mcp_sqlite_tables" | "mcp_sqlite_query" | "background_list" | "background_output"
         | "git_status" | "git_diff" | "git_log" | "update_plan" | "update_todos" => {
             ReplayClass::SafeToReplay
@@ -616,6 +617,12 @@ pub fn classify_verification(model_text: &str, commands: &[Value], inspected: bo
     } else {
         ClaimLevel::ModelClaim
     };
+    // Model prose never upgrades Observed → Verified.
+    let level = if claims && level != ClaimLevel::Verified && !evidence {
+        ClaimLevel::ModelClaim
+    } else {
+        level
+    };
     json!({
         "claim": level,
         "verified": level == ClaimLevel::Verified,
@@ -629,6 +636,29 @@ pub fn classify_verification(model_text: &str, commands: &[Value], inspected: bo
             "Claim level is derived from recorded tool evidence, not prose."
         }
     })
+}
+
+/// When the user goal is a bug/fix, ask for a failing test first. Not applied
+/// to every prompt — only when the task text indicates a bug fix.
+pub fn bugfix_policy(task: &str) -> Option<&'static str> {
+    let lower = task.to_ascii_lowercase();
+    let hints = [
+        "bug",
+        "fix",
+        "regress",
+        "broken",
+        "fails",
+        "failure",
+        "crash",
+        "incorrect",
+    ];
+    if hints.iter().any(|h| lower.contains(h)) {
+        Some(
+            "Bug-fix policy: reproduce with a failing test or clear reproduction command before claiming a fix. Do not present the task as verified until that failing case and a subsequent passing check are observed in this task.",
+        )
+    } else {
+        None
+    }
 }
 
 fn looks_like_success_claim(text: &str) -> bool {
@@ -761,6 +791,10 @@ pub fn catalog() -> Value {
         "search_files",
         "search_text",
         "search_symbol",
+        "workspace_symbols",
+        "goto_definition",
+        "find_references",
+        "get_diagnostics",
         "mcp_sqlite_tables",
         "mcp_sqlite_query",
         "background_start",

@@ -429,3 +429,55 @@ async fn denied_approval_is_not_success_and_does_not_run_the_command() {
         .bytes
         .is_none());
 }
+
+
+#[tokio::test]
+async fn secret_env_is_refused_and_tokens_redacted_in_tool_messages() {
+    let (_root, tools) = fixture(Config::default());
+    let openai = format!("{}{}", "sk-test", "abcdefghijklmnopqrstuvwxyz0123");
+    let aws = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+    fs::write(
+        tools.workspace.path.join(".env"),
+        format!("OPENAI_API_KEY={openai}\n"),
+    )
+    .unwrap();
+    fs::write(
+        tools.workspace.path.join("leak.txt"),
+        format!("token={aws}\n"),
+    )
+    .unwrap();
+    let blocked = call(&tools, "read_file", json!({"path":".env"})).await;
+    assert!(!blocked.success || blocked.output["redacted"] == true, "{}", blocked.output);
+    assert!(
+        blocked.output["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Refusing")
+            || blocked.output["redacted"] == true
+    );
+    let leaked = call(&tools, "read_file", json!({"path":"leak.txt"})).await;
+    assert!(leaked.success, "{}", leaked.error);
+    let message = leaked.message("read_file", 50_000);
+    let content = message["content"].as_str().unwrap();
+    assert!(content.contains("[redacted secret]"), "{content}");
+    assert!(!content.contains(&aws), "{content}");
+}
+
+#[tokio::test]
+async fn workspace_symbols_find_rust_fixture() {
+    let (_root, tools) = fixture(Config::default());
+    fs::create_dir_all(tools.workspace.path.join("src")).unwrap();
+    fs::write(
+        tools.workspace.path.join("src/lib.rs"),
+        "pub fn alpha() {}\npub struct Beta;\n",
+    )
+    .unwrap();
+    let result = call(
+        &tools,
+        "workspace_symbols",
+        json!({"query":"alpha","max_hits":20}),
+    )
+    .await;
+    assert!(result.success, "{}", result.error);
+    assert!(result.output.to_string().contains("alpha"));
+}

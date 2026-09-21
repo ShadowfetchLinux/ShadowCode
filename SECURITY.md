@@ -73,7 +73,12 @@ job is active there. Dangerous operations use the harness permission policy and
 approval flow.
 
 **The terminal is not an OS sandbox.** Commands execute as your Linux user with
-that user's filesystem and network capabilities. Command classification is a
+that user's filesystem and network capabilities. When `bwrap` (bubblewrap) is
+installed, `exec` may wrap the command in a limited profile: workspace bind,
+read-only home/system roots, and network off unless permissions allow network.
+If bubblewrap is missing or user namespaces are blocked (common on some Pop!_OS
+setups), ShadowCode falls back to the unsandboxed shell and Doctor reports that
+clearly — it does not pretend isolation. Command classification remains a
 heuristic control, not a containment guarantee. Workspace hooks, project
 instructions, MCP servers, and installed plugins are executable or influential
 project content. Trust a project only if you trust that content. Use a container
@@ -96,6 +101,12 @@ SQLite and releases its connection; an OS filesystem stall may delay return.
 Keys belong in `~/.config/shadow-agent/secrets.env` with mode 600, or environment
 variables named in config. Never commit keys, tokens, sessions, or personal
 workspace data. The installer does not source the secrets file as shell code.
+
+Before file contents or tool output enter model context, ShadowCode scans for
+common secret patterns and high-entropy tokens and replaces matches with
+`[redacted secret]`. Raw `.env` / `secrets.env` / credential JSON contents are
+refused rather than sent to the model. This is deliberate redaction for model
+context, not TPM or keyring migration, and does not rewrite shell commands.
 
 Local databases and drafts can contain prompts, tool output, and source code.
 Protect the user account and filesystem accordingly. The configured model
