@@ -8,6 +8,27 @@ import { Check, Copy } from "lucide-react";
 // JSON export still retain the complete response.
 export const MARKDOWN_PREVIEW_LIMIT = 512 * 1024;
 
+/** Model/repo Markdown may contain javascript:, data:, file:, or relative
+ * hrefs. Only absolute http(s) links and in-page fragments stay clickable. */
+export function safeMarkdownHref(href?: string): string | undefined {
+  if (!href) return undefined;
+  if (href.startsWith("#") && !href.includes(":")) return href;
+  try {
+    const parsed = new URL(href);
+    if (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname &&
+      !parsed.username &&
+      !parsed.password
+    ) {
+      return href;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<"pre">) {
   const [copied, setCopied] = useState(false);
   return (
@@ -54,11 +75,20 @@ export const Markdown = memo(function Markdown({
         remarkPlugins={[remarkGfm]}
         components={{
           pre: CodeBlock,
-          a: ({ children, ...props }) => (
-            <a {...props} target="_blank" rel="noopener noreferrer">
-              {children}
-            </a>
-          ),
+          a: ({ children, href, ...props }) => {
+            const safe = safeMarkdownHref(href);
+            if (!safe) return <span>{children}</span>;
+            return (
+              <a
+                {...props}
+                href={safe}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {children}
+              </a>
+            );
+          },
           // Remote images from model output must not make invisible network requests.
           img: ({ alt }) => (
             <span className="hint">[Image: {alt || "attachment"}]</span>

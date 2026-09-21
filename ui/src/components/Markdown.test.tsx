@@ -6,7 +6,11 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { Markdown, MARKDOWN_PREVIEW_LIMIT } from "./Markdown";
+import {
+  Markdown,
+  MARKDOWN_PREVIEW_LIMIT,
+  safeMarkdownHref,
+} from "./Markdown";
 
 const parses = vi.hoisted(() => vi.fn());
 vi.mock("react-markdown", async (original) => {
@@ -76,4 +80,30 @@ it("bounds a very large response until the reader explicitly expands it", () => 
   expect(
     screen.queryByRole("button", { name: "Show full response" }),
   ).toBeNull();
+});
+
+it("keeps only http(s) and fragment Markdown links clickable", () => {
+  expect(safeMarkdownHref("https://example.com/docs")).toBe(
+    "https://example.com/docs",
+  );
+  expect(safeMarkdownHref("#section")).toBe("#section");
+  expect(safeMarkdownHref("javascript:alert(1)")).toBeUndefined();
+  expect(safeMarkdownHref("data:text/html,hi")).toBeUndefined();
+  expect(safeMarkdownHref("file:///etc/passwd")).toBeUndefined();
+  expect(safeMarkdownHref("README.md")).toBeUndefined();
+  expect(safeMarkdownHref("https://user:secret@example.com")).toBeUndefined();
+  render(
+    <Markdown>
+      {
+        "[Safe](https://example.com)\n[Script](javascript:alert(1))\n[Local](README.md)"
+      }
+    </Markdown>,
+  );
+  expect(screen.getByRole("link", { name: "Safe" }).getAttribute("href")).toBe(
+    "https://example.com",
+  );
+  expect(screen.queryByRole("link", { name: "Script" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Local" })).toBeNull();
+  expect(screen.getByText("Script")).toBeTruthy();
+  expect(screen.getByText("Local")).toBeTruthy();
 });
