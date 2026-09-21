@@ -277,4 +277,6 @@ Inspectable names stay `intent[0]`, `unresolved`, `failed_approaches`.
 - Version bump to 0.21.0.
 - Merge to main.
 
+Clean-tree re-run after the qualification commits: Rust 282, UI 40.
+
 See `docs/SHADOWCODE_021_QUALIFICATION_REPORT.md`.

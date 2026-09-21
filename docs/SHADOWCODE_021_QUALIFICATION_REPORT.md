@@ -496,11 +496,10 @@ not marked passed.**
 | 6 h leak | not run | — |
 | `dpkg -i` | not run | — |
 
-A second workspace cargo run after the keep-list alias removal still
-used the 282-test inventory (autonomy_021 15/15; model_routing 9/9 on
-retry). If a later clean-checkout re-run is attached to the pushed
-commit, record that SHA’s counts there — this report does not invent
-them.
+Clean-tree re-run on `c8c1e0f` (this report’s commit parent after the
+harness/docs land; working tree empty): Rust **282 passed / 0 failed /
+0 ignored**; UI **40 passed / 10 files**. Unrun: 5M sqlite, 6 h leak,
+`dpkg -i`.
 
 ## P29 Release decision
 
