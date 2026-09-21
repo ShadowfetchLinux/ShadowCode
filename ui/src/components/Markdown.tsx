@@ -1,4 +1,4 @@
-import { useState, type ComponentPropsWithoutRef } from "react";
+import { memo, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
@@ -32,7 +32,12 @@ function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<"pre">) {
   );
 }
 
-export function Markdown({ children }: { children: string }) {
+// Streaming one response must not reparse every earlier message.
+export const Markdown = memo(function Markdown({
+  children,
+}: {
+  children: string;
+}) {
   return (
     <div className="markdown">
       <ReactMarkdown
@@ -54,4 +59,4 @@ export function Markdown({ children }: { children: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});

@@ -30,6 +30,16 @@ These are saved-history/initial-load bounds, not a claim of constant memory for 
 long-running live task or a virtualized Markdown renderer. Further live-stream,
 large-single-message and WebKit memory stress remain native release gates.
 
+## Live rendering
+
+Unchanged Markdown messages reuse their rendered output during live updates.
+Only a response whose text changes is reparsed, so streaming a new answer does
+not repeatedly parse earlier code blocks, tables and links. Code-copy controls
+retain their own local state. This reduces repeated rendering work; it does not
+cap the number or size of live messages. A regression test counts real Markdown
+parser calls across 100 updates and checks that the updated response and earlier
+formatted content remain visible.
+
 ## Service contract
 
 The desktop requests `GET /api/sessions/ID?view=window` or

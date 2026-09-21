@@ -2,6 +2,9 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Live response updates reuse unchanged Markdown messages instead of reparsing
+  earlier answers and code blocks on every update.
+
 - Native desktop saved-history pages support older/newer/latest navigation
   without loading thousands of events or tasks at once. Live work continues
   while browsing; original records remain available through export.
