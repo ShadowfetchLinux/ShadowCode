@@ -333,6 +333,7 @@ pub fn account(
 pub fn preserve(messages: &[Value]) -> Value {
     let mut intent = Vec::new();
     let mut constraints = Vec::new();
+    let mut decisions = Vec::new();
     let mut unresolved = Vec::new();
     let mut completed = Vec::new();
     let mut failed = Vec::new();
@@ -348,6 +349,9 @@ pub fn preserve(messages: &[Value]) -> Value {
         }
         if role == "user" && looks_like_constraint(content) && constraints.len() < 8 {
             constraints.push(tools::truncate(content, 240).to_owned());
+        }
+        if looks_like_decision(content) && decisions.len() < 8 {
+            decisions.push(tools::truncate(content, 240).to_owned());
         }
         if role == "assistant" {
             if let Some(calls) = message["tool_calls"].as_array() {
@@ -404,6 +408,7 @@ pub fn preserve(messages: &[Value]) -> Value {
     json!({
         "intent": intent,
         "constraints": constraints,
+        "decisions": decisions,
         "unresolved": unresolved,
         "completed": completed,
         "failed_approaches": failed,
@@ -422,6 +427,14 @@ fn looks_like_constraint(text: &str) -> bool {
         || lower.contains("never ")
         || lower.contains("required:")
         || lower.contains("constraint")
+}
+
+fn looks_like_decision(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("decision:")
+        || lower.contains("decided to")
+        || lower.contains("we will use")
+        || lower.contains("chose to")
 }
 
 fn collect_paths(value: &Value, files: &mut BTreeSet<String>) {

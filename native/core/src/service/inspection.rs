@@ -270,10 +270,8 @@ impl Service {
                 cfg.agent.max_steps,
                 cfg.agent.max_task_tokens,
             );
-            let profile = crate::autonomy::capability_profile(
-                &cfg.model.provider,
-                cfg.model.context_limit,
-            );
+            let profile =
+                crate::autonomy::capability_profile(&cfg.model.provider, cfg.model.context_limit);
             checks.push(check(
                 "autonomy-budget",
                 "info",
@@ -290,7 +288,10 @@ impl Service {
                 "Provider capability profile",
                 format!(
                     "{} context {} streaming={} parallel_tools={}",
-                    profile.provider, profile.context_window, profile.streaming, profile.parallel_tools
+                    profile.provider,
+                    profile.context_window,
+                    profile.streaming,
+                    profile.parallel_tools
                 ),
                 "",
             ));

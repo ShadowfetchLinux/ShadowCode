@@ -1083,10 +1083,16 @@ impl Engine {
                     match autonomy::runaway_action(*count) {
                         autonomy::RunawayAction::Continue => {}
                         autonomy::RunawayAction::Warn => {
-                            events.emit("runaway.warning", json!({"tool":call.name,"repeats":*count,"action":"warn"}))?;
+                            events.emit(
+                                "runaway.warning",
+                                json!({"tool":call.name,"repeats":*count,"action":"warn"}),
+                            )?;
                         }
                         autonomy::RunawayAction::Replan => {
-                            events.emit("runaway.warning", json!({"tool":call.name,"repeats":*count,"action":"replan"}))?;
+                            events.emit(
+                                "runaway.warning",
+                                json!({"tool":call.name,"repeats":*count,"action":"replan"}),
+                            )?;
                             replan = true;
                         }
                         autonomy::RunawayAction::Pause => {
@@ -1142,7 +1148,9 @@ impl Engine {
                     continue;
                 }
                 let mut summary = json!({"commands":commands,"hooks":outcomes,"status":if commands.is_empty(){"not_run"}else if commands.last().is_some_and(|v:&Value|v["success"]==true){"last_command_succeeded"}else{"last_command_failed"}});
-                if let Value::Object(extra) = autonomy::classify_verification(&response.text, &commands, inspected) {
+                if let Value::Object(extra) =
+                    autonomy::classify_verification(&response.text, &commands, inspected)
+                {
                     if let Value::Object(map) = &mut summary {
                         map.extend(extra);
                     }
