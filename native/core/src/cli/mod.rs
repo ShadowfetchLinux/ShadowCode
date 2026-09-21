@@ -23,7 +23,7 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 pub use args::Options;
-use args::{Background, Command, Mcp, Plugin, Run, TaskOptions};
+use args::{Background, Command, Mcp, Plugin, Run, TaskOptions, WorktreeArgs};
 use backend::Backend;
 use clap::Parser;
 use serde_json::{json, Value};
@@ -870,8 +870,11 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 });
             }
         }
-        Command::Worktree {create,reference,inspect,remove,hash,recovery,restore,recovery_hash,review_return,return_changes,return_hash,review_changes,copy_changes,copy_hash}=>{
-            if *review_changes {backend.call("POST","/api/worktrees/review-changes",Value::Null).await?}
+        Command::Worktree(options)=>{
+            let WorktreeArgs {create,reference,inspect,remove,hash,recovery,restore,recovery_hash,review_return,return_changes,return_hash,review_changes,copy_changes,copy_hash,review_repair,repair,repair_hash} = options.as_ref();
+            if let Some(id)=review_repair {backend.call("POST","/api/worktrees/review-repair",json!({"id":id})).await?}
+            else if let Some(id)=repair {backend.call("POST","/api/worktrees/repair",json!({"id":id,"hash":repair_hash})).await?}
+            else if *review_changes {backend.call("POST","/api/worktrees/review-changes",Value::Null).await?}
             else if *copy_changes {backend.call("POST","/api/worktrees/copy-changes",json!({"hash":copy_hash})).await?}
             else if let Some(id)=return_changes {
                 let value=backend.call("POST","/api/worktrees/return",json!({"id":id,"hash":return_hash})).await?;

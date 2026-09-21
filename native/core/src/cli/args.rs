@@ -52,42 +52,7 @@ pub enum Command {
         task: TaskOptions,
     },
     /// List managed worktrees, or create an isolated branch at a local commit.
-    Worktree {
-        #[arg(long,conflicts_with_all=["inspect","remove","recovery","restore","review_return","return_changes"])]
-        create: bool,
-        #[arg(long, conflicts_with_all = ["remove","recovery","restore","review_return","return_changes"])]
-        inspect: Option<String>,
-        #[arg(long, requires = "hash", conflicts_with_all = ["recovery","restore","review_return","return_changes"])]
-        remove: Option<String>,
-        #[arg(long, requires = "remove")]
-        hash: Option<String>,
-        /// Review retained commits for a missing managed checkout.
-        #[arg(long, conflicts_with_all = ["restore","review_return","return_changes"])]
-        recovery: Option<String>,
-        /// Restore a reviewed commit to a separate checkout, retaining original metadata.
-        #[arg(long, requires = "recovery_hash", conflicts_with_all = ["review_return","return_changes"])]
-        restore: Option<String>,
-        #[arg(long, requires = "restore")]
-        recovery_hash: Option<String>,
-        /// Review committed changes before returning them to the source project.
-        #[arg(long, conflicts_with = "return_changes")]
-        review_return: Option<String>,
-        /// Prepare a reviewed merge in the source checkout without committing.
-        #[arg(long, requires = "return_hash")]
-        return_changes: Option<String>,
-        #[arg(long, requires = "return_changes")]
-        return_hash: Option<String>,
-        /// Review source edits, staging split and untracked files for an isolated copy.
-        #[arg(long, conflicts_with_all=["create","inspect","remove","recovery","restore","review_return","return_changes","copy_changes"])]
-        review_changes: bool,
-        /// Copy reviewed source edits into a new worktree without altering the source.
-        #[arg(long, requires="copy_hash", conflicts_with_all=["create","inspect","remove","recovery","restore","review_return","return_changes"])]
-        copy_changes: bool,
-        #[arg(long, requires = "copy_changes")]
-        copy_hash: Option<String>,
-        #[arg(long, default_value = "HEAD", requires = "create")]
-        reference: String,
-    },
+    Worktree(Box<WorktreeArgs>),
     /// Show the selected project and active work.
     Status,
     /// List tables or run one read-only query against an existing project database.
@@ -390,4 +355,50 @@ pub enum Background {
     Logs {
         id: String,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct WorktreeArgs {
+    #[arg(long,conflicts_with_all=["inspect","remove","recovery","restore","review_return","return_changes"])]
+    pub create: bool,
+    #[arg(long, conflicts_with_all = ["remove","recovery","restore","review_return","return_changes"])]
+    pub inspect: Option<String>,
+    #[arg(long, requires = "hash", conflicts_with_all = ["recovery","restore","review_return","return_changes"])]
+    pub remove: Option<String>,
+    #[arg(long, requires = "remove")]
+    pub hash: Option<String>,
+    /// Review retained commits for a missing managed checkout.
+    #[arg(long, conflicts_with_all = ["restore","review_return","return_changes"])]
+    pub recovery: Option<String>,
+    /// Restore a reviewed commit to a separate checkout, retaining original metadata.
+    #[arg(long, requires = "recovery_hash", conflicts_with_all = ["review_return","return_changes"])]
+    pub restore: Option<String>,
+    #[arg(long, requires = "restore")]
+    pub recovery_hash: Option<String>,
+    /// Review committed changes before returning them to the source project.
+    #[arg(long, conflicts_with = "return_changes")]
+    pub review_return: Option<String>,
+    /// Prepare a reviewed merge in the source checkout without committing.
+    #[arg(long, requires = "return_hash")]
+    pub return_changes: Option<String>,
+    #[arg(long, requires = "return_changes")]
+    pub return_hash: Option<String>,
+    /// Review source edits, staging split and untracked files for an isolated copy.
+    #[arg(long, conflicts_with_all=["create","inspect","remove","recovery","restore","review_return","return_changes","copy_changes"])]
+    pub review_changes: bool,
+    /// Copy reviewed source edits into a new worktree without altering the source.
+    #[arg(long, requires="copy_hash", conflicts_with_all=["create","inspect","remove","recovery","restore","review_return","return_changes"])]
+    pub copy_changes: bool,
+    #[arg(long, requires = "copy_changes")]
+    pub copy_hash: Option<String>,
+    /// Review missing Git connection files at the original managed location.
+    #[arg(long, conflicts_with_all=["create","inspect","remove","recovery","restore","review_return","return_changes","review_changes","copy_changes","repair"])]
+    pub review_repair: Option<String>,
+    /// Restore reviewed missing connections while preserving files and staging.
+    #[arg(long, requires="repair_hash", conflicts_with_all=["create","inspect","remove","recovery","restore","review_return","return_changes","review_changes","copy_changes"])]
+    pub repair: Option<String>,
+    #[arg(long, requires = "repair")]
+    pub repair_hash: Option<String>,
+    #[arg(long, default_value = "HEAD", requires = "create")]
+    pub reference: String,
 }

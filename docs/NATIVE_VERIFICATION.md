@@ -876,3 +876,29 @@ nonzero PID before disconnecting and checking child cleanup.
 
 The full workspace rerun after these corrections passes all **234 native tests**;
 Clippy with warnings denied also passes.
+
+## Reviewed managed Git connection repair
+
+Fifteen worktree integration tests pass, including restoration of both missing
+connection files at the original managed checkout, byte-for-byte preservation of
+the original index, retained staged/unstaged/untracked work, unchanged source,
+stale-review rejection and active-workspace exclusion. Foreign connections,
+symlinks, locked worktrees and missing indexes are refused. Repair journals remain
+private and separate from active worktree records. This is connection repair, not
+reconstruction of missing files, indexes or moved/damaged administrative metadata.
+
+Clippy with warnings denied, the native desktop build, 27 UI tests and seven
+browser scenarios pass. The executable CLI passes 21 scenario groups with 31
+model requests, including reviewed repair with stale-hash rejection and original
+index/file preservation. The expanded CLI arguments use a boxed argument group
+without changing existing option names or action conflicts.
+
+The native Rust/WebKit window suite passes with 29 model requests. Its repair
+flow deletes the disposable checkout's connection, reviews and restores it via
+Settings, then checks exact original index bytes and staged/unstaged content.
+Light, dark and compact repair views report zero accessibility violations; the
+screenshot was visually inspected. The first harness attempt queried a card
+before the asynchronous inventory loaded; it now waits for that exact card before
+clicking, matching the existing return-flow readiness check. Broader moved-path
+and lost-metadata recovery, final package/release checks and installation remain
+open.

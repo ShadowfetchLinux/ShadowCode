@@ -432,6 +432,19 @@ try {
   assert.equal(fixtureGit(["show",":README.md"]),"staged source snapshot\n");
   checks.push("reviewed dirty-worktree copy preserves staged, unstaged and untracked source changes");
 
+  const repairAdmin=path.join(copiedChanges.common_directory,"worktrees",copiedChanges.id);
+  const repairIndex=await readFile(path.join(repairAdmin,"index"));
+  await rm(path.join(copiedChanges.path,".git"));
+  const repairReview=await cli(["worktree","--review-repair",copiedChanges.id],0,{workspace:isolatedSource});
+  assert.equal(repairReview.checkout_pointer,null);
+  assert.match((await cli(["worktree","--repair",copiedChanges.id,"--repair-hash","stale"],1,{workspace:isolatedSource})).error,/changed/);
+  assert.equal((await cli(["worktree","--repair",copiedChanges.id,"--repair-hash",repairReview.hash],0,{workspace:isolatedSource})).state,"ready");
+  assert.deepEqual(await readFile(path.join(repairAdmin,"index")),repairIndex);
+  assert.equal(execFileSync("git",["show",":README.md"],{cwd:copiedChanges.path,encoding:"utf8"}),"staged source snapshot\n");
+  assert.equal(await readFile(path.join(copiedChanges.path,"README.md"),"utf8"),"unstaged source snapshot\n");
+  assert.equal(await readFile(path.join(copiedChanges.path,"untracked-copy.txt"),"utf8"),"untracked snapshot\n");
+  checks.push("reviewed worktree connection repair preserves the original index and dirty files");
+
   // Seed only this disposable, stopped profile. Recent-list limits must not hide
   // older IDs or force fetching multi-megabyte job results to resolve a prefix.
   const historyDb = new DatabaseSync(path.join(profile, "state/shadow-agent.db"));

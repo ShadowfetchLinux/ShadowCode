@@ -59,7 +59,8 @@ the existing React visual design. This document tracks engineering acceptance;
   branches and commits.
   CLI and desktop rescue restore a missing checkout’s retained commit into a
   separate checkout while preserving original recovery metadata. Damaged-path
-  repair remains open. CLI and desktop copy
+  repair now restores missing connection files at the original managed location;
+  moved paths and conflicting/lost metadata still need recovery work. CLI and desktop copy
   preserves reviewed staged/unstaged patches and regular untracked files in a
   new checkout without resetting the source.
   Reviewed CLI and desktop return prepare a merge without committing, preserving source

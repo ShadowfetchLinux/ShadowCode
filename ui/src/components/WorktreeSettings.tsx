@@ -6,6 +6,7 @@ import {
   type WorktreeRecovery,
   type WorktreeReturnReview,
   type WorktreeCopyReview,
+  type WorktreeRepairReview,
 } from "../api";
 export function WorktreeSettings({
   onOpen,
@@ -26,6 +27,9 @@ export function WorktreeSettings({
     null,
   );
   const [copyReview, setCopyReview] = useState<WorktreeCopyReview | null>(null);
+  const [repairReview, setRepairReview] = useState<WorktreeRepairReview | null>(
+    null,
+  );
   const reviewRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let live = true;
@@ -48,11 +52,11 @@ export function WorktreeSettings({
     };
   }, []);
   useLayoutEffect(() => {
-    if (review || recovery || returnReview || copyReview) {
+    if (review || recovery || returnReview || copyReview || repairReview) {
       reviewRef.current?.scrollIntoView({ block: "nearest" });
       reviewRef.current?.focus({ preventScroll: true });
     }
-  }, [review, recovery, returnReview, copyReview]);
+  }, [review, recovery, returnReview, copyReview, repairReview]);
   async function refresh() {
     const data = await api.worktrees();
     setWorkspace(data.workspace);
@@ -61,6 +65,7 @@ export function WorktreeSettings({
     setRecovery(null);
     setReturnReview(null);
     setCopyReview(null);
+    setRepairReview(null);
   }
   async function perform(action: () => Promise<void>) {
     setBusy(true);
@@ -69,6 +74,7 @@ export function WorktreeSettings({
     setRecovery(null);
     setReturnReview(null);
     setCopyReview(null);
+    setRepairReview(null);
     try {
       await action();
     } catch (e) {
@@ -217,6 +223,20 @@ export function WorktreeSettings({
                 className="ghost"
                 disabled={busy}
                 onClick={() =>
+                  void perform(async () =>
+                    setRepairReview(
+                      await api.reviewWorktreeRepair(workspace, record.id),
+                    ),
+                  )
+                }
+              >
+                Review connection repair
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy}
+                onClick={() =>
                   void perform(async () => {
                     setReview(null);
                     setRecovery(
@@ -231,6 +251,66 @@ export function WorktreeSettings({
           </article>
         ))}
       </div>
+      {repairReview && (
+        <div
+          className="worktree-review"
+          ref={reviewRef}
+          tabIndex={-1}
+          role="region"
+          aria-label="Review connection repair"
+        >
+          <h4>Restore missing Git connections</h4>
+          <code className="worktree-path">{repairReview.record.path}</code>
+          <p>
+            Branch retained: <strong>{repairReview.record.branch}</strong>
+          </p>
+          <code className="worktree-path">{repairReview.head}</code>
+          <p>
+            Checkout connection:{" "}
+            {repairReview.checkout_pointer === null
+              ? "Missing — will restore"
+              : "Intact — preserved"}
+          </p>
+          <p>
+            Repository connection:{" "}
+            {repairReview.registration_pointer === null
+              ? "Missing — will restore"
+              : "Intact — preserved"}
+          </p>
+          <p>{repairReview.warning}</p>
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={() => setRepairReview(null)}
+            >
+              Cancel repair
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void perform(async () => {
+                  const repaired = await api.repairWorktree(
+                    workspace,
+                    repairReview.record.id,
+                    repairReview.hash,
+                  );
+                  await refresh();
+                  onToast(
+                    `Restored Git connection for ${repaired.branch}`,
+                    "ok",
+                  );
+                })
+              }
+            >
+              Restore Git connection
+            </button>
+          </div>
+        </div>
+      )}
       {copyReview && (
         <div
           className="worktree-review"

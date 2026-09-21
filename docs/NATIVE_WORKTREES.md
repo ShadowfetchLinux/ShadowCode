@@ -60,11 +60,12 @@ checks; removal never uses `--force` or deletes branches. Unmerged commits remai
 on the preserved branch. Source files and selection remain unchanged.
 
 Files deliberately changed by external programs should be preserved before
-removal, just as with ordinary Git operations. Damaged checkout paths or missing Git registrations still require manual
-inspection; the recovery record remains. For a missing path whose Git
+removal, just as with ordinary Git operations. Missing connection files at the original managed location can be repaired as
+described below. Moved paths, conflicting connections or lost administrative
+metadata still require manual inspection; the recovery record remains. For a missing path whose Git
 registration survives, use the reviewed rescue below.
 
-Repair of damaged checkouts remains part of the
+Broader moved-checkout and damaged-metadata recovery remains part of the
 [native migration gates](NATIVE_MIGRATION.md).
 
 Inventory and individual actions share the same bounded, non-following record
@@ -183,3 +184,32 @@ Git requires a configured identity even for a merge prepared without committing.
 If return reports an identity error, configure your own `user.name` and
 `user.email` in the source repository, then review and retry. ShadowCode does not
 invent an identity or modify your Git identity settings.
+
+
+## Repair missing Git connections
+
+Use **Settings → Worktrees → Review connection repair** when the original managed
+checkout still exists but its `.git` file or the repository's corresponding
+`gitdir` connection is missing. The review identifies the checkout, retained
+branch/commit and which connection is missing. **Restore Git connection** writes
+only missing connection files; it does not rebuild an index, reset files, change
+branches or recreate the checkout.
+
+```sh
+shadowcode --workspace /source/project worktree --review-repair WORKTREE_ID
+shadowcode --workspace /source/project worktree --repair WORKTREE_ID --repair-hash REVIEW_HASH
+```
+
+The source must be trusted, writable and idle. Active source/worktree tasks and
+managed background processes block repair. Keep external Git operations and
+filesystem writers idle during review and repair. A changed review is rejected;
+new files created by another writer are never overwritten. The operation retains
+a private journal under `managed-worktrees/records/repairs` and records interrupted
+or failed repairs for inspection instead of rolling back or deleting evidence.
+
+This repair requires the original real directory, retained managed branch,
+common-directory identity and existing regular index. Locked worktrees,
+symlinks, connections pointing elsewhere, moved checkouts and missing indexes
+are refused. It cannot reconstruct deleted uncommitted data. Preserve those
+cases for manual recovery; use the separate missing-checkout rescue only when its
+review matches the situation. No Git configuration or identity is changed.

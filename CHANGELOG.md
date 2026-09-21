@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Reviewed desktop and CLI repair restores missing managed Git connection files
+  while preserving the original index and local edits, with private recovery
+  journals and refusal of conflicting or lost metadata.
+
 - Reviewed CLI and desktop copying carries staged, unstaged, binary and regular untracked
   edits into a new worktree while preserving the source. It rejects stale
   snapshots and retains partial destinations after failure.

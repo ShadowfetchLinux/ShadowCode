@@ -966,3 +966,150 @@ async fn return_without_git_identity_preserves_source_and_can_be_retried() {
         "reviewed work\n"
     );
 }
+
+#[tokio::test]
+async fn reviewed_connection_repair_preserves_index_files_and_rejects_stale_state() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(&paths, json!({"trusted_workspaces":[project]})).unwrap();
+    let service = Service::open(paths.clone(), Some(project.clone())).unwrap();
+    let record = worktrees::create(&paths, &project, "HEAD", CancellationToken::new())
+        .await
+        .unwrap();
+    fs::write(record.path.join("tracked.txt"), "staged\n").unwrap();
+    git(&record.path, &["add", "tracked.txt"]);
+    fs::write(record.path.join("tracked.txt"), "unstaged\n").unwrap();
+    fs::write(record.path.join("untracked.txt"), "keep me\n").unwrap();
+    let admin = record.common_directory.join("worktrees").join(&record.id);
+    let index = fs::read(admin.join("index")).unwrap();
+    let original_pointer = fs::read(record.path.join(".git")).unwrap();
+    let original_registration = fs::read(admin.join("gitdir")).unwrap();
+    fs::remove_file(record.path.join(".git")).unwrap();
+    let review = operation(
+        &service,
+        "/api/worktrees/review-repair",
+        json!({"id":record.id}),
+    )
+    .await
+    .unwrap();
+    assert!(review["checkout_pointer"].is_null());
+    fs::remove_file(admin.join("gitdir")).unwrap();
+    assert!(operation(
+        &service,
+        "/api/worktrees/repair",
+        json!({"id":record.id,"hash":review["hash"]})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("changed"));
+    assert!(!record.path.join(".git").exists());
+    let review = operation(
+        &service,
+        "/api/worktrees/review-repair",
+        json!({"id":record.id}),
+    )
+    .await
+    .unwrap();
+    let busy = service.engine.reserve_workspace(&record.path).unwrap();
+    assert!(operation(
+        &service,
+        "/api/worktrees/repair",
+        json!({"id":record.id,"hash":review["hash"]})
+    )
+    .await
+    .is_err());
+    drop(busy);
+    let repaired = operation(
+        &service,
+        "/api/worktrees/repair",
+        json!({"id":record.id,"hash":review["hash"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(repaired["state"], "ready");
+    assert_eq!(fs::read(admin.join("index")).unwrap(), index);
+    assert_eq!(
+        fs::read(record.path.join(".git")).unwrap(),
+        original_pointer
+    );
+    assert_eq!(
+        fs::read(admin.join("gitdir")).unwrap(),
+        original_registration
+    );
+    assert_eq!(git(&record.path, &["show", ":tracked.txt"]), "staged");
+    assert_eq!(
+        fs::read_to_string(record.path.join("tracked.txt")).unwrap(),
+        "unstaged\n"
+    );
+    assert_eq!(
+        fs::read_to_string(record.path.join("untracked.txt")).unwrap(),
+        "keep me\n"
+    );
+    assert_eq!(git(&project, &["status", "--porcelain"]), "");
+    assert!(operation(
+        &service,
+        "/api/worktrees/review-repair",
+        json!({"id":record.id})
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("already intact"));
+    assert_eq!(
+        fs::read_dir(paths.data.join("managed-worktrees/records/repairs"))
+            .unwrap()
+            .count(),
+        1
+    );
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn connection_repair_refuses_foreign_links_locks_and_lost_indexes() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    let record = worktrees::create(&paths, &project, "HEAD", CancellationToken::new())
+        .await
+        .unwrap();
+    let admin = record.common_directory.join("worktrees").join(&record.id);
+    fs::write(record.path.join(".git"), "gitdir: /foreign/repository\n").unwrap();
+    assert!(
+        worktrees::repair::review(&paths, &project, &record.id, CancellationToken::new())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("somewhere else")
+    );
+    fs::remove_file(record.path.join(".git")).unwrap();
+    symlink(admin.join("gitdir"), record.path.join(".git")).unwrap();
+    assert!(
+        worktrees::repair::review(&paths, &project, &record.id, CancellationToken::new())
+            .await
+            .is_err()
+    );
+    fs::remove_file(record.path.join(".git")).unwrap();
+    fs::write(admin.join("locked"), "unavailable drive").unwrap();
+    assert!(
+        worktrees::repair::review(&paths, &project, &record.id, CancellationToken::new())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Unlock")
+    );
+    fs::remove_file(admin.join("locked")).unwrap();
+    fs::rename(admin.join("index"), admin.join("preserved-index")).unwrap();
+    assert!(
+        worktrees::repair::review(&paths, &project, &record.id, CancellationToken::new())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("index is missing")
+    );
+    assert!(!record.path.join(".git").exists());
+}

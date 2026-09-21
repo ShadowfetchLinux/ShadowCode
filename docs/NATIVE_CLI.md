@@ -94,6 +94,9 @@ forwards ordinary shutdown signals, waits for native cleanup, and preserves the
 payload's exit status. Force-killing the wrapper still reports its signal status;
 the native child observes wrapper loss and shuts down.
 
+`worktree --review-repair ID` and `worktree --repair ID --repair-hash HASH`
+restore reviewed missing Git connection files while preserving files and staging.
+
 See [native worktrees](NATIVE_WORKTREES.md) for creation, reviewed removal,
 missing-checkout recovery, reviewed copying of uncommitted edits, and reviewed
 return of committed work. `worktree --review-changes` followed by

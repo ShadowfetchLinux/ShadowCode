@@ -1,5 +1,6 @@
-//! Managed Git worktree creation. The source checkout is never reset or stashed.
+//! Managed Git worktrees. The source checkout is never reset or stashed.
 pub mod changes;
+pub mod repair;
 use crate::{
     paths::{self, AppPaths},
     process::{self, ProcessSpec},

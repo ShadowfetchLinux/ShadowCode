@@ -12,6 +12,8 @@ import { api, type ManagedWorktree, type WorktreeInspection } from "../api";
 vi.mock("../api", () => ({
   api: {
     worktrees: vi.fn(),
+    reviewWorktreeRepair: vi.fn(),
+    repairWorktree: vi.fn(),
     reviewWorktreeCopy: vi.fn(),
     copyWorktreeChanges: vi.fn(),
     createWorktree: vi.fn(),
@@ -231,4 +233,39 @@ it("reviews separate staged and unstaged edits and rejects a stale copy", async 
     screen.queryByRole("region", { name: "Review copied changes" }),
   ).toBeNull();
   expect(api.createWorktree).not.toHaveBeenCalled();
+});
+
+it("requires review before repairing a missing connection and clears rejected review", async () => {
+  vi.mocked(api.reviewWorktreeRepair).mockResolvedValue({
+    record,
+    administrative_directory: "/source/.git/worktrees/managed",
+    head: "retained-head",
+    checkout_pointer: null,
+    registration_pointer: "/isolated/.git",
+    warning: "Files and staging are preserved.",
+    hash: "repair-hash",
+  });
+  vi.mocked(api.repairWorktree).mockRejectedValue(
+    new Error("Repair state changed"),
+  );
+  render(<WorktreeSettings onToast={vi.fn()} />);
+  fireEvent.click(await screen.findByText("Review connection repair"));
+  const region = await screen.findByRole("region", {
+    name: "Review connection repair",
+  });
+  expect(document.activeElement).toBe(region);
+  expect(
+    screen.getByText("Checkout connection: Missing — will restore"),
+  ).toBeTruthy();
+  expect(api.repairWorktree).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("Restore Git connection"));
+  await screen.findByRole("alert");
+  expect(api.repairWorktree).toHaveBeenCalledWith(
+    "/source",
+    "managed",
+    "repair-hash",
+  );
+  expect(
+    screen.queryByRole("region", { name: "Review connection repair" }),
+  ).toBeNull();
 });
