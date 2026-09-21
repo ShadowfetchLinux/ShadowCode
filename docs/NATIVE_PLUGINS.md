@@ -1,4 +1,4 @@
-# Native project plugins — 0.20 development
+# Native project plugins — 0.21
 
 A native plugin installs a reviewed collection of skills, slash commands,
 lifecycle hooks and MCP definitions into one project. The desktop and CLI use

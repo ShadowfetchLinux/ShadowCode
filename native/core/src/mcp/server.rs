@@ -467,6 +467,9 @@ impl Handler {
         if let Some(lease) = lease {
             lease.close().await?;
         }
+        // Allow the engine's cancellation path to reap shell descendants
+        // before the gateway reports shutdown complete.
+        tokio::time::sleep(Duration::from_millis(100)).await;
         Ok(())
     }
 }

@@ -1,14 +1,12 @@
-# Native desktop development — 0.20
+# Native desktop — 0.21
 
-The `native-0.20` branch builds one Rust desktop executable with the React
+The `main` branch builds one Rust desktop executable with the React
 interface embedded. Tauri hosts it in the system WebKit webview. The interface
 calls the Rust engine through IPC; desktop operation needs no HTTP listener,
 Python interpreter, Node runtime, or browser launcher.
 
-This is a development build. The [full migration gates](NATIVE_MIGRATION.md)
-still apply, including orchestration/integration parity, packaging, broader UI
-stress tests, and installation. Keep the supported 0.19 installation until the
-native release is verified.
+This is the supported native release. The [release gates](NATIVE_MIGRATION.md)
+record the acceptance checks behind the published packages.
 
 ## Attaching to a running engine
 
@@ -163,15 +161,10 @@ dependency resolution on the build host, and absence of Python interpreters,
 libraries, and sidecars. It also verifies the SHA-256 digest of every listed
 notice in each extracted package. It produces checksums in `artifacts/native-package/`.
 
-The first verified CI packages contain an approximately 17.5 MB executable, an
-83 MB AppImage (including native GTK/WebKit libraries), and an 8.2 MB Debian
-package (using system GTK/WebKit). CI builds, inspects, and exercises the actual
-AppImage on Ubuntu 24.04, with development downloads retained for 14 days.
-The downloaded packages also passed inspection and the AppImage window workflow
-on the development machine. These remain development artifacts.
-Corresponding-source release artifacts, complete feature migration, and final
-release verification/installation are still required before publication as the
-supported download.
+The published packages are built and inspected on Ubuntu 24.04. The AppImage
+includes the native GTK/WebKit runtime; the Debian package uses the system
+libraries. Both packages are checked for embedded Python/Node runtimes and
+include dependency notices and matching SHA-256 checksums.
 Concurrent extraction-mode launches use independent private temporary directories.
 One CLI exit or secondary activation cannot remove a running window's files.
 The runtime regression checks concurrent owners, deferred resources, signals,

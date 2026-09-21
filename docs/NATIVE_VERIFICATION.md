@@ -1,13 +1,15 @@
-# Native engine verification — development branch
+# Native engine verification — 0.21 release
 
-Recorded on 2026-09-20. This is evidence for the Rust engine under development,
-not a claim that the native desktop release is complete. The full release gates
-remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
+Recorded on 2026-09-21. This is the evidence record for the published Python-free
+Rust engine and its native desktop packages. The release gates are listed in
+[NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **234 native unit and
-integration tests** pass on the development machine. The suite covers:
+The UI production build and 45 UI tests pass. The native unit and integration
+suite passes serially with locked dependencies; the only local limitation is
+that rustdoc cannot load the host's missing pinned `libLLVM.so.22.1` shared
+library. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
   legacy SQLite backups and goal import, session branching, and durable replay.

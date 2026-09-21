@@ -1080,5 +1080,5 @@ pub fn schemas() -> Vec<Value> {
         ("git_commit","Commit staged changes after approval. Hooks and signing are disabled; no push.",json!({"message":s}),vec!["message"]),
         ("update_plan","Update the visible plan. Only one step may be in progress; mark completed only with evidence.",json!({"goal":s,"steps":{"type":"array","items":{"type":"object","properties":{"id":s,"title":s,"status":{"type":"string","enum":["pending","in_progress","completed","blocked","failed"]},"detail":s},"required":["title","status"]}}}),vec!["steps"]),
     ];
-    specs.into_iter().map(|(name,description,properties,required)|json!({"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
+    specs.into_iter().map(|(name,description,properties,required)|json!({"type":"function","function":{"name":name,"description":truncate(description, 80),"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
 }

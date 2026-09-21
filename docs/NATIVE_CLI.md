@@ -1,10 +1,10 @@
-# Native command line — 0.20 development
+# Native command line — 0.21
 
 The same `shadowcode` executable runs tasks in a terminal and opens the desktop.
 CLI commands start before GTK or WebKit: they need no display, Python runtime,
 Node runtime, browser, or HTTP listener. Model inference still runs in Ollama or
-your configured compatible provider. This guide describes the native development
-branch; [remaining release gates](NATIVE_MIGRATION.md) still apply.
+your configured compatible provider. This guide describes the supported native
+release; [release gates](NATIVE_MIGRATION.md) record its verification.
 
 For a fullscreen workspace, use [`shadowcode tui`](NATIVE_TUI.md).
 

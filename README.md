@@ -10,9 +10,9 @@ context, tools, permissions, checkpoints, plans, and verification.
 
 ![ShadowCode workspace](docs/images/workspace-light.png)
 
-**Native 0.20 development:** the `native-0.20` branch now builds a Rust/Tauri
-desktop window with the interface embedded in the executable. It needs no Python
-runtime or browser launcher. See the [native development guide](docs/NATIVE_DESKTOP.md)
+**Native 0.21 release:** the `main` branch builds a Rust/Tauri desktop window
+with the interface embedded in the executable. It needs no Python runtime or
+browser launcher. See the [native desktop guide](docs/NATIVE_DESKTOP.md)
 and the [goals](docs/NATIVE_GOALS.md) and [model routing](docs/NATIVE_ROUTING.md)
 workflows, [managed background processes and model tools](docs/NATIVE_BACKGROUND.md), and
 [native slash commands and project skills](docs/NATIVE_WORKFLOWS.md),
@@ -29,15 +29,13 @@ with Codex/Claude Code/Cursor registration output, and a
 that share the active desktop engine or run headlessly with their own profile.
 The [native desktop can also attach](docs/NATIVE_DESKTOP.md#attaching-to-a-running-engine)
 to a running headless/TUI engine and leave its work running when the window closes.
-Development AppImage and Debian
+Release AppImage and Debian
 packages include [dependency inventories and notices](licenses/native/README.md).
-Integrations and release checks are tracked under the [migration gates](docs/NATIVE_MIGRATION.md).
-The existing 0.19 release remains available until the native tag is verified and
-published.
+Integrations and release checks are tracked under the [release gates](docs/NATIVE_MIGRATION.md).
 
 ## Native AppImage
 
-After the `v0.21.0` native release is tagged, download the **x86_64 AppImage**
+Download the `v0.21.0` **x86_64 AppImage**
 and its `SHA256SUMS` file from [GitHub releases](https://github.com/ShadowfetchLinux/ShadowCode/releases/latest).
 The native application embeds its interface; Python, Node.js and a browser
 launcher are not runtime dependencies. The release targets **Ubuntu 24.04 or
@@ -63,7 +61,7 @@ entry automatically. It replaces older ShadowCode AppImages only after the new
 executable starts, preserves settings, keys, memory and task history, and refuses
 a changed download before it can alter the installed application.
 
-## Native 0.20 highlights
+## Native 0.21 highlights
 
 - **A focused workspace.** Persistent projects and tasks, search, pinned tasks,
   a refined light/dark interface, and responsive layouts. Files, review, terminal,

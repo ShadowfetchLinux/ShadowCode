@@ -1,4 +1,4 @@
-# Native SQLite inspection — 0.20 development
+# Native SQLite inspection — 0.21
 
 The native engine lists tables and queries existing SQLite files inside the
 selected project. It replaces the Python built-in reader with bundled SQLite;

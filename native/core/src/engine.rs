@@ -981,7 +981,7 @@ impl Engine {
         tools: &ToolExecutor,
     ) -> Result<(String, Value)> {
         let model = ModelClient::new(running.config.model.clone(), &self.0.paths)?;
-        let schemas: Vec<_> = tools
+        let mut schemas: Vec<_> = tools
             .schemas()
             .into_iter()
             .filter(|schema| {
@@ -991,6 +991,18 @@ impl Engine {
                     || name == "git_branch"
             })
             .collect();
+        // Small local models cannot accept the full native catalog plus a
+        // useful response window. Keep the high-frequency coding surface and
+        // omit optional integrations; the complete catalog remains available
+        // when a larger context model is selected.
+        if running.config.model.context_limit <= 4096 {
+            const CORE: &[&str] = &[
+                "list_files", "read_file", "search_files", "search_text",
+                "search_symbol", "write_file", "edit_file", "apply_patch",
+                "create_directory", "exec", "git_status", "git_diff", "update_plan",
+            ];
+            schemas.retain(|schema| CORE.contains(&schema["function"]["name"].as_str().unwrap_or("")));
+        }
         let mut messages = self
             .0
             .store

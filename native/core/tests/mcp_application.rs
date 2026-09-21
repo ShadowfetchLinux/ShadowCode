@@ -545,8 +545,7 @@ async fn engine_waits_for_mcp_cleanup_on_success_failure_limits_cancellation_and
                 model: None,
                 mode: "code".into(),
                 queue: false,
-            
-            images: Vec::new(),
+                images: Vec::new(),
         })
             .await
             .unwrap();
@@ -751,8 +750,7 @@ async fn engine_http_streams_close_on_completion_cancellation_and_shutdown() {
                 model: None,
                 mode: "code".into(),
                 queue: false,
-            
-            images: Vec::new(),
+                images: Vec::new(),
         })
             .await
             .unwrap();

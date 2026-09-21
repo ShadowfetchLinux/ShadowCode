@@ -69,19 +69,50 @@ pub struct ProcessResult {
 
 struct ProcessGroup(u32);
 impl ProcessGroup {
+    #[cfg(target_os = "linux")]
+    fn descendants(pid: u32) -> Vec<u32> {
+        let path = format!("/proc/{pid}/task/{pid}/children");
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|value| value.parse().ok())
+            .flat_map(|child| {
+                let mut all = vec![child];
+                all.extend(Self::descendants(child));
+                all
+            })
+            .collect()
+    }
     fn terminate(&self) {
         #[cfg(unix)]
         if self.0 != 0 {
+            #[cfg(target_os = "linux")]
+            let descendants = Self::descendants(self.0);
             unsafe {
                 libc::kill(-(self.0 as i32), libc::SIGTERM);
+                // Some shells alter their process group while spawning a
+                // background job. Signal the leader directly as well so an
+                // owned task cannot outlive its cancellation scope.
+                libc::kill(self.0 as i32, libc::SIGTERM);
+                #[cfg(target_os = "linux")]
+                for child in descendants {
+                    libc::kill(child as i32, libc::SIGTERM);
+                }
             }
         }
     }
     fn kill(&mut self) {
         #[cfg(unix)]
         if self.0 != 0 {
+            #[cfg(target_os = "linux")]
+            let descendants = Self::descendants(self.0);
             unsafe {
                 libc::kill(-(self.0 as i32), libc::SIGKILL);
+                libc::kill(self.0 as i32, libc::SIGKILL);
+                #[cfg(target_os = "linux")]
+                for child in descendants {
+                    libc::kill(child as i32, libc::SIGKILL);
+                }
             }
         }
         self.0 = 0;
@@ -212,6 +243,17 @@ async fn run_internal(
         .envs(&spec.env);
     #[cfg(unix)]
     command.process_group(0);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        command.pre_exec(|| {
+            // Propagate cancellation to shell-created descendants when their
+            // owning process exits, preventing orphaned local-model tasks.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = command
         .spawn()
         .with_context(|| format!("Could not start {}", spec.program))?;
@@ -258,7 +300,7 @@ async fn run_internal(
         _=deadline=>(None,true,false),
         _=cancel.cancelled()=>(None,false,true),
     };
-    let status = if cancelled && monitor.is_some() {
+    let status = if cancelled {
         group.terminate();
         tokio::time::timeout(Duration::from_secs(2), child.wait())
             .await

@@ -1,4 +1,4 @@
-# Queued follow-ups — native 0.20 development
+# Queued follow-ups — native 0.21
 
 Keep working on the next instruction while ShadowCode runs a task. In the native
 desktop, enter a message and press Enter or **Queue follow-up**. The running
@@ -45,12 +45,11 @@ messages too if they are no longer wanted.
   managed shutdown and cancels its active and queued work. After an abrupt exit,
   unfinished tasks are marked interrupted for review; they are not replayed
   automatically.
-- This desktop queue uses the native engine. The supported 0.19 Python/browser
-  release retains its existing one-task composer. The native CLI also supports
-  queued submissions; see [NATIVE_CLI.md](NATIVE_CLI.md).
+- This desktop queue uses the native engine. The native CLI also supports queued
+  submissions; see [NATIVE_CLI.md](NATIVE_CLI.md).
 
 See [NATIVE_VERIFICATION.md](NATIVE_VERIFICATION.md) for the engine and real-window
-checks and [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md) for the remaining release gates.
+checks and [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md) for the release gates.
 
 ## Polling and long prompts
 

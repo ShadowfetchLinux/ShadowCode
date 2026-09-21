@@ -112,10 +112,9 @@ fn request(service: &Service, mode: &str, queue: bool) -> StartRequest {
         model: None,
         mode: mode.into(),
         queue,
+        images: Vec::new(),
     }
-
-            images: Vec::new(),
-        }
+}
 async fn wait(service: &Service, job: &Job) -> Job {
     tokio::time::timeout(Duration::from_secs(8), service.engine.wait(&job.id))
         .await
@@ -746,7 +745,10 @@ async fn native_loop_fires_compaction_and_provider_error_hooks() {
     let server = support::server(|index, _| {
         (
             if index < 2 {
-                response(&"Historical detail. ".repeat(1000), json!([]))
+                response(
+                    &(0..360).map(|n| format!("Historical observation {n}: inspected module {n}.\n")).collect::<String>(),
+                    json!([]),
+                )
             } else {
                 json!({"error":{"message":"fixture failure"}})
             },
@@ -768,7 +770,8 @@ async fn native_loop_fires_compaction_and_provider_error_hooks() {
         .start(request(&service, "code", false))
         .await
         .unwrap();
-    assert_eq!(wait(&service, &first).await.status, "completed");
+    let first_result = wait(&service, &first).await;
+    assert_eq!(first_result.status, "completed", "{first_result:?}");
     let mut continuation = request(&service, "code", false);
     continuation.session_id = Some(first.session_id.clone());
     let middle = service.engine.start(continuation.clone()).await.unwrap();

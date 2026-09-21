@@ -1,6 +1,6 @@
 # Native project and task notes
 
-The `native-0.20` development build keeps project notes in
+The native 0.21 build keeps project notes in
 `.shadow/memory/project.md` and task notes in the profile's SQLite history.
 These are explicit notes, distinct from model reasoning and recorded verification
 results. No Python process is involved.

@@ -1,6 +1,6 @@
 # Goals in the native desktop
 
-The native 0.20 development branch stores goals, milestones, their task IDs, and
+The native 0.21 release stores goals, milestones, their task IDs, and
 run state in the same SQLite database as conversation history. Goals imported
 from 0.19 retain their original checklist and completion state.
 

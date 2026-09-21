@@ -1,9 +1,9 @@
-# Native lifecycle hooks — 0.20 development
+# Native lifecycle hooks — 0.21
 
 Native hooks run explicitly enabled project commands at fixed points in an
 agent task. They use the Rust process runner and need no Python interpreter or
-callback loader. This guide covers the native development branch; the
-[remaining release gates](NATIVE_MIGRATION.md) still apply.
+callback loader. This guide covers the supported native release; the
+[release gates](NATIVE_MIGRATION.md) record its verification.
 
 [Project plugins](NATIVE_PLUGINS.md) can supply native hook definitions.
 Installation leaves them disabled; review their exact commands here before

@@ -207,7 +207,6 @@ async fn task_memory_continues_branches_and_exports_without_source_coupling() {
             model: None,
             mode: "plan".into(),
             queue: false,
-        
             images: Vec::new(),
         })
         .await

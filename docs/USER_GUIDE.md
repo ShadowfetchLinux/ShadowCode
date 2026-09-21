@@ -1,10 +1,9 @@
 # ShadowCode user guide
 
-This guide covers the supported 0.19 release. For the Python-free 0.20
-development branch, use the [native desktop](NATIVE_DESKTOP.md) and
-[native CLI](NATIVE_CLI.md) and [native hooks](NATIVE_HOOKS.md) guides, plus the documented
-[migration status](NATIVE_MIGRATION.md). Native lifecycle and integration support
-differ from the browser/API release described below.
+This guide covers the supported 0.21 native release. The desktop, CLI, terminal
+interface, and integrations use the same Python-free Rust engine. See the
+[native desktop](NATIVE_DESKTOP.md), [native CLI](NATIVE_CLI.md), and
+[release gates](NATIVE_MIGRATION.md) guides for platform and integration details.
 
 ## Start a project
 

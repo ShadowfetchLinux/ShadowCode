@@ -1,6 +1,6 @@
 # Models and routing in the native desktop
 
-The native 0.20 development build can choose a registered model for each task
+The native 0.21 build can choose a registered model for each task
 mode. Open **Health → Router**, choose the **Plan**, **Build**, **Review**, and
 **Test** models, then enable routing. Each field saves immediately. Leave a field
 on **Default** to follow the application model configured in Settings.

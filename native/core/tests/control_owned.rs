@@ -68,7 +68,6 @@ async fn dropping_an_owner_cancels_queued_jobs_without_waiting_for_an_unrelated_
             model: None,
             mode: "plan".into(),
             queue: false,
-        
             images: Vec::new(),
         })
         .await
@@ -257,7 +256,6 @@ async fn workflow_ownership_cancels_only_its_jobs_and_rejects_non_task_commands(
             model: None,
             mode: "plan".into(),
             queue: false,
-        
             images: Vec::new(),
         })
         .await

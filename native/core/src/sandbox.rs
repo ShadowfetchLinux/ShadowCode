@@ -59,7 +59,6 @@ pub fn profile_args(workspace: &Path, command: &str, allow_network: bool) -> Vec
     let ws_str = ws.to_string_lossy().into_owned();
     let mut args = vec![
         "--die-with-parent".into(),
-        "--unshare-pid".into(),
         "--unshare-ipc".into(),
         "--unshare-uts".into(),
         "--new-session".into(),

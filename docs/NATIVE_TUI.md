@@ -1,4 +1,4 @@
-# Native terminal interface — 0.20 development
+# Native terminal interface — 0.21
 
 `shadowcode tui` opens a fullscreen terminal workspace in the same Rust executable
 as the desktop and command line. It requires a real, cursor-addressable terminal;

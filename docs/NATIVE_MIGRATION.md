@@ -1,8 +1,8 @@
-# Native desktop migration — 0.20
+# Native desktop release gates — 0.21
 
 The target is a Python-free Rust application with a dedicated Tauri window and
-the existing React visual design. This document tracks engineering acceptance;
-0.19 remains the supported release until the native gates are proved.
+the existing React visual design. This document records the engineering
+acceptance gates for the published 0.21 release.
 
 ## Product and compatibility gates
 
@@ -184,8 +184,8 @@ Implemented foundation:
   and package inspection for Python runtimes or sidecars. Both packages contain
   application dependency notices; the AppImage adds an inventory and copyright
   texts for its actual bundled libraries. Package checks verify every listed
-  notice's checksum. Corresponding-source artifacts and final release validation
-  remain separate gates.
+  notice's checksum. The published release includes the corresponding runtime
+  source archive and SHA-256 manifest.
 - Clean Ubuntu 24.04 CI builds and tests both native package formats. The tagged
   native-release workflow repeats the Rust, UI, CLI, TUI, MCP, stress, window,
   package, runtime-source and packaged-app checks before it publishes checksummed
@@ -197,9 +197,9 @@ Implemented foundation:
   local AppImage probes exercise actual Ollama gpt-oss and Qwen coding tasks,
   approvals, saved continuation, streaming cancellation, and checkpoint rewind.
 
-The remaining orchestration/integrations, full desktop interaction/stress
-coverage, and release packaging are still in progress. The native
-branch is not yet a replacement for the 0.19 release.
+The native release gates are complete for the published 0.21 Linux packages.
+Future work can extend provider and platform coverage without changing the
+release's Python-free runtime contract.
 
 The [native MCP client](NATIVE_MCP.md) has bounded Rust stdio and Streamable HTTP
 transports, inert Settings/CLI registration, explicit project/content activation, lazy tool

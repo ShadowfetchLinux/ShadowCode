@@ -38,10 +38,9 @@ fn request(service: &Service, mode: &str) -> StartRequest {
         model: None,
         mode: mode.into(),
         queue: true,
+        images: Vec::new(),
     }
-
-            images: Vec::new(),
-        }
+}
 async fn wait(service: &Service, id: &str) -> Job {
     tokio::time::timeout(Duration::from_secs(8), service.engine.wait(id))
         .await

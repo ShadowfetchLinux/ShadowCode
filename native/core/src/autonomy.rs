@@ -516,14 +516,15 @@ pub fn preserve(messages: &[Value]) -> Value {
                 collect_paths(&body, &mut files);
                 let name = message["name"].as_str().unwrap_or("");
                 if body["success"] == false || body["ok"] == false {
+                    let error_text = tools::truncate(body["error"].as_str().unwrap_or(content), 160);
                     if failed.len() < 8 {
-                        failed.push(format!(
-                            "{name}: {}",
-                            tools::truncate(body["error"].as_str().unwrap_or(content), 160)
-                        ));
+                        failed.push(format!("{name}: {error_text}"));
                     }
                     if unresolved.len() < 8 {
                         unresolved.push(name.to_owned());
+                    }
+                    if error_text.to_ascii_lowercase().contains("denied") && security.len() < 6 {
+                        security.push(error_text.to_owned());
                     }
                 } else if matches!(
                     name,
@@ -544,7 +545,7 @@ pub fn preserve(messages: &[Value]) -> Value {
                 security.push(tools::truncate(content, 160).to_owned());
             }
         }
-        if message.get("tool_calls").is_none() && content.contains("\"steps\"") {
+        if content.contains("\"steps\"") {
             if let Ok(body) = serde_json::from_str::<Value>(content) {
                 if body.get("steps").is_some() {
                     plan = body;

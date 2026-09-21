@@ -1,6 +1,6 @@
 # Native project inspection, diagnostics and test jobs
 
-These workflows run in Rust on the `native-0.20` development branch. The desktop,
+These workflows run in Rust in the native 0.21 release. The desktop,
 CLI and MCP server use the same project and task services. Python is needed only
 when the user's project itself requires a Python test runner.
 

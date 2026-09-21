@@ -421,8 +421,7 @@ async fn workspace_reservation_excludes_tasks_and_is_released_on_drop() {
         model: None,
         mode: "code".into(),
         queue: true,
-    
-            images: Vec::new(),
+        images: Vec::new(),
         };
     assert!(service
         .engine

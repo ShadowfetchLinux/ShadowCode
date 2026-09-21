@@ -219,6 +219,14 @@
       "file": "sse-stream-0.2.6/LICENSE-MIT",
       "url": "https://raw.githubusercontent.com/4t145/sse-stream/3108d1ec2b5b34b6bd35e5b50bd0eb2c8fa6e04f/LICENSE-MIT",
       "sha256": "049d23c7810a0723f186a193f841378dbc307f62be89bdba21c73126b0df2c52"
+    },
+    {
+      "packages": [
+        "tree-sitter-typescript@0.23.2"
+      ],
+      "file": "tree-sitter-typescript-0.23.2/LICENSE",
+      "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/v0.23.2/LICENSE",
+      "sha256": "34c20e121b26f8b4d49b71c284e41a15462154606519b75f94112ae8fa807630"
     }
   ]
 }

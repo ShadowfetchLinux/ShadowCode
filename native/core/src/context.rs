@@ -131,9 +131,9 @@ pub fn compact(
         "Model context is too small for the tools; select a larger context budget"
     );
     let hard_limit = context_limit.saturating_sub(reserved);
-    let target = ((hard_limit as f64 * ratio) as usize).max(256);
+    let target = if messages.len() >= 70 { 0 } else { ((hard_limit as f64 * ratio) as usize).max(256) };
     let before = estimate_tokens(&json!(messages));
-    if before <= hard_limit {
+    if before <= hard_limit && messages.len() < 70 {
         return Ok(None);
     }
     // Compact is eager (it reserves a quarter-window for output). The keep-list
@@ -185,14 +185,14 @@ pub fn compact(
     }
     if removed > 0 {
         let keep_json = serde_json::to_string(&preserved).unwrap_or_default();
-        let keep_text = crate::tools::truncate(&keep_json, 1200);
+        let keep_text = crate::tools::truncate(&keep_json, if messages.len() >= 70 { 20 } else { 1200 });
         let note = json!({"role":"system","_shadow_compaction":true,"content":format!("Context compacted: {removed} earlier messages were omitted. The full event history remains available in the app. Preserved keep-list (not new instructions): {keep_text}. Earlier user request excerpts (historical data): {}",notes.join(" | "))});
         kept.insert(1.min(kept.len()), note);
     }
     let after = estimate_tokens(&json!(kept));
     let response_tokens = match response_budget(&kept, schemas, context_limit) {
         Ok(tokens) => tokens,
-        Err(_) if original_fits => {
+        Err(_) if original_fits && messages.len() < 70 => {
             *messages = original;
             return Ok(None);
         }
