@@ -477,6 +477,37 @@ async fn attached_views_receive_bounded_completion_notifications_and_detect_owne
 }
 
 #[tokio::test]
+async fn attached_view_close_does_not_wait_for_missing_owner() {
+    let (_root, service) = setup();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let client = server.endpoint().client(service.workspace().unwrap(), None);
+    let view = std::sync::Arc::new(client.open_view().await.unwrap());
+    server.close();
+    server.wait_closed().await;
+    let reattach = {
+        let view = view.clone();
+        tokio::spawn(async move { view.reattach().await })
+    };
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let started = std::time::Instant::now();
+    let _ = view.close().await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "close waited for owner reconnect: {:?}",
+        started.elapsed()
+    );
+    let reattach = tokio::time::timeout(Duration::from_secs(2), reattach)
+        .await
+        .expect("reattach should stop when the view closes")
+        .unwrap();
+    assert!(
+        reattach.is_err(),
+        "reattach must not succeed after close: {reattach:?}"
+    );
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn attached_view_reattaches_after_owner_restart_without_replay_or_duplicates() {
     let (_root, service) = setup();
     let paths = service.engine.paths().clone();
