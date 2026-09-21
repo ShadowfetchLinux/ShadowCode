@@ -89,6 +89,56 @@ gaps rather than rewriting working systems.
 
 Pushed to `origin/audit/independent-hardening-20260921` only. Not merged to `main`.
 
+## Rebase onto current main (2026-09-21)
+
+- **Needed:** yes. Merge-base was `7f7c760`. Audit had five commits on top of
+  native-0.20; `origin/main` had five commits the audit branch lacked.
+- **Rebased onto:** `ab5e7c8fb578d969ff1f41454d7ff7f946be20c7`
+  (`Canonicalize ShadowCode version to 0.20.0 after native merge (#2)`).
+- **What main gained since the audit branched:** version strings and the
+  flagship test now treat `0.20.0` as canonical (`0.19.0` is stale);
+  Playwright `/new` waits for session activation and skips persisting
+  `/new` as a draft; e2e waits for `.loading-task` to clear before the
+  command palette. Those files (`App.tsx`, `workspace.spec.ts`,
+  `pyproject.toml`, `src/shadow_agent/__init__.py`,
+  `packaging/shadow-agent.desktop`, `tests/test_flagship_018.py`) were
+  not touched by the audit commits.
+- **Conflicts:** none. All five audit commits applied cleanly. Main's
+  newer behavior was preserved automatically; no audit hunk reverted
+  main.
+- **Audit fixes still present after rebase:**
+  - `models.rs` `resolve_call_index` plus identity-ignore on repeated
+    `id`/`name`; tests `compatible_stream_continues_unindexed_argument_deltas`
+    and `compatible_stream_ignores_repeated_call_identity`.
+  - `store.rs` `recover_jobs` writes durable `agent.completed` with
+    `interrupted: true` and `event_cursor`; foundations recovery tests.
+  - `safeMarkdownHref` allowlists `#` fragments and credential-free
+    `http`/`https`; `Markdown.test.tsx`.
+  - `ARCHITECTURE.md` / `SECURITY.md` / this journal.
+- **Behavioral change vs pre-rebase audit:** none of the audit patches
+  changed. The rebased tree now also includes main's 0.20.0 version
+  canonicalization and `/new` session-switch timing. Pre-rebase Python
+  leftover (`test_version_is_canonical_everywhere` expecting README
+  `0.19.0`) is resolved on this branch because it now contains main's
+  version commit.
+- **HEAD after rebase (before this journal note):**
+  `6f50644666f2067c68b87935d1e50ff9e4b1bfe2`
+- **Post-rebase commands:**
+  - `cargo test --workspace --offline --lib --tests --bins`: pass
+    (audit stream and recovery cases included).
+  - `npm --prefix ui test -- --run`: 36 passed (8 files).
+  - `npm --prefix ui run build`: pass.
+  - `cargo build -p shadowcode-desktop --offline`: pass.
+  - `cargo clippy --workspace --all-targets --offline -- -D warnings`:
+    **not run**. This host has `rustc`/`cargo` 1.95.0 but no
+    `clippy`/`rustfmt` binaries and no `rustup`. Matching packages
+    exist: `sudo apt install rust-clippy rustfmt` (candidates
+    `1.95.0~1777070268~24.04~a85c377`). No sudo was used.
+- **Main:** not checked out for merge, not modified, not force-pushed.
+  Remains `ab5e7c8` on `origin/main`.
+- **Push:** `git push --force-with-lease origin audit/independent-hardening-20260921`
+  only, after this journal commit.
+
 ## Remaining concerns
 
 - Shell/network/root checks remain lexical word lists, not a sandbox.
