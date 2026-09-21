@@ -103,12 +103,13 @@ pub async fn create(
     cancel: CancellationToken,
 ) -> Result<Record> {
     let _guard = tokio::select! {guard=CREATION.lock()=>guard,_=cancel.cancelled()=>anyhow::bail!("Worktree creation cancelled")};
-    create_unlocked(paths, source, reference, cancel).await
+    create_unlocked(paths, source, reference, true, cancel).await
 }
 async fn create_unlocked(
     paths: &AppPaths,
     source: &Path,
     reference: &str,
+    ready_after_checkout: bool,
     cancel: CancellationToken,
 ) -> Result<Record> {
     let source = Workspace::open(source)?.path;
@@ -178,8 +179,11 @@ async fn create_unlocked(
     .await;
     match result {
         Ok(_) => {
-            record.state = "ready".into();
-            save(&records, &record)?;
+            // A copy is not ready until its patches, files and verification finish.
+            if ready_after_checkout {
+                record.state = "ready".into();
+                save(&records, &record)?;
+            }
             Ok(record)
         }
         Err(error) => {

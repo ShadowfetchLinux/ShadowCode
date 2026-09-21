@@ -210,7 +210,7 @@ pub async fn copy<R>(
         "Source changed during capture; review it again"
     );
     let mut record =
-        super::create_unlocked(paths, source, &snapshot.review.head, cancel.clone()).await?;
+        super::create_unlocked(paths, source, &snapshot.review.head, false, cancel.clone()).await?;
     let (records, _) = super::roots(paths)?;
     record.state = "copying".into();
     record.detail =
