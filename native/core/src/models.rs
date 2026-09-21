@@ -381,23 +381,26 @@ impl StreamDecoder {
         );
         if let Some(calls) = message["tool_calls"].as_array() {
             for (position, call) in calls.iter().enumerate() {
-                let index = call["index"]
-                    .as_u64()
-                    .map(|i| i as usize)
-                    .unwrap_or_else(|| {
-                        if self.ollama {
-                            self.calls.len()
-                        } else {
-                            position
-                        }
-                    });
+                let index = self.resolve_call_index(call, position, calls.len());
                 ensure!(index < 128, "Too many tool calls in one response");
                 let part = self.calls.entry(index).or_default();
                 if let Some(id) = call["id"].as_str() {
-                    part.id.push_str(id);
+                    if part.id.is_empty() {
+                        part.id.push_str(id);
+                    } else {
+                        ensure!(part.id == id, "Tool call id changed during streaming");
+                    }
                 }
                 if let Some(name) = call["function"]["name"].as_str() {
-                    part.name.push_str(name);
+                    if part.name.is_empty() {
+                        part.name.push_str(name);
+                    } else if part.name != name && !name.is_empty() {
+                        if name.starts_with(&part.name) {
+                            part.name = name.to_owned();
+                        } else if !part.name.ends_with(name) {
+                            part.name.push_str(name);
+                        }
+                    }
                 }
                 if let Some(args) = call["function"].get("arguments") {
                     if let Some(args) = args.as_str() {
@@ -444,6 +447,45 @@ impl StreamDecoder {
             .prompt_tokens
             .saturating_add(self.response.usage.completion_tokens);
         Ok(())
+    }
+    /// Compatible local servers often omit `index` after the first delta.
+    /// Use an explicit index, then a matching call id, then continue one
+    /// incomplete same-name call. A new name or a completed same-name call
+    /// starts another slot. Ollama still treats each unindexed frame as a
+    /// new call unless an id matches an earlier one.
+    fn resolve_call_index(&self, call: &Value, position: usize, chunk_len: usize) -> usize {
+        if let Some(index) = call["index"].as_u64() {
+            return index as usize;
+        }
+        if let Some(id) = call["id"].as_str().filter(|id| !id.is_empty()) {
+            if let Some((&index, _)) = self.calls.iter().find(|(_, part)| part.id == id) {
+                return index;
+            }
+        }
+        if self.ollama {
+            return self.calls.len();
+        }
+        let name = call["function"]["name"].as_str().unwrap_or("");
+        if name.is_empty() {
+            return self.calls.keys().next_back().copied().unwrap_or(position);
+        }
+        let named: Vec<usize> = self
+            .calls
+            .iter()
+            .filter(|(_, part)| part.name == name)
+            .map(|(&index, _)| index)
+            .collect();
+        if chunk_len == 1 && named.len() == 1 {
+            let args = &self.calls[&named[0]].args;
+            if args.is_empty() || serde_json::from_str::<Value>(args).is_err() {
+                return named[0];
+            }
+        }
+        self.calls
+            .keys()
+            .next_back()
+            .map(|index| index + 1)
+            .unwrap_or(position)
     }
     fn full_response(&mut self, value: Value) -> Result<()> {
         if self.ollama {

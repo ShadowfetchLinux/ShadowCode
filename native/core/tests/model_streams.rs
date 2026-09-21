@@ -101,6 +101,50 @@ fn compatible_stream_reassembles_utf8_and_interleaved_tool_arguments() {
 }
 
 #[test]
+fn compatible_stream_continues_unindexed_argument_deltas() {
+    let wire = [
+        sse(json!({"choices":[{"delta":{"tool_calls":[{"id":"call_a","function":{"name":"read_file","arguments":"{\"pa"}}]}}]})),
+        sse(json!({"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"th\":\"README.md\"}"}}]}}]})),
+        sse(json!({"choices":[{"delta":{"tool_calls":[{"id":"call_b","function":{"name":"search_text","arguments":"{\"pattern\":\"TODO\"}"}}]}}]})),
+        sse(json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]})),
+        "data: [DONE]\n\n".into(),
+    ]
+    .concat();
+    for chunk_size in [1, 5, 4096] {
+        let mut decoder = StreamDecoder::new(false);
+        for chunk in wire.as_bytes().chunks(chunk_size) {
+            decoder.push(chunk).unwrap();
+        }
+        decoder.flush().unwrap();
+        let result = decoder.finish().unwrap();
+        assert_eq!(result.tool_calls.len(), 2);
+        assert_eq!(result.tool_calls[0].id, "call_a");
+        assert_eq!(result.tool_calls[0].arguments["path"], "README.md");
+        assert_eq!(result.tool_calls[1].id, "call_b");
+        assert_eq!(result.tool_calls[1].arguments["pattern"], "TODO");
+    }
+}
+
+#[test]
+fn compatible_stream_ignores_repeated_call_identity() {
+    let wire = [
+        sse(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]})),
+        sse(json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"read_file","arguments":"\"README.md\"}"}}]}}]})),
+        sse(json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]})),
+        "data: [DONE]\n\n".into(),
+    ]
+    .concat();
+    let mut decoder = StreamDecoder::new(false);
+    decoder.push(wire.as_bytes()).unwrap();
+    decoder.flush().unwrap();
+    let result = decoder.finish().unwrap();
+    assert_eq!(result.tool_calls.len(), 1);
+    assert_eq!(result.tool_calls[0].id, "call_a");
+    assert_eq!(result.tool_calls[0].name, "read_file");
+    assert_eq!(result.tool_calls[0].arguments["path"], "README.md");
+}
+
+#[test]
 fn incomplete_invalid_and_cut_short_calls_are_never_accepted() {
     let start = sse(
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"x","function":{"name":"exec","arguments":"{\"command\":"}}]}}]}),
