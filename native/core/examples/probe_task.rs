@@ -70,7 +70,9 @@ async fn main() -> Result<()> {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     });
-    let request=StartRequest{workspace:project.clone(),task:"Fix the add function in src/lib.rs so it adds its two inputs. Inspect the file using tools, make the smallest change, then run exactly `cargo test --offline --lib` using exec with no cwd parameter. Preserve the existing tests and package files. Finish only after seeing the test result.".into(),session_id:None,model:None,mode:"code".into(),queue:false};
+    let request=StartRequest{workspace:project.clone(),task:"Fix the add function in src/lib.rs so it adds its two inputs. Inspect the file using tools, make the smallest change, then run exactly `cargo test --offline --lib` using exec with no cwd parameter. Preserve the existing tests and package files. Finish only after seeing the test result.".into(),session_id:None,model:None,mode:"code".into(),queue:false
+            images: Vec::new(),
+        };
     let first = engine.start(request).await?;
     let completed =
         tokio::time::timeout(Duration::from_secs(240), engine.wait(&first.id)).await??;
@@ -107,7 +109,9 @@ async fn main() -> Result<()> {
         "Independent verification failed: {}",
         verified.stderr
     );
-    let second=engine.start(StartRequest{workspace:project.clone(),task:"Read src/lib.rs again and tell me what add(-2, 1) now returns. Do not change files or run commands.".into(),session_id:Some(first.session_id.clone()),model:None,mode:"review".into(),queue:false}).await?;
+    let second=engine.start(StartRequest{workspace:project.clone(),task:"Read src/lib.rs again and tell me what add(-2, 1) now returns. Do not change files or run commands.".into(),session_id:Some(first.session_id.clone()),model:None,mode:"review".into(),queue:false
+            images: Vec::new(),
+        }).await?;
     let continued =
         tokio::time::timeout(Duration::from_secs(180), engine.wait(&second.id)).await??;
     ensure!(

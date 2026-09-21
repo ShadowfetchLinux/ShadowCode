@@ -704,6 +704,7 @@ export const api = {
     model?: string,
     purpose: string = "coder",
     queue = false,
+    images: string[] = [],
   ) =>
     send<Job>("/api/jobs", "POST", {
       task,
@@ -712,6 +713,7 @@ export const api = {
       model: model || undefined,
       purpose,
       queue,
+      images: images.length ? images : undefined,
     }),
   job: (id: string) => get<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string, only_if_queued = false) =>
@@ -744,7 +746,16 @@ export const api = {
       expected_hash: expectedHash,
     }),
   attach: (filename: string, text: string) =>
-    send<{ path: string }>("/api/workspace/attach", "POST", { filename, text }),
+    send<{ path: string; kind?: string }>("/api/workspace/attach", "POST", {
+      filename,
+      text,
+    }),
+  attachImage: (filename: string, data_base64: string) =>
+    send<{ path: string; mime: string; bytes: number; kind: string }>(
+      "/api/workspace/attach-image",
+      "POST",
+      { filename, data_base64 },
+    ),
   undo: () =>
     send<{ ok: boolean; restored: string[] }>(
       "/api/checkpoints/undo",

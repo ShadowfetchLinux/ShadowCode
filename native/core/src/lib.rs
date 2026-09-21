@@ -32,6 +32,7 @@ pub mod service;
 pub mod sqlite;
 pub mod store;
 pub mod tools;
+pub mod vision;
 pub mod workflows;
 pub mod workspace;
 pub mod worktrees;

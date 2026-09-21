@@ -344,6 +344,8 @@ async fn background_work_coexists_with_agent_tasks_and_shutdown_cleans_both() {
             model: None,
             mode: "plan".into(),
             queue: false,
+        
+            images: Vec::new(),
         })
         .await
         .unwrap();

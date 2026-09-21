@@ -4163,6 +4163,7 @@ name = "shadowcode-core"
 version = "0.21.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bytes",
  "cap-std",
  "clap",

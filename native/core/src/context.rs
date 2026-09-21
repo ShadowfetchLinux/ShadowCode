@@ -76,6 +76,12 @@ pub fn repair_incomplete(messages: &mut Vec<Value>) {
 }
 
 pub fn estimate_tokens(value: &Value) -> usize {
+    if let Some(arr) = value.as_array() {
+        return arr.iter().map(estimate_tokens).sum();
+    }
+    if value.get("role").is_some() {
+        return crate::vision::estimate_message_tokens(value);
+    }
     value.to_string().len().div_ceil(3)
 }
 

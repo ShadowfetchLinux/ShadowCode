@@ -59,6 +59,9 @@ pub struct StartRequest {
     pub mode: String,
     #[serde(default)]
     pub queue: bool,
+    /// Workspace-relative image attachment paths (png/jpeg/webp).
+    #[serde(default)]
+    pub images: Vec<String>,
 }
 fn default_mode() -> String {
     "code".into()
@@ -71,6 +74,8 @@ pub struct Job {
     pub session_id: String,
     pub task_id: String,
     pub task: String,
+    #[serde(default)]
+    pub images: Vec<String>,
     pub status: String,
     pub mode: String,
     pub model: String,
@@ -328,8 +333,14 @@ impl Engine {
             "Application is shutting down"
         );
         ensure!(
-            !request.task.trim().is_empty() && request.task.len() <= 128_000,
-            "Task must contain between 1 and 128000 bytes"
+            (!request.task.trim().is_empty() || !request.images.is_empty())
+                && request.task.len() <= 128_000,
+            "Task must contain between 1 and 128000 bytes, or include an image attachment"
+        );
+        ensure!(
+            request.images.len() <= crate::vision::MAX_IMAGES_PER_TURN,
+            "At most {} images may be attached per task",
+            crate::vision::MAX_IMAGES_PER_TURN
         );
         ensure!(
             matches!(request.mode.as_str(), "code" | "plan" | "review")
@@ -417,6 +428,7 @@ impl Engine {
             session_id: sid,
             task_id: crate::id(),
             task: request.task,
+            images: request.images,
             status: "queued".into(),
             mode: request.mode,
             model: if context.command.is_some() {
@@ -881,9 +893,15 @@ impl Engine {
             system.push_str(extra);
         }
         messages.insert(0, json!({"role":"system","content":system}));
-        messages.push(json!({"role":"user","content":job.task}));
+        let image_refs = crate::vision::refs_from_paths(&running.workspace, &job.images)?;
+        crate::vision::ensure_vision_or_bail(
+            &running.config.model.provider,
+            &running.config.model.name,
+            image_refs.len(),
+        )?;
+        messages.push(crate::vision::user_message(&job.task, &image_refs));
         self.0.store.save_messages(&job.id, &messages)?;
-        events.emit("agent.started",json!({"job_id":job.id,"task":job.task,"mode":job.mode,"model":job.model,"native":true}))?;
+        events.emit("agent.started",json!({"job_id":job.id,"task":job.task,"mode":job.mode,"model":job.model,"native":true,"images":job.images}))?;
         if let Some(decision) = &job.routing {
             events.emit(
                 if decision.fallback_reason.is_some() {
@@ -965,7 +983,15 @@ impl Engine {
                 let mut flushed = Instant::now();
                 let mut event_error = None;
                 let response = model
-                    .chat(&messages, &schemas, running.cancel.clone(), |delta| {
+                    .chat(
+                        &crate::vision::hydrate_for_provider(
+                            &messages,
+                            &running.workspace,
+                            &running.config.model.provider,
+                        )?,
+                        &schemas,
+                        running.cancel.clone(),
+                        |delta| {
                         partial.push_str(delta);
                         pending.push_str(delta);
                         if pending.len() >= 4000 || flushed.elapsed() >= Duration::from_millis(80) {

@@ -929,6 +929,7 @@ impl Service {
                             model: None,
                             mode: "command".into(),
                             queue: body["queue"].as_bool().unwrap_or(false),
+                            images: Vec::new(),
                         },
                         crate::engine::CommandRequest {
                             command,
@@ -966,6 +967,12 @@ impl Service {
                 } else {
                     Some(self.resolve_model(text("model"), &cfg.model)?)
                 };
+                let images: Vec<String> = body["images"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect();
                 let job = self
                     .engine
                     .start_limited_owned(
@@ -986,6 +993,7 @@ impl Service {
                             model,
                             mode: mode.into(),
                             queue: body["queue"].as_bool().unwrap_or(false),
+                            images,
                         },
                         purpose,
                         body.get("permission_limit")
@@ -1090,7 +1098,17 @@ impl Service {
                 let path = format!(".shadow/attachments/{}-{name}", crate::id());
                 self.mutable_workspace()?
                     .write(&path, text("text").as_bytes(), Some("missing"))?;
-                return Ok(json!({"path":path}));
+                return Ok(json!({"path":path,"kind":"text"}));
+            }
+            ("POST", "/api/workspace/attach-image") => {
+                let name = Path::new(text("filename"))
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .context("Invalid image filename")?;
+                let bytes = crate::vision::decode_data_base64(text("data_base64"))?;
+                let ws = self.mutable_workspace()?;
+                let stored = crate::vision::store_attachment(&ws, name, &bytes)?;
+                return Ok(json!({"path":stored.path,"mime":stored.mime,"bytes":stored.bytes,"kind":"image"}));
             }
             ("POST", "/api/workspace/exec") => {
                 let selection = self.snapshot_selection()?;

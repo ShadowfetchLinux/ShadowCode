@@ -680,9 +680,16 @@ export default function App() {
     const submitTicket = selection.current;
     const original = task;
     const attached = [...chips];
+    const imagePaths = attached.filter((p) =>
+      /\.(png|jpe?g|webp)$/i.test(p),
+    );
+    const textPaths = attached.filter((p) => !imagePaths.includes(p));
     const text = (
       task.trim() +
-      (chips.length ? `\n\nAttached paths: ${chips.join(", ")}` : "")
+      (textPaths.length ? `\n\nAttached paths: ${textPaths.join(", ")}` : "") +
+      (imagePaths.length
+        ? `\n\nAttached images: ${imagePaths.join(", ")}`
+        : "")
     ).trim();
     submittingRef.current = true;
     setSubmitting(true);
@@ -699,12 +706,13 @@ export default function App() {
         return;
       }
       const started = await api.startJob(
-        text,
+        text || (imagePaths.length ? "Describe the attached image(s)." : ""),
         workspace || undefined,
         sessionId || undefined,
         modelChoice || undefined,
         mode,
         queueing,
+        imagePaths,
       );
       if (submitTicket !== selection.current) {
         await refresh();
@@ -746,12 +754,43 @@ export default function App() {
       toast("Attach files after the project's active work finishes.", "info");
       return;
     }
+    const imageExt = /\.(png|jpe?g|webp)$/i;
     for (const file of Array.from(files)) {
-      if (file.size > 1_000_000) {
+      const isImage =
+        file.type.startsWith("image/") || imageExt.test(file.name);
+      if (file.size > 1_000_000 && !isImage) {
         toast(
           `${file.name}: text attachments must be smaller than 1 MB`,
           "err",
         );
+        continue;
+      }
+      if (isImage) {
+        if (file.size > 4_000_000) {
+          toast(`${file.name}: images must be smaller than 4 MB`, "err");
+          continue;
+        }
+        if (
+          !["image/png", "image/jpeg", "image/webp", ""].includes(file.type) &&
+          !imageExt.test(file.name)
+        ) {
+          toast(`${file.name}: use PNG, JPEG, or WebP`, "err");
+          continue;
+        }
+        try {
+          const buffer = await file.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          let binary = "";
+          const chunk = 0x8000;
+          for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+          }
+          const data_base64 = btoa(binary);
+          const saved = await api.attachImage(file.name, data_base64);
+          setChips((prev) => [...new Set([...prev, saved.path])]);
+        } catch (e) {
+          toast(String(e), "err");
+        }
         continue;
       }
       try {
@@ -762,7 +801,7 @@ export default function App() {
             !file.type.startsWith("text/") &&
             !/json|javascript|xml|yaml/.test(file.type))
         ) {
-          toast(`${file.name}: attach a text or source file`, "err");
+          toast(`${file.name}: attach a text, source, or image file`, "err");
           continue;
         }
         const saved = await api.attach(file.name, text);
@@ -1566,8 +1605,8 @@ export default function App() {
               <button
                 type="button"
                 className="icon-btn attach-btn"
-                aria-label="Attach text files"
-                title="Attach text files"
+                aria-label="Attach files or images"
+                title="Attach text files or images (PNG, JPEG, WebP)"
                 disabled={projectBusy || composerLocked}
                 onClick={() => fileRef.current?.click()}
               >
@@ -1577,6 +1616,7 @@ export default function App() {
                 ref={fileRef}
                 type="file"
                 multiple
+                accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp,text/*,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.toml,.yaml,.yml,.css,.html,.svg"
                 hidden
                 onChange={(e) => {
                   if (e.target.files) void attach(e.target.files);

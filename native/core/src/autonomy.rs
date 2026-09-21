@@ -244,6 +244,14 @@ pub fn runaway_action(repeats: usize) -> RunawayAction {
 }
 
 pub fn capability_profile(provider: &str, context_limit: usize) -> CapabilityProfile {
+    capability_profile_for(provider, "", context_limit)
+}
+
+pub fn capability_profile_for(
+    provider: &str,
+    model: &str,
+    context_limit: usize,
+) -> CapabilityProfile {
     let local = matches!(
         provider,
         "ollama" | "local" | "llamacpp" | "lmstudio" | "vllm" | "mock"
@@ -254,7 +262,8 @@ pub fn capability_profile(provider: &str, context_limit: usize) -> CapabilityPro
         tools: provider != "mock",
         structured_output: !local,
         reasoning: matches!(provider, "openai" | "openrouter" | "anthropic"),
-        multimodal: matches!(provider, "openai" | "openrouter" | "ollama"),
+        multimodal: crate::vision::model_supports_vision(provider, model)
+            || (model.is_empty() && matches!(provider, "openai" | "openrouter")),
         streaming: true,
         parallel_tools: !matches!(provider, "ollama" | "llamacpp"),
         quirks: match provider {

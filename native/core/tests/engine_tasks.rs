@@ -39,7 +39,9 @@ fn request(root: &Path, task: &str, session_id: Option<String>) -> StartRequest 
         mode: "code".into(),
         queue: false,
     }
-}
+
+            images: Vec::new(),
+        }
 async fn wait(engine: &Engine, id: &str) -> Job {
     tokio::time::timeout(Duration::from_secs(8), engine.wait(id))
         .await

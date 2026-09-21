@@ -174,6 +174,7 @@ impl Engine {
                         model: None,
                         mode: milestone["mode"].as_str().unwrap_or("code").into(),
                         queue: true,
+                        images: Vec::new(),
                     },
                     LaunchContext {
                         system_context: Some(context),

@@ -375,3 +375,51 @@ async fn provider_http_429_and_500_do_not_execute_tools() {
         task.abort();
     }
 }
+
+#[test]
+fn ollama_and_openai_request_bodies_carry_vision_payloads() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(root.path()).unwrap();
+    let mut client = ModelClient::new(
+        ModelConfig {
+            provider: "ollama".into(),
+            name: "gemma4:12b".into(),
+            ..Default::default()
+        },
+        &paths,
+    )
+    .unwrap();
+    let messages = vec![
+        json!({"role":"system","content":"Instructions"}),
+        json!({
+            "role":"user",
+            "content":"What is shown?",
+            "images":["aGVsbG8="]
+        }),
+    ];
+    let body = client.request_body(&messages, &[], 128);
+    let converted = body["messages"].as_array().unwrap();
+    let user = converted.iter().find(|m| m["role"] == "user").unwrap();
+    assert_eq!(user["content"], "What is shown?");
+    assert_eq!(user["images"][0], "aGVsbG8=");
+
+    client.config.provider = "openai".into();
+    let openai_messages = vec![json!({
+        "role":"user",
+        "content":[
+            {"type":"text","text":"Describe"},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}
+        ]
+    })];
+    let openai = client.request_body(&openai_messages, &[], 128);
+    let content = openai["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image_url");
+    assert!(content[1]["image_url"]["url"]
+        .as_str()
+        .unwrap()
+        .starts_with("data:image/png;base64,"));
+    // Text-only path stays a plain string for non-vision turns.
+    let plain = client.request_body(&[json!({"role":"user","content":"hi"})], &[], 64);
+    assert_eq!(plain["messages"][0]["content"], "hi");
+}
