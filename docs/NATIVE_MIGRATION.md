@@ -185,7 +185,10 @@ Implemented foundation:
   texts for its actual bundled libraries. Package checks verify every listed
   notice's checksum. Corresponding-source artifacts and final release validation
   remain separate gates.
-- Clean Ubuntu 24.04 CI builds and tests both native package formats. The
+- Clean Ubuntu 24.04 CI builds and tests both native package formats. The tagged
+  native-release workflow repeats the Rust, UI, CLI, TUI, MCP, stress, window,
+  package, runtime-source and packaged-app checks before it publishes checksummed
+  AppImage, Debian and retained-runtime-source artifacts. The
   downloaded CI artifacts pass checksum and package inspection locally, and the
   AppImage passes the full native-window workflow on both machines. Separate
   local AppImage probes exercise actual Ollama gpt-oss and Qwen coding tasks,

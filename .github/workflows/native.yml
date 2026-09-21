@@ -3,7 +3,7 @@ on:
   push:
     branches: [native-0.20]
   pull_request:
-    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'scripts/*native*.mjs', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml']
+    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'scripts/*native*.mjs', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml', '.github/workflows/release.yml']
 permissions:
   contents: read
 jobs:
