@@ -55,6 +55,7 @@ export function Drawer({
   health,
   busy,
   toast,
+  onAskAgent,
 }: {
   tab: DrawerTab;
   onTab: (t: DrawerTab) => void;
@@ -72,6 +73,7 @@ export function Drawer({
   health: Health | null;
   busy: boolean;
   toast: Toast;
+  onAskAgent?: (prompt: string) => void;
 }) {
   return (
     <aside className="drawer" aria-label="Drawer">
@@ -119,7 +121,12 @@ export function Drawer({
           />
         )}
         {tab === "changes" && (
-          <ChangesTab path={diffPath} busy={busy} toast={toast} />
+          <ChangesTab
+            path={diffPath}
+            busy={busy}
+            toast={toast}
+            onAskAgent={onAskAgent}
+          />
         )}
         {tab === "skills" && (
           <SkillsTab
@@ -412,10 +419,12 @@ function ChangesTab({
   path,
   busy,
   toast,
+  onAskAgent,
 }: {
   path: string;
   busy: boolean;
   toast: Toast;
+  onAskAgent?: (prompt: string) => void;
 }) {
   const [git, setGit] = useState<{
     status: string;
@@ -600,6 +609,23 @@ function ChangesTab({
                         >
                           Discard
                         </button>
+                        {onAskAgent && (
+                          <button
+                            type="button"
+                            className="mini"
+                            onClick={() => {
+                              const body = h.lines
+                                .map((line) => `${line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}${line.text}`)
+                                .join("");
+                              onAskAgent(
+                                `Review this hunk in ${selected}:\n${h.header}\n${body}\nAdjust or explain as needed.`,
+                              );
+                              toast("Hunk queued in composer", "info");
+                            }}
+                          >
+                            Ask agent
+                          </button>
+                        )}
                       </span>
                     )}
                 </header>
