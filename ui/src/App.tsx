@@ -57,7 +57,13 @@ import { QueuedTasks } from "./components/QueuedTasks";
 import { useConversation } from "./hooks/useConversation";
 import { modelLabel } from "./lib/models";
 import { conversationJob } from "./lib/jobs";
-import { isProjectTrustError, trustErrorHint, trustRequestFor } from "./lib/trust";
+import {
+  isProjectTrustError,
+  sameWorkspacePath,
+  trustErrorHint,
+  trustPromptFor,
+  trustRequestFor,
+} from "./lib/trust";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -315,9 +321,14 @@ export default function App() {
         sessionData.sessions.find((s) => s.id === saved) ||
         sessionData.sessions.find((s) => s.workspace === h.workspace);
       if (onboard.completed && initial) await openSession(initial.id);
-      if (h.trusted === false && h.workspace) {
-        setTrust(trustRequestFor(h.workspace, h.permissions));
-      }
+      const latest = await api.status();
+      setStatus(latest);
+      const prompt = trustPromptFor(
+        latest.workspace || h.workspace,
+        latest.trusted ?? h.trusted,
+        latest.permissions || h.permissions,
+      );
+      if (prompt) setTrust(prompt);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -489,17 +500,24 @@ export default function App() {
     if (!trust) return;
     try {
       const opened = await api.trustProject(trust.path);
+      const [latest, h] = await Promise.all([api.status(), api.health()]);
+      setStatus(latest);
+      setHealth(h);
+      if (latest.trusted === false) {
+        toast(
+          "Trust did not persist. Click Trust and open again, then send the task.",
+          "err",
+        );
+        return;
+      }
       setTrust(null);
-      const sameWorkspace =
-        !!workspace &&
-        !!opened.path &&
-        workspace.replace(/\/+$/, "") ===
-          String(opened.path).replace(/\/+$/, "");
-      if (sessionId && sameWorkspace) {
-        await reloadConfig();
+      await reloadConfig();
+      if (sessionId && sameWorkspacePath(workspace, opened.path || latest.workspace)) {
         toast("Project trusted. You can send a task.", "ok");
       } else if (opened.session_id) {
         await openSession(opened.session_id);
+      } else {
+        toast("Project trusted. You can send a task.", "ok");
       }
     } catch (e) {
       toast(String(e), "err");
@@ -647,6 +665,16 @@ export default function App() {
     if (isSessionCommand(task)) {
       setTask("");
       await newSession({ force: true });
+      return;
+    }
+    const prompt = trustPromptFor(
+      workspace || health?.workspace,
+      status?.trusted ?? health?.trusted,
+      status?.permissions || health?.permissions,
+    );
+    if (prompt) {
+      setTrust(prompt);
+      setError("");
       return;
     }
     const submitTicket = selection.current;

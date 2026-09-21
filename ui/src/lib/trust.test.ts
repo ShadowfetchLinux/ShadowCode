@@ -1,5 +1,11 @@
 import { expect, it } from "vitest";
-import { isProjectTrustError, trustErrorHint, trustRequestFor } from "./trust";
+import {
+  isProjectTrustError,
+  sameWorkspacePath,
+  trustErrorHint,
+  trustPromptFor,
+  trustRequestFor,
+} from "./trust";
 
 it("detects the job-gate trust error so the dialog can open", () => {
   expect(
@@ -23,4 +29,23 @@ it("builds a trust dialog request from the open workspace path", () => {
     name: "app",
     permissions: { level: "workspace" },
   });
+});
+
+it("treats trailing slashes as the same workspace", () => {
+  expect(sameWorkspacePath("/home/user/app", "/home/user/app/")).toBe(true);
+  expect(sameWorkspacePath("/home/user/app", "/home/user/other")).toBe(false);
+  expect(sameWorkspacePath("", "/home/user/app")).toBe(false);
+});
+
+it("opens the trust dialog for a restored untrusted folder instead of sending a job", () => {
+  expect(
+    trustPromptFor("/home/user/app/", false, { level: "workspace" }),
+  ).toEqual({
+    path: "/home/user/app/",
+    name: "app",
+    permissions: { level: "workspace" },
+  });
+  expect(trustPromptFor("/home/user/app", true)).toBeNull();
+  expect(trustPromptFor("/home/user/app", undefined)).toBeNull();
+  expect(trustPromptFor("", false)).toBeNull();
 });

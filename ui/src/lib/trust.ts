@@ -7,6 +7,16 @@ export function trustErrorHint(error: unknown): string | undefined {
   return "This folder is not trusted. Click Trust this folder, then Trust and open, and send the task again.";
 }
 
+export function sameWorkspacePath(
+  left?: string | null,
+  right?: string | null,
+): boolean {
+  if (!left || !right) return false;
+  const slim = (path: string) =>
+    path.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return slim(left) === slim(right) && slim(left).length > 0;
+}
+
 export function trustRequestFor(
   path: string,
   permissions?: Record<string, unknown>,
@@ -17,4 +27,14 @@ export function trustRequestFor(
     name: workspace.split(/[\\/]/).filter(Boolean).at(-1),
     permissions,
   };
+}
+
+export function trustPromptFor(
+  workspace: string | undefined,
+  trusted: boolean | undefined,
+  permissions?: Record<string, unknown>,
+): ReturnType<typeof trustRequestFor> | null {
+  const folder = workspace?.trim();
+  if (!folder || trusted !== false) return null;
+  return trustRequestFor(folder, permissions);
 }
