@@ -452,6 +452,29 @@ impl Store {
             json!({"id":db.last_insert_rowid(),"ts":time,"type":kind,"session_id":sid,"task_id":tid,"payload":payload}),
         )
     }
+    /// Local-only store metrics for Doctor. No telemetry is sent.
+    pub fn local_stats(&self) -> Result<Value> {
+        let db = self.lock()?;
+        let events: i64 = db.query_row("SELECT count(*) FROM events", [], |r| r.get(0))?;
+        let sessions: i64 = db.query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))?;
+        let jobs: i64 = db.query_row("SELECT count(*) FROM desktop_jobs", [], |r| r.get(0))?;
+        let page_count: i64 = db.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let page_size: i64 = db.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+        let wal = db
+            .query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
+            .unwrap_or_default();
+        let bytes = fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+        Ok(json!({
+            "events": events,
+            "sessions": sessions,
+            "jobs": jobs,
+            "bytes": bytes,
+            "page_count": page_count,
+            "page_size": page_size,
+            "journal_mode": wal,
+            "telemetry": false
+        }))
+    }
     pub fn event_cursor(&self, sid: &str) -> Result<i64> {
         Ok(self.lock()?.query_row(
             "SELECT coalesce(max(id),0) FROM events WHERE session_id=?",

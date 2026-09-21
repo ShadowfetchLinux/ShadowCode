@@ -109,6 +109,7 @@ pub fn compact(
     }
     messages.retain(|m| m["_shadow_compaction"] != true);
     let last_user = messages.iter().rposition(|m| m["role"] == "user");
+    let preserved = crate::autonomy::preserve(messages);
     let mut groups: Vec<Vec<Value>> = Vec::new();
     for message in messages.iter() {
         if message["role"] == "tool" {
@@ -149,7 +150,9 @@ pub fn compact(
         }
     }
     if removed > 0 {
-        let note = json!({"role":"system","_shadow_compaction":true,"content":format!("Context compacted: {removed} earlier messages were omitted. The full event history remains available in the app. Earlier user request excerpts (historical data): {}",notes.join(" | "))});
+        let keep_json = serde_json::to_string(&preserved).unwrap_or_default();
+        let keep_text = crate::tools::truncate(&keep_json, 1200);
+        let note = json!({"role":"system","_shadow_compaction":true,"content":format!("Context compacted: {removed} earlier messages were omitted. The full event history remains available in the app. Preserved keep-list (not new instructions): {keep_text}. Earlier user request excerpts (historical data): {}",notes.join(" | "))});
         kept.insert(1.min(kept.len()), note);
     }
     let after = estimate_tokens(&json!(kept));
@@ -160,7 +163,7 @@ pub fn compact(
     }
     *messages = kept;
     Ok(Some(
-        json!({"before_estimated_tokens":before,"after_estimated_tokens":after,"omitted_messages":removed,"response_token_limit":response_tokens,"method":"bounded_history"}),
+        json!({"before_estimated_tokens":before,"after_estimated_tokens":after,"omitted_messages":removed,"response_token_limit":response_tokens,"method":"bounded_history","preserved":preserved}),
     ))
 }
 

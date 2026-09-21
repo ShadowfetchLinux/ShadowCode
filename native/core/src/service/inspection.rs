@@ -252,9 +252,61 @@ impl Service {
                 checks.push(check("model-response","not_checked","Actual model response","Not contacted; use --test-model or test_model=true to send a small diagnostic prompt",""));
             }
         }
+        if let Ok(stats) = self.engine.store().local_stats() {
+            checks.push(check(
+                "history-scale",
+                "info",
+                "Local history size",
+                format!(
+                    "{} events, {} sessions, {} bytes; journal {}; no telemetry",
+                    stats["events"], stats["sessions"], stats["bytes"], stats["journal_mode"]
+                ),
+                "",
+            ));
+        }
+        if let Ok(cfg) = self.config() {
+            let caps = crate::autonomy::effective_caps(
+                &cfg.agent.autonomy_profile,
+                cfg.agent.max_steps,
+                cfg.agent.max_task_tokens,
+            );
+            let profile = crate::autonomy::capability_profile(
+                &cfg.model.provider,
+                cfg.model.context_limit,
+            );
+            checks.push(check(
+                "autonomy-budget",
+                "info",
+                "Autonomy budget",
+                format!(
+                    "profile {} · {} steps · {} tokens; not a silent kill switch",
+                    cfg.agent.autonomy_profile, caps.max_steps, caps.max_tokens
+                ),
+                "",
+            ));
+            checks.push(check(
+                "provider-profile",
+                "info",
+                "Provider capability profile",
+                format!(
+                    "{} context {} streaming={} parallel_tools={}",
+                    profile.provider, profile.context_window, profile.streaming, profile.parallel_tools
+                ),
+                "",
+            ));
+            checks.push(check(
+                "shell-policy",
+                "info",
+                "Shell policy is heuristic",
+                crate::autonomy::shell_policy_limits()["do_not_claim"]
+                    .as_str()
+                    .unwrap_or("not an OS sandbox"),
+                "",
+            ));
+        }
         let failures = checks.iter().filter(|c| c["status"] == "fail").count();
         Ok(
-            json!({"ok":failures==0,"version":crate::VERSION,"runtime":"rust","checks":checks,"failures":failures,"project_map":map,"suggestions":checks.iter().filter(|c|c["status"]!="pass"&&c["fix"]!="").map(|c|c["fix"].clone()).collect::<Vec<_>>()}),
+            json!({"ok":failures==0,"version":crate::VERSION,"runtime":"rust","checks":checks,"failures":failures,"project_map":map,"suggestions":checks.iter().filter(|c|c["status"]!="pass"&&c["fix"]!="").map(|c|c["fix"].clone()).collect::<Vec<_>>(),"telemetry":false}),
         )
     }
 }

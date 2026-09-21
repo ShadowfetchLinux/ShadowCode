@@ -1627,7 +1627,7 @@ export default function App() {
             </button>
           </div>
         </div>
-        <footer className="statusline">
+        <footer className="statusline" aria-live="polite">
           <span className={`status-dot ${busy ? "active" : ""}`} />
           <span>
             {busy

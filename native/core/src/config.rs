@@ -89,6 +89,7 @@ pub struct AgentConfig {
     pub max_fix_retries: usize,
     pub max_output_bytes: usize,
     pub max_task_tokens: u64,
+    pub autonomy_profile: String,
 }
 impl Default for AgentConfig {
     fn default() -> Self {
@@ -102,6 +103,7 @@ impl Default for AgentConfig {
             max_fix_retries: 3,
             max_output_bytes: 256_000,
             max_task_tokens: 1_000_000,
+            autonomy_profile: "normal".into(),
         }
     }
 }
@@ -213,6 +215,13 @@ impl Config {
         ensure!(
             self.agent.max_task_tokens > 0,
             "Token budget must be positive"
+        );
+        ensure!(
+            matches!(
+                self.agent.autonomy_profile.as_str(),
+                "unlimited" | "conservative" | "normal" | "extended" | "custom"
+            ),
+            "Autonomy profile must be unlimited, conservative, normal, extended, or custom"
         );
         ensure!(
             valid_secret_name(&self.model.api_key_env),

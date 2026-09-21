@@ -108,6 +108,11 @@ absolute `http`/`https` URLs without embedded credentials stay clickable;
 `javascript:`, `data:`, `file:`, and relative hrefs render as text. Allowed
 external links open with `noopener noreferrer`.
 
+Crash recovery does not auto-replay shell, Git history changes, or file
+mutations. Those classes require confirmation or human review. Model prose is
+not treated as verified correctness. Doctor metrics stay on the local
+machine; there is no product telemetry.
+
 ## Releases
 
 Verify release assets against `SHA256SUMS`. Checksums detect mismatched or damaged

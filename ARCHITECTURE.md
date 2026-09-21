@@ -36,6 +36,13 @@ approvals; terminal status follows worker exit. A profile lock prevents a second
 manager from recovering live jobs. The desktop may attach to a persistent
 headless/TUI engine; closing an attached window leaves that work running.
 
+Autonomy (0.21 branch) adds inspectable layered context accounting before each
+model request, a deterministic compaction keep-list, replay classes for crash
+recovery, progressive loop handling, and claim/observed/verified completion.
+These extend `context.rs` and `engine.rs`; they do not replace checkpoints or
+the permission checker. Named autonomy profiles never raise configured caps
+and never silently kill a task.
+
 Filesystem tools resolve paths with directory capabilities. Shell classification
 is a policy check, not kernel isolation. See [SECURITY.md](SECURITY.md).
 

@@ -2,6 +2,11 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- 0.21 autonomy (feature branch): inspectable context budgets, structured
+  compaction keep-lists, replay classification, progressive loop
+  warn→replan→pause, named autonomy caps that never silently kill, claim vs
+  observed vs verified completion, local Doctor store metrics. Not released.
+
 - Independent audit: Markdown keeps only fragment and credential-free http(s)
   links clickable; compatible streams continue unindexed tool-argument deltas
   and ignore repeated call ids/names; restart recovery writes a durable

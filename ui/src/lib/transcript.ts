@@ -97,6 +97,25 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       },
     ];
   }
+  if (
+    event.type === "context.budget" ||
+    event.type === "autonomy.budget" ||
+    event.type === "runaway.warning" ||
+    event.type === "context.compacted"
+  ) {
+    const detail =
+      event.type === "runaway.warning"
+        ? `Loop ${String(p.action || "warn")}: ${String(p.tool || "tool")} repeated ${String(p.repeats || "")}`
+        : event.type === "autonomy.budget"
+          ? `Autonomy budget ${Math.round(Number(p.ratio || 0) * 100)}% of ${String(p.max_steps || "")} steps`
+          : event.type === "context.compacted"
+            ? `Context compacted; ${String(p.omitted_messages || 0)} earlier messages omitted`
+            : `Context ${String(p.used_estimated_tokens || 0)}/${String(p.limit || 0)} estimated tokens`;
+    items = [
+      ...items,
+      { kind: "note", taskId, text: detail },
+    ];
+  }
   if (event.type === "workflow.selected") {
     items = [
       ...items,

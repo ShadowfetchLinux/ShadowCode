@@ -305,6 +305,39 @@ describe("durable transcript", () => {
       "second",
     ]);
   });
+  it("surfaces local context and autonomy notes without claiming verification", () => {
+    const state = replay([
+      event(1, "context.budget", {
+        used_estimated_tokens: 1200,
+        limit: 8000,
+      }),
+      event(2, "autonomy.budget", { ratio: 0.8, max_steps: 64 }),
+      event(3, "runaway.warning", {
+        action: "replan",
+        tool: "read_file",
+        repeats: 4,
+      }),
+    ]);
+    expect(state.items.map((item) => item.text).join("\n")).toMatch(
+      /Context 1200\/8000/,
+    );
+    expect(state.items.some((item) => /Autonomy budget/.test(item.text))).toBe(
+      true,
+    );
+    expect(state.items.some((item) => /Loop replan/.test(item.text))).toBe(
+      true,
+    );
+  });
+  it("replays 10000 stream events without dropping the last cursor", () => {
+    const started = performance.now();
+    let state = emptyTranscript();
+    for (let i = 1; i <= 10000; i++)
+      state = applyEvent(state, event(i, "model.delta", { text: String(i) }));
+    expect(state.cursor).toBe(10000);
+    expect(state.items).toHaveLength(10000);
+    expect(state.items[9999].text).toBe("10000");
+    expect(performance.now() - started).toBeLessThan(4000);
+  });
   it("continues well past the former 800-event boundary", () => {
     let state = emptyTranscript();
     for (let i = 1; i <= 1600; i++)
