@@ -80,6 +80,15 @@ gaps rather than rewriting working systems.
   harness behavior was changed.
 - AppImage/Debian packaging and native-window WebDriver were not rerun.
 
+## Commits on `audit/independent-hardening-20260921`
+
+- `a65fd52` Continue compatible tool streams when later deltas omit index or repeat identity
+- `0581508` Record a durable interrupted completion when recovering unfinished jobs
+- `ce88a1b` Keep only fragment and credential-free http(s) Markdown links clickable
+- `ddd172e` Document the independent native audit and the 0.20 architecture
+
+Pushed to `origin/audit/independent-hardening-20260921` only. Not merged to `main`.
+
 ## Remaining concerns
 
 - Shell/network/root checks remain lexical word lists, not a sandbox.
