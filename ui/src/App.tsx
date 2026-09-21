@@ -26,7 +26,9 @@ import {
   Sparkles,
   Square,
   TerminalSquare,
+  TestTube2,
   X,
+  Cpu,
 } from "lucide-react";
 import {
   api,
@@ -39,11 +41,13 @@ import {
   type ProviderInfo,
   type Session,
 } from "./api";
-import { ApprovalCard, CommandCardView, OpCard } from "./components/cards";
+import { ApprovalCard, CommandCardView, OpCard, ThinkingCard } from "./components/cards";
 import { Drawer, type DrawerTab } from "./components/Drawer";
 import { Sidebar } from "./components/Sidebar";
 import { Markdown } from "./components/Markdown";
 import { Onboarding } from "./components/Onboarding";
+import { FlowGuide } from "./components/FlowGuide";
+import { OpenWeightHub } from "./components/OpenWeightHub";
 import {
   CustomModelDialog,
   Help,
@@ -74,7 +78,14 @@ import {
 } from "./lib/transport";
 
 type Overlay =
-  "" | "settings" | "help" | "palette" | "project" | "custom-model";
+  | ""
+  | "settings"
+  | "help"
+  | "palette"
+  | "project"
+  | "custom-model"
+  | "flow-guide"
+  | "open-weights";
 type Toast = { id: number; text: string; kind: "ok" | "err" | "info" };
 const formatTokens = (n: number) =>
   n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
@@ -831,6 +842,18 @@ export default function App() {
   }
   const palette: PaletteItem[] = [
     {
+      id: "flow-guide",
+      label: "20-Minute Fast-Track Guide",
+      hint: "Master the workflow",
+      run: () => setOverlay("flow-guide"),
+    },
+    {
+      id: "open-weights",
+      label: "Open-Weight Models Showcase",
+      hint: "Qwen, DeepSeek, Llama",
+      run: () => setOverlay("open-weights"),
+    },
+    {
       id: "new",
       label: "New task",
       hint: "Ctrl+N",
@@ -1082,6 +1105,26 @@ export default function App() {
         <div className="top-right">
           <button
             type="button"
+            className="top-action flow-guide-btn"
+            aria-label="20-Minute Fast-Track Guide"
+            title="20-Minute Fast-Track Guide"
+            onClick={() => setOverlay("flow-guide")}
+          >
+            <Sparkles size={14} />
+            <span>20-Min Flow</span>
+          </button>
+          <button
+            type="button"
+            className="top-action open-weights-btn"
+            aria-label="Open-Weight Models Showcase"
+            title="Open-Weight Models Showcase"
+            onClick={() => setOverlay("open-weights")}
+          >
+            <Cpu size={14} />
+            <span>Open Weights</span>
+          </button>
+          <button
+            type="button"
             className={`top-action ${panel === "changes" ? "on" : ""}`}
             aria-label="Review changes"
             title="Git changes"
@@ -1293,41 +1336,91 @@ export default function App() {
                   <img src="/icon.svg" alt="" />
                 </div>
                 <div className="eyebrow">
-                  YOUR IDEAS. YOUR MODELS. YOUR MACHINE.
+                  PILLAR FOR OPEN SOURCE & OPEN WEIGHTS · LINUX NATIVE
                 </div>
-                <h1>What are we building?</h1>
-                <p>A focused space to turn intent into working code.</p>
-                <button
-                  type="button"
-                  className="workspace-badge"
-                  title={workspace}
-                  onClick={() => setOverlay("project")}
-                >
-                  <FolderOpen size={14} />
-                  {workspace.split("/").pop() || "Choose a project"}
-                  <ChevronRight size={13} />
-                </button>
-                <div className="suggestions">
+                <h1>What are we building today?</h1>
+                <p>A focused, autonomous workspace powered by local open-weight models.</p>
+
+                <div className="welcome-meta-bar">
+                  <button
+                    type="button"
+                    className="workspace-badge"
+                    title={workspace}
+                    onClick={() => setOverlay("project")}
+                  >
+                    <FolderOpen size={14} />
+                    <span>{workspace.split("/").pop() || "Choose a project"}</span>
+                    <ChevronRight size={13} />
+                  </button>
+
+                  <button
+                    type="button"
+                    className="model-hero-badge"
+                    title="Configure open-weight models"
+                    onClick={() => setOverlay("open-weights")}
+                  >
+                    <Cpu size={14} />
+                    <span>{model || "Choose Open-Weight Model"}</span>
+                    <span className="badge-tag">Local</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="guide-hero-badge"
+                    onClick={() => setOverlay("flow-guide")}
+                  >
+                    <Sparkles size={14} />
+                    <span>20-Min Fast-Track Flow</span>
+                  </button>
+                </div>
+
+                <div className="suggestions grid-3">
                   {[
                     {
                       icon: Code2,
-                      title: "Build something",
-                      body: "Turn an idea into a first version",
+                      title: "Build a feature",
+                      body: "Turn an idea into working code with verification",
                       prompt: "Help me build ",
+                      mode: "coder",
+                    },
+                    {
+                      icon: ListChecks,
+                      title: "Plan milestones",
+                      body: "Non-destructive plan & architectural blueprint",
+                      prompt: "Create a detailed implementation plan and milestone roadmap for ",
+                      mode: "planner",
                     },
                     {
                       icon: GitPullRequest,
-                      title: "Review this project",
-                      body: "Find bugs and practical improvements",
+                      title: "Find & fix bugs",
+                      body: "Scan for edge cases and reliability issues",
                       prompt:
                         "Review this project for bugs and reliability issues. Explain your findings before changing files.",
+                      mode: "reviewer",
                     },
                     {
                       icon: Sparkles,
-                      title: "Understand the code",
-                      body: "Find your way around the workspace",
+                      title: "Codebase tour",
+                      body: "Understand the architecture and entry points",
                       prompt:
-                        "Explore this workspace and explain its architecture, key entry points, and how to run it.",
+                        "Explore this workspace and explain its architecture, key entry points, and how to run it in 3 bullet points.",
+                      mode: "reviewer",
+                    },
+                    {
+                      icon: TestTube2,
+                      title: "Generate tests",
+                      body: "Author unit tests and verify coverage",
+                      prompt:
+                        "Write automated tests for the core modules and verify they pass.",
+                      mode: "tester",
+                    },
+                    {
+                      icon: ShieldCheck,
+                      title: "Security audit",
+                      body: "Audit for vulnerabilities and exposed secrets",
+                      prompt:
+                        "Audit this workspace for security risks, unvalidated inputs, and exposed secrets.",
+                      mode: "reviewer",
                     },
                   ].map((s) => (
                     <button
@@ -1336,6 +1429,7 @@ export default function App() {
                       key={s.title}
                       onClick={() => {
                         setTask(s.prompt);
+                        setMode(s.mode);
                         promptRef.current?.focus();
                       }}
                     >
@@ -1385,6 +1479,13 @@ export default function App() {
                     >
                       {item.text}
                     </div>
+                  ) : item.kind === "thinking" ? (
+                    <ThinkingCard
+                      key={i}
+                      text={item.text}
+                      durationSec={item.durationSec}
+                      live={item.live}
+                    />
                   ) : item.kind === "user" ? (
                     <div key={i} className="msg-user">
                       <div className="user-pill">
@@ -1879,6 +1980,28 @@ export default function App() {
               toast(String(e), "err");
             }
           }}
+        />
+      )}
+      {overlay === "flow-guide" && (
+        <FlowGuide
+          onClose={() => setOverlay("")}
+          onSelectPrompt={(prompt, chosenMode) => {
+            setTask(prompt);
+            if (chosenMode) setMode(chosenMode);
+            promptRef.current?.focus();
+          }}
+        />
+      )}
+      {overlay === "open-weights" && (
+        <OpenWeightHub
+          models={models}
+          providers={providers}
+          activeModelId={modelChoice || status?.model.name || ""}
+          onSelectModel={(id) => {
+            setModelChoice(id);
+          }}
+          onClose={() => setOverlay("")}
+          onToast={toast}
         />
       )}
     </div>

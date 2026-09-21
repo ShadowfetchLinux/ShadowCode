@@ -104,23 +104,39 @@ cargo build -p shadowcode-desktop --locked
 the [native migration guide](docs/NATIVE_MIGRATION.md) for validation and release
 requirements.
 
-## Choose a model
+## Open-Weight Model Flagship Pillar
 
-On first launch, select a detected local model and **Test & start**, or enter a
-provider endpoint and model ID. Mock is an offline harness demonstration with
-deterministic behaviors, not a general coding model.
+ShadowCode is purpose-built to serve as the definitive harness for open-source, open-weight models:
 
-```bash
-shadow models
-shadow models --use gpt-oss:20b
-shadow models --use my-model --provider local --endpoint http://127.0.0.1:1234/v1
-shadow models --use my-model --provider openai_compatible --endpoint https://your-provider.example/v1
-```
+- **Open-Weight Coding Champions:** First-class showcase and prompt tuning for **Qwen 2.5 Coder** (7B, 14B, 32B), **DeepSeek R1 & V3** (14B, 32B, 671B), **Llama 3.3** (70B), **Mistral Devstral** (22B), **GPT-OSS** (20B), and **Gemma 4** (12B).
+- **Hardware & VRAM Compatibility Advisor:** Automatically checks your GPU and VRAM (e.g. NVIDIA RTX 16GB) to suggest optimal model quantization and parameters (7B ~5GB, 14B ~10GB, 32B ~20GB, 70B ~40GB).
+- **Local Privacy & Zero Telemetry:** Connects seamlessly to local inference runtimes:
+  - **Ollama** (`http://127.0.0.1:11434`)
+  - **LM Studio** (`http://127.0.0.1:1234`)
+  - **vLLM** (`http://127.0.0.1:8000`)
+  - **llama.cpp** (`http://127.0.0.1:8080`)
+- **Reasoning Channel Visualizer:** Transparent chain-of-thought streaming for reasoning models like DeepSeek R1 with live timers and collapsible thought traces.
 
-Supported providers: Ollama, LM Studio/local, llama.cpp, vLLM, and any compatible
-`/v1/chat/completions` endpoint. The composer can override the model per task.
-Store API keys through Settings or the environment variable named by `api_key_env`.
-Never put keys in YAML or Git.
+## 20-Minute Fast-Track Mastery (Codex & Cursor Workflow)
+
+Anyone with basic coding intent can master the autonomous agent loop in under 20 minutes:
+
+1. **Pick Model & Workspace:** Connect your local Ollama / open-weight server in one click or select from the Open-Weights Showcase.
+2. **Select Agent Mode:**
+   - 🔨 **Build (Coder):** Autonomous file modification, command execution, and test repair.
+   - 🧭 **Plan (Architect):** Non-destructive milestone blueprints and roadmaps before editing code.
+   - 🛡️ **Review (Auditor):** Strict security audits, vulnerability scanning, and bug discovery.
+   - 🧪 **Test (QA):** Unit test authoring and behavioral regression checks.
+3. **The Codex / Cursor Iterative Loop:**
+   - Prompt with clear intent and file attachments.
+   - Watch live tool execution and file inspection cards.
+   - Inspect color-coded diff hunks in the Changes drawer (`Ctrl+B`).
+   - Accept or reject edits per-hunk, per-file, or rewind previous tasks with one click.
+4. **Live Steering & Queueing:**
+   - Click **Pause** to give live redirection advice, then **Resume** to inject context.
+   - Queue follow-ups while an active task is executing without waiting.
+5. **Interactive Flow Guide:**
+   - Launch the visual **20-Min Flow Guide** anytime from the top bar or welcome screen.
 
 ## Workflows
 

@@ -613,10 +613,33 @@ pub async fn detect() -> Vec<Value> {
             match result {
                 Ok(value)=>{
                     let empty=Vec::new();let rows=value[if provider=="ollama"{"models"}else{"data"}].as_array().unwrap_or(&empty);
-                    let models:Vec<_>=rows.iter().filter_map(|m|{
-                        let name=if provider=="ollama"{m["name"].as_str()}else{m["id"].as_str()}?;
-                        Some(json!({"id":name,"name":name,"size_bytes":m["size"].as_u64().unwrap_or(0),"context_limit":m.pointer("/details/context_length").and_then(Value::as_u64).unwrap_or(0),"capabilities":{"completion":true},"detail":m.pointer("/details/parameter_size").and_then(Value::as_str).unwrap_or("")}))
-                    }).collect();
+                    let models: Vec<_> = rows
+                        .iter()
+                        .filter_map(|m| {
+                            let name = if provider == "ollama" {
+                                m["name"].as_str()
+                            } else {
+                                m["id"].as_str()
+                            }?;
+                            let mut caps = serde_json::Map::new();
+                            caps.insert("completion".into(), Value::Bool(true));
+                            if let Some(list) = m.get("capabilities").and_then(Value::as_array) {
+                                for item in list {
+                                    if let Some(s) = item.as_str() {
+                                        caps.insert(s.to_string(), Value::Bool(true));
+                                    }
+                                }
+                            }
+                            Some(json!({
+                                "id": name,
+                                "name": name,
+                                "size_bytes": m["size"].as_u64().unwrap_or(0),
+                                "context_limit": m.pointer("/details/context_length").and_then(Value::as_u64).unwrap_or(0),
+                                "capabilities": Value::Object(caps),
+                                "detail": m.pointer("/details/parameter_size").and_then(Value::as_str).unwrap_or("")
+                            }))
+                        })
+                        .collect();
                     json!({"provider":provider,"label":preset["label"],"endpoint":base,"running":true,"latency_ms":start.elapsed().as_millis(),"detail":format!("{} models available",models.len()),"models":models})
                 }
                 Err(_)=>json!({"provider":provider,"label":preset["label"],"endpoint":base,"running":false,"latency_ms":start.elapsed().as_millis(),"models":[],"detail":"Not reachable"}),

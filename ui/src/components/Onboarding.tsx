@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type DetectedProvider } from "../api";
 import { isNative, pickDirectory } from "../lib/transport";
+import { FlowGuide } from "./FlowGuide";
+import { Sparkles, Cpu, ShieldCheck } from "lucide-react";
 
 type Pick = {
   provider: string;
@@ -11,6 +13,7 @@ type Pick = {
 
 /** One screen, one click. Pick a detected model → Test & start. */
 export function Onboarding({ onDone }: { onDone: () => void }) {
+  const [showGuide, setShowGuide] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [detected, setDetected] = useState<DetectedProvider[]>([]);
   const [presets, setPresets] = useState<
@@ -133,8 +136,20 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   return (
     <div className="modal-back">
       <div className="wizard">
+        <div className="onboarding-flagship-badge">
+          <Cpu size={14} />
+          <span>PILLAR FOR OPEN SOURCE & OPEN WEIGHTS</span>
+        </div>
         <p className="kicker">ShadowCode</p>
         <h2>Pick a model, start working</h2>
+        <button
+          type="button"
+          className="onboarding-guide-btn"
+          onClick={() => setShowGuide(true)}
+        >
+          <Sparkles size={14} />
+          <span>New to ShadowCode? Open 20-Minute Fast-Track Guide</span>
+        </button>
         <div className="field">
           <label htmlFor="onboarding-field-1">Project folder</label>
           <div className="input-action">
@@ -337,6 +352,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           Change anything later in Settings.
         </p>
       </div>
+      {showGuide && <FlowGuide onClose={() => setShowGuide(false)} />}
     </div>
   );
 }
