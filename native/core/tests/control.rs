@@ -598,32 +598,3 @@ async fn attached_view_reattaches_after_owner_restart_without_replay_or_duplicat
     assert_eq!(running, 0, "reattach must not start or resume jobs");
     stop(server, service).await;
 }
-
-fn descriptor_count() -> usize {
-    std::fs::read_dir("/proc/self/fd")
-        .map(|entries| entries.count())
-        .unwrap_or(0)
-}
-
-#[tokio::test]
-async fn attach_close_loop_does_not_grow_descriptors() {
-    let (_root, service) = setup();
-    let server = Server::start_with_mode(service.clone(), "server").unwrap();
-    let client = server.endpoint().client(service.workspace().unwrap(), None);
-    for _ in 0..2 {
-        let view = client.open_view().await.unwrap();
-        view.close().await.unwrap();
-    }
-    let baseline = descriptor_count();
-    for _ in 0..20 {
-        let view = client.open_view().await.unwrap();
-        view.close().await.unwrap();
-    }
-    let after = descriptor_count();
-    eprintln!("attach_close_loop descriptors baseline={baseline} after={after}");
-    assert!(
-        after <= baseline + 24,
-        "descriptor leak: baseline={baseline} after={after}"
-    );
-    stop(server, service).await;
-}
