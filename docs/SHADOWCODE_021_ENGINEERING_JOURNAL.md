@@ -225,3 +225,56 @@ H6. Expanding the lexical shell blacklist will raise false positives
 - Merge to main.
 - Auto-retry of POST after reattach.
 - Path guessing for relocated worktrees.
+
+## RELEASE QUALIFICATION (2026-09-21)
+
+Branch `release/shadowcode-0.21-qualification` created from
+`feature/shadowcode-0.21-autonomy` at
+`5d33133bf7d61375aafdb44d6b51ef01a0d5cbe0`. Main was not checked out,
+merged, force-pushed, or deleted. The autonomy branch was left at the
+same SHA. Version remains **0.20.0**.
+
+The previous autonomy pass did **not** execute real OS-process desktop
+reattach, full 1M insert (only a 60s/139k debug probe), AppImage/deb,
+installer checksums on a disposable home, a real ollama harness, a
+self-host worktree, a 6-hour leak hunt, or a clean-machine package
+inventory. This pass ran those gates where the host allowed it.
+
+### Product change (confirmed gap only)
+
+`autonomy::preserve` now extracts `decisions` (`decision:` / `decided to`
+/ `we will use` / `chose to`). Duplicate JSON aliases (`objective`,
+`unfinished`, `failures`) were tried and **removed** so the compact
+keep-list note does not inflate the 4096-token tester-route budget.
+Inspectable names stay `intent[0]`, `unresolved`, `failed_approaches`.
+
+### Evidence (selected)
+
+- Real `shadowcode serve` SIGKILL: `view.reattached` with
+  `jobs_started=0` `tools_replayed=0`; no duplicate event ids.
+- Lab: desktop death left a detached hang running; engine kill marked
+  `interrupted` and did not rewrite `side-effect.txt` or `shell-side.txt`.
+- Release SQLite example, no cutoff: 10k / 100k / 1M. 1M = 397.3s,
+  164 MB, peak RSS 7220 KB, recent/history/catch-up 0 ms. 5M not run.
+- UI reconstruct: 10k 167 ms, 50k 17.6 s, 100k 64.3 s. Desktop still
+  pages 128 events. No virtualization added.
+- ollama `gpt-oss:20b`: bounded “Reply with exactly OK”; harness
+  survived; `verified=false` on model prose.
+- AppImage + deb built after removing `/usr/local/bin` from PATH
+  (linuxdeploy dies on `/usr/local/bin/node` → `/root/.hermes/...`).
+  Isolated extract/doctor/window smoke. Deb extracted under `/tmp` only.
+- Workspace Rust `--lib --tests --bins`: **282 passed**. UI default:
+  **40 passed**. Playwright e2e: **7 passed**. Clippy `-D warnings` and
+  rustfmt `--check` passed via rust-dev extract.
+
+### Not done / not claimed
+
+- 6-hour leak hunt (idle `serve` monitor **1802 s**: RSS 58→47 MB,
+  FDs 35→35; no leak claimed).
+- 5M event insert.
+- Keyboard-only on the real GTK window (e2e used the Python test UI).
+- `dpkg -i` onto the primary machine.
+- Version bump to 0.21.0.
+- Merge to main.
+
+See `docs/SHADOWCODE_021_QUALIFICATION_REPORT.md`.
