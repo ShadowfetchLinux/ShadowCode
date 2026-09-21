@@ -1355,3 +1355,17 @@ kbd {
 .worktree-review strong {
   overflow-wrap: anywhere;
 }
+
+.history-navigation {
+  margin: 0 0 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.history-navigation .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.history-navigation p {
+  margin: 10px 0 0;
+}

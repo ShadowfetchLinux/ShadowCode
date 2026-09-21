@@ -1,6 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type EventRow, type Job, type SessionDetail } from "../api";
-import { applyEvent, emptyTranscript, replay } from "../lib/transcript";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type SetStateAction,
+} from "react";
+import {
+  api,
+  type EventRow,
+  type Job,
+  type SessionDetail,
+  type HistoryPage,
+} from "../api";
+import {
+  applyEvent,
+  emptyTranscript,
+  replay,
+  type Transcript,
+} from "../lib/transcript";
 import { jobEvents } from "../lib/jobEvents";
 import { isNative } from "../lib/transport";
 
@@ -8,43 +25,83 @@ export const isActive = (job: Job | null) =>
   !!job && ["queued", "running", "cancelling"].includes(job.status);
 
 export function useConversation(onComplete: () => void) {
-  const [transcript, setTranscript] = useState(emptyTranscript);
+  const [liveTranscript, setLiveTranscript] = useState(emptyTranscript);
   const [job, setJob] = useState<Job | null>(null);
   const [connection, setConnection] = useState<"connected" | "reconnecting">(
     "connected",
   );
+  const [history, setHistory] = useState<{
+    page: HistoryPage;
+    state: Transcript;
+    before: number;
+    newer: number[];
+  } | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [historyBase, setHistoryBase] = useState<{
+    first_cursor: number;
+    has_older: boolean;
+  } | null>(null);
+  const [streamEpoch, setStreamEpoch] = useState(0);
+  const session = useRef("");
+  const historyRequest = useRef(0);
+  const historyPending = useRef(false);
+  const clearHistory = useCallback(() => {
+    historyRequest.current++;
+    historyPending.current = false;
+    setHistory(null);
+    setHistoryLoading(false);
+    setHistoryError("");
+  }, []);
   const generation = useRef(0);
   const cursor = useRef(0);
   const complete = useRef(onComplete);
   complete.current = onComplete;
 
-  const load = useCallback((detail: SessionDetail, active: Job | null) => {
-    generation.current++;
-    const state = replay(detail.events);
-    if (active && !isActive(active)) {
-      state.stage = active.status.toUpperCase();
-      if (
-        active.summary &&
-        !state.items.some(
-          (item) => item.kind === "agent" && item.text === active.summary,
+  const load = useCallback(
+    (detail: SessionDetail, active: Job | null, preserveHistory = false) => {
+      generation.current++;
+      setStreamEpoch((epoch) => epoch + 1);
+      if (!preserveHistory || session.current !== detail.id) clearHistory();
+      session.current = detail.id;
+      setHistoryBase(detail.history_page || null);
+      const state = replay(detail.events);
+      if (active && !isActive(active)) {
+        state.stage = active.status.toUpperCase();
+        if (
+          active.summary &&
+          !state.items.some(
+            (item) => item.kind === "agent" && item.text === active.summary,
+          )
         )
-      )
-        state.items.push({
-          kind: "agent",
-          text: active.summary,
-          who: active.status === "completed" ? "Result" : "Needs attention",
-        });
-    }
-    cursor.current = detail.event_cursor || state.cursor;
-    setTranscript(state);
-    setJob(active);
-    setConnection("connected");
-  }, []);
-  const start = useCallback((next: Job) => {
-    cursor.current = next.event_cursor || 0;
-    setJob(next);
-    setTranscript((s) => ({ ...s, stage: "UNDERSTAND", plan: [], usage: {} }));
-  }, []);
+          state.items.push({
+            kind: "agent",
+            text: active.summary,
+            who: active.status === "completed" ? "Result" : "Needs attention",
+          });
+      }
+      cursor.current = detail.event_cursor || state.cursor;
+      setLiveTranscript(state);
+      setJob(active);
+      setConnection("connected");
+    },
+    [clearHistory],
+  );
+  const start = useCallback(
+    (next: Job) => {
+      clearHistory();
+      session.current = next.session_id;
+      cursor.current = next.event_cursor || 0;
+      setJob(next);
+      setLiveTranscript((s) => ({
+        ...s,
+        stage: "UNDERSTAND",
+        plan: [],
+        usage: {},
+      }));
+    },
+    [clearHistory],
+  );
 
   useEffect(() => {
     if (!isActive(job)) return;
@@ -60,7 +117,7 @@ export function useConversation(onComplete: () => void) {
       source.close();
       setJob(done);
       setConnection("connected");
-      setTranscript((s) => {
+      setLiveTranscript((s) => {
         const items = [...s.items];
         if (
           done.summary &&
@@ -124,7 +181,7 @@ export function useConversation(onComplete: () => void) {
               : current,
           );
         }
-        setTranscript((s) => applyEvent(s, row));
+        setLiveTranscript((s) => applyEvent(s, row));
       } catch {
         /* malformed events do not tear down a working connection */
       }
@@ -145,7 +202,8 @@ export function useConversation(onComplete: () => void) {
         if (!isActive(latest)) {
           const detail = await api.session(latest.session_id);
           if (!closed && current === generation.current) {
-            setTranscript(replay(detail.events));
+            setLiveTranscript(replay(detail.events));
+            setHistoryBase(detail.history_page || null);
             finish(latest);
           }
         }
@@ -160,11 +218,82 @@ export function useConversation(onComplete: () => void) {
       source.close();
       clearInterval(timer);
     };
-  }, [job?.id, job?.status]);
+  }, [job?.id, job?.status, streamEpoch]);
 
+  const pageHistory = useCallback(
+    async (direction: "older" | "newer") => {
+      if (historyPending.current || !session.current) return;
+      const before =
+        direction === "older"
+          ? history?.page.first_cursor || historyBase?.first_cursor || 0
+          : history?.newer.at(-1) || 0;
+      if (!before) {
+        if (direction === "newer") clearHistory();
+        return;
+      }
+      const request = ++historyRequest.current;
+      const selected = session.current;
+      historyPending.current = true;
+      setHistoryLoading(true);
+      setHistoryError("");
+      try {
+        const page = await api.historyPage(selected, before);
+        if (request !== historyRequest.current || selected !== session.current)
+          return;
+        setHistory({
+          page,
+          state: replay(page.events),
+          before,
+          newer:
+            direction === "older"
+              ? [...(history?.newer || []), history?.before || 0]
+              : (history?.newer || []).slice(0, -1),
+        });
+      } catch (error) {
+        if (request === historyRequest.current) setHistoryError(String(error));
+      } finally {
+        if (request === historyRequest.current) {
+          historyPending.current = false;
+          setHistoryLoading(false);
+        }
+      }
+    },
+    [history, historyBase, clearHistory],
+  );
+  const setTranscript = useCallback(
+    (update: SetStateAction<Transcript>) => {
+      if (history)
+        setHistory((current) =>
+          current
+            ? {
+                ...current,
+                state:
+                  typeof update === "function" ? update(current.state) : update,
+              }
+            : current,
+        );
+      else setLiveTranscript(update);
+    },
+    [history],
+  );
   return {
-    transcript,
+    transcript: history
+      ? { ...liveTranscript, items: history.state.items }
+      : liveTranscript,
     setTranscript,
+    history: {
+      enabled: Boolean(historyBase),
+      viewing: Boolean(history),
+      firstCursor: history?.page.first_cursor || 0,
+      hasOlder: history
+        ? history.page.has_older
+        : Boolean(historyBase?.has_older),
+      loading: historyLoading,
+      error: historyError,
+      older: () => pageHistory("older"),
+      newer: () => pageHistory("newer"),
+      latest: clearHistory,
+    },
     job,
     setJob,
     connection,

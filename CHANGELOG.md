@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Native desktop saved-history pages support older/newer/latest navigation
+  without loading thousands of events or tasks at once. Live work continues
+  while browsing; original records remain available through export.
+
 - Reviewed desktop and CLI repair restores missing managed Git connection files
   while preserving the original index and local edits, with private recovery
   journals and refusal of conflicting or lost metadata.

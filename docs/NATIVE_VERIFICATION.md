@@ -911,3 +911,47 @@ issuing one WebDriver click. It does not retry mutations or relax assertions.
 The full native-window rerun with this readiness helper passes with 29 model
 requests, including plugin installation/removal, worktree copy and connection
 repair. The replacement GitHub pipeline remains unverified until it completes.
+
+## Bounded native desktop saved-history pages
+
+Twelve service-command tests pass. The history regression traverses every event
+across byte-limited Unicode pages, excludes another session's interleaved events,
+keeps the exclusive cursor stable after live appends, rejects invalid cursors,
+and verifies oversized preview notices leave original events and exports intact.
+The default session API retains its existing full-history contract.
+
+All 31 UI tests and seven browser scenarios pass. Hook tests cover older/newer
+cursor navigation, live streaming while reading an old page, return to the latest
+state, late responses after session changes, retryable errors and reattachment
+of an unchanged running-job ID after a refreshed snapshot. The latter previously
+changed the event generation without forcing the stream effect to reattach.
+Queued-task snapshot refreshes preserve the historical page being read. Clippy
+with warnings denied and the native desktop build also pass.
+
+The saved-page limits are 128 events, 2 MiB aggregate event payload and 256 KiB
+per ordinary preview event. Explicit omission notices point to export for larger
+individual events; originals are never rewritten. Long-running live transcript
+memory and Markdown virtualization remain separate release gates.
+
+The first expanded native-window run caught a worktree-copy publication race:
+checkout creation briefly saved `ready` before applying the reviewed edits, so
+an inventory reader could observe the original index as if copying had finished.
+Copy creation now remains in its incomplete state until copy application and
+verification publish readiness. All 15 worktree regressions pass after the fix;
+the desktop test continues to require the copied index as soon as `ready` appears.
+
+
+The expanded native-window run passes with 29 model requests and a disposable
+12,000-event conversation. It traverses all 94 pages back to the first message,
+keeps no more than 128 message elements in the DOM, navigates forward and returns
+to the latest snapshot. Light, dark and compact history checks report zero
+accessibility violations; the rendered history screen was visually inspected.
+Visual review also prompted the floating Latest activity control to return from
+historical browsing to live messages, matching the top Latest messages action.
+
+The full window rerun also verifies both Latest messages and the floating Latest
+activity control return to the current snapshot. The large-event notice names
+JSON export explicitly: the command palette now exposes **Export this task as
+JSON**, while Markdown remains the readable summary. The browser regression
+checks this action selects `format=json`; native OS save-dialog interaction
+remains in the separate desktop integration gate.

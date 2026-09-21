@@ -39,6 +39,23 @@ test("workspace layout, drafts, palette, files and terminal", async ({
     page.getByRole("heading", { name: "Settings", exact: true }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
+  await page.evaluate(() => {
+    const original = window.open;
+    window.open = (url) => {
+      window.open = original;
+      document.body.dataset.exportUrl = String(url);
+      return null;
+    };
+  });
+  await page.keyboard.press("Control+k");
+  await page
+    .getByPlaceholder("Type a command…")
+    .fill("Export this task as JSON");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("body")).toHaveAttribute(
+    "data-export-url",
+    /\/api\/sessions\/[^/]+\/export\?format=json$/,
+  );
   await page.getByRole("button", { name: "Browse files", exact: true }).click();
   await page.getByRole("button", { name: "· README.md", exact: true }).click();
   await expect(page.locator(".file-view")).toContainText("A safe workspace");

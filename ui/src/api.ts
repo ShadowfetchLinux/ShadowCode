@@ -1,4 +1,4 @@
-import { request } from "./lib/transport";
+import { request, isNative } from "./lib/transport";
 
 export type ModelInfo = {
   id: string;
@@ -52,6 +52,13 @@ export type SessionDetail = Session & {
   tasks: { id: string; prompt: string; summary?: string; status: string }[];
   events: EventRow[];
   event_cursor: number;
+  history_page?: { first_cursor: number; has_older: boolean };
+};
+export type HistoryPage = {
+  events: EventRow[];
+  first_cursor: number;
+  event_cursor: number;
+  has_older: boolean;
 };
 export type EventRow = {
   id?: number;
@@ -597,9 +604,18 @@ export const api = {
       "POST",
       {},
     ),
-  session: (id: string) => get<SessionDetail>(`/api/sessions/${id}`),
+  historyPage: (id: string, before: number) =>
+    get<HistoryPage>(`/api/sessions/${id}/events?view=window&before=${before}`),
+  session: (id: string) =>
+    get<SessionDetail>(
+      `/api/sessions/${id}${isNative() ? "?view=window" : ""}`,
+    ),
   activateSession: (id: string) =>
-    send<SessionDetail>(`/api/sessions/${id}/activate`, "POST", {}),
+    send<SessionDetail>(
+      `/api/sessions/${id}/activate${isNative() ? "?view=window" : ""}`,
+      "POST",
+      {},
+    ),
   currentJob: (id: string) =>
     get<{ job: Job | null }>(
       `/api/jobs/current?session_id=${encodeURIComponent(id)}&include_finished=true`,

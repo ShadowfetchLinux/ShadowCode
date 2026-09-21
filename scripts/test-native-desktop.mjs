@@ -1,6 +1,7 @@
 // Real Tauri/WebKit window test. Requires a display (xvfb-run works), DBus,
 // tauri-driver, and WebKitWebDriver. No Python service or browser launcher.
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -23,7 +24,7 @@ const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.m
 for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json", "inspection.png", "accessibility-inspection.json", "diagnostics.png", "accessibility-diagnostics.json", "plugins.png", "accessibility-plugins.json", "accessibility-plugins-dark.json", "accessibility-plugins-compact.json"]) await rm(path.join(artifacts, name), { force: true });
 for (const theme of ["light","dark","compact"]) for (const name of [`queue-${theme}.png`,`accessibility-queue-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
 for (const theme of ["light","dark","compact"]) for (const name of [`background-approval-${theme}.png`,`accessibility-background-approval-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
-for (const view of ["worktree-copy", "worktree-return", "worktree-recovery", "worktree-repair"]) for (const name of [`${view}.png`, `accessibility-${view}.json`, `accessibility-${view}-dark.json`, `accessibility-${view}-compact.json`]) await rm(path.join(artifacts,name),{force:true});
+for (const view of ["worktree-copy", "worktree-return", "worktree-recovery", "worktree-repair", "history"]) for (const name of [`${view}.png`, `accessibility-${view}.json`, `accessibility-${view}-dark.json`, `accessibility-${view}-compact.json`]) await rm(path.join(artifacts,name),{force:true});
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
@@ -820,6 +821,41 @@ try {
     const goal = (await api("GET", `/api/goals/${pausedGoal.id}`));
     return goal.status === "paused" && !goal.running;
   });
+  // Populate only this disposable profile with a history larger than the old cap.
+  const historySession=await api("POST","/api/sessions",{workspace:project,title:"Long saved history"});
+  const historyDb=new DatabaseSync(path.join(stateDirectory,"shadow-agent.db"));
+  historyDb.exec("PRAGMA busy_timeout=5000; BEGIN");
+  const putHistory=historyDb.prepare("INSERT INTO events(ts,type,session_id,task_id,payload) VALUES(?,'model.delta',?,NULL,?)");
+  for(let index=0;index<12000;index++)putHistory.run(Date.now()/1000,historySession.id,JSON.stringify({text:`History message ${index}`,message_id:`history-${index}`}));
+  historyDb.exec("COMMIT");historyDb.close();
+  await execute("localStorage.setItem('shadow:selected',arguments[0])",[historySession.id]);
+  await wd("POST",`/session/${session}/refresh`,{});
+  await until("Bounded history snapshot",()=>execute("return document.querySelector('.chat-inner')?.textContent.includes('History message 11999') && !!document.querySelector('[aria-label=\"Conversation history\"]')"));
+  assert.equal(await execute("return document.querySelectorAll('.msg-agent').length"),128);
+  let historyPages=0;
+  while(await execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Older messages'&&!b.disabled)")) {
+    const first=await execute("return document.querySelector('.msg-agent .markdown')?.textContent");
+    await clickButton("Older messages");
+    await until("Earlier saved page rendered",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent!==arguments[0] && !document.querySelector('[aria-label=\"Conversation history\"] [role=status]')",[first]));
+    assert.ok(await execute("return document.querySelectorAll('.msg-agent').length<=128"));
+    assert.ok(++historyPages<100,"History cursor must make progress");
+  }
+  assert.equal(await execute("return document.querySelector('.msg-agent .markdown').textContent.trim()"),"History message 0");
+  assert.equal(historyPages,93);
+  await screenshot("history");await accessibility("history");
+  await execute("document.documentElement.dataset.theme='dark'");await accessibility("history-dark");await execute("document.documentElement.dataset.theme='light'");
+  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("history-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
+  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
+  await clickButton("Newer messages");
+  await until("Newer saved page",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent.trim()==='History message 96'"));
+  await clickButton("Latest activity");
+  await until("Floating latest returns to live history",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent.trim()==='History message 11872'"));
+  await clickButton("Older messages");
+  await until("Earlier history reopened",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent.trim()==='History message 11744'"));
+  await clickButton("Latest messages");
+  await until("Latest history restored",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent.trim()==='History message 11872'"));
+  assert.equal(await execute("return document.querySelectorAll('.msg-agent').length"),128);
+  await click('button[aria-label="Terminal"]');
   await clickButton("Background");
   await fill('#background-name', "shutdown-server");
   await type('#background-command', "trap '' TERM; sleep 60 & echo $! > background-child.pid; printf shutdown-ready; wait");
@@ -859,7 +895,7 @@ try {
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
   await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, missing checkout rescue, reviewed return without committing, preserved original metadata and light/dark/compact accessibility",
-    "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "managed native shutdown"] }, null, 2));
+    "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "12,000-event history with bounded DOM, all 94 pages, newer/latest navigation and three-layout accessibility", "managed native shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

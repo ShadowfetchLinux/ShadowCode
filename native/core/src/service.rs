@@ -1255,7 +1255,7 @@ impl Service {
                     return if q("summary") == "true" {
                         Ok(session)
                     } else {
-                        self.session(sid)
+                        self.session(sid, q("view") == "window")
                     }
                 }
                 ("PATCH", None) => {
@@ -1282,7 +1282,7 @@ impl Service {
                         ),
                         Some(sid.into()),
                     )?;
-                    return self.session(sid);
+                    return self.session(sid, q("view") == "window");
                 }
                 ("POST", Some("branch")) => {
                     let workspace = PathBuf::from(
@@ -1295,6 +1295,17 @@ impl Service {
                     return store.branch_session_with_memory(sid, text("title"), &memory);
                 }
                 ("GET", Some("events")) => {
+                    if q("view") == "window" {
+                        let through = if q("before").is_empty() {
+                            store.event_cursor(sid)?
+                        } else {
+                            let before: i64 =
+                                q("before").parse().context("Invalid history cursor")?;
+                            ensure!(before > 0, "History cursor must be positive");
+                            (before - 1).min(store.event_cursor(sid)?)
+                        };
+                        return store.history_page(sid, through);
+                    }
                     if !q("before").is_empty() {
                         let before: i64 = q("before").parse().context("Invalid history cursor")?;
                         ensure!(before > 0, "History cursor must be positive");
@@ -1522,12 +1533,20 @@ impl Service {
     fn resolve_model(&self, id: &str, fallback: &ModelConfig) -> Result<ModelConfig> {
         model_registry::resolve(&self.engine.store(), id, fallback)
     }
-    fn session(&self, id: &str) -> Result<Value> {
+    fn session(&self, id: &str, window: bool) -> Result<Value> {
         let store = self.engine.store();
         let mut session = store.session(id)?.context("Session not found")?;
         let cursor = store.event_cursor(id)?;
-        session["tasks"] = json!(store.tasks(id, 10000)?);
-        session["events"] = json!(store.recent_events_through(id, cursor, 10000)?);
+        if window {
+            let page = store.history_page(id, cursor)?;
+            session["tasks"] = json!([]);
+            session["events"] = page["events"].clone();
+            session["history_page"] =
+                json!({"first_cursor":page["first_cursor"],"has_older":page["has_older"]});
+        } else {
+            session["tasks"] = json!(store.tasks(id, 10000)?);
+            session["events"] = json!(store.recent_events_through(id, cursor, 10000)?);
+        }
         session["event_cursor"] = json!(cursor);
         Ok(session)
     }

@@ -492,6 +492,29 @@ impl Store {
         rows.reverse();
         Ok(rows)
     }
+    /// A bounded desktop history page. Oversized events remain in the store/export.
+    pub fn history_page(&self, sid: &str, through: i64) -> Result<Value> {
+        let events = self.query(
+            "WITH candidates AS (SELECT id,ts,session_id,task_id,
+                CASE WHEN length(CAST(payload AS BLOB))>262144 THEN 'history.omitted' ELSE type END AS type,
+                CASE WHEN length(CAST(payload AS BLOB))>262144 THEN json_object('text','A large saved event is omitted from this preview. Use Export this task as JSON in the command palette to read its original content.','original_type',type,'original_bytes',length(CAST(payload AS BLOB))) ELSE payload END AS payload
+                FROM events WHERE session_id=? AND id<=? ORDER BY id DESC LIMIT 128),
+             bounded AS (SELECT *,sum(length(CAST(payload AS BLOB))) OVER (ORDER BY id DESC) AS bytes FROM candidates)
+             SELECT id,ts,session_id,task_id,type,payload FROM bounded WHERE bytes<=2097152 ORDER BY id",
+            params![sid, through],
+        )?;
+        let first = events.first().and_then(|e| e["id"].as_i64()).unwrap_or(0);
+        let has_older = first > 0
+            && !self
+                .query(
+                    "SELECT id FROM events WHERE session_id=? AND id<? LIMIT 1",
+                    params![sid, first],
+                )?
+                .is_empty();
+        Ok(
+            json!({"events":events,"first_cursor":first,"event_cursor":through,"has_older":has_older}),
+        )
+    }
     pub fn save_job(&self, job: &Value) -> Result<()> {
         let id = job["id"].as_str().context("Job requires an ID")?;
         self.execute("INSERT INTO desktop_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",params![id,job.to_string()])?;

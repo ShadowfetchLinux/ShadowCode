@@ -826,3 +826,127 @@ async fn session_listing_and_literal_search_work_after_tasks_are_saved() {
     assert_eq!(found["sessions"].as_array().unwrap().len(), 1);
     assert_eq!(found["sessions"][0]["id"], plain["id"]);
 }
+
+#[tokio::test]
+async fn desktop_history_pages_are_bounded_complete_and_preserve_original_exports() {
+    let (_root, service) = setup(true);
+    let store = service.engine.store();
+    let session = store
+        .create_session(&service.workspace().unwrap(), "fixture", "Long history")
+        .unwrap();
+    let sid = session["id"].as_str().unwrap();
+    let other = store
+        .create_session(&service.workspace().unwrap(), "fixture", "Other history")
+        .unwrap();
+    let mut expected = vec![];
+    for number in 0..300 {
+        let id = store.add_event("model.delta", &json!({"text":format!("Saved message {number}: {}", "雪".repeat(7000)),"message_id":format!("message-{number}")}), Some(sid), None).unwrap();
+        expected.push(id["id"].as_i64().unwrap());
+        store
+            .add_event(
+                "user.message",
+                &json!({"text":"Other session must stay out"}),
+                other["id"].as_str(),
+                None,
+            )
+            .unwrap();
+    }
+    let huge = "oversized-original".repeat(20000);
+    expected.push(
+        store
+            .add_event("model.delta", &json!({"text":huge}), Some(sid), None)
+            .unwrap()["id"]
+            .as_i64()
+            .unwrap(),
+    );
+    let initial = call(
+        &service,
+        "POST",
+        &format!("/api/sessions/{sid}/activate?view=window"),
+        json!({}),
+    )
+    .await
+    .unwrap();
+    assert!(initial["tasks"].as_array().unwrap().is_empty());
+    assert!(initial.to_string().len() < 2_200_000);
+    assert!(initial["history_page"]["has_older"].as_bool().unwrap());
+    assert_eq!(
+        initial["events"].as_array().unwrap().last().unwrap()["type"],
+        "history.omitted"
+    );
+    let mut seen: Vec<i64> = initial["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["id"].as_i64().unwrap())
+        .collect();
+    let mut before = initial["history_page"]["first_cursor"].as_i64().unwrap();
+    // A new live event must not change a page's exclusive upper boundary.
+    let later = store
+        .add_event(
+            "user.message",
+            &json!({"text":"New live message"}),
+            Some(sid),
+            None,
+        )
+        .unwrap();
+    loop {
+        let page = call(
+            &service,
+            "GET",
+            &format!("/api/sessions/{sid}/events?view=window&before={before}"),
+            Value::Null,
+        )
+        .await
+        .unwrap();
+        assert!(page.to_string().len() < 2_200_000);
+        let rows = page["events"].as_array().unwrap();
+        assert!(rows.len() <= 128);
+        assert!(rows
+            .iter()
+            .all(|event| event["session_id"] == sid && event["id"].as_i64().unwrap() < before));
+        seen.extend(rows.iter().map(|event| event["id"].as_i64().unwrap()));
+        if !page["has_older"].as_bool().unwrap() {
+            break;
+        }
+        let next = page["first_cursor"].as_i64().unwrap();
+        assert!(next > 0 && next < before);
+        before = next;
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, expected);
+    let full = call(
+        &service,
+        "GET",
+        &format!("/api/sessions/{sid}"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(full["event_cursor"], later["id"]);
+    assert!(full["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["payload"]["text"] == huge));
+    let export = call(
+        &service,
+        "GET",
+        &format!("/api/sessions/{sid}/export?format=json"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert!(export
+        .to_string()
+        .contains("oversized-originaloversized-original"));
+    assert!(call(
+        &service,
+        "GET",
+        &format!("/api/sessions/{sid}/events?view=window&before=0"),
+        Value::Null
+    )
+    .await
+    .is_err());
+    service.engine.shutdown().await.unwrap();
+}

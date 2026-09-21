@@ -137,6 +137,7 @@ export default function App() {
   const booted = useRef(false);
   const activationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const stick = useRef(true);
+  const browsingHistory = useRef(false);
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastSeq.current;
@@ -366,6 +367,17 @@ export default function App() {
     switching,
     queuedJobs.length,
   ]);
+  useLayoutEffect(() => {
+    if (conversation.history.viewing) {
+      stick.current = false;
+      streamRef.current?.scrollTo({ top: 0 });
+    } else if (browsingHistory.current) {
+      stick.current = true;
+      setAtBottom(true);
+      streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
+    }
+    browsingHistory.current = conversation.history.viewing;
+  }, [conversation.history.firstCursor, conversation.history.viewing]);
   useEffect(() => {
     let live = true;
     async function poll() {
@@ -400,7 +412,7 @@ export default function App() {
     void Promise.all([api.session(sessionId), api.job(next.id)])
       .then(([detail, fullJob]) => {
         if (live && selectedRef.current === sessionId && !submittingRef.current)
-          conversation.load(detail, fullJob);
+          conversation.load(detail, fullJob, true);
       })
       .catch(() => {
         /* The next poll retries a failed snapshot. */
@@ -720,9 +732,9 @@ export default function App() {
       toast(String(e), "err");
     }
   }
-  function exportSession() {
+  function exportSession(format: "md" | "json" = "md") {
     if (sessionId)
-      void saveExport(sessionId).catch((e) => toast(String(e), "err"));
+      void saveExport(sessionId, format).catch((e) => toast(String(e), "err"));
   }
   const palette: PaletteItem[] = [
     {
@@ -765,6 +777,12 @@ export default function App() {
       label: "Export this task as Markdown",
       hint: "Ctrl+Shift+E",
       run: exportSession,
+    },
+    {
+      id: "export-json",
+      label: "Export this task as JSON",
+      hint: "Complete event records",
+      run: () => exportSession("json"),
     },
     {
       id: "stop",
@@ -1083,12 +1101,79 @@ export default function App() {
                 </button>
               </div>
             )}
+            {!switching &&
+              conversation.history.enabled &&
+              (conversation.history.hasOlder ||
+                conversation.history.viewing ||
+                conversation.history.error) && (
+                <nav
+                  className="history-navigation"
+                  aria-label="Conversation history"
+                >
+                  <div className="row">
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={
+                        conversation.history.loading ||
+                        !conversation.history.hasOlder
+                      }
+                      onClick={() => {
+                        stick.current = false;
+                        void conversation.history.older();
+                      }}
+                    >
+                      Older messages
+                    </button>
+                    {conversation.history.viewing && (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={conversation.history.loading}
+                          onClick={() => {
+                            stick.current = false;
+                            void conversation.history.newer();
+                          }}
+                        >
+                          Newer messages
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => {
+                            conversation.history.latest();
+                            stick.current = true;
+                            setAtBottom(true);
+                          }}
+                        >
+                          Latest messages
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {conversation.history.loading && (
+                    <p role="status">Loading saved messages…</p>
+                  )}
+                  {conversation.history.viewing && (
+                    <p className="hint">
+                      Browsing saved history. Current work continues. Pages may
+                      begin partway through a task.
+                    </p>
+                  )}
+                  {conversation.history.error && (
+                    <p role="alert" className="error">
+                      {conversation.history.error}
+                    </p>
+                  )}
+                </nav>
+              )}
             {switching ? (
               <div className="loading-task">
                 <LoaderCircle size={20} className="spin" />
                 Opening task…
               </div>
-            ) : empty ? (
+            ) : empty && !conversation.history.viewing ? (
               <div className="welcome">
                 <div className="welcome-symbol">
                   <img src="/icon.svg" alt="" />
@@ -1238,11 +1323,13 @@ export default function App() {
             )}
           </div>
         </div>
-        {!atBottom && (
+        {(!atBottom || conversation.history.viewing) && (
           <button
             type="button"
             className="jump-latest"
             onClick={() => {
+              if (conversation.history.viewing) conversation.history.latest();
+              setAtBottom(true);
               stick.current = true;
               streamRef.current?.scrollTo({
                 top: streamRef.current.scrollHeight,

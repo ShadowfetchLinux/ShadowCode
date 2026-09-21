@@ -27,7 +27,7 @@ export const emptyTranscript = (): Transcript => ({
  * tool calls carry their own IDs; a final message replaces its streamed text. */
 export function applyEvent(state: Transcript, event: EventRow): Transcript {
   if (event.id && event.id <= state.cursor) return state;
-  const p = event.payload;
+  const p = event.payload || {};
   let items = state.items;
   let stage = state.stage;
   let usage = state.usage;
@@ -36,6 +36,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let activeTaskId = state.activeTaskId;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
+  if (event.type === "history.omitted") {
+    items = [...items, { kind: "note", taskId, text, warning: true }];
+  }
   if (event.type === "hook.started" || event.type === "hook.completed") {
     const callId = `hook-${String(p.id)}`;
     const index = items.findIndex(
