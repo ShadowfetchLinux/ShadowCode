@@ -4,7 +4,7 @@ It includes local/Ollama and compatible model routing, streamed tasks, explicit 
 
 Downloads:
 - **AppImage:** `ShadowCode_0.21.0_amd64.AppImage` is the desktop application. Run it directly, or add `--appimage-extract-and-run` when FUSE is unavailable.
-- **Debian package:** `shadowcode_0.21.0_amd64.deb` installs the same native app on supported Debian/Ubuntu systems.
+- **Debian package:** `ShadowCode_0.21.0_amd64.deb` installs the same native app on supported Debian/Ubuntu systems.
 - **Runtime source archive:** retained source and build records for the bundled AppImage runtime.
 - **SHA256SUMS:** download-integrity checksums for every release artifact.
 
