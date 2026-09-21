@@ -259,6 +259,22 @@ fn run() -> Result<()> {
                                 "shadowcode:events",
                                 json!({"session_id":event["session_id"]}),
                             );
+                            if event["type"] == "view.disconnected" {
+                                {
+                                    let backend = handle.state::<Backend>();
+                                    match backend.reattach_if_needed().await {
+                                        Ok(true) => {
+                                            let _ = handle.emit("shadowcode:events", json!({}));
+                                        }
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Attached desktop could not reattach: {error:#}"
+                                            );
+                                        }
+                                        Ok(false) => {}
+                                    }
+                                }
+                            }
                             if event["type"] == "agent.completed" {
                                 let enabled = Config::load(&notification_paths, None)
                                     .ok()

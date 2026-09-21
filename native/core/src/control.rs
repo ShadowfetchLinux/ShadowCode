@@ -197,6 +197,29 @@ impl Client {
             Err(error) => Err(error),
         }
     }
+    /// Poll until a matching engine is listening, or fail on version mismatch.
+    pub async fn wait_available(&self, timeout: Duration) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match self.available().await {
+                Ok(true) => return Ok(()),
+                Ok(false) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Ok(false) => bail!("No running engine is available to attach"),
+                Err(error)
+                    if error.to_string().contains("different version")
+                        || error.to_string().contains("protocol/profile mismatch") =>
+                {
+                    return Err(error);
+                }
+                Err(_error) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 struct SocketLease {
     path: PathBuf,

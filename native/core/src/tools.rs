@@ -34,7 +34,14 @@ impl ToolResult {
     pub fn message(&self, name: &str, limit: usize) -> Value {
         let content = serde_json::to_string(self).unwrap_or_default();
         let content = if content.len() > limit {
-            json!({"success":self.success,"truncated":true,"preview":truncate(&content,limit),"error":self.error}).to_string()
+            json!({
+                "success":self.success,
+                "truncated":true,
+                "preview":truncate(&content,limit),
+                "error":self.error,
+                "note":format!("Tool output was truncated to {limit} bytes. Use offset/limit, max_hits, or a narrower query; do not assume the omitted bytes.")
+            })
+            .to_string()
         } else {
             content
         };
@@ -544,9 +551,16 @@ impl ToolExecutor {
             "list_files" => {
                 let entries = self.workspace.list(args["path"].as_str().unwrap_or("."))?;
                 let count = integer(args, "max_entries", 400, 1, 10_000)?;
-                Ok(
-                    json!({"truncated":entries.len()>count,"entries":entries.into_iter().take(count).collect::<Vec<_>>()}),
-                )
+                let truncated = entries.len() > count;
+                Ok(json!({
+                    "truncated":truncated,
+                    "entries":entries.into_iter().take(count).collect::<Vec<_>>(),
+                    "note": if truncated {
+                        "Listing was truncated. Raise max_entries or narrow the path; omitted names are not in this result."
+                    } else {
+                        ""
+                    }
+                }))
             }
             "read_file" => {
                 let file = self.workspace.read(string(args, "path")?)?;
@@ -564,9 +578,29 @@ impl ToolExecutor {
                     .take(limit)
                     .collect::<String>();
                 let preview = truncate(&content, self.config.agent.max_output_bytes);
-                Ok(
-                    json!({"path":file.path,"content":preview,"hash":file.hash,"bytes":file.bytes,"offset":offset,"total_lines":total,"truncated":offset-1+limit<total || preview.len()<content.len()}),
-                )
+                let range_truncated = offset - 1 + limit < total;
+                let byte_truncated = preview.len() < content.len();
+                let truncated = range_truncated || byte_truncated;
+                let next_offset = if range_truncated {
+                    Some(offset + limit)
+                } else {
+                    None
+                };
+                Ok(json!({
+                    "path":file.path,
+                    "content":preview,
+                    "hash":file.hash,
+                    "bytes":file.bytes,
+                    "offset":offset,
+                    "total_lines":total,
+                    "truncated":truncated,
+                    "next_offset":next_offset,
+                    "note": if truncated {
+                        "Read was truncated. Continue from next_offset or raise limit; omitted lines are not in this result."
+                    } else {
+                        ""
+                    }
+                }))
             }
             "search_files" => self.workspace.find_files(
                 string(args, "query")?,
@@ -916,7 +950,7 @@ pub fn schemas() -> Vec<Value> {
     let b = json!({"type":"boolean"});
     let specs=vec![
         ("list_files","List direct children of a workspace directory.",json!({"path":s,"max_entries":n}),vec![]),
-        ("read_file","Read UTF-8 text with 1-based offset/limit. Returns a content hash for safe edits.",json!({"path":s,"offset":n,"limit":n}),vec!["path"]),
+        ("read_file","Read UTF-8 text with 1-based offset/limit. Returns truncated=true and next_offset when the range or byte budget is exceeded; do not assume omitted lines.",json!({"path":s,"offset":n,"limit":n}),vec!["path"]),
         ("search_files","Find filenames by substring; respects ignore rules.",json!({"query":s,"path":s}),vec!["query"]),
         ("search_text","Search text; literal by default, optional regex and file glob.",json!({"query":s,"path":s,"regex":b,"glob":s,"max_hits":n}),vec!["query"]),
         ("search_symbol","Find likely symbol definitions by name.",json!({"query":s,"path":s}),vec!["query"]),

@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, ensure, Result};
 use serde_json::Value;
 use shadowcode_core::{
     control,
@@ -42,13 +42,44 @@ impl Backend {
             && matches!(request.path.as_str(), "/api/health" | "/api/version");
         let mut result = match self {
             Self::Owned { service, .. } => service.dispatch(request).await?,
-            Self::Attached(view) => view.dispatch(request).await?,
+            Self::Attached(view) => self.dispatch_attached(view, request).await?,
         };
         if describe {
             result["desktop_attached"] = Value::Bool(matches!(self, Self::Attached(_)));
             result["desktop_pid"] = serde_json::json!(std::process::id());
         }
         Ok(result)
+    }
+    async fn dispatch_attached(
+        &self,
+        view: &control::ViewClient,
+        request: Request,
+    ) -> Result<Value> {
+        if view.disconnected() {
+            view.reattach().await?;
+            ensure_get_only(&request)?;
+        }
+        match view.dispatch(request.clone()).await {
+            Ok(result) => Ok(result),
+            Err(error) if engine_gone(&error) => {
+                view.mark_disconnected();
+                view.reattach().await?;
+                ensure_get_only(&request)?;
+                view.dispatch(request).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+    /// Reconnect a disconnected attached view. Never starts jobs or replays tools.
+    pub async fn reattach_if_needed(&self) -> Result<bool> {
+        match self {
+            Self::Owned { .. } => Ok(false),
+            Self::Attached(view) if view.disconnected() => {
+                view.reattach().await?;
+                Ok(true)
+            }
+            Self::Attached(_) => Ok(false),
+        }
     }
     pub async fn close(&self) -> Result<()> {
         match self {
@@ -68,4 +99,27 @@ impl Backend {
             }
         }
     }
+}
+
+fn ensure_get_only(request: &Request) -> Result<()> {
+    ensure!(
+        request.method == "GET",
+        "Engine reattached after a process restart. The previous request was not retried."
+    );
+    Ok(())
+}
+
+fn engine_gone(error: &anyhow::Error) -> bool {
+    let text = error.to_string();
+    text.contains("Attached view is closed")
+        || text.contains("No running engine")
+        || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+            )
+        })
 }

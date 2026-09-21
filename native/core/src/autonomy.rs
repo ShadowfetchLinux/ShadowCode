@@ -195,7 +195,11 @@ pub fn caps_for(profile: &str) -> Option<AutonomyCaps> {
 
 /// Named profiles never raise the configured caps. Unlimited/custom use
 /// the user's configured limits as-is.
-pub fn effective_caps(profile: &str, configured_steps: usize, configured_tokens: u64) -> AutonomyCaps {
+pub fn effective_caps(
+    profile: &str,
+    configured_steps: usize,
+    configured_tokens: u64,
+) -> AutonomyCaps {
     match caps_for(profile) {
         Some(named) => AutonomyCaps {
             max_steps: named.max_steps.min(configured_steps),
@@ -268,7 +272,11 @@ pub fn capability_profile(provider: &str, context_limit: usize) -> CapabilityPro
     }
 }
 
-pub fn account(messages: &[Value], schemas: &[Value], context_limit: usize) -> Result<Value, anyhow::Error> {
+pub fn account(
+    messages: &[Value],
+    schemas: &[Value],
+    context_limit: usize,
+) -> Result<Value, anyhow::Error> {
     let reserved = context::response_budget(messages, schemas, context_limit).unwrap_or(256);
     let mut layers = BTreeMap::from([
         ("system", 0usize),
@@ -360,10 +368,7 @@ pub fn preserve(messages: &[Value]) -> Value {
                     if failed.len() < 8 {
                         failed.push(format!(
                             "{name}: {}",
-                            tools::truncate(
-                                body["error"].as_str().unwrap_or(content),
-                                160
-                            )
+                            tools::truncate(body["error"].as_str().unwrap_or(content), 160)
                         ));
                     }
                     if unresolved.len() < 8 {
@@ -421,7 +426,10 @@ fn looks_like_constraint(text: &str) -> bool {
 
 fn collect_paths(value: &Value, files: &mut BTreeSet<String>) {
     for key in ["path", "src", "dest"] {
-        if let Some(path) = value[key].as_str().filter(|p| !p.is_empty() && p.len() <= 512) {
+        if let Some(path) = value[key]
+            .as_str()
+            .filter(|p| !p.is_empty() && p.len() <= 512)
+        {
             files.insert(path.to_owned());
         }
     }
@@ -438,7 +446,9 @@ pub fn classify_verification(model_text: &str, commands: &[Value], inspected: bo
     let claims = looks_like_success_claim(model_text);
     let any_cmd = !commands.is_empty();
     let any_ok = commands.iter().any(|c| c["success"] == true);
-    let any_fail = commands.iter().any(|c| c["success"] == false || c["timed_out"] == true);
+    let any_fail = commands
+        .iter()
+        .any(|c| c["success"] == false || c["timed_out"] == true);
     let evidence = commands.iter().any(looks_like_verification_command);
     let level = if evidence && any_ok && !any_fail {
         ClaimLevel::Verified
@@ -472,17 +482,31 @@ fn looks_like_success_claim(text: &str) -> bool {
 }
 
 fn looks_like_verification_command(command: &Value) -> bool {
-    let text = command["command"].as_str().unwrap_or("").to_ascii_lowercase();
-    ["test", "pytest", "cargo test", "npm test", "lint", "clippy", "tsc", "cargo check"]
-        .iter()
-        .any(|needle| text.contains(needle))
+    let text = command["command"]
+        .as_str()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    [
+        "test",
+        "pytest",
+        "cargo test",
+        "npm test",
+        "lint",
+        "clippy",
+        "tsc",
+        "cargo check",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 pub fn parse_git_status(branch_line: &str, entries: &str) -> GitSafety {
     let detached = branch_line.contains("detached") || branch_line.starts_with("## HEAD");
     let rebase_or_merge = branch_line.contains("rebasing")
         || branch_line.contains("merging")
-        || entries.lines().any(|line| line.starts_with("u ") || line.contains("UU "));
+        || entries
+            .lines()
+            .any(|line| line.starts_with("u ") || line.contains("UU "));
     let mut dirty = false;
     let mut staged = false;
     let mut untracked = false;
@@ -502,11 +526,15 @@ pub fn parse_git_status(branch_line: &str, entries: &str) -> GitSafety {
             if line.len() >= 2 && !line.starts_with(' ') && &line[..1] != "?" {
                 staged = staged || !line.starts_with(' ');
             }
-            if line.as_bytes().get(0).is_some_and(|c| *c != b'?' && *c != b' ') {
+            if line
+                .as_bytes()
+                .first()
+                .is_some_and(|c| *c != b'?' && *c != b' ')
+            {
                 staged = true;
             }
         }
-        let name = line.splitn(2, ' ').nth(1).unwrap_or("");
+        let name = line.split_once(' ').map(|(_, rest)| rest).unwrap_or("");
         let file = name.rsplit_once(' ').map(|(_, n)| n).unwrap_or(name);
         if file.starts_with('-')
             || file.contains('\0')
@@ -542,7 +570,9 @@ pub fn parse_git_status(branch_line: &str, entries: &str) -> GitSafety {
         checkpoint_required,
         note: match risk {
             "conflict" => "Do not auto-commit, reset, or clean. Conflicts need a human.".into(),
-            "detached" => "HEAD is detached. Do not reset or create commits without confirmation.".into(),
+            "detached" => {
+                "HEAD is detached. Do not reset or create commits without confirmation.".into()
+            }
             "dirty" => "Take a safety checkpoint before destructive Git or shell work.".into(),
             _ => "Working tree is clean enough for ordinary read-only Git tools.".into(),
         },
@@ -557,7 +587,10 @@ pub fn worktree_recovery_advice(reason: &str) -> Value {
     } else if reason.contains("locked") {
         (false, "Another Git process holds the worktree. Wait or inspect the lock; do not delete it blindly.")
     } else {
-        (false, "Auto-recovery is unsafe. Surface the recorded paths and require review.")
+        (
+            false,
+            "Auto-recovery is unsafe. Surface the recorded paths and require review.",
+        )
     };
     json!({"auto_recover":safe,"action":action,"guess_paths":false})
 }

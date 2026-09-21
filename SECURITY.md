@@ -109,9 +109,13 @@ absolute `http`/`https` URLs without embedded credentials stay clickable;
 external links open with `noopener noreferrer`.
 
 Crash recovery does not auto-replay shell, Git history changes, or file
-mutations. Those classes require confirmation or human review. Model prose is
-not treated as verified correctness. Doctor metrics stay on the local
-machine; there is no product telemetry.
+mutations. Those classes require confirmation or human review. Incomplete
+tool groups are closed with a class-specific unknown-result record; shell
+is never treated as safe to replay. Engine-process reattach reconnects the
+desktop view only: it does not start jobs or retry mutating commands.
+Worktree repair requires the recorded real directory and does not guess a
+relocated checkout. Model prose is not treated as verified correctness.
+Doctor metrics stay on the local machine; there is no product telemetry.
 
 ## Releases
 

@@ -327,3 +327,51 @@ fn thousands_of_frames_in_one_network_chunk_preserve_all_text() {
     assert_eq!(deltas.len(), 10_000);
     assert_eq!(decoder.finish().unwrap().text, "word ".repeat(10_000));
 }
+
+async fn status_fixture(status: u16, body: &str) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+    let body = body.to_owned();
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = socket.read(&mut request).await;
+        let payload = format!(
+            "HTTP/1.1 {status} ERR\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = socket.write_all(payload.as_bytes()).await;
+    });
+    (endpoint, task)
+}
+
+#[tokio::test]
+async fn provider_http_429_and_500_do_not_execute_tools() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(root.path()).unwrap();
+    for (status, needle) in [(429, "rate limit"), (500, "HTTP 500")] {
+        let (endpoint, task) = status_fixture(status, "{\"error\":\"nope\"}").await;
+        let client = ModelClient::new(
+            ModelConfig {
+                provider: "local".into(),
+                name: "fixture".into(),
+                endpoint,
+                ..Default::default()
+            },
+            &paths,
+        )
+        .unwrap();
+        let error = client
+            .chat(
+                &[json!({"role":"user","content":"hello"})],
+                &[],
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(needle), "status {status} error was {error}");
+        task.abort();
+    }
+}

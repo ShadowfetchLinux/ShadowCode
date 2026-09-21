@@ -1,7 +1,10 @@
 //! Independent navigation state for a desktop attached to an existing engine.
 //! The lease keeps only the view alive; jobs belong to the persistent engine.
 use super::*;
-use std::{collections::HashMap, sync::RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Mutex as StdMutex, RwLock},
+};
 use tokio::{
     net::unix::OwnedWriteHalf,
     sync::{broadcast, Mutex},
@@ -54,11 +57,12 @@ impl Drop for Lease {
 /// cancel its durable jobs. Requests use separate connections so a slow tool
 /// cannot prevent status reads or cancellation from the same window.
 pub struct ViewClient {
-    client: Client,
+    client: StdMutex<Client>,
     writer: Mutex<Option<OwnedWriteHalf>>,
     reader: Mutex<Option<AbortOnDropHandle<Result<()>>>>,
     events: broadcast::Sender<Value>,
     closed: Arc<AtomicBool>,
+    attach: Mutex<()>,
 }
 impl Client {
     pub async fn open_view(&self) -> Result<ViewClient> {
@@ -117,26 +121,82 @@ impl Client {
             result
         });
         Ok(ViewClient {
-            client,
+            client: StdMutex::new(client),
             writer: Mutex::new(Some(writer)),
             reader: Mutex::new(Some(AbortOnDropHandle::new(task))),
             events,
             closed,
+            attach: Mutex::new(()),
         })
     }
 }
 impl ViewClient {
+    pub fn disconnected(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+    pub fn mark_disconnected(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+    fn client(&self) -> Result<Client> {
+        self.client
+            .lock()
+            .map(|client| client.clone())
+            .map_err(|_| anyhow::anyhow!("View client lock poisoned"))
+    }
     pub async fn dispatch(&self, request: Request) -> Result<Value> {
         ensure!(
             !self.closed.load(Ordering::Acquire),
             "Attached view is closed"
         );
-        self.client.dispatch(request).await
+        self.client()?.dispatch(request).await
     }
     pub fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
     }
+    /// After the owner process exits, wait for a new engine on the same
+    /// endpoint and replace this view's lease. Does not start jobs, replay
+    /// tools, or emit durable events. Existing subscribers keep this
+    /// broadcast and receive `view.reattached`.
+    pub async fn reattach(&self) -> Result<Value> {
+        let _gate = self.attach.lock().await;
+        ensure!(
+            self.closed.load(Ordering::Acquire),
+            "Attached view is still connected; detach before reattaching"
+        );
+        let mut base = self.client()?;
+        base.view = None;
+        base.wait_available(Duration::from_secs(20)).await?;
+        let _ = self.reader.lock().await.take();
+        let _ = self.writer.lock().await.take();
+        let fresh = base.open_view().await?;
+        *self.writer.lock().await = fresh.writer.lock().await.take();
+        *self.reader.lock().await = fresh.reader.lock().await.take();
+        {
+            let mut client = self
+                .client
+                .lock()
+                .map_err(|_| anyhow::anyhow!("View client lock poisoned"))?;
+            *client = fresh
+                .client
+                .lock()
+                .map_err(|_| anyhow::anyhow!("View client lock poisoned"))?
+                .clone();
+        }
+        self.closed.store(false, Ordering::Release);
+        let notice = json!({
+            "type": "view.reattached",
+            "jobs_started": 0,
+            "tools_replayed": 0,
+        });
+        let _ = self.events.send(notice.clone());
+        Ok(json!({
+            "reattached": true,
+            "jobs_started": 0,
+            "tools_replayed": 0,
+        }))
+    }
     pub async fn close(&self) -> Result<()> {
+        let _gate = self.attach.lock().await;
         self.closed.store(true, Ordering::Release);
         let Some(mut task) = self.reader.lock().await.take() else {
             return Ok(());
@@ -244,7 +304,7 @@ mod tests {
         });
         let (events, _) = broadcast::channel(64);
         let view = Arc::new(ViewClient {
-            client: Client {
+            client: StdMutex::new(Client {
                 endpoint: Endpoint {
                     path: PathBuf::new(),
                     profile: "fixture".into(),
@@ -252,11 +312,12 @@ mod tests {
                 workspace: PathBuf::new(),
                 session_id: None,
                 view: Some("fixture".into()),
-            },
+            }),
             writer: Mutex::new(Some(writer)),
             reader: Mutex::new(Some(AbortOnDropHandle::new(task))),
             events,
             closed: Arc::new(AtomicBool::new(false)),
+            attach: Mutex::new(()),
         });
         let closing_view = view.clone();
         let closing = tokio::spawn(async move { closing_view.close().await });

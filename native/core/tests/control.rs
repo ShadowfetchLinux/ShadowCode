@@ -475,3 +475,155 @@ async fn attached_views_receive_bounded_completion_notifications_and_detect_owne
     let _ = view.close().await;
     service.engine.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn attached_view_reattaches_after_owner_restart_without_replay_or_duplicates() {
+    let (_root, service) = setup();
+    let paths = service.engine.paths().clone();
+    let workspace = service.workspace().unwrap();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let client = server.endpoint().client(workspace.clone(), None);
+    let view = client.open_view().await.unwrap();
+    let mut events = view.subscribe();
+    let started = view
+        .dispatch(request(
+            "POST",
+            "/api/jobs",
+            json!({"task": "Exercise provider failure notification"}),
+        ))
+        .await
+        .unwrap();
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event["type"] == "agent.completed" {
+                break;
+            }
+        }
+    })
+    .await;
+    let before = view
+        .dispatch(request(
+            "GET",
+            &format!("/api/events?session_id={session_id}"),
+            Value::Null,
+        ))
+        .await
+        .unwrap();
+    let before_ids: Vec<i64> = before["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["id"].as_i64())
+        .collect();
+    assert!(!before_ids.is_empty());
+    assert!(view
+        .reattach()
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("still connected"));
+    server.close();
+    server.wait_closed().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event["type"] == "view.disconnected" {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    service.engine.shutdown().await.unwrap();
+    drop(service);
+
+    let service = Service::open(paths, Some(workspace)).unwrap();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let attached = view.reattach().await.unwrap();
+    assert_eq!(attached["reattached"], true);
+    assert_eq!(attached["jobs_started"], 0);
+    assert_eq!(attached["tools_replayed"], 0);
+    let notice = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event["type"] == "view.reattached" {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(notice["jobs_started"], 0);
+    assert_eq!(notice["tools_replayed"], 0);
+    let health = view
+        .dispatch(request("GET", "/api/health", Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(health["ok"], true);
+    let after = view
+        .dispatch(request(
+            "GET",
+            &format!("/api/events?session_id={session_id}"),
+            Value::Null,
+        ))
+        .await
+        .unwrap();
+    let after_ids: Vec<i64> = after["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["id"].as_i64())
+        .collect();
+    for id in &before_ids {
+        assert!(after_ids.contains(id), "lost event {id}");
+    }
+    let unique: std::collections::HashSet<_> = after_ids.iter().collect();
+    assert_eq!(
+        unique.len(),
+        after_ids.len(),
+        "duplicate event ids after reattach"
+    );
+    let jobs = view
+        .dispatch(request("GET", "/api/jobs", Value::Null))
+        .await
+        .unwrap();
+    let running = jobs["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|job| job["status"] == "running" || job["status"] == "queued")
+        .count();
+    assert_eq!(running, 0, "reattach must not start or resume jobs");
+    stop(server, service).await;
+}
+
+fn descriptor_count() -> usize {
+    std::fs::read_dir("/proc/self/fd")
+        .map(|entries| entries.count())
+        .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn attach_close_loop_does_not_grow_descriptors() {
+    let (_root, service) = setup();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let client = server.endpoint().client(service.workspace().unwrap(), None);
+    for _ in 0..2 {
+        let view = client.open_view().await.unwrap();
+        view.close().await.unwrap();
+    }
+    let baseline = descriptor_count();
+    for _ in 0..20 {
+        let view = client.open_view().await.unwrap();
+        view.close().await.unwrap();
+    }
+    let after = descriptor_count();
+    eprintln!("attach_close_loop descriptors baseline={baseline} after={after}");
+    assert!(
+        after <= baseline + 24,
+        "descriptor leak: baseline={baseline} after={after}"
+    );
+    stop(server, service).await;
+}

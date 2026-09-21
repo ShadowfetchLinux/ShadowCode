@@ -5,7 +5,10 @@
 - 0.21 autonomy (feature branch): inspectable context budgets, structured
   compaction keep-lists, replay classification, progressive loop
   warn→replan→pause, named autonomy caps that never silently kill, claim vs
-  observed vs verified completion, local Doctor store metrics. Not released.
+  observed vs verified completion, local Doctor store metrics, engine-process
+  auto-reattach that does not retry mutations, explicit tool-result
+  truncation notes, and worktree recovery that refuses path guessing. Not
+  released. Package version remains 0.20.0.
 
 - Independent audit: Markdown keeps only fragment and credential-free http(s)
   links clickable; compatible streams continue unindexed tool-argument deltas

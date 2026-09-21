@@ -383,10 +383,12 @@ fn recovery_repairs_missing_tool_results_without_replaying_mutations() {
     context::repair_incomplete(&mut messages);
     context::validate_pairs(&messages).unwrap();
     assert_eq!(messages.len(), 4);
+    assert_eq!(messages[3]["name"], "read_file");
     assert!(messages[3]["content"]
         .as_str()
         .unwrap()
-        .contains("may have run"));
+        .contains("Re-run the inspection"));
+    assert_eq!(messages[2]["content"], "saved");
 }
 
 #[test]

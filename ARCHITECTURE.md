@@ -35,13 +35,19 @@ plus queued follow-ups. Cancellation sets a durable request and releases pending
 approvals; terminal status follows worker exit. A profile lock prevents a second
 manager from recovering live jobs. The desktop may attach to a persistent
 headless/TUI engine; closing an attached window leaves that work running.
+If that owner process exits and a matching engine returns on the same
+socket, an attached view reopens its lease (`view.reattached`) without
+starting jobs, retrying mutating requests, or replaying completed tools.
+The UI then fetches committed rows from the last event cursor.
 
 Autonomy (0.21 branch) adds inspectable layered context accounting before each
 model request, a deterministic compaction keep-list, replay classes for crash
 recovery, progressive loop handling, and claim/observed/verified completion.
 These extend `context.rs` and `engine.rs`; they do not replace checkpoints or
 the permission checker. Named autonomy profiles never raise configured caps
-and never silently kill a task.
+and never silently kill a task. Tool results that exceed their byte or range
+budget set `truncated` and a model-visible note. Worktree repair still
+requires the recorded real path (`guess_paths: false`).
 
 Filesystem tools resolve paths with directory capabilities. Shell classification
 is a policy check, not kernel isolation. See [SECURITY.md](SECURITY.md).

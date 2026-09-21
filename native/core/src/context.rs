@@ -50,7 +50,22 @@ pub fn repair_incomplete(messages: &mut Vec<Value>) {
         }
         for call in calls {
             if let Some(id) = call["id"].as_str() {
-                result.push(replies.remove(id).unwrap_or_else(||json!({"role":"tool","tool_call_id":id,"name":call["function"]["name"],"content":"The application stopped before this tool result was durably recorded. The operation may have run. Inspect the current workspace and checkpoint before deciding what to do; do not assume success or repeat a mutation blindly."})));
+                let name = call["function"]["name"].as_str().unwrap_or("");
+                let content = match crate::autonomy::replay_class(name) {
+                    crate::autonomy::ReplayClass::SafeToReplay => {
+                        "The application stopped before this read-only result was durably recorded. Re-run the inspection if needed; do not invent the missing output."
+                    }
+                    crate::autonomy::ReplayClass::ReEvaluate => {
+                        "The application stopped before this result was durably recorded. Inspect the current workspace before repeating the operation."
+                    }
+                    crate::autonomy::ReplayClass::RequiresConfirmation
+                    | crate::autonomy::ReplayClass::NeverAutoReplay => {
+                        "The application stopped before this tool result was durably recorded. The operation may have run. Do not auto-replay shell, Git history, or file mutations. Inspect the workspace and checkpoint first."
+                    }
+                };
+                result.push(replies.remove(id).unwrap_or_else(
+                    || json!({"role":"tool","tool_call_id":id,"name":name,"content":content}),
+                ));
             }
         }
     }

@@ -1113,3 +1113,35 @@ async fn connection_repair_refuses_foreign_links_locks_and_lost_indexes() {
     );
     assert!(!record.path.join(".git").exists());
 }
+
+#[tokio::test]
+async fn repair_refuses_relocated_checkout_without_guessing_a_path() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    let record = worktrees::create(&paths, &project, "HEAD", CancellationToken::new())
+        .await
+        .unwrap();
+    let elsewhere = root.path().join("elsewhere");
+    fs::rename(&record.path, &elsewhere).unwrap();
+    let error = worktrees::repair::review(&paths, &project, &record.id, CancellationToken::new())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("original real directory")
+            || error.contains("Repair requires")
+            || error.contains("No such file")
+            || error.contains("os error 2"),
+        "{error}"
+    );
+    assert!(
+        !record.path.exists(),
+        "must not recreate a guessed checkout"
+    );
+    assert!(elsewhere.exists(), "relocated tree is left untouched");
+    let advice = shadowcode_core::autonomy::worktree_recovery_advice("worktree path was moved");
+    assert_eq!(advice["auto_recover"], false);
+    assert_eq!(advice["guess_paths"], false);
+}

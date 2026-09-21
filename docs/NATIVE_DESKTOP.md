@@ -39,9 +39,12 @@ limit is 16 KiB, the local broadcast buffer holds 64 hints, and completion
 summaries contain at most 180 Unicode characters. A lagging receiver requests
 durable replay; a blocked socket releases its view after five seconds.
 
-If the owner exits or restarts, close and reopen the window to attach again.
-Automatic reattachment remains follow-up work; closing a disconnected window
-still succeeds.
+If the owner exits or restarts, the attached window waits for a matching
+engine on the same socket and reopens its view lease. Reattach does not
+start jobs, retry POST/mutating commands, or replay completed tools.
+Existing subscribers receive `view.reattached` on the same wakeup channel
+and then fetch committed rows from the last cursor. Closing a disconnected
+window still succeeds if the new engine never returns.
 
 ## Build and run
 

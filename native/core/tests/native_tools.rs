@@ -336,3 +336,96 @@ async fn search_is_cooperatively_cancellable_and_plans_validate_state() {
     assert!(call(&tools,"update_plan",json!({"goal":"test","steps":[{"title":"a","status":"completed"},{"title":"b","status":"in_progress"}]})).await.success);
     assert_eq!(tools.plan()["steps"][1]["status"], "running");
 }
+
+#[tokio::test]
+async fn invalid_args_do_not_panic_and_truncation_is_visible() {
+    let (_root, tools) = fixture(Config::default());
+    tools
+        .workspace
+        .write("big.rs", "line\n".repeat(500).as_bytes(), None)
+        .unwrap();
+    let invalid = tools
+        .execute(ToolCall {
+            id: "bad".into(),
+            name: "read_file".into(),
+            arguments: json!("not-an-object"),
+        })
+        .await
+        .unwrap();
+    assert!(!invalid.success);
+    assert!(invalid.error.contains("object"));
+    let ranged = call(
+        &tools,
+        "read_file",
+        json!({"path":"big.rs","offset":1,"limit":10}),
+    )
+    .await;
+    assert!(ranged.success);
+    assert_eq!(ranged.output["truncated"], true);
+    assert_eq!(ranged.output["next_offset"], 11);
+    assert!(ranged.output["note"]
+        .as_str()
+        .unwrap()
+        .contains("truncated"));
+    let message = ranged.message("read_file", 80);
+    let content = message["content"].as_str().unwrap();
+    assert!(content.contains("truncated") && content.contains("note"));
+    for name in [
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "delete_file",
+        "exec",
+        "git_commit",
+        "git_reset",
+        "git_clean",
+    ] {
+        assert_ne!(
+            shadowcode_core::autonomy::replay_class(name),
+            shadowcode_core::autonomy::ReplayClass::SafeToReplay
+        );
+    }
+}
+
+#[tokio::test]
+async fn denied_approval_is_not_success_and_does_not_run_the_command() {
+    let (_root, tools) = fixture(Config::default());
+    let worker = tools.clone();
+    let task = tokio::spawn(async move {
+        call(&worker, "exec", json!({"command": "touch must-not-exist"})).await
+    });
+    let record = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(approval) = tools.approvals.list(None).pop() {
+                break approval;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    tools
+        .approvals
+        .decide(&record.id, &tools.events.session_id, false)
+        .unwrap();
+    let result = task.await.unwrap();
+    assert!(!result.success);
+    let status =
+        shadowcode_core::autonomy::tool_status(result.success, &result.output, &result.error);
+    assert_ne!(status, shadowcode_core::autonomy::ToolStatus::Success);
+    assert!(
+        matches!(
+            status,
+            shadowcode_core::autonomy::ToolStatus::Denied
+                | shadowcode_core::autonomy::ToolStatus::Cancelled
+        ),
+        "{status:?} from {}",
+        result.error
+    );
+    assert!(tools
+        .workspace
+        .snapshot("must-not-exist")
+        .unwrap()
+        .bytes
+        .is_none());
+}
