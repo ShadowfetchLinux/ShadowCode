@@ -126,19 +126,27 @@ async fn client_disconnect_cancels_manual_command_and_releases_workspace() {
             ))
             .await
     });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !workspace.join("child.pid").exists() {
+    let pid = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            // Shell redirection creates the file before echo writes the PID.
+            // An empty value would accidentally probe /proc/stat below.
+            if let Some(pid) = fs::read_to_string(workspace.join("child.pid"))
+                .ok()
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .filter(|pid| *pid > 0)
+            {
+                break pid;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .unwrap();
-    let pid = fs::read_to_string(workspace.join("child.pid")).unwrap();
     operation.abort();
     let _ = operation.await;
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let alive = fs::read_to_string(format!("/proc/{}/stat", pid.trim()))
+            let alive = fs::read_to_string(format!("/proc/{pid}/stat"))
                 .is_ok_and(|stat| !stat.contains(") Z "));
             if !alive {
                 break;

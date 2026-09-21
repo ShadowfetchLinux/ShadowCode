@@ -34,6 +34,8 @@ fn git(root: &Path, args: &[&str]) -> String {
 fn repository(root: &Path) {
     fs::create_dir(root).unwrap();
     git(root, &["init", "-q"]);
+    git(root, &["config", "user.name", "Worktree Test"]);
+    git(root, &["config", "user.email", "test@example.invalid"]);
     fs::write(root.join("tracked.txt"), "committed\n").unwrap();
     git(root, &["add", "tracked.txt"]);
     git(root, &["commit", "-qm", "Base"]);
@@ -569,7 +571,7 @@ async fn reviewed_return_preserves_diverged_source_and_requires_a_separate_commi
     )
     .await
     .unwrap();
-    assert_eq!(returned["state"], "merge_pending");
+    assert_eq!(returned["state"], "merge_pending", "{returned}");
     assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
     assert_eq!(
         git(&project, &["rev-parse", "MERGE_HEAD"]),
@@ -646,7 +648,10 @@ async fn reviewed_return_preserves_conflicts_for_resolution_or_abort() {
     assert_eq!(result["state"], "needs_attention");
     assert!(result["detail"].as_str().unwrap().contains("merge --abort"));
     assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
-    assert!(git(&project, &["status", "--porcelain"]).contains("UU tracked.txt"));
+    assert!(
+        git(&project, &["status", "--porcelain"]).contains("UU tracked.txt"),
+        "{result}"
+    );
     let conflict = fs::read_to_string(project.join("tracked.txt")).unwrap();
     assert!(conflict.contains("source version") && conflict.contains("worktree version"));
     assert_eq!(
@@ -900,4 +905,64 @@ async fn interrupted_copy_retains_destination_record_and_never_resets_source() {
         "keep these edits\n"
     );
     assert_eq!(git(&project, &["show", ":tracked.txt"]), "committed");
+}
+
+#[tokio::test]
+async fn return_without_git_identity_preserves_source_and_can_be_retried() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    repository(&project);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    let record = worktrees::create(&paths, &project, "HEAD", CancellationToken::new())
+        .await
+        .unwrap();
+    fs::write(record.path.join("incoming.txt"), "reviewed work\n").unwrap();
+    git(&record.path, &["add", "incoming.txt"]);
+    git(&record.path, &["commit", "-qm", "Incoming"]);
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    // Empty repository-local values override any identity on the developer machine.
+    git(&project, &["config", "user.name", ""]);
+    git(&project, &["config", "user.email", ""]);
+    let review = worktrees::review_return(&paths, &project, &record.id, CancellationToken::new())
+        .await
+        .unwrap();
+    let result = worktrees::return_changes(
+        &paths,
+        &project,
+        &record.id,
+        &review.hash,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.state, "needs_attention", "{result:?}");
+    assert!(
+        result.detail.contains("identity") || result.detail.contains("empty ident"),
+        "{}",
+        result.detail
+    );
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
+    assert!(git(&project, &["status", "--porcelain"]).is_empty());
+    assert!(!project.join("incoming.txt").exists());
+    assert!(!project.join(".git/MERGE_HEAD").exists());
+    git(&project, &["config", "user.name", "Worktree Test"]);
+    git(&project, &["config", "user.email", "test@example.invalid"]);
+    let review = worktrees::review_return(&paths, &project, &record.id, CancellationToken::new())
+        .await
+        .unwrap();
+    let result = worktrees::return_changes(
+        &paths,
+        &project,
+        &record.id,
+        &review.hash,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.state, "merge_pending", "{result:?}");
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        fs::read_to_string(project.join("incoming.txt")).unwrap(),
+        "reviewed work\n"
+    );
 }

@@ -12,6 +12,8 @@ import { api, type ManagedWorktree, type WorktreeInspection } from "../api";
 vi.mock("../api", () => ({
   api: {
     worktrees: vi.fn(),
+    reviewWorktreeCopy: vi.fn(),
+    copyWorktreeChanges: vi.fn(),
     createWorktree: vi.fn(),
     inspectWorktree: vi.fn(),
     removeWorktree: vi.fn(),
@@ -191,4 +193,42 @@ it("shows the incoming diff and reports merge conflicts as needing attention", a
   expect(
     screen.queryByRole("region", { name: "Review returned changes" }),
   ).toBeNull();
+});
+
+it("reviews separate staged and unstaged edits and rejects a stale copy", async () => {
+  vi.mocked(api.reviewWorktreeCopy).mockResolvedValue({
+    source: "/source",
+    head: "reviewed-head",
+    staged_diff: "+ staged text",
+    unstaged_diff: "+ unstaged text",
+    untracked: [{ path: "new.txt", bytes: 12, hash: "file-hash", mode: 420 }],
+    intent_to_add: ["planned.txt"],
+    hash: "copy-hash",
+  });
+  vi.mocked(api.copyWorktreeChanges).mockRejectedValue(
+    new Error("Source changed; review again"),
+  );
+  render(<WorktreeSettings onToast={vi.fn()} />);
+  await screen.findByText("shadowcode/managed");
+  fireEvent.click(screen.getByText("Review current edits"));
+  const region = await screen.findByRole("region", {
+    name: "Review copied changes",
+  });
+  expect(document.activeElement).toBe(region);
+  expect(api.reviewWorktreeCopy).toHaveBeenCalledWith("/source");
+  expect(
+    screen.getByRole("region", { name: "Staged copy diff" }).textContent,
+  ).toContain("+ staged text");
+  expect(
+    screen.getByRole("region", { name: "Unstaged copy diff" }).textContent,
+  ).toContain("+ unstaged text");
+  expect(screen.getByText("new.txt")).toBeTruthy();
+  expect(api.copyWorktreeChanges).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("Copy into new worktree"));
+  await screen.findByRole("alert");
+  expect(api.copyWorktreeChanges).toHaveBeenCalledWith("/source", "copy-hash");
+  expect(
+    screen.queryByRole("region", { name: "Review copied changes" }),
+  ).toBeNull();
+  expect(api.createWorktree).not.toHaveBeenCalled();
 });

@@ -375,7 +375,7 @@ try {
   checks.push("remote command disconnect and persistent-owner shutdown clean process groups and release the profile");
   const isolatedSource=path.join(scratch,"worktree-source");await mkdir(isolatedSource);
   const fixtureGit=args=>execFileSync("git",["-c","core.hooksPath=/dev/null","-c","user.name=Worktree Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd:isolatedSource,encoding:"utf8"});
-  fixtureGit(["init","-q"]);await writeFile(path.join(isolatedSource,"README.md"),"fixture-read-value committed\n");fixtureGit(["add","README.md"]);fixtureGit(["commit","-qm","Base"]);
+  fixtureGit(["init","-q"]);fixtureGit(["config","user.name","Worktree Test"]);fixtureGit(["config","user.email","test@example.invalid"]);await writeFile(path.join(isolatedSource,"README.md"),"fixture-read-value committed\n");fixtureGit(["add","README.md"]);fixtureGit(["commit","-qm","Base"]);
   await writeFile(path.join(isolatedSource,"README.md"),"source local edits\n");
   await cli(["trust"],0,{workspace:isolatedSource});
   assert.equal((await cli(["worktree"],0,{workspace:isolatedSource})).worktrees.length,0);

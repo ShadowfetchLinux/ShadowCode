@@ -5,6 +5,7 @@ import {
   type WorktreeInspection,
   type WorktreeRecovery,
   type WorktreeReturnReview,
+  type WorktreeCopyReview,
 } from "../api";
 export function WorktreeSettings({
   onOpen,
@@ -24,6 +25,7 @@ export function WorktreeSettings({
   const [returnReview, setReturnReview] = useState<WorktreeReturnReview | null>(
     null,
   );
+  const [copyReview, setCopyReview] = useState<WorktreeCopyReview | null>(null);
   const reviewRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let live = true;
@@ -46,11 +48,11 @@ export function WorktreeSettings({
     };
   }, []);
   useLayoutEffect(() => {
-    if (review || recovery || returnReview) {
+    if (review || recovery || returnReview || copyReview) {
       reviewRef.current?.scrollIntoView({ block: "nearest" });
       reviewRef.current?.focus({ preventScroll: true });
     }
-  }, [review, recovery, returnReview]);
+  }, [review, recovery, returnReview, copyReview]);
   async function refresh() {
     const data = await api.worktrees();
     setWorkspace(data.workspace);
@@ -58,6 +60,7 @@ export function WorktreeSettings({
     setReview(null);
     setRecovery(null);
     setReturnReview(null);
+    setCopyReview(null);
   }
   async function perform(action: () => Promise<void>) {
     setBusy(true);
@@ -65,6 +68,7 @@ export function WorktreeSettings({
     setReview(null);
     setRecovery(null);
     setReturnReview(null);
+    setCopyReview(null);
     try {
       await action();
     } catch (e) {
@@ -80,8 +84,8 @@ export function WorktreeSettings({
       <h3>Isolated worktrees</h3>
       <p className="hint">
         Work on a separate branch while keeping this checkout intact. New
-        worktrees start from a local commit; existing uncommitted edits stay
-        here.
+        worktrees start from a local commit. You can also review and copy your
+        current edits into a new worktree while preserving the originals.
       </p>
       <p className="hint">Source project</p>
       <code className="worktree-path">
@@ -120,6 +124,18 @@ export function WorktreeSettings({
           }
         >
           Create worktree
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          disabled={busy || loading || !workspace}
+          onClick={() =>
+            void perform(async () =>
+              setCopyReview(await api.reviewWorktreeCopy(workspace)),
+            )
+          }
+        >
+          Review current edits
         </button>
         <button
           type="button"
@@ -215,6 +231,84 @@ export function WorktreeSettings({
           </article>
         ))}
       </div>
+      {copyReview && (
+        <div
+          className="worktree-review"
+          ref={reviewRef}
+          tabIndex={-1}
+          role="region"
+          aria-label="Review copied changes"
+        >
+          <h4>Copy current edits into a new worktree</h4>
+          <code className="worktree-path">{copyReview.source}</code>
+          <p>
+            Starting commit:{" "}
+            <code className="worktree-path">{copyReview.head}</code>
+          </p>
+          <h4>Staged changes</h4>
+          <pre tabIndex={0} role="region" aria-label="Staged copy diff">
+            {copyReview.staged_diff || "No staged changes."}
+          </pre>
+          <h4>Unstaged changes</h4>
+          <pre tabIndex={0} role="region" aria-label="Unstaged copy diff">
+            {copyReview.unstaged_diff || "No unstaged changes."}
+          </pre>
+          <h4>Untracked files</h4>
+          {copyReview.untracked.length ? (
+            <ul>
+              {copyReview.untracked.map((file) => (
+                <li key={file.path}>
+                  <code className="worktree-path">{file.path}</code>{" "}
+                  {file.bytes.toLocaleString()} bytes
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No untracked files.</p>
+          )}
+          {copyReview.intent_to_add.length > 0 && (
+            <p>
+              Intent-to-add entries are preserved:{" "}
+              {copyReview.intent_to_add.join(", ")}
+            </p>
+          )}
+          <p>
+            The copy starts from this project’s HEAD and preserves staged and
+            unstaged edits separately. Original files stay here. Ignored files
+            are excluded. If the source changes, review it again before copying.
+          </p>
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={() => setCopyReview(null)}
+            >
+              Cancel copy
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void perform(async () => {
+                  const copied = await api.copyWorktreeChanges(
+                    workspace,
+                    copyReview.hash,
+                  );
+                  await refresh();
+                  onToast(
+                    `Copied edits into ${copied.branch}; source preserved`,
+                    "ok",
+                  );
+                })
+              }
+            >
+              Copy into new worktree
+            </button>
+          </div>
+        </div>
+      )}
       {returnReview && (
         <div
           className="worktree-review"

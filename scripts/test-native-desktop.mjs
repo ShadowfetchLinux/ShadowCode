@@ -23,6 +23,7 @@ const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.m
 for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json", "inspection.png", "accessibility-inspection.json", "diagnostics.png", "accessibility-diagnostics.json", "plugins.png", "accessibility-plugins.json", "accessibility-plugins-dark.json", "accessibility-plugins-compact.json"]) await rm(path.join(artifacts, name), { force: true });
 for (const theme of ["light","dark","compact"]) for (const name of [`queue-${theme}.png`,`accessibility-queue-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
 for (const theme of ["light","dark","compact"]) for (const name of [`background-approval-${theme}.png`,`accessibility-background-approval-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
+for (const view of ["worktree-copy", "worktree-return", "worktree-recovery"]) for (const name of [`${view}.png`, `accessibility-${view}.json`, `accessibility-${view}-dark.json`, `accessibility-${view}-compact.json`]) await rm(path.join(artifacts,name),{force:true});
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
@@ -45,7 +46,7 @@ let httpPeer;
 await mkdir(nativeEnv.TMPDIR);
 await mkdir(project); await mkdir(configDirectory, { recursive: true });
 await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
-for (const args of [["init","-q"],["add","README.md"],["commit","-qm","Desktop fixture base"]]) await promisify(execFile)("git",["-c","core.hooksPath=/dev/null","-c","user.name=Desktop Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd:project});
+for (const args of [["init","-q"],["config","user.name","Desktop Test"],["config","user.email","test@example.invalid"],["add","README.md"],["commit","-qm","Desktop fixture base"]]) await promisify(execFile)("git",["-c","core.hooksPath=/dev/null","-c","user.name=Desktop Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd:project});
 await mkdir(path.join(project, ".shadowcode/hooks"), { recursive: true });
 await writeFile(path.join(project, ".shadowcode/hooks/verify.json"), JSON.stringify({
   name: "verify-result", events: ["on_complete"], timeout_sec: 10,
@@ -612,6 +613,31 @@ try {
   await clickButton("Close");
   await returnGit(project,["merge","--abort"]);
   assert.equal(await returnGit(project,["rev-parse","HEAD"]),sourceHeadBeforeReturn);
+  // Copy a reviewed dirty source through the desktop, preserving its staging split.
+  const copyReadme = await readFile(path.join(project,"README.md"),"utf8");
+  await writeFile(path.join(project,"README.md"),copyReadme+"\nStaged desktop copy\n");
+  await returnGit(project,["add","README.md"]);
+  await writeFile(path.join(project,"README.md"),copyReadme+"\nStaged desktop copy\nUnstaged desktop copy\n");
+  await writeFile(path.join(project,"copy-untracked.txt"),"untracked desktop copy\n");
+  const copySourceStatus=await returnGit(project,["status","--porcelain"]);
+  const copySourceIndex=await returnGit(project,["show",":README.md"]);
+  const previousCopyIds=new Set((await api("GET","/api/worktrees")).worktrees.map(w=>w.id));
+  await openSettings();await clickButton("Worktrees");await clickButton("Review current edits");
+  await until("Copy review focused",()=>execute("return document.activeElement?.getAttribute('aria-label')==='Review copied changes'"));
+  assert.ok(await execute("return document.querySelector('[aria-label=\"Staged copy diff\"]').textContent.includes('+Staged desktop copy')"));
+  assert.ok(await execute("return document.querySelector('[aria-label=\"Unstaged copy diff\"]').textContent.includes('+Unstaged desktop copy')"));
+  await screenshot("worktree-copy");await accessibility("worktree-copy");
+  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktree-copy-dark");await execute("document.documentElement.dataset.theme='light'");
+  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktree-copy-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
+  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
+  await clickButton("Copy into new worktree");
+  const copiedWorktree=await until("Desktop changes copied",async()=>(await api("GET","/api/worktrees")).worktrees.find(w=>!previousCopyIds.has(w.id)&&w.state==="ready"));
+  assert.equal(await returnGit(project,["status","--porcelain"]),copySourceStatus);
+  assert.equal(await returnGit(project,["show",":README.md"]),copySourceIndex);
+  assert.equal(await returnGit(copiedWorktree.path,["show",":README.md"]),copySourceIndex);
+  assert.equal(await readFile(path.join(copiedWorktree.path,"README.md"),"utf8"),await readFile(path.join(project,"README.md"),"utf8"));
+  assert.equal(await readFile(path.join(copiedWorktree.path,"copy-untracked.txt"),"utf8"),"untracked desktop copy\n");
+  await clickButton("Close");
   backgroundToolMode="start";
   await type('textarea[aria-label="Message ShadowCode"]', "Start the managed project watcher and read its log.");
   await click('button[aria-label="Send task"]');

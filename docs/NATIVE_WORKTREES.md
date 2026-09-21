@@ -64,8 +64,7 @@ removal, just as with ordinary Git operations. Damaged checkout paths or missing
 inspection; the recovery record remains. For a missing path whose Git
 registration survives, use the reviewed rescue below.
 
-Desktop controls for copying uncommitted changes and repair of damaged
-checkouts remain part of the
+Repair of damaged checkouts remains part of the
 [native migration gates](NATIVE_MIGRATION.md).
 
 Inventory and individual actions share the same bounded, non-following record
@@ -171,5 +170,16 @@ inspection, as with ordinary Git snapshot operations.
 A stale hash fails before creation. If checkout/application is interrupted or
 verification fails, the source remains intact and the partial destination stays
 recorded for inspection; no automatic deletion hides evidence. Temporary patches
-use private files and are removed on ordinary completion/error. Desktop copy
-controls remain in development.
+use private files and are removed on ordinary completion/error.
+
+In desktop Settings → Worktrees, choose **Review current edits**. The review
+shows the source HEAD, separate staged and unstaged patches, untracked file
+names and sizes, and any intent-to-add entries. **Copy into new worktree** uses
+that reviewed HEAD regardless of the separate creation reference field. The
+result appears in the inventory; open and trust it before running tasks.
+Cancellation leaves the source untouched, and rejected reviews must be refreshed.
+
+Git requires a configured identity even for a merge prepared without committing.
+If return reports an identity error, configure your own `user.name` and
+`user.email` in the source repository, then review and retry. ShadowCode does not
+invent an identity or modify your Git identity settings.

@@ -2,7 +2,7 @@
 
 ## 0.20.0 — native development (unreleased)
 
-- Reviewed CLI copying carries staged, unstaged, binary and regular untracked
+- Reviewed CLI and desktop copying carries staged, unstaged, binary and regular untracked
   edits into a new worktree while preserving the source. It rejects stale
   snapshots and retains partial destinations after failure.
 

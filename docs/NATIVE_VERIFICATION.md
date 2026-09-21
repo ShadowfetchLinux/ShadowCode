@@ -6,7 +6,7 @@ remain in [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated checks
 
-`cargo fmt --all --check`, Clippy with warnings denied, and all **216 native unit and
+`cargo fmt --all --check`, Clippy with warnings denied, and all **234 native unit and
 integration tests** pass on the development machine. The suite covers:
 
 - Config validation, private secrets, untrusted project overlays, profile locks,
@@ -315,8 +315,9 @@ handling of a FIFO excluded by Git. A refused destination reservation retains a
 The native executable passes 20 CLI scenario groups / 32 scripted model requests,
 including separate patch review, stale-hash refusal, copied file contents and
 source/destination staging checks. Workspace Clippy and the native build pass.
-Desktop copy controls and damaged-checkout repair remain open; bounded Git-visible
-copy coverage does not claim arbitrary filesystem or submodule replication.
+Desktop copy controls now have native-window coverage; damaged-checkout repair
+remains open. Bounded Git-visible copy coverage does not claim arbitrary
+filesystem or submodule replication.
 
 ## Terminal input after resize
 
@@ -843,3 +844,35 @@ decisions, and machine-readable results are retained in `artifacts/native-model/
 
 Broader desktop/UI tests, integrations, release artifact checks, and installation
 remain mandatory before release.
+
+
+## Desktop reviewed copy and Git identity fixtures
+
+The desktop copy review displays separate staged and unstaged patches, untracked
+file names/sizes and intent-to-add entries. All 26 UI tests and seven browser
+scenarios pass, including exact review-hash submission, keyboard focus and stale
+copy rejection. The actual Rust/WebKit window suite passes with 29 model requests;
+its new copy flow verifies the destination files and staging against the source
+and proves the original files/index remain unchanged. Light, dark and compact
+copy-review accessibility checks report zero violations; the screenshot was
+visually inspected. Clippy, the native desktop build and 20 CLI scenario groups
+(31 model requests in this run) also pass.
+
+CI runs 35545837440 and 35546241039 failed the worktree return tests before this
+fixture correction. Fixture commits supplied identity only to individual test
+Git commands, while application-driven merges use the repository identity.
+Fixtures now configure their disposable repositories explicitly, rather than
+depending on the developer's global identity. Thirteen worktree tests pass,
+including a regression that deliberately clears repository identity, verifies
+return preserves source HEAD/files/index with an actionable error, then configures
+identity and successfully retries. Replacement CI is still pending; local checks
+are not a claim that the final release or remote pipeline is complete.
+
+
+The first full Rust rerun exposed a timeout in the existing client-disconnect
+fixture. Its PID file existence check could read between shell redirection and
+`echo`, probing `/proc/stat` with an empty PID. The fixture now waits for a parsed,
+nonzero PID before disconnecting and checking child cleanup.
+
+The full workspace rerun after these corrections passes all **234 native tests**;
+Clippy with warnings denied also passes.

@@ -117,6 +117,15 @@ export type ManagedWorktree = {
   created_at: number;
   detail: string;
 };
+export type WorktreeCopyReview = {
+  source: string;
+  head: string;
+  staged_diff: string;
+  unstaged_diff: string;
+  untracked: { path: string; bytes: number; hash: string; mode: number }[];
+  intent_to_add: string[];
+  hash: string;
+};
 export type WorktreeReturnReview = {
   record: ManagedWorktree;
   source_head: string;
@@ -500,6 +509,15 @@ export const api = {
     send<WorktreeInspection>("/api/worktrees/inspect", "POST", {
       workspace,
       id,
+    }),
+  reviewWorktreeCopy: (workspace: string) =>
+    send<WorktreeCopyReview>("/api/worktrees/review-changes", "POST", {
+      workspace,
+    }),
+  copyWorktreeChanges: (workspace: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/copy-changes", "POST", {
+      workspace,
+      hash,
     }),
   reviewWorktreeReturn: (workspace: string, id: string) =>
     send<WorktreeReturnReview>("/api/worktrees/review-return", "POST", {
