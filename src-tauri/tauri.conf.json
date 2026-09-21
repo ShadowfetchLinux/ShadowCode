@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ShadowCode",
+  "version": "0.20.0",
+  "identifier": "com.shadowfetch.shadowcode",
+  "build": {
+    "beforeDevCommand": {
+      "script": "npm run dev -- --host 127.0.0.1",
+      "cwd": "../ui"
+    },
+    "devUrl": "http://127.0.0.1:5174",
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "../ui" },
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ShadowCode",
+        "create": false,
+        "width": 1380,
+        "height": 920,
+        "minWidth": 520,
+        "minHeight": 640,
+        "center": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-src 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:5174; object-src 'none'; frame-src 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb"],
+    "category": "DeveloperTool",
+    "shortDescription": "A native workspace for local coding models",
+    "longDescription": "ShadowCode combines local model coding tasks, explicit approvals, durable conversations, and Git review in a native desktop application.",
+    "icon": [
+      "../assets/icons/shadow-agent-32.png",
+      "../assets/icons/shadow-agent-128.png",
+      "../assets/icons/shadow-agent-256.png",
+      "../assets/icons/shadow-agent-512.png"
+    ],
+    "linux": { "deb": { "depends": ["git"] } }
+  }
+}

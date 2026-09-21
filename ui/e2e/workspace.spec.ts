@@ -39,6 +39,23 @@ test("workspace layout, drafts, palette, files and terminal", async ({
     page.getByRole("heading", { name: "Settings", exact: true }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
+  await page.evaluate(() => {
+    const original = window.open;
+    window.open = (url) => {
+      window.open = original;
+      document.body.dataset.exportUrl = String(url);
+      return null;
+    };
+  });
+  await page.keyboard.press("Control+k");
+  await page
+    .getByPlaceholder("Type a command…")
+    .fill("Export this task as JSON");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("body")).toHaveAttribute(
+    "data-export-url",
+    /\/api\/sessions\/[^/]+\/export\?format=json$/,
+  );
   await page.getByRole("button", { name: "Browse files", exact: true }).click();
   await page.getByRole("button", { name: "· README.md", exact: true }).click();
   await expect(page.locator(".file-view")).toContainText("A safe workspace");
@@ -106,14 +123,9 @@ test("compact layout keeps composer and controls reachable", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 600, height: 850 });
-  if (
-    await page
-      .getByRole("button", { name: "Hide sidebar", exact: true })
-      .isVisible()
-  )
-    await page
-      .getByRole("button", { name: "Hide sidebar", exact: true })
-      .click();
+  // Resizing closes the sidebar asynchronously. Waiting for that state avoids
+  // trying to click a control that disappears between isVisible() and click().
+  await expect(page.locator(".sidebar")).toHaveCount(0);
   await expect(
     page.getByRole("textbox", { name: "Message ShadowCode" }),
   ).toBeVisible();
@@ -201,6 +213,14 @@ test("new-task shortcuts and deletion keep task selection usable", async ({
   await prompt.fill("/new");
   await page.getByRole("button", { name: "Send task", exact: true }).click();
   await expect(prompt).toHaveValue("");
+  await expect
+    .poll(async () => {
+      const selected = await page.evaluate(() =>
+        localStorage.getItem("shadow:selected"),
+      );
+      return Boolean(selected && selected !== first);
+    })
+    .toBe(true);
   const toDelete = await page.evaluate(() =>
     localStorage.getItem("shadow:selected"),
   );

@@ -13,7 +13,7 @@
   --dim: #b4b8be;
   --hover: rgba(0, 0, 0, 0.045);
   --ok: #1f9d57;
-  --warn: #b8730a;
+  --warn: #955b00;
   --danger: #d23a4a;
   --info: #2a6fb4;
   --add-bg: rgba(31, 157, 87, 0.09);
@@ -384,6 +384,9 @@ h4 {
   padding: 8px 10px;
   color: var(--text-2);
 }
+.tool-card > .markdown {
+  padding: 10px 14px;
+}
 .status-row {
   display: flex;
   justify-content: space-between;
@@ -391,6 +394,17 @@ h4 {
   color: var(--muted);
   padding: 4px 10px;
   font-size: 12px;
+}
+.status-row > span {
+  flex: 0 0 30%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.status-row > code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 /* approval: subtle */
@@ -404,6 +418,7 @@ h4 {
 }
 .approval-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   margin-bottom: 8px;
@@ -821,6 +836,61 @@ button.mini.primary-mini {
 .item.static {
   cursor: default;
 }
+.hook-command,
+.mcp-command {
+  padding: 10px;
+  margin: 8px 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.hook-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+.hook-entry .hook-command {
+  align-self: stretch;
+  margin: 2px 0;
+}
+.hook-refresh {
+  margin: 6px 0;
+}
+.mcp-server {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.mcp-server-heading,
+.mcp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-server-heading {
+  justify-content: space-between;
+}
+.mcp-settings > .hint {
+  overflow-wrap: anywhere;
+}
+.mcp-settings form {
+  padding: 12px 0;
+}
+.mcp-add {
+  margin-top: 16px;
+}
+.mcp-add > summary {
+  cursor: pointer;
+  font-weight: 500;
+}
 .item strong {
   display: block;
   color: var(--text);
@@ -1031,6 +1101,26 @@ button.mini.primary-mini {
 .health-bad {
   color: var(--danger);
 }
+.diagnostic-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.diagnostic-check {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+.diagnostic-check strong {
+  font-weight: 500;
+}
+.diagnostic-check p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+}
 .update-row {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
@@ -1096,7 +1186,16 @@ button.mini.primary-mini {
 }
 .milestones li.done {
   color: var(--muted);
+}
+.milestones li.done > div > span {
   text-decoration: line-through;
+}
+.milestones li > div {
+  min-width: 0;
+}
+.milestone-detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .milestones li.in_progress {
   color: var(--text);
@@ -1140,7 +1239,8 @@ button.mini.primary-mini {
   background: rgba(20, 25, 30, 0.32);
   display: grid;
   place-items: center;
-  z-index: 20;
+  /* Transient notifications must not cover an active dialog's controls. */
+  z-index: 50;
   padding: 24px;
   backdrop-filter: blur(2px);
 }
@@ -1326,6 +1426,10 @@ button.mini.primary-mini {
   gap: 8px;
   z-index: 40;
   max-width: 380px;
+  pointer-events: none;
+}
+.toast button {
+  pointer-events: auto;
 }
 .toast {
   padding: 9px 13px;
@@ -1347,11 +1451,9 @@ button.mini.primary-mini {
 @keyframes toast-in {
   from {
     transform: translateY(8px);
-    opacity: 0;
   }
   to {
     transform: translateY(0);
-    opacity: 1;
   }
 }
 .boot {
@@ -1398,4 +1500,45 @@ button.mini.primary-mini {
   :root {
     --drawer-w: 320px;
   }
+}
+
+.plugin-settings .row {
+  gap: 8px;
+}
+.plugin-entry p {
+  margin: 6px 0;
+}
+.plugin-entry details,
+.plugin-preview details {
+  margin: 8px 0;
+}
+.plugin-settings summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.plugin-settings code,
+.plugin-settings li {
+  overflow-wrap: anywhere;
+}
+.plugin-settings ul {
+  padding-left: 20px;
+}
+.plugin-import,
+.plugin-preview {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.plugin-preview pre {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.plugin-settings .field input[type="file"] {
+  max-width: 100%;
+}
+.plugin-preview h4 {
+  margin-top: 0;
 }

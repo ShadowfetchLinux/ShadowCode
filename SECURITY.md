@@ -9,15 +9,61 @@ without live credentials. There is no bug bounty program.
 
 ## Local trust boundary
 
-The desktop API defaults to `127.0.0.1:7430`. It validates loopback Host values,
+Native 0.20 development uses embedded Tauri IPC for the desktop and a private
+Unix socket for CLI clients. The socket directory must be owned by the OS user
+and private; both peers check user credentials, protocol and profile identity.
+Requests use bounded frames and independent project/session selection. It opens
+no TCP listener. See [native CLI lifecycle and trust](docs/NATIVE_CLI.md).
+These boundaries trust processes running as the same user. The full
+[native release gates](docs/NATIVE_MIGRATION.md) remain in progress.
+
+Native profile config, data, and state directories are created with mode 700;
+existing application directories are restricted to that mode without deleting
+their contents or changing permissions on an existing parent directory. Each
+must be owned by the current account and must not itself be a symlink. A
+relocated XDG base or `--profile` parent may be a symlink. The native profile lock
+is a private regular file with mode 600; symlinks, additional hard links, foreign
+owners and special files are rejected before acquiring it.
+
+Native configuration and secret writes serialize the full read–modify–write
+operation across threads in the owning engine; another native manager cannot
+open the same locked profile. This prevents unrelated concurrent changes from
+being overwritten. Reads require regular files and consume at most 1 MB plus a
+limit-check byte. Writes reject oversized results before replacing saved data.
+This coordination does not lock out an external text editor or another program
+running as the same account.
+
+[Native project plugins](docs/NATIVE_PLUGINS.md) install validated declarative
+bundles into namespaced project files. Installation does not execute scripts,
+install dependencies or activate hooks/MCP. Executable integrations require
+separate content-bound approval. Private install journals determine which
+unchanged files may be removed; edited files and legacy bundles are preserved.
+Plugin text can influence a selected task and is subject to the same project
+trust and tool permissions as other workflow instructions.
+
+[Native lifecycle hooks](docs/NATIVE_HOOKS.md) require explicit activation for a
+trusted workspace and exact definition hash. Discovery never imports repository
+code. The approval pins the command definition, not the scripts or dependencies
+it invokes. Enabled commands run as the user, inherit their environment, and can
+have effects outside the project; lexical root/network checks are not a sandbox.
+Changed manifests fail closed. Read-only tasks keep hooks inactive. Running and
+queued tasks keep their configuration snapshot; cancellation stops active hook
+processes. Hook shell edits are outside file-tool checkpoints. Python callbacks
+remain inactive until converted and reviewed.
+
+The supported 0.19 desktop API defaults to `127.0.0.1:7430`. It validates loopback Host values,
 rejects cross-origin and cross-site browser requests, and sends framing, MIME,
 referrer, and content-security headers. Do not expose it to a network, reverse
 proxy it to the public internet, or run it under a shared untrusted account.
 Local processes running as your user are trusted and can call the API.
 
-The MCP HTTP transport has its own optional bearer token, stored in
-`~/.config/shadow-agent/mcp-token`. Stdio MCP inherits the launching client's
-trust. Browser API protections do not replace MCP authentication.
+The legacy 0.19 MCP HTTP transport has its own optional bearer token, stored
+in `~/.config/shadow-agent/mcp-token`. The [native MCP HTTP gateway](docs/NATIVE_MCP.md)
+is explicitly started, binds only to loopback and requires a bearer credential
+reference. It validates Host, rejects browser Origins and bounds requests and
+connections. Stdio MCP inherits the launching client's trust. Both native
+transports pin a project and own their submitted jobs; browser API protections
+do not replace MCP authentication.
 
 ## Files and command execution
 
@@ -37,6 +83,14 @@ Review applies only current unstaged hunks. A changed diff causes a conflict,
 rather than applying a stale client patch. File restores can overwrite later
 edits; review the checkpoint and retain independent version-control backups.
 
+[Native SQLite inspection](docs/NATIVE_SQLITE.md) opens existing project
+databases read-only and authorizes only queries returning rows. SQL writes,
+ATTACH, configuration PRAGMAs and extension loading are denied; a small explicit
+allowlist supports read-only schema PRAGMAs. SQLite may maintain its WAL
+coordination sidecars. Directory capabilities confine database/sidecar paths;
+query work, concurrent readers and output are bounded. Cancellation interrupts
+SQLite and releases its connection; an OS filesystem stall may delay return.
+
 ## Secrets and transcript content
 
 Keys belong in `~/.config/shadow-agent/secrets.env` with mode 600, or environment
@@ -55,7 +109,11 @@ load remote images embedded in model responses. External links open with
 ## Releases
 
 Verify release assets against `SHA256SUMS`. Checksums detect mismatched or damaged
-downloads; they are not independent signatures. The AppImage bundles Python and
+downloads; they are not independent signatures. The 0.19 AppImage bundles Python and
 its dependencies, so security updates require installing a new build. Source
 installations use a project virtual environment. Neither installer deletes keys,
 configuration, or saved task history.
+
+Native development packages contain Rust application code, embedded UI assets,
+and native libraries; their dependency inventories and notices are checked during
+packaging. They have not yet replaced the supported release download.

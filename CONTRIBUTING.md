@@ -1,5 +1,13 @@
 # Contributing to ShadowCode
 
+Native 0.20 work lives on `native-0.20`. Follow the
+[Rust/Tauri development guide](docs/NATIVE_DESKTOP.md),
+[native CLI guide](docs/NATIVE_CLI.md), and
+[migration acceptance gates](docs/NATIVE_MIGRATION.md). Native behavior tests live
+in `native/core/tests`; executable CLI and actual-window tests are in `scripts/`.
+The Python workflow below remains for the supported 0.19 release and legacy
+transport compatibility.
+
 Use Python 3.12+ and Node.js 20.19+ or 22.12+.
 
 ```bash

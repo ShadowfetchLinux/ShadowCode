@@ -1,14 +1,28 @@
 import { Dialog } from "./Dialog";
+import { WorktreeSettings } from "./WorktreeSettings";
+import { PluginSettings } from "./PluginSettings";
+import { McpSettings } from "./McpSettings";
+import { isNative } from "../lib/transport";
 import { useEffect, useState } from "react";
 import {
   api,
   type DetectedProvider,
   type McpServer,
+  type NativeMcpCatalog,
   type ProviderInfo,
+  type HookCatalog,
+  type LegacyPluginCatalog,
+  type NativePluginCatalog,
 } from "../api";
 
 type Section =
-  "model" | "permissions" | "appearance" | "hooks" | "mcp" | "plugins";
+  | "model"
+  | "permissions"
+  | "appearance"
+  | "hooks"
+  | "mcp"
+  | "plugins"
+  | "worktrees";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "model", label: "Model" },
   { id: "permissions", label: "Permissions" },
@@ -16,6 +30,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "hooks", label: "Hooks" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
+  { id: "worktrees", label: "Worktrees" },
 ];
 
 export function Settings({
@@ -24,6 +39,7 @@ export function Settings({
   onSave,
   onToast,
   initialSection = "model",
+  onOpenProject,
 }: {
   cfg: Record<string, unknown>;
   onClose: () => void;
@@ -34,6 +50,7 @@ export function Settings({
   ) => Promise<void>;
   onToast: (text: string, kind: "ok" | "err" | "info") => void;
   initialSection?: Section;
+  onOpenProject?: (path: string) => void;
 }) {
   const model = (cfg.model || {}) as Record<string, string>;
   const permissions = (cfg.permissions || {}) as Record<
@@ -70,16 +87,27 @@ export function Settings({
     Number(ui.notify_after_sec ?? 4),
   );
   // Hooks / MCP / plugins
-  const [hooks, setHooks] = useState<
-    { name: string; events: string[]; builtin: boolean }[]
-  >([]);
-  const [hookDirs, setHookDirs] = useState<string[]>([]);
+  const [hookCatalog, setHookCatalog] = useState<HookCatalog>({
+    hooks: [],
+    dirs: [],
+  });
+  const [hookError, setHookError] = useState("");
+  const [hookBusy, setHookBusy] = useState(false);
   const [servers, setServers] = useState<McpServer[]>([]);
+  const [nativeMcp, setNativeMcp] = useState<NativeMcpCatalog | null>(null);
+  const [mcpError, setMcpError] = useState("");
   const [newServer, setNewServer] = useState({ name: "", target: "" });
-  const [plugins, setPlugins] = useState<{
-    installed: { name: string; version: string; description: string }[];
-    available: { name: string; installed: boolean }[];
-  }>({ installed: [], available: [] });
+  const [plugins, setPlugins] = useState<LegacyPluginCatalog>({
+    installed: [],
+    available: [],
+  });
+  const [nativePlugins, setNativePlugins] =
+    useState<NativePluginCatalog | null>(null);
+  const [pluginError, setPluginError] = useState("");
+  function updatePlugins(value: LegacyPluginCatalog | NativePluginCatalog) {
+    if (value.format === "native-plugins-v1") setNativePlugins(value);
+    else setPlugins(value);
+  }
 
   useEffect(() => {
     void api
@@ -92,20 +120,56 @@ export function Settings({
       .catch(() => setDetected([]));
     void api
       .hooks()
-      .then((d) => {
-        setHooks(d.hooks);
-        setHookDirs(d.dirs);
-      })
-      .catch(() => undefined);
+      .then(setHookCatalog)
+      .catch((error) => setHookError(String(error)));
     void api
       .mcpServers()
-      .then((d) => setServers(d.servers))
-      .catch(() => undefined);
+      .then((d) =>
+        d.format === "native-mcp-v1" ? setNativeMcp(d) : setServers(d.servers),
+      )
+      .catch((error) => setMcpError(String(error)));
     void api
       .plugins()
-      .then(setPlugins)
-      .catch(() => undefined);
+      .then(updatePlugins)
+      .catch((error) => setPluginError(String(error)));
   }, []);
+
+  async function activateHook(path: string, hash: string, enabled: boolean) {
+    setHookBusy(true);
+    setHookError("");
+    try {
+      setHookCatalog(
+        await api.activateHook(
+          hookCatalog.workspace || "",
+          path,
+          hash,
+          enabled,
+        ),
+      );
+      onToast(
+        enabled
+          ? "Hook enabled for new tasks in this project"
+          : "Hook disabled for new tasks",
+        "ok",
+      );
+    } catch (error) {
+      setHookError(String(error));
+    } finally {
+      setHookBusy(false);
+    }
+  }
+
+  async function refreshHooks() {
+    setHookBusy(true);
+    setHookError("");
+    try {
+      setHookCatalog(await api.hooks());
+    } catch (error) {
+      setHookError(String(error));
+    } finally {
+      setHookBusy(false);
+    }
+  }
 
   const preset = providers.find((p) => p.id === provider);
   const detectedFor = detected.find(
@@ -216,7 +280,7 @@ export function Settings({
     <Dialog label="Settings" className="modal settings" onClose={onClose}>
       <nav className="settings-nav">
         <h2>Settings</h2>
-        {SECTIONS.map((s) => (
+        {SECTIONS.filter((s) => s.id !== "worktrees" || isNative()).map((s) => (
           <button
             type="button"
             key={s.id}
@@ -440,15 +504,43 @@ export function Settings({
         {section === "hooks" && (
           <section>
             <h3>Hooks</h3>
-            <p className="hint">
-              Deterministic lifecycle hooks fire at fixed points in the loop.
-              Project hooks go in{" "}
-              <code>{hookDirs[0] || ".shadowcode/hooks/"}</code> as{" "}
-              <code>*.py</code> files exporting <code>register(registry)</code>.
-            </p>
+            <button
+              type="button"
+              className="ghost hook-refresh"
+              disabled={hookBusy}
+              onClick={() => void refreshHooks()}
+            >
+              Refresh hooks
+            </button>
+            {hookCatalog.format === "command-v1" ? (
+              <p className="hint">
+                Review a command before enabling it for new tasks in this
+                project. Hooks run as your user with a timeout and can change
+                files. Plan and Review modes keep them inactive. Definitions
+                live in <code>.shadowcode/hooks/*.yaml</code>.
+              </p>
+            ) : (
+              <p className="hint">
+                Deterministic lifecycle hooks fire at fixed points in the loop.
+                Project hooks go in{" "}
+                <code>{hookCatalog.dirs[0] || ".shadowcode/hooks/"}</code> as{" "}
+                <code>*.py</code> files exporting{" "}
+                <code>register(registry)</code>.
+              </p>
+            )}
+            {hookError && (
+              <p className="hint error" role="alert">
+                {hookError}
+              </p>
+            )}
+            {hookCatalog.format === "command-v1" && !hookCatalog.trusted && (
+              <p className="hint">
+                Trust this project before enabling a command.
+              </p>
+            )}
             <div className="list">
-              {hooks.map((h) => (
-                <div className="item static" key={h.name}>
+              {hookCatalog.hooks.map((h) => (
+                <div className="item static hook-entry" key={h.path || h.name}>
                   <strong>
                     {h.name}
                     {h.builtin ? (
@@ -456,16 +548,81 @@ export function Settings({
                     ) : null}
                   </strong>
                   <span>{h.events.join(", ")}</span>
+                  {h.command !== undefined && (
+                    <>
+                      <span className="dim">
+                        {h.description || h.path} · {h.timeout_sec}s
+                        {h.path_suffix
+                          ? ` · paths ending in ${h.path_suffix}`
+                          : ""}
+                      </span>
+                      <pre className="hook-command">{h.command}</pre>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={
+                          hookBusy || (!h.enabled && !hookCatalog.trusted)
+                        }
+                        onClick={() =>
+                          void activateHook(h.path!, h.hash!, !h.enabled)
+                        }
+                      >
+                        {h.enabled ? `Disable ${h.name}` : `Enable ${h.name}`}
+                      </button>
+                    </>
+                  )}
                 </div>
               ))}
-              {hooks.length === 0 && (
-                <p className="hint">No hooks registered.</p>
+              {hookCatalog.hooks.length === 0 && (
+                <p className="hint">No hook definitions found.</p>
               )}
+              {hookCatalog.issues?.map((issue) => (
+                <p className="hint" key={issue}>
+                  {issue}
+                </p>
+              ))}
+              {hookCatalog.approved
+                ?.filter(
+                  (a) =>
+                    !hookCatalog.hooks.some(
+                      (h) => h.path === a.path && h.enabled,
+                    ),
+                )
+                .map((a) => (
+                  <div className="item static hook-entry" key={a.path}>
+                    <strong>Review required: {a.path}</strong>
+                    <span>
+                      The enabled definition changed or is unavailable. Restore
+                      it, review and enable its current contents, or disable it
+                      before starting another Build task.
+                    </span>
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={hookBusy}
+                      aria-label={`Disable unavailable hook ${a.path}`}
+                      onClick={() => void activateHook(a.path, a.hash, false)}
+                    >
+                      Disable unavailable hook
+                    </button>
+                  </div>
+                ))}
             </div>
           </section>
         )}
 
-        {section === "mcp" && (
+        {section === "mcp" && nativeMcp && (
+          <McpSettings
+            catalog={nativeMcp}
+            onChange={setNativeMcp}
+            onToast={onToast}
+          />
+        )}
+        {section === "mcp" && mcpError && <p role="alert">{mcpError}</p>}
+        {section === "mcp" && !nativeMcp && !mcpError && isNative() && (
+          <p role="status">Loading MCP definitions…</p>
+        )}
+        {section === "mcp" && !nativeMcp && !mcpError && !isNative() && (
           <section>
             <h3>MCP servers</h3>
             <p className="hint">
@@ -520,9 +677,44 @@ export function Settings({
           </section>
         )}
 
-        {section === "plugins" && (
+        {section === "plugins" && nativePlugins && (
+          <PluginSettings
+            catalog={nativePlugins}
+            onChange={(value) => {
+              setNativePlugins(value);
+              void api
+                .hooks()
+                .then(setHookCatalog)
+                .catch((error) => setHookError(String(error)));
+              void api
+                .mcpServers()
+                .then((d) => {
+                  if (d.format === "native-mcp-v1") setNativeMcp(d);
+                })
+                .catch((error) => setMcpError(String(error)));
+            }}
+            onToast={onToast}
+            onNavigate={(next) => {
+              setSection(next);
+              if (next === "hooks") void refreshHooks();
+              else
+                void api
+                  .mcpServers()
+                  .then((d) => {
+                    if (d.format === "native-mcp-v1") setNativeMcp(d);
+                  })
+                  .catch((error) => setMcpError(String(error)));
+            }}
+          />
+        )}
+        {section === "plugins" && !nativePlugins && (
           <section>
             <h3>Plugins</h3>
+            {pluginError && (
+              <p role="alert" className="error">
+                {pluginError}
+              </p>
+            )}
             <div className="list">
               {plugins.available.map((p) => {
                 const meta = plugins.installed.find((m) => m.name === p.name);
@@ -542,7 +734,8 @@ export function Settings({
                         onClick={() =>
                           void api
                             .removePlugin(p.name)
-                            .then(() => api.plugins().then(setPlugins))
+                            .then(() => api.plugins().then(updatePlugins))
+                            .catch((err) => onToast(String(err), "err"))
                         }
                       >
                         Remove
@@ -554,7 +747,7 @@ export function Settings({
                         onClick={() =>
                           void api
                             .installPlugin(p.name)
-                            .then(() => api.plugins().then(setPlugins))
+                            .then(() => api.plugins().then(updatePlugins))
                             .catch((err) => onToast(String(err), "err"))
                         }
                       >
@@ -564,13 +757,20 @@ export function Settings({
                   </div>
                 );
               })}
-              {plugins.available.length === 0 && (
-                <p className="hint">No plugins in the registry.</p>
+              {plugins.available.length === 0 && !pluginError && (
+                <p className="hint">
+                  {isNative()
+                    ? "Loading project plugins…"
+                    : "No plugins in the registry."}
+                </p>
               )}
             </div>
           </section>
         )}
 
+        {section === "worktrees" && isNative() && (
+          <WorktreeSettings onOpen={onOpenProject} onToast={onToast} />
+        )}
         <div className="row end settings-foot">
           <button type="button" className="ghost" onClick={onClose}>
             Close

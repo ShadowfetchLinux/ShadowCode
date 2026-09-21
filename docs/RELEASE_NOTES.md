@@ -1,15 +1,15 @@
-ShadowCode 0.19.0 upgrades the complete Linux coding workspace: a persistent project/task sidebar, polished light and dark themes, Markdown conversations, saved drafts, live plans, a terminal panel, and staged/unstaged review.
+ShadowCode 0.20 is a native Linux application for local and compatible coding models. The desktop, terminal interface, CLI, and MCP server use the same Rust engine. The desktop embeds its interface and communicates through Tauri IPC; it does not bundle Python, Node.js, or a browser launcher.
 
-Tasks now restore their workspace and conversation context, reconnect without duplicate output, stream past the former 800-event limit, and survive API restarts as explicit interrupted records. Cancellation waits for the worker to stop. Direct API edits enforce read-only permissions and guard against active tasks; browser access is restricted to the same origin.
+It includes local/Ollama and compatible model routing, streamed tasks, explicit tool approvals, Plan/Build/Review modes, durable task history, project instructions and skills, checkpoints and rewind, workspace queues, goals, managed background processes, reviewed worktree workflows, and MCP client and server support. A desktop window can attach to a running `shadowcode serve` or TUI engine and leave its work running when the window closes.
 
 Downloads:
-- **AppImage:** bundled Python and desktop UI; run with `--appimage-extract-and-run` when FUSE is unavailable.
-- **Portable archive:** extract and run `ShadowCode/shadowcode`.
-- **Python wheel/source archive:** includes the compiled interface.
-- **SHA256SUMS:** download-integrity checksums.
+- **AppImage:** `ShadowCode_0.20.0_amd64.AppImage` is the desktop application. Run it directly, or add `--appimage-extract-and-run` when FUSE is unavailable.
+- **Debian package:** `shadowcode_0.20.0_amd64.deb` installs the same native app on supported Debian/Ubuntu systems.
+- **Runtime source archive:** retained source and build records for the bundled AppImage runtime.
+- **SHA256SUMS:** download-integrity checksums for every release artifact.
 
-The Linux binaries target x86_64, Ubuntu 24.04+ / glibc 2.39+. Git and a browser are external requirements. The browser window uses Chromium/Chrome/Brave when available. User data remains in the existing `shadow-agent` XDG directories.
+The Linux binaries target x86_64, Ubuntu 24.04+ / glibc 2.39+. Git and model providers such as Ollama remain external. User data remains in the existing `shadow-agent` XDG directories.
 
-Install with `scripts/install-appimage.sh /path/to/ShadowCode-0.19.0-x86_64.AppImage` from the source checkout. It installs to `~/Applications`, updates the desktop launcher, and removes older ShadowCode AppImages after checking the new build. Finish any running tasks and restart the previous API before launching the upgraded app.
+Verify `SHA256SUMS` before installing. Keep it beside the downloaded AppImage so `scripts/install-appimage.sh /path/to/ShadowCode_0.20.0_amd64.AppImage` verifies the matching SHA-256 entry automatically. The installer checks the application version, installs to `~/Applications`, updates the desktop launcher, and removes older ShadowCode AppImages only after the new build is ready. Existing profile data is preserved.
 
-See the README, user guide, security policy, and changelog for usage and practical limits. The shell is a user-level process, not an OS sandbox; review model-generated changes and verification evidence.
+Release publishing runs native Rust, UI, terminal, MCP, stress, real-window, package inspection, runtime-rebuild, and packaged-app checks before uploading artifacts. The shell is a user-level process, not an OS sandbox; review model-generated changes and verification evidence.

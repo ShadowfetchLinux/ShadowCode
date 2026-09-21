@@ -1,6 +1,7 @@
 import { Dialog } from "./Dialog";
 import { useEffect, useState } from "react";
 import type { Project, ProviderInfo } from "../api";
+import { isNative, pickDirectory } from "../lib/transport";
 
 export const SHORTCUTS: [string, string][] = [
   ["Enter", "Send task (Shift+Enter for a new line)"],
@@ -133,21 +134,44 @@ export function ProjectPicker({
   onPick: (path: string) => void;
 }) {
   const [path, setPath] = useState(current);
+  const [error, setError] = useState("");
   return (
     <Dialog label="Open project" className="modal modal-sm" onClose={onClose}>
       <h2>Open a project</h2>
       <div className="field">
         <label htmlFor="overlays-field-1">Folder path</label>
-        <input
-          id="overlays-field-1"
-          autoFocus
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="/path/to/project"
-          onKeyDown={(ev) => {
-            if (ev.key === "Enter") onPick(path);
-          }}
-        />
+        <div className="input-action">
+          <input
+            id="overlays-field-1"
+            autoFocus
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder="/path/to/project"
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter") onPick(path);
+            }}
+          />
+          {isNative() && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() =>
+                void pickDirectory()
+                  .then((path) => {
+                    if (path) setPath(path);
+                  })
+                  .catch((error) => setError(String(error)))
+              }
+            >
+              Browse…
+            </button>
+          )}
+        </div>
+        {error && (
+          <p role="alert" className="hint danger-text">
+            {error}
+          </p>
+        )}
       </div>
       {projects.length > 0 && (
         <div className="list">

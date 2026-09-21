@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type DetectedProvider } from "../api";
+import { isNative, pickDirectory } from "../lib/transport";
 
 type Pick = {
   provider: string;
@@ -136,12 +137,32 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         <h2>Pick a model, start working</h2>
         <div className="field">
           <label htmlFor="onboarding-field-1">Project folder</label>
-          <input
-            id="onboarding-field-1"
-            value={workspace}
-            onChange={(e) => setWorkspace(e.target.value)}
-            placeholder="/path/to/project"
-          />
+          <div className="input-action">
+            <input
+              id="onboarding-field-1"
+              value={workspace}
+              onChange={(e) => setWorkspace(e.target.value)}
+              placeholder="/path/to/project"
+            />
+            {isNative() && (
+              <button
+                type="button"
+                className="ghost"
+                disabled={state.busy}
+                onClick={() =>
+                  void pickDirectory()
+                    .then((path) => {
+                      if (path) setWorkspace(path);
+                    })
+                    .catch((error) =>
+                      setState({ busy: false, ok: false, text: String(error) }),
+                    )
+                }
+              >
+                Browse…
+              </button>
+            )}
+          </div>
         </div>
         <div className="field">
           <div className="hint">
@@ -160,7 +181,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <p className="hint">
               No local model server found. Start Ollama (or LM Studio /
               llama.cpp / vLLM) and reload, use an API provider below, or start
-              with the offline Mock.
+              with the offline preview.
             </p>
           )}
           <div className="model-grid">
@@ -201,8 +222,12 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 })
               }
             >
-              <strong>Mock</strong>
-              <span>offline · no key · for trying the harness</span>
+              <strong>{isNative() ? "Offline preview" : "Mock"}</strong>
+              <span>
+                {isNative()
+                  ? "Explore the workspace; select a model to run tasks"
+                  : "offline · no key · for trying the harness"}
+              </span>
             </button>
           </div>
         </div>

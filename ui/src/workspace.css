@@ -505,6 +505,73 @@ kbd {
   background: var(--surface-3);
   overflow-wrap: anywhere;
 }
+.msg-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0 0 16px;
+  overflow-wrap: anywhere;
+}
+.msg-note.warning {
+  color: var(--text);
+  border-left: 2px solid var(--muted);
+  padding-left: 12px;
+}
+.routing-fields {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0;
+}
+.background-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  margin: 20px 0;
+}
+.background-form label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.background-form input {
+  width: 100%;
+  min-width: 0;
+}
+.background-form button {
+  justify-self: start;
+  margin-top: 4px;
+}
+.bg-task > code,
+.bg-task .health-bad {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.background-output summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.background-output pre {
+  max-height: 240px;
+  overflow: auto;
+}
+.routing-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.routing-field label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.routing-field select {
+  width: 100%;
+  min-width: 0;
+}
+.routing-field p {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .msg-agent {
   font-size: 14px;
   line-height: 1.8;
@@ -519,6 +586,20 @@ kbd {
 }
 .markdown {
   overflow-wrap: anywhere;
+}
+.markdown-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.markdown-preview p {
+  margin: 0;
 }
 .markdown > :first-child {
   margin-top: 0;
@@ -682,6 +763,93 @@ kbd {
   max-width: 860px;
   margin: 0 auto;
   padding: 8px 36px 0;
+}
+.task-queue {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.queue-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  color: var(--text-2);
+}
+.queue-heading strong {
+  font-weight: 600;
+}
+.queue-count {
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: var(--surface-2);
+  font-variant-numeric: tabular-nums;
+}
+.queue-help {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+.task-queue ol {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.task-queue li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.queue-position {
+  color: var(--muted);
+  font-size: 11px;
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.queue-message {
+  min-width: 0;
+  flex: 1;
+}
+.queue-message summary {
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.queue-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+  line-height: 1.5;
+}
+.queue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  font-size: 10px;
+  color: var(--muted);
+  padding-top: 3px;
+}
+.queue-meta > * {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.queue-meta button {
+  font-size: inherit;
+  color: var(--text-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-align: left;
+}
+.queue-cancel {
+  flex: 0 0 28px;
 }
 .composer {
   max-width: none;
@@ -1135,4 +1303,83 @@ kbd {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+.input-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.input-action input {
+  flex: 1;
+  min-width: 0;
+}
+.input-action button {
+  flex-shrink: 0;
+}
+
+.worktree-create {
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 18px 0;
+}
+.worktree-create label {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 220px;
+}
+.worktree-list {
+  display: grid;
+  gap: 12px;
+}
+.worktree-card,
+.worktree-review {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+}
+.worktree-card {
+  display: grid;
+  gap: 8px;
+}
+.worktree-card p {
+  margin: 0;
+}
+.worktree-path {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.worktree-review {
+  margin-top: 18px;
+  background: var(--surface-2);
+  scroll-margin: 16px;
+}
+.worktree-review pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.worktree-review code {
+  overflow-wrap: anywhere;
+}
+
+.worktree-card strong,
+.worktree-review strong {
+  overflow-wrap: anywhere;
+}
+
+.history-navigation {
+  margin: 0 0 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.history-navigation .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.history-navigation p {
+  margin: 10px 0 0;
 }

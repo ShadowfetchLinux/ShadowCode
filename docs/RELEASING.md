@@ -1,36 +1,91 @@
-# Release procedure
+# Native release procedure
 
-Build on Ubuntu 24.04 / x86_64 with Python 3.12 and Node 22. `requirements-build.txt`
-records the Python build/test dependency set used for 0.19.0; `ui/package-lock.json`
-locks the frontend. This is a pinned dependency build, not a claim of bit-for-bit
-reproducible binaries across machines.
+This procedure publishes the Rust/Tauri 0.20 application. The tag workflow is
+the release authority: it does not build, upload, or mention the legacy Python
+wheel, source distribution, portable archive, or browser launcher.
 
-1. Update `pyproject.toml`, `src/shadow_agent/__init__.py`, the desktop entry,
-   README, changelog, canonical-version test, and release notes.
-2. Create `.venv`, install `requirements-build.txt` and the editable project.
-3. Download appimagetool **1.9.1 x86_64** from its official GitHub release and verify
-   SHA-256 `ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0`.
-4. Run `APPIMAGETOOL=/path/to/appimagetool ./scripts/build-linux.sh`.
-5. Run `npm --prefix ui test`, then `cd ui && npx playwright install chromium &&
-   npm run test:e2e`. Inspect light/dark/compact and completed-task screenshots.
-6. Run `.venv/bin/python -m build` to produce the wheel and source archive.
-7. Smoke the standalone and AppImage executables with `--version`, the API, an
-   offline task, and a real local-model task when available. Test a clean wheel
-   installation. Verify the installer preserves existing XDG data.
-8. Recompute `dist/SHA256SUMS` for the AppImage, portable archive, wheel, and source
-   archive. Commit, tag `vVERSION`, and push. The tag workflow repeats the checks
-   on Ubuntu 24.04 and uploads the assets. Inspect both workflows before announcing.
+## Prepare the release
 
-The source installer uses a venv and builds from the npm lockfile. The AppImage
-installer validates the executable before replacing the prior stable link and
-launcher. Do not replace a running API midway through a task. AppImage extraction
-must remain alive while serving assets; `desktop.py` deliberately keeps the
-standalone process serving rather than exiting after spawning a detached worker.
+1. Update the shared version in `Cargo.toml` and `src-tauri/tauri.conf.json`.
+   They must match the tag exactly, for example `v0.20.0`.
+2. Update `CHANGELOG.md`, `docs/RELEASE_NOTES.md`, README download commands and
+   native migration/verification records with only evidence that is current for
+   the tagged commit.
+3. Run the focused local checks:
 
-Browser test artifacts are ignored by Git. Copy only intentional, sanitized
-screenshots into `docs/images/`. Never include databases, secrets, model caches,
-user browser profiles, or machine-specific paths in release artifacts.
+   ```sh
+   npm --prefix ui ci
+   npm --prefix ui run build
+   npm --prefix ui test
+   npm --prefix ui run test:e2e
+   cargo +1.95.0 fmt --all --check
+   cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
+   cargo +1.95.0 test --workspace --locked
+   cargo build -p shadowcode-desktop --locked
+   node scripts/test-native-cli.mjs
+   node scripts/test-native-stress.mjs
+   node scripts/test-native-tui.mjs
+   ```
 
-The GitHub workflows pin their actions by commit. Keep action pins, build locks,
-and the appimagetool checksum current as part of maintenance. Release assets are
-checksummed but are not independently signed.
+4. Verify the package path before tagging. On the pinned Ubuntu 24.04 build
+   environment, run:
+
+   ```sh
+   node scripts/build-native.mjs
+   node scripts/check-native-package.mjs \
+     target/release/bundle/appimage/ShadowCode_VERSION_amd64.AppImage \
+     target/release/bundle/deb/ShadowCode_VERSION_amd64.deb
+   node scripts/test-native-runtime-sources.mjs
+   node scripts/test-native-runtime.mjs
+   bash scripts/test-install-appimage.sh
+   ```
+
+   Package inspection verifies the absence of Python/Node sidecars, package
+   notices and their digests. The installer test uses a disposable home to prove
+   a checked AppImage replaces an old application, preserves profile data, and
+   refuses a checksum mismatch before changing the installed target.
+
+5. Push the reviewed commit, create and push the matching annotated tag:
+
+   ```sh
+   git tag -a vVERSION -m "ShadowCode VERSION"
+   git push origin vVERSION
+   ```
+
+## GitHub release gate
+
+`.github/workflows/release.yml` runs on the tag. It validates the native version,
+builds the embedded UI, runs Rust format/clippy/tests, then exercises the native
+CLI, sustained stress suite, terminal, MCP transports and real WebKit window.
+It builds both packages, checks the AppImage and Debian contents, rebuilds the
+bundled runtime sources without network access, verifies extraction behavior, and
+runs the packaged CLI, TUI, MCP and window checks. It creates `SHA256SUMS` only
+after those checks and uploads:
+
+- `ShadowCode_VERSION_amd64.AppImage`
+- `shadowcode_VERSION_amd64.deb`
+- `ShadowCode_VERSION_appimage-runtime-sources.tar.gz`
+- `SHA256SUMS`
+
+Do not install or announce a tag while this job is incomplete or failed. Inspect
+the exact uploaded checksums and release notes after success.
+
+## Install verification
+
+Download the AppImage and `SHA256SUMS` into the same directory, then verify and
+install it:
+
+```sh
+sha256sum -c SHA256SUMS
+./scripts/install-appimage.sh /path/to/ShadowCode_VERSION_amd64.AppImage
+```
+
+The installer performs a second matching-entry check when `SHA256SUMS` is beside
+the AppImage. It starts the new executable for its version before replacing the
+stable Applications link, then removes old versioned ShadowCode AppImages. It
+does not delete XDG profile data. Finish active work in the previous application
+before the final replacement, then reopen ShadowCode and verify the expected
+sessions, settings and model connection.
+
+The native release remains a user-level process runner rather than an operating
+system sandbox. Review requested tool approvals and the task's recorded evidence.

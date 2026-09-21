@@ -1,8 +1,11 @@
+import { request, isNative } from "./lib/transport";
+
 export type ModelInfo = {
   id: string;
   name: string;
   provider: string;
   endpoint: string;
+  context_limit?: number;
   detected?: boolean;
   metadata?: Record<string, unknown> & {
     capabilities?: Record<string, boolean>;
@@ -49,6 +52,13 @@ export type SessionDetail = Session & {
   tasks: { id: string; prompt: string; summary?: string; status: string }[];
   events: EventRow[];
   event_cursor: number;
+  history_page?: { first_cursor: number; has_older: boolean };
+};
+export type HistoryPage = {
+  events: EventRow[];
+  first_cursor: number;
+  event_cursor: number;
+  has_older: boolean;
 };
 export type EventRow = {
   id?: number;
@@ -57,6 +67,15 @@ export type EventRow = {
   payload: Record<string, unknown>;
   session_id?: string;
   task_id?: string;
+};
+export type ProjectSkill = {
+  name: string;
+  content: string;
+  raw_content?: string;
+  description?: string;
+  path?: string;
+  mode?: string;
+  hash?: string;
 };
 export type FileEntry = { name: string; path: string; type: "file" | "dir" };
 export type PlanStep = {
@@ -67,13 +86,91 @@ export type PlanStep = {
 };
 export type Approval = {
   id: string;
+  session_id?: string;
   command?: string;
   reason?: string;
   tool?: string;
   pending?: boolean;
 };
+export type LifecycleHook = {
+  name: string;
+  events: string[];
+  builtin: boolean;
+  command?: string;
+  description?: string;
+  path?: string;
+  hash?: string;
+  enabled?: boolean;
+  timeout_sec?: number;
+  path_suffix?: string;
+};
+export type HookCatalog = {
+  hooks: LifecycleHook[];
+  dirs: string[];
+  issues?: string[];
+  format?: string;
+  workspace?: string;
+  trusted?: boolean;
+  approved?: { path: string; hash: string }[];
+};
+export type ManagedWorktree = {
+  id: string;
+  source: string;
+  path: string;
+  branch: string;
+  base_commit: string;
+  common_directory: string;
+  state: string;
+  created_at: number;
+  detail: string;
+};
+export type WorktreeRepairReview = {
+  record: ManagedWorktree;
+  administrative_directory: string;
+  head: string;
+  checkout_pointer: string | null;
+  registration_pointer: string | null;
+  warning: string;
+  hash: string;
+};
+export type WorktreeCopyReview = {
+  source: string;
+  head: string;
+  staged_diff: string;
+  unstaged_diff: string;
+  untracked: { path: string; bytes: number; hash: string; mode: number }[];
+  intent_to_add: string[];
+  hash: string;
+};
+export type WorktreeReturnReview = {
+  record: ManagedWorktree;
+  source_head: string;
+  source_branch: string;
+  worktree_head: string;
+  worktree_branch: string;
+  merge_base: string;
+  diff: string;
+  hash: string;
+};
+export type WorktreeRecovery = {
+  record: ManagedWorktree;
+  commit: string;
+  branch: string;
+  warning: string;
+  hash: string;
+};
+export type WorktreeInspection = {
+  record: ManagedWorktree;
+  head: string;
+  current_branch: string;
+  status: string;
+  can_remove: boolean;
+  reason: string;
+  hash: string;
+};
 export type Job = {
   id: string;
+  task_id?: string;
   workspace: string;
   event_cursor: number;
   started_at: number;
@@ -82,7 +179,12 @@ export type Job = {
   status: string;
   summary?: string;
   task?: string;
+  task_truncated?: boolean;
+  purpose?: string;
   usage?: Record<string, number>;
+  model?: string;
+  mode?: string;
+  routing?: RoutingDecision | null;
   result?: {
     success: boolean;
     summary: string;
@@ -92,6 +194,7 @@ export type Job = {
 };
 export type Health = {
   ok: boolean;
+  desktop_attached?: boolean;
   version?: string;
   workspace: string;
   provider?: { ok: boolean; name: string; detail: string };
@@ -135,6 +238,8 @@ export type Milestone = {
   status: string;
   detail?: string;
   task_id?: string;
+  require_verification?: boolean;
+  mode?: string;
 };
 export type Goal = {
   id: string;
@@ -147,6 +252,9 @@ export type Goal = {
   running: boolean;
   milestones: Milestone[];
   updated_at: number;
+  session_id?: string;
+  job_id?: string;
+  run_detail?: string;
 };
 export type BackgroundTask = {
   id: string;
@@ -156,12 +264,31 @@ export type BackgroundTask = {
   pid: number;
   exit_code: number | null;
   output: string;
+  cwd?: string;
+  started_at?: number;
+  ended_at?: number | null;
+  error?: string;
+  truncated?: boolean;
+  output_preview_truncated?: boolean;
+};
+export type RoutingDecision = {
+  purpose: string;
+  source: string;
+  requested: string;
+  model_id: string;
+  model_name: string;
+  provider: string;
+  context_limit: number;
+  fallback_reason?: string | null;
 };
 export type RoutingView = {
   enabled: boolean;
   default: string;
   table: Record<string, string>;
   config: Record<string, string | boolean>;
+  default_name?: string;
+  decisions?: Record<string, RoutingDecision>;
+  models?: ModelInfo[];
 };
 export type DoctorReport = {
   ok: boolean;
@@ -169,6 +296,7 @@ export type DoctorReport = {
   checks: {
     id: string;
     ok: boolean;
+    status?: "pass" | "warn" | "fail" | "info" | "not_checked";
     label: string;
     detail?: string;
     fix?: string;
@@ -180,6 +308,28 @@ export type McpServer = {
   command?: string[] | null;
   url?: string | null;
 };
+export type NativeMcpServer = McpServer & {
+  api_key_env?: string | null;
+  id: string;
+  hash: string;
+  description: string;
+  timeout_sec: number;
+  env_names: string[];
+  env_refs: Record<string, string>;
+  enabled: boolean;
+  transport: "stdio" | "http";
+};
+export type NativeMcpCatalog = {
+  format: "native-mcp-v1";
+  servers: NativeMcpServer[];
+  approved: { workspace: string; server: string; hash: string }[];
+  issues: string[];
+  workspace: string;
+  trusted: boolean;
+  dirs: string[];
+};
+export type McpCatalog =
+  NativeMcpCatalog | { format?: undefined; servers: McpServer[] };
 export type UpdateInfo = {
   current: string;
   latest: string;
@@ -190,33 +340,14 @@ export type UpdateInfo = {
   error: string;
 };
 
-async function parseError(res: Response, path: string): Promise<string> {
-  try {
-    const data = await res.json();
-    return String(data.detail || data.error || `${path} ${res.status}`);
-  } catch {
-    return `${path} ${res.status}`;
-  }
-}
-
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(await parseError(res, path));
-  return res.json() as Promise<T>;
-}
+const get = <T>(path: string) => request<T>(path);
 
 async function send<T>(
   path: string,
   method: string,
   body?: unknown,
 ): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await parseError(res, path));
-  return res.json() as Promise<T>;
+  return request<T>(path, method, body);
 }
 
 export const api = {
@@ -337,6 +468,7 @@ export const api = {
     }),
   abandonGoal: (id: string) =>
     send<Goal>(`/api/goals/${id}/abandon`, "POST", {}),
+  pauseGoal: (id: string) => send<Goal>(`/api/goals/${id}/pause`, "POST", {}),
   deleteGoal: (id: string) =>
     send<{ ok: boolean }>(`/api/goals/${id}`, "DELETE"),
   setMilestone: (goalId: string, milestoneId: string, status: string) =>
@@ -345,27 +477,119 @@ export const api = {
       detail: "",
     }),
   background: () => get<{ tasks: BackgroundTask[] }>("/api/background"),
+  backgroundTask: (id: string) => get<BackgroundTask>(`/api/background/${id}`),
   startBackground: (name: string, command: string) =>
     send<BackgroundTask>("/api/background", "POST", { name, command }),
   stopBackground: (id: string) =>
     send<BackgroundTask>(`/api/background/${id}/stop`, "POST", {}),
-  hooks: () =>
-    get<{
-      hooks: { name: string; events: string[]; builtin: boolean }[];
-      dirs: string[];
-    }>("/api/hooks"),
-  mcpServers: () => get<{ servers: McpServer[] }>("/api/mcp/servers"),
+  hooks: () => get<HookCatalog>("/api/hooks"),
+  activateHook: (
+    workspace: string,
+    path: string,
+    hash: string,
+    enabled: boolean,
+  ) =>
+    send<HookCatalog>("/api/hooks/activation", "POST", {
+      workspace,
+      path,
+      hash,
+      enabled,
+    }),
+  mcpServers: () => get<McpCatalog>("/api/mcp/servers"),
+  registerMcp: (definition: Record<string, unknown>, hash = "") =>
+    send<NativeMcpCatalog>("/api/mcp/servers", "POST", { definition, hash }),
+  activateMcp: (
+    workspace: string,
+    server: string,
+    hash: string,
+    enabled: boolean,
+  ) =>
+    send<NativeMcpCatalog>("/api/mcp/activation", "POST", {
+      workspace,
+      server,
+      hash,
+      enabled,
+    }),
+  removeMcp: (server: string, hash: string) =>
+    send<NativeMcpCatalog>("/api/mcp/servers/delete", "POST", { server, hash }),
   saveMcpServers: (servers: McpServer[]) =>
     send<{ servers: McpServer[] }>("/api/mcp/servers", "PUT", {
       values: { servers },
       api_key: "",
       api_key_env: "",
     }),
-  plugins: () =>
-    get<{
-      installed: { name: string; version: string; description: string }[];
-      available: { name: string; installed: boolean }[];
-    }>("/api/plugins"),
+  worktrees: () =>
+    get<{ workspace: string; worktrees: ManagedWorktree[] }>("/api/worktrees"),
+  createWorktree: (workspace: string, reference: string) =>
+    send<ManagedWorktree>("/api/worktrees", "POST", { workspace, reference }),
+  inspectWorktree: (workspace: string, id: string) =>
+    send<WorktreeInspection>("/api/worktrees/inspect", "POST", {
+      workspace,
+      id,
+    }),
+  reviewWorktreeRepair: (workspace: string, id: string) =>
+    send<WorktreeRepairReview>("/api/worktrees/review-repair", "POST", {
+      workspace,
+      id,
+    }),
+  repairWorktree: (workspace: string, id: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/repair", "POST", {
+      workspace,
+      id,
+      hash,
+    }),
+  reviewWorktreeCopy: (workspace: string) =>
+    send<WorktreeCopyReview>("/api/worktrees/review-changes", "POST", {
+      workspace,
+    }),
+  copyWorktreeChanges: (workspace: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/copy-changes", "POST", {
+      workspace,
+      hash,
+    }),
+  reviewWorktreeReturn: (workspace: string, id: string) =>
+    send<WorktreeReturnReview>("/api/worktrees/review-return", "POST", {
+      workspace,
+      id,
+    }),
+  returnWorktreeChanges: (workspace: string, id: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/return", "POST", {
+      workspace,
+      id,
+      hash,
+    }),
+  worktreeRecovery: (workspace: string, id: string) =>
+    send<WorktreeRecovery>("/api/worktrees/recovery", "POST", {
+      workspace,
+      id,
+    }),
+  restoreWorktree: (workspace: string, id: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/restore", "POST", {
+      workspace,
+      id,
+      hash,
+    }),
+  removeWorktree: (workspace: string, id: string, hash: string) =>
+    send<ManagedWorktree>("/api/worktrees/remove", "POST", {
+      workspace,
+      id,
+      hash,
+    }),
+  plugins: () => get<LegacyPluginCatalog | NativePluginCatalog>("/api/plugins"),
+  previewPlugin: (source: { name: string } | { bundle: unknown }) =>
+    send<PluginPreview>("/api/plugins/preview", "POST", source),
+  installNativePlugin: (workspace: string, preview: PluginPreview) =>
+    send<PluginChange>("/api/plugins/install", "POST", {
+      workspace,
+      bundle: preview.bundle,
+      hash: preview.hash,
+    }),
+  removeNativePlugin: (workspace: string, name: string, hash: string) =>
+    send<PluginChange>("/api/plugins/remove", "POST", {
+      workspace,
+      name,
+      hash,
+    }),
   installPlugin: (name: string) =>
     send<{ name: string }>(`/api/plugins/${name}/install`, "POST", {}),
   removePlugin: (name: string) =>
@@ -381,14 +605,23 @@ export const api = {
       "POST",
       {},
     ),
-  session: (id: string) => get<SessionDetail>(`/api/sessions/${id}`),
+  historyPage: (id: string, before: number) =>
+    get<HistoryPage>(`/api/sessions/${id}/events?view=window&before=${before}`),
+  session: (id: string) =>
+    get<SessionDetail>(
+      `/api/sessions/${id}${isNative() ? "?view=window" : ""}`,
+    ),
   activateSession: (id: string) =>
-    send<SessionDetail>(`/api/sessions/${id}/activate`, "POST", {}),
+    send<SessionDetail>(
+      `/api/sessions/${id}/activate${isNative() ? "?view=window" : ""}`,
+      "POST",
+      {},
+    ),
   currentJob: (id: string) =>
     get<{ job: Job | null }>(
       `/api/jobs/current?session_id=${encodeURIComponent(id)}&include_finished=true`,
     ),
-  jobs: () => get<{ jobs: Job[] }>("/api/jobs"),
+  jobs: () => get<{ jobs: Job[] }>("/api/jobs?view=summary&limit=100"),
   createSession: (workspace: string, title = "") =>
     send<{ id: string; workspace: string }>("/api/sessions", "POST", {
       workspace,
@@ -459,6 +692,7 @@ export const api = {
       };
       permissions: { level: string; network?: boolean };
       onboarding?: { completed: boolean };
+      routing?: Record<string, string | boolean>;
     }>("/api/workspace/status"),
   startJob: (
     task: string,
@@ -466,6 +700,7 @@ export const api = {
     session_id?: string,
     model?: string,
     purpose: string = "coder",
+    queue = false,
   ) =>
     send<Job>("/api/jobs", "POST", {
       task,
@@ -473,9 +708,11 @@ export const api = {
       session_id,
       model: model || undefined,
       purpose,
+      queue,
     }),
   job: (id: string) => get<Job>(`/api/jobs/${id}`),
-  cancelJob: (id: string) => send<Job>(`/api/jobs/${id}/cancel`, "POST", {}),
+  cancelJob: (id: string, only_if_queued = false) =>
+    send<Job>(`/api/jobs/${id}/cancel`, "POST", { only_if_queued }),
   cancelCurrent: (session_id?: string) =>
     send<{ ok: boolean }>(
       `/api/run/cancel${session_id ? `?session_id=${session_id}` : ""}`,
@@ -486,18 +723,23 @@ export const api = {
     get<{ approvals: Approval[] }>(
       `/api/approvals${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
     ),
-  decide: (id: string, decision: "approve" | "deny") =>
-    send<Approval>(`/api/approvals/${id}`, "POST", { decision }),
+  decide: (id: string, decision: "approve" | "deny", sessionId?: string) =>
+    send<Approval>(`/api/approvals/${id}`, "POST", {
+      decision,
+      session_id: sessionId,
+    }),
   instructions: () =>
     get<{ content: string; exists: boolean }>("/api/workspace/instructions"),
   saveInstructions: (content: string) =>
     send<{ ok: boolean }>("/api/workspace/instructions", "PUT", { content }),
   skills: () =>
-    get<{ skills: { name: string; content: string }[] }>(
-      "/api/workspace/skills",
-    ),
-  saveSkill: (name: string, content: string) =>
-    send<{ ok: boolean }>("/api/workspace/skills", "PUT", { name, content }),
+    get<{ skills: ProjectSkill[]; issues?: string[] }>("/api/workspace/skills"),
+  saveSkill: (name: string, content: string, expectedHash?: string) =>
+    send<{ ok: boolean }>("/api/workspace/skills", "PUT", {
+      name,
+      content,
+      expected_hash: expectedHash,
+    }),
   attach: (filename: string, text: string) =>
     send<{ path: string }>("/api/workspace/attach", "POST", { filename, text }),
   undo: () =>
@@ -557,11 +799,17 @@ export const api = {
         source: string;
       }[];
     }>("/api/commands"),
-  runCommand: (name: string, args = "", sessionId?: string) =>
+  runCommand: (
+    name: string,
+    args = "",
+    sessionId?: string,
+    options: { model?: string; purpose?: string; queue?: boolean } = {},
+  ) =>
     send<CommandResult>("/api/commands/run", "POST", {
       name,
       args,
       session_id: sessionId,
+      ...options,
     }),
 };
 
@@ -589,4 +837,45 @@ export type CommandResult = {
   quit: boolean;
   passthrough: boolean;
   metadata: Record<string, unknown>;
+};
+
+export type LegacyPluginCatalog = {
+  format?: undefined;
+  installed: { name: string; version: string; description: string }[];
+  available: { name: string; installed: boolean }[];
+};
+export type PluginFile = {
+  path: string;
+  kind: string;
+  hash: string;
+  content?: string;
+  status?: "unchanged" | "modified" | "missing" | "unreadable";
+  error?: string | null;
+};
+export type PluginEntry = {
+  name: string;
+  version: string;
+  description: string;
+  hash: string;
+  state?: "prepared" | "installed" | "removing";
+  files: PluginFile[];
+};
+export type NativePluginCatalog = {
+  format: "native-plugins-v1";
+  workspace: string;
+  trusted: boolean;
+  read_only: boolean;
+  installed: PluginEntry[];
+  available: PluginEntry[];
+  issues: string[];
+  legacy: string[];
+};
+export type PluginPreview = {
+  bundle: { name: string; version: string; description: string };
+  hash: string;
+  files: PluginFile[];
+};
+export type PluginChange = {
+  catalog: NativePluginCatalog;
+  result: { name: string; retained?: { path: string; reason: string }[] };
 };

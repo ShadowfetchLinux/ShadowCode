@@ -3,6 +3,7 @@ import {
   ArrowUpRight,
   ChevronDown,
   Circle,
+  Clock3,
   FolderOpen,
   MessageSquare,
   PanelLeftClose,
@@ -97,7 +98,13 @@ export function Sidebar({
     localStorage.setItem("shadow:pins", JSON.stringify(next));
   }
   function task(s: Session) {
-    const running = jobs.some((j) => j.session_id === s.id);
+    const running = jobs.some(
+      (j) =>
+        j.session_id === s.id && ["running", "cancelling"].includes(j.status),
+    );
+    const queued = jobs.some(
+      (j) => j.session_id === s.id && j.status === "queued",
+    );
     return (
       <div
         className={`task-row ${s.id === selected ? "selected" : ""}`}
@@ -106,12 +113,19 @@ export function Sidebar({
         <button
           type="button"
           className="task-link"
+          data-session-id={s.id}
           aria-current={s.id === selected ? "page" : undefined}
           title={s.title || "Untitled task"}
           onClick={() => onSelect(s.id)}
         >
           {running ? (
-            <span className="running-dot" />
+            <span
+              className="running-dot"
+              role="img"
+              aria-label="Task running"
+            />
+          ) : queued ? (
+            <Clock3 size={14} aria-label="Task queued" />
           ) : (
             <MessageSquare size={14} />
           )}

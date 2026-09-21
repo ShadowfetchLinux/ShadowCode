@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -11,6 +17,7 @@ import {
   GitBranch,
   GitPullRequest,
   ListChecks,
+  ListPlus,
   LoaderCircle,
   PanelLeft,
   Paperclip,
@@ -46,7 +53,17 @@ import {
   type PaletteItem,
 } from "./components/overlays";
 import { Settings } from "./components/Settings";
+import { QueuedTasks } from "./components/QueuedTasks";
 import { useConversation } from "./hooks/useConversation";
+import { modelLabel } from "./lib/models";
+import { conversationJob } from "./lib/jobs";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  exportSession as saveExport,
+  isNative,
+  openExternal,
+} from "./lib/transport";
 
 type Overlay =
   "" | "settings" | "help" | "palette" | "project" | "custom-model";
@@ -97,7 +114,12 @@ export default function App() {
   } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [error, setError] = useState("");
+  const [shutdown, setShutdown] = useState<{
+    status: string;
+    message?: string;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [cancellingQueued, setCancellingQueued] = useState<string[]>([]);
   const [switching, setSwitching] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -118,6 +140,7 @@ export default function App() {
   const booted = useRef(false);
   const activationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const stick = useRef(true);
+  const browsingHistory = useRef(false);
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastSeq.current;
@@ -127,6 +150,39 @@ export default function App() {
       5000,
     );
   }, []);
+
+  useEffect(() => {
+    if (!isNative()) return;
+    let stopped = false;
+    let unsubscribe: (() => void) | undefined;
+    void listen<{ status: string; message?: string }>(
+      "shadowcode:shutdown",
+      (event) => setShutdown(event.payload),
+    )
+      .then((stop) => {
+        if (stopped) stop();
+        else unsubscribe = stop;
+      })
+      .catch((error) => {
+        if (!stopped) toast(String(error), "err");
+      });
+    const external = (event: MouseEvent) => {
+      const anchor = (
+        event.target as Element | null
+      )?.closest<HTMLAnchorElement>("a[href]");
+      if (!anchor || anchor.getAttribute("href")?.startsWith("#")) return;
+      event.preventDefault();
+      void openExternal(anchor.href).catch((error) =>
+        toast(String(error), "err"),
+      );
+    };
+    document.addEventListener("click", external, true);
+    return () => {
+      stopped = true;
+      unsubscribe?.();
+      document.removeEventListener("click", external, true);
+    };
+  }, [toast]);
 
   const refresh = useCallback(async () => {
     const [s, p, active, state] = await Promise.all([
@@ -158,7 +214,26 @@ export default function App() {
     void refresh().catch(() => undefined);
   });
   const { transcript, setTranscript, job, busy, connection } = conversation;
-  const locked = busy || submitting || switching;
+  const locked = busy || submitting || switching || Boolean(shutdown);
+  const projectBusy =
+    busy ||
+    jobs.some(
+      (item) =>
+        item.workspace === workspace &&
+        ["queued", "running", "cancelling"].includes(item.status),
+    );
+  const queueing = isNative() && projectBusy;
+  const composerLocked =
+    submitting || switching || Boolean(shutdown) || (busy && !isNative());
+  const queuedJobs = isNative()
+    ? jobs
+        .filter(
+          (item) => item.workspace === workspace && item.status === "queued",
+        )
+        .slice()
+        .reverse()
+    : [];
+  const commandWaiting = queueing && task.trim().startsWith("/");
   taskRef.current = task;
 
   async function reloadConfig() {
@@ -213,7 +288,11 @@ export default function App() {
         toast(String(e), "err");
       }
     } finally {
-      if (ticket === selection.current) setSwitching(false);
+      if (ticket === selection.current) {
+        stick.current = true;
+        setAtBottom(true);
+        setSwitching(false);
+      }
     }
   }
 
@@ -256,6 +335,14 @@ export default function App() {
     localStorage.setItem("shadow:sidebar", sidebar ? "open" : "closed");
   }, [sidebar]);
   useEffect(() => {
+    const compact = window.matchMedia("(max-width: 760px)");
+    const resize = (event: MediaQueryListEvent) => {
+      if (event.matches) setSidebar(false);
+    };
+    compact.addEventListener("change", resize);
+    return () => compact.removeEventListener("change", resize);
+  }, []);
+  useEffect(() => {
     document.title = `${busy ? "● " : ""}ShadowCode`;
   }, [busy]);
   useEffect(() => {
@@ -274,10 +361,30 @@ export default function App() {
       el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
     }
   }, [task]);
-  useEffect(() => {
-    if (stick.current)
+  useLayoutEffect(() => {
+    if (ready && !switching && stick.current)
       streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
-  }, [transcript.items, commandCards, busy, approvals]);
+  }, [
+    transcript.items,
+    commandCards,
+    busy,
+    submitting,
+    approvals,
+    ready,
+    switching,
+    queuedJobs.length,
+  ]);
+  useLayoutEffect(() => {
+    if (conversation.history.viewing) {
+      stick.current = false;
+      streamRef.current?.scrollTo({ top: 0 });
+    } else if (browsingHistory.current) {
+      stick.current = true;
+      setAtBottom(true);
+      streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
+    }
+    browsingHistory.current = conversation.history.viewing;
+  }, [conversation.history.firstCursor, conversation.history.viewing]);
   useEffect(() => {
     let live = true;
     async function poll() {
@@ -295,12 +402,40 @@ export default function App() {
       }
     }
     void poll();
-    const timer = setInterval(poll, busy ? 1200 : 5000);
+    const timer = setInterval(poll, busy ? 1200 : isNative() ? 2000 : 5000);
     return () => {
       live = false;
       clearInterval(timer);
     };
   }, [sessionId, busy]);
+  // Goals and queued follow-ups can start after the visible job has finished.
+  // Reload before attaching their stream so intervening milestones are retained.
+  useEffect(() => {
+    if (!sessionId || busy || submitting || switching) return;
+    const sessionJobs = jobs.filter((item) => item.session_id === sessionId);
+    const next = conversationJob(sessionJobs, job);
+    if (!next || next.id === job?.id) return;
+    let live = true;
+    void Promise.all([api.session(sessionId), api.job(next.id)])
+      .then(([detail, fullJob]) => {
+        if (live && selectedRef.current === sessionId && !submittingRef.current)
+          conversation.load(detail, fullJob, true);
+      })
+      .catch(() => {
+        /* The next poll retries a failed snapshot. */
+      });
+    return () => {
+      live = false;
+    };
+  }, [
+    jobs,
+    sessionId,
+    busy,
+    submitting,
+    switching,
+    job?.id,
+    conversation.load,
+  ]);
   useEffect(() => {
     if (!job || !busy) return;
     const tick = () =>
@@ -360,24 +495,53 @@ export default function App() {
     if (!job || !busy) return;
     try {
       const next = await api.cancelJob(job.id);
-      conversation.setJob(next);
+      if (selectedRef.current === next.session_id) {
+        const detail = await api.session(next.session_id);
+        if (selectedRef.current === next.session_id)
+          conversation.load(detail, next);
+      }
+      await refresh();
     } catch (e) {
       toast(String(e), "err");
     }
   }
-  async function decide(id: string, decision: "approve" | "deny") {
+  async function cancelQueued(queued: Job) {
+    if (cancellingQueued.includes(queued.id)) return;
+    setCancellingQueued((ids) => [...ids, queued.id]);
     try {
-      await api.decide(id, decision);
-      setApprovals((await api.approvals(sessionId)).approvals);
+      const updated = await api.cancelJob(queued.id, true);
+      setJobs((items) =>
+        items.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      toast("Queued task cancelled.", "info");
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setCancellingQueued((ids) => ids.filter((id) => id !== queued.id));
+      void refresh().catch(() => undefined);
+    }
+  }
+  async function decide(
+    id: string,
+    decision: "approve" | "deny",
+    approvalSession?: string,
+  ) {
+    try {
+      await api.decide(id, decision, approvalSession);
+      const selected = selectedRef.current;
+      const next = await api.approvals(selected);
+      if (selectedRef.current === selected) setApprovals(next.approvals);
     } catch (e) {
       toast(String(e), "err");
     }
   }
   async function runSlash(text: string) {
+    const ticket = selection.current;
+    const originSession = selectedRef.current;
     const [name, ...rest] = text.slice(1).split(" ");
     const args = rest.join(" ");
     if (name === "new" || name === "clear") {
-      await newSession({ force: true });
+      await newSession();
       return;
     }
     const panels: Record<string, DrawerTab> = {
@@ -386,29 +550,92 @@ export default function App() {
       goals: "goals",
       skills: "skills",
       health: "health",
-      doctor: "health",
+      ...(!isNative() ? { doctor: "health" as DrawerTab } : {}),
+      background: "background",
     };
     if (panels[name] && !args) {
       setPanel(panels[name]);
       return;
     }
-    if (name === "settings") {
+    if (name === "settings" && !args) {
       setOverlay("settings");
       return;
     }
-    const result = await api.runCommand(name, args, sessionId || undefined);
-    if (result.kind === "overlay")
+    const result = await api.runCommand(name, args, sessionId || undefined, {
+      model: modelChoice || undefined,
+      purpose: mode,
+    });
+    if (ticket !== selection.current) {
+      await refresh();
+      return;
+    }
+    const metadata = result.metadata || {};
+    const started = metadata.job as Job | undefined;
+    if (started?.id) {
+      if (started.session_id !== selectedRef.current) {
+        selectedRef.current = started.session_id;
+        setSessionId(started.session_id);
+        localStorage.setItem("shadow:selected", started.session_id);
+      }
+      conversation.start(started);
+    } else if (typeof metadata.session_id === "string") {
+      await openSession(metadata.session_id);
+    } else if (result.kind === "overlay") {
       setOverlay((result.overlay as Overlay) || "settings");
-    else setCommandCards((prev) => [...prev, result]);
+    } else if (metadata.action === "expand") {
+      setTranscript((state) => {
+        const index = state.items.map((item) => item.kind).lastIndexOf("tool");
+        return {
+          ...state,
+          items: state.items.map((item, i) =>
+            i === index && item.kind === "tool"
+              ? { ...item, collapsed: item.collapsed === false }
+              : item,
+          ),
+        };
+      });
+    } else if (metadata.action === "quit" || result.quit) {
+      if (isNative()) await invoke("desktop_quit");
+      else toast("Close this browser tab to leave ShadowCode.", "info");
+    } else if (!metadata.panel) {
+      if (isNative() && originSession) {
+        const [detail, current] = await Promise.all([
+          api.session(originSession),
+          api.currentJob(originSession),
+        ]);
+        if (ticket === selection.current)
+          conversation.load(detail, current.job);
+      } else setCommandCards((prev) => [...prev, result]);
+    }
+    if (
+      typeof metadata.panel === "string" &&
+      [...Object.values(panels), "changes"].includes(
+        metadata.panel as DrawerTab,
+      )
+    )
+      setPanel(metadata.panel as DrawerTab);
+    if (metadata.reload_config) await reloadConfig();
     await refresh();
   }
   async function submit() {
-    if (locked || submittingRef.current || (!task.trim() && !chips.length))
+    if (
+      composerLocked ||
+      submittingRef.current ||
+      (!task.trim() && !chips.length)
+    )
       return;
+    if (commandWaiting) {
+      setError(
+        "Wait for this project's active work to finish before running a slash command. You can queue a message now.",
+      );
+      return;
+    }
     if (isSessionCommand(task)) {
+      setTask("");
       await newSession({ force: true });
       return;
     }
+    const submitTicket = selection.current;
     const original = task;
     const attached = [...chips];
     const text = (
@@ -435,15 +662,31 @@ export default function App() {
         sessionId || undefined,
         modelChoice || undefined,
         mode,
+        queueing,
       );
+      if (submitTicket !== selection.current) {
+        await refresh();
+        return;
+      }
       if (started.session_id !== selectedRef.current) {
         selectedRef.current = started.session_id;
         setSessionId(started.session_id);
         localStorage.setItem("shadow:selected", started.session_id);
       }
-      conversation.start(started);
+      // Keep streaming the current task while the follow-up waits. A task
+      // submitted from an idle conversation can itself be waiting on a project.
+      if (!busy) conversation.start(started);
+      if (queueing)
+        toast(
+          "Follow-up queued. It will run after earlier project tasks.",
+          "ok",
+        );
       await refresh().catch(() => undefined);
     } catch (e) {
+      if (submitTicket !== selection.current) {
+        toast(String(e), "err");
+        return;
+      }
       setTask(original);
       setChips(attached);
       setError(String(e));
@@ -454,6 +697,10 @@ export default function App() {
     }
   }
   async function attach(files: FileList | File[]) {
+    if (projectBusy || composerLocked) {
+      toast("Attach files after the project's active work finishes.", "info");
+      return;
+    }
     for (const file of Array.from(files)) {
       if (file.size > 1_000_000) {
         toast(
@@ -493,8 +740,9 @@ export default function App() {
       toast(String(e), "err");
     }
   }
-  function exportSession() {
-    if (sessionId) window.open(api.exportUrl(sessionId), "_blank", "noopener");
+  function exportSession(format: "md" | "json" = "md") {
+    if (sessionId)
+      void saveExport(sessionId, format).catch((e) => toast(String(e), "err"));
   }
   const palette: PaletteItem[] = [
     {
@@ -537,6 +785,12 @@ export default function App() {
       label: "Export this task as Markdown",
       hint: "Ctrl+Shift+E",
       run: exportSession,
+    },
+    {
+      id: "export-json",
+      label: "Export this task as JSON",
+      hint: "Complete event records",
+      run: () => exportSession("json"),
     },
     {
       id: "stop",
@@ -627,26 +881,46 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+  const reloadCommands = useCallback(async () => {
+    const result = await api.commands();
+    setCommands(result.commands);
+  }, []);
   useEffect(() => {
+    let current = true;
     api
       .commands()
-      .then((d) => setCommands(d.commands))
-      .catch(() => undefined);
-  }, []);
+      .then((result) => {
+        if (current) setCommands(result.commands);
+      })
+      .catch(() => {
+        if (current) setCommands([]);
+      });
+    return () => {
+      current = false;
+    };
+  }, [workspace]);
 
   const current = sessions.find((s) => s.id === sessionId);
   const title = current?.title || "New task";
+  const selectedModel = models.find(
+    (candidate) => candidate.id === modelChoice,
+  );
+  const activeModel = job?.routing || transcript.routing;
   const model =
-    modelChoice ||
-    status?.model.name ||
-    status?.model.default ||
-    "Choose model";
-  const ctx = status?.model.context_limit
+    busy && activeModel
+      ? activeModel.model_name
+      : selectedModel
+        ? modelLabel(selectedModel, models)
+        : status?.routing?.enabled
+          ? "Automatic by task mode"
+          : status?.model.name || status?.model.default || "Choose model";
+  const contextLimit =
+    activeModel?.context_limit || status?.model.context_limit;
+  const ctx = contextLimit
     ? Math.min(
         100,
         Math.round(
-          ((transcript.usage.prompt_tokens || 0) / status.model.context_limit) *
-            100,
+          ((transcript.usage.prompt_tokens || 0) / contextLimit) * 100,
         ),
       )
     : 0;
@@ -724,6 +998,7 @@ export default function App() {
           <button
             type="button"
             className={`top-action ${panel === "changes" ? "on" : ""}`}
+            aria-label="Review changes"
             onClick={() => setPanel(panel === "changes" ? null : "changes")}
           >
             <GitPullRequest size={15} />
@@ -761,6 +1036,12 @@ export default function App() {
         </div>
       </header>
       <main className="stage">
+        {health?.desktop_attached && (
+          <div className="connection-banner" role="status">
+            Connected to your running engine. Closing this window leaves its
+            work running.
+          </div>
+        )}
         {job?.status === "interrupted" && (
           <div className="connection-banner" role="status">
             <span>
@@ -797,6 +1078,23 @@ export default function App() {
           }}
         >
           <div className={`chat-inner ${empty ? "is-empty" : ""}`}>
+            {shutdown && (
+              <div className="notice" role="status">
+                <span>
+                  {shutdown.message ||
+                    "Stopping active work and saving the session before closing…"}
+                </span>
+                {shutdown.status === "error" && (
+                  <button
+                    type="button"
+                    className="mini"
+                    onClick={() => void invoke("desktop_quit")}
+                  >
+                    Retry closing
+                  </button>
+                )}
+              </div>
+            )}
             {error && (
               <div className="notice bad" role="alert">
                 <span>{error}</span>
@@ -817,12 +1115,79 @@ export default function App() {
                 </button>
               </div>
             )}
+            {!switching &&
+              conversation.history.enabled &&
+              (conversation.history.hasOlder ||
+                conversation.history.viewing ||
+                conversation.history.error) && (
+                <nav
+                  className="history-navigation"
+                  aria-label="Conversation history"
+                >
+                  <div className="row">
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={
+                        conversation.history.loading ||
+                        !conversation.history.hasOlder
+                      }
+                      onClick={() => {
+                        stick.current = false;
+                        void conversation.history.older();
+                      }}
+                    >
+                      Older messages
+                    </button>
+                    {conversation.history.viewing && (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={conversation.history.loading}
+                          onClick={() => {
+                            stick.current = false;
+                            void conversation.history.newer();
+                          }}
+                        >
+                          Newer messages
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => {
+                            conversation.history.latest();
+                            stick.current = true;
+                            setAtBottom(true);
+                          }}
+                        >
+                          Latest messages
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {conversation.history.loading && (
+                    <p role="status">Loading saved messages…</p>
+                  )}
+                  {conversation.history.viewing && (
+                    <p className="hint">
+                      Browsing saved history. Current work continues. Pages may
+                      begin partway through a task.
+                    </p>
+                  )}
+                  {conversation.history.error && (
+                    <p role="alert" className="error">
+                      {conversation.history.error}
+                    </p>
+                  )}
+                </nav>
+              )}
             {switching ? (
               <div className="loading-task">
                 <LoaderCircle size={20} className="spin" />
                 Opening task…
               </div>
-            ) : empty ? (
+            ) : empty && !conversation.history.viewing ? (
               <div className="welcome">
                 <div className="welcome-symbol">
                   <img src="/icon.svg" alt="" />
@@ -887,7 +1252,11 @@ export default function App() {
             ) : (
               <>
                 {transcript.items.map((item, i) =>
-                  item.kind === "tool" ? (
+                  item.kind === "user" &&
+                  transcript.activeTaskId !== item.taskId &&
+                  queuedJobs.some(
+                    (queued) => queued.task_id === item.taskId,
+                  ) ? null : item.kind === "tool" ? (
                     <OpCard
                       key={i}
                       item={item}
@@ -907,6 +1276,15 @@ export default function App() {
                         setPanel("changes");
                       }}
                     />
+                  ) : item.kind === "command" ? (
+                    <CommandCardView key={i} card={item.card} />
+                  ) : item.kind === "note" ? (
+                    <div
+                      key={i}
+                      className={`msg-note ${item.warning ? "warning" : ""}`}
+                    >
+                      {item.text}
+                    </div>
                   ) : item.kind === "user" ? (
                     <div key={i} className="msg-user">
                       <div className="user-pill">
@@ -929,7 +1307,9 @@ export default function App() {
               <ApprovalCard
                 key={a.id}
                 approval={a}
-                onDecide={(id, decision) => void decide(id, decision)}
+                onDecide={(id, decision) =>
+                  void decide(id, decision, a.session_id)
+                }
               />
             ))}
             {(busy || submitting) && !switching && (
@@ -937,12 +1317,16 @@ export default function App() {
                 <LoaderCircle size={15} className="spin" />
                 <span>
                   {submitting
-                    ? "Starting task"
+                    ? queueing
+                      ? "Queuing follow-up"
+                      : "Starting task"
                     : job?.status === "cancelling"
                       ? "Stopping safely"
-                      : transcript.stage === "UNDERSTAND"
-                        ? "Exploring your request"
-                        : transcript.stage.toLowerCase().replaceAll("_", " ")}
+                      : job?.status === "queued"
+                        ? "Waiting for earlier work to finish"
+                        : transcript.stage === "UNDERSTAND"
+                          ? "Exploring your request"
+                          : transcript.stage.toLowerCase().replaceAll("_", " ")}
                 </span>
                 <span className="dim">
                   {elapsed >= 60
@@ -953,11 +1337,13 @@ export default function App() {
             )}
           </div>
         </div>
-        {!atBottom && (
+        {(!atBottom || conversation.history.viewing) && (
           <button
             type="button"
             className="jump-latest"
             onClick={() => {
+              if (conversation.history.viewing) conversation.history.latest();
+              setAtBottom(true);
               stick.current = true;
               streamRef.current?.scrollTo({
                 top: streamRef.current.scrollHeight,
@@ -977,6 +1363,15 @@ export default function App() {
             void attach(e.dataTransfer.files);
           }}
         >
+          <QueuedTasks
+            jobs={queuedJobs}
+            sessions={sessions}
+            selected={sessionId}
+            cancelling={cancellingQueued}
+            disabled={submitting || switching || Boolean(shutdown)}
+            onCancel={(queued) => void cancelQueued(queued)}
+            onOpen={(id) => void openSession(id)}
+          />
           {transcript.plan.length > 0 && (
             <details className="task-plan">
               <summary>
@@ -1066,11 +1461,13 @@ export default function App() {
               value={task}
               rows={2}
               placeholder={
-                busy
-                  ? "Draft your next step while ShadowCode works…"
-                  : empty
-                    ? "Describe what you want to build…"
-                    : "Ask for a follow-up change…"
+                queueing
+                  ? "Add a follow-up to the queue…"
+                  : busy
+                    ? "Draft your next step while ShadowCode works…"
+                    : empty
+                      ? "Describe what you want to build…"
+                      : "Ask for a follow-up change…"
               }
               onChange={(e) => {
                 setTask(e.target.value);
@@ -1112,6 +1509,7 @@ export default function App() {
                 className="icon-btn attach-btn"
                 aria-label="Attach text files"
                 title="Attach text files"
+                disabled={projectBusy || composerLocked}
                 onClick={() => fileRef.current?.click()}
               >
                 <Paperclip size={17} />
@@ -1137,9 +1535,11 @@ export default function App() {
                 }}
               >
                 <option value="">
-                  {status?.model.name ||
-                    status?.model.default ||
-                    "Choose model"}
+                  {status?.routing?.enabled
+                    ? "Automatic by task mode"
+                    : status?.model.name ||
+                      status?.model.default ||
+                      "Choose model"}
                 </option>
                 {[...new Set(models.map((m) => m.provider))].map((p) => (
                   <optgroup key={p} label={p}>
@@ -1147,7 +1547,7 @@ export default function App() {
                       .filter((m) => m.provider === p)
                       .map((m) => (
                         <option key={m.id} value={m.id}>
-                          {m.name || m.id}
+                          {modelLabel(m, models)}
                           {m.detected ? " · local" : ""}
                         </option>
                       ))}
@@ -1163,13 +1563,21 @@ export default function App() {
                 onChange={(e) => setMode(e.target.value)}
               >
                 <option value="coder">Build</option>
-                <option value="researcher">Research</option>
+                <option value="planner">Plan</option>
                 <option value="reviewer">Review</option>
                 <option value="tester">Test</option>
               </select>
               <span className="grow" />
               <span className="composer-hint">
-                {task ? "↵ Send" : "/ for commands"}
+                {commandWaiting
+                  ? "Commands wait until idle"
+                  : task
+                    ? queueing
+                      ? "↵ Queue"
+                      : "↵ Send"
+                    : queueing
+                      ? "Queue a follow-up"
+                      : "/ for commands"}
               </span>
               {busy ? (
                 <button
@@ -1182,16 +1590,23 @@ export default function App() {
                 >
                   <Square size={14} fill="currentColor" />
                 </button>
-              ) : (
+              ) : null}
+              {(!busy || isNative()) && (
                 <button
                   type="submit"
                   className="submit-btn"
-                  aria-label="Send task"
-                  title="Send task"
-                  disabled={locked || (!task.trim() && !chips.length)}
+                  aria-label={queueing ? "Queue follow-up" : "Send task"}
+                  title={queueing ? "Queue follow-up" : "Send task"}
+                  disabled={
+                    composerLocked ||
+                    commandWaiting ||
+                    (!task.trim() && !chips.length)
+                  }
                 >
                   {submitting ? (
                     <LoaderCircle size={17} className="spin" />
+                  ) : queueing ? (
+                    <ListPlus size={19} />
                   ) : (
                     <ArrowUp size={19} />
                   )}
@@ -1224,7 +1639,7 @@ export default function App() {
           <span className="sep">/</span>
           <span title={model}>{model}</span>
           <span className="grow" />
-          <span title="Input tokens as a percentage of the configured context limit">
+          <span title="Input tokens as a percentage of this task's model context limit">
             Context {ctx}%
           </span>
           <span className="sep">·</span>
@@ -1239,7 +1654,9 @@ export default function App() {
               {git.branch}
             </button>
           )}
-          <span className="version">v{health?.version || "0.19.0"}</span>
+          <span className="version">
+            {health?.version ? `v${health.version}` : "Connecting"}
+          </span>
         </footer>
       </main>
       {panel && (
@@ -1264,6 +1681,12 @@ export default function App() {
               if (next) await openSession(next.id);
               else await newSession();
             }
+          }}
+          onSkillsChanged={reloadCommands}
+          onUseSkill={(name) => {
+            setTask(`/skill ${name} `);
+            setPanel(null);
+            promptRef.current?.focus();
           }}
           diffPath={diffPath}
           onDiffPath={setDiffPath}
@@ -1299,6 +1722,7 @@ export default function App() {
       {overlay === "settings" && (
         <Settings
           cfg={cfg}
+          onOpenProject={(path) => void pickProject(path)}
           onClose={() => setOverlay("")}
           onToast={toast}
           onSave={async (values, key, env) => {
