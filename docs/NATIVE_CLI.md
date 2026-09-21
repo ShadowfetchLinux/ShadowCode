@@ -229,9 +229,11 @@ shadowcode background stop PROCESS_PREFIX
 
 `--detach` and background start require that persistent owner. Closing it cancels
 managed work and waits for process-group cleanup. `serve` does not install a
-daemon or automatically restart jobs. Opening the GUI while `serve` owns that
-profile is not supported yet: stop `serve` before opening the window. The desktop
-can already act as the shared owner for CLI clients.
+daemon or automatically restart jobs. Opening the GUI while `serve` or a TUI
+owns the same profile attaches to that engine. The window keeps its own project
+and conversation selection and shows a notice that closing it leaves shared
+work running. A temporary foreground command cannot host an attached desktop.
+See [desktop attachment](NATIVE_DESKTOP.md#attaching-to-a-running-engine).
 
 Model [background tools](NATIVE_BACKGROUND.md#asking-a-model-to-manage-a-server)
 use this same process list. On a persistent owner, a started project server

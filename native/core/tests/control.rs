@@ -266,3 +266,157 @@ async fn temporary_command_owner_allows_observation_but_rejects_new_work() {
     assert!(!service.workspace().unwrap().join("unexpected").exists());
     stop(server, service).await;
 }
+
+#[tokio::test]
+async fn attached_views_keep_navigation_independent_and_detach_without_stopping_owner() {
+    let (root, service) = setup();
+    let primary = service.workspace().unwrap();
+    let other = root.path().join("view-project");
+    fs::create_dir(&other).unwrap();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let client = server.endpoint().client(primary.clone(), None);
+    let first = client.open_view().await.unwrap();
+    let second = client.open_view().await.unwrap();
+    let selected = first
+        .dispatch(request(
+            "POST",
+            "/api/projects/trust",
+            json!({"path": other}),
+        ))
+        .await
+        .unwrap();
+    let status = first
+        .dispatch(request("GET", "/api/workspace/status", Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(status["workspace"], json!(other));
+    assert_eq!(
+        second
+            .dispatch(request("GET", "/api/workspace/status", Value::Null))
+            .await
+            .unwrap()["workspace"],
+        json!(primary)
+    );
+    assert_eq!(service.workspace().unwrap(), primary);
+    // Omitted session_id uses the view's retained conversation selection.
+    first
+        .dispatch(request(
+            "POST",
+            "/api/workspace/exec",
+            json!({"command": "printf attached-view"}),
+        ))
+        .await
+        .unwrap();
+    assert!(service
+        .engine
+        .store()
+        .recent_events(selected["session_id"].as_str().unwrap(), 10)
+        .unwrap()
+        .iter()
+        .any(|e| e["type"] == "terminal.completed"));
+    first.close().await.unwrap();
+    first.close().await.unwrap();
+    assert!(first
+        .dispatch(request("GET", "/api/health", Value::Null))
+        .await
+        .is_err());
+    assert!(client.available().await.unwrap());
+    assert_eq!(
+        second
+            .dispatch(request("GET", "/api/health", Value::Null))
+            .await
+            .unwrap()["workspace"],
+        json!(primary)
+    );
+    second.close().await.unwrap();
+    stop(server, service).await;
+}
+
+#[tokio::test]
+async fn attached_view_leases_are_bounded_and_dropped_connections_release_slots() {
+    let (_root, service) = setup();
+    let server = Server::start_with_mode(service.clone(), "tui").unwrap();
+    let client = server.endpoint().client(service.workspace().unwrap(), None);
+    let mut views = Vec::new();
+    for _ in 0..4 {
+        views.push(client.open_view().await.unwrap());
+    }
+    let error = client.open_view().await.err().unwrap().to_string();
+    assert!(error.contains("At most four"), "{error}");
+    drop(views.pop());
+    let replacement = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match client.open_view().await {
+                Ok(view) => break view,
+                Err(error) => {
+                    assert!(error.to_string().contains("At most four"), "{error}");
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    replacement.close().await.unwrap();
+    drop(views);
+    stop(server, service).await;
+}
+
+#[tokio::test]
+async fn foreground_command_cannot_become_a_desktop_engine_owner() {
+    let (_root, service) = setup();
+    let server = Server::start_with_mode(service.clone(), "command").unwrap();
+    let client = server.endpoint().client(service.workspace().unwrap(), None);
+    assert!(client
+        .open_view()
+        .await
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("foreground CLI"));
+    stop(server, service).await;
+}
+
+#[tokio::test]
+async fn attached_view_status_is_available_during_slow_manual_execution() {
+    let (_root, service) = setup();
+    let workspace = service.workspace().unwrap();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let view = std::sync::Arc::new(
+        server
+            .endpoint()
+            .client(workspace.clone(), None)
+            .open_view()
+            .await
+            .unwrap(),
+    );
+    let executing = view.clone();
+    let operation = tokio::spawn(async move {
+        executing
+            .dispatch(request(
+                "POST",
+                "/api/workspace/exec",
+                json!({"command": "touch started; sleep 30", "timeout": 60}),
+            ))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !workspace.join("started").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let status = tokio::time::timeout(
+        Duration::from_secs(2),
+        view.dispatch(request("GET", "/api/health", Value::Null)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(status["ok"], true);
+    operation.abort();
+    assert!(operation.await.unwrap_err().is_cancelled());
+    view.close().await.unwrap();
+    stop(server, service).await;
+}

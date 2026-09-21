@@ -10,6 +10,32 @@ still apply, including orchestration/integration parity, packaging, broader UI
 stress tests, and installation. Keep the supported 0.19 installation until the
 native release is verified.
 
+## Attaching to a running engine
+
+Open the desktop with the same profile as a running `shadowcode serve` or TUI.
+The window attaches over the private Unix socket instead of opening another
+SQLite manager. Its project and conversation selection remain independent of
+other clients. Global settings, approvals, task history and project queues are
+shared. A banner explains that closing this attached window leaves engine-owned
+tasks and background processes running. Stop them explicitly, or stop the
+owning server/TUI. A desktop that starts the engine itself still stops managed
+work when it closes.
+
+Each attached view holds one private connection; ordinary requests use separate
+connections so a slow command cannot block status reads or cancellation. At most
+four views may attach. Closing the view, losing its connection, or stopping the
+owner releases its navigation state. Views do not persist project selection to
+the owner's remembered-workspace file. A temporary foreground CLI command is
+not a persistent host and rejects desktop attachment. Version mismatches are
+rejected before attachment.
+
+Attached windows wake the durable event reader every 250 ms while open; only an
+active selected job causes event reads. They currently do not deliver native
+completion notifications, which still use the owning desktop's local event
+subscription. If the owner exits or restarts, close and reopen the window to
+attach again. Automatic reattachment and attached completion notifications
+remain follow-up work; closing a disconnected window must still succeed.
+
 ## Build and run
 
 On Ubuntu 24.04, install the native build dependencies:

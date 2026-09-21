@@ -1028,6 +1028,12 @@ export default function App() {
         </div>
       </header>
       <main className="stage">
+        {health?.desktop_attached && (
+          <div className="connection-banner" role="status">
+            Connected to your running engine. Closing this window leaves its
+            work running.
+          </div>
+        )}
         {job?.status === "interrupted" && (
           <div className="connection-banner" role="status">
             <span>

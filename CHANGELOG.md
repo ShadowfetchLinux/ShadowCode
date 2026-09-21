@@ -2,6 +2,10 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- Desktop windows can attach to an existing headless/TUI engine with independent
+  navigation and a visible shared-lifetime notice. Closing an attached window
+  leaves engine-owned work running.
+
 - Live response updates reuse unchanged Markdown messages instead of reparsing
   earlier answers and code blocks on every update. Native catch-up combines
   adjacent fragments of the same response while preserving durable cursors and

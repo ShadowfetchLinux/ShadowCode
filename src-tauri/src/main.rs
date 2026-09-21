@@ -5,9 +5,8 @@ use serde_json::{json, Value};
 use shadowcode_core::{
     cli,
     config::Config,
-    control,
     paths::{self},
-    service::{Request, Service},
+    service::Request,
 };
 use std::{
     path::PathBuf,
@@ -18,6 +17,9 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
+mod backend;
+use backend::Backend;
+
 #[derive(Default)]
 struct Lifecycle {
     requested: AtomicBool,
@@ -27,7 +29,7 @@ struct Lifecycle {
 #[tauri::command]
 async fn api(
     request: Request,
-    service: tauri::State<'_, Service>,
+    service: tauri::State<'_, Backend>,
 ) -> std::result::Result<Value, String> {
     service
         .dispatch(request)
@@ -55,7 +57,7 @@ async fn pick_directory(app: tauri::AppHandle) -> std::result::Result<Option<Pat
 #[tauri::command]
 async fn export_session(
     app: tauri::AppHandle,
-    service: tauri::State<'_, Service>,
+    service: tauri::State<'_, Backend>,
     session_id: String,
     format: String,
 ) -> std::result::Result<Option<String>, String> {
@@ -126,12 +128,10 @@ fn request_shutdown(app: &tauri::AppHandle) {
         return;
     }
     let app = app.clone();
-    let service = app.state::<Service>().inner().clone();
-    app.state::<control::Server>().close();
-    let _ = app.emit("shadowcode:shutdown", json!({"status":"closing"}));
+    let attached = matches!(app.state::<Backend>().inner(), Backend::Attached(_));
+    let _ = app.emit("shadowcode:shutdown", json!({"status":"closing", "message": if attached { "Closing this window. Work continues in the shared engine." } else { "Stopping managed work and closing the engine…" }}));
     tauri::async_runtime::spawn(async move {
-        app.state::<control::Server>().wait_closed().await;
-        match service.engine.shutdown().await {
+        match app.state::<Backend>().close().await {
             Ok(()) => {
                 app.state::<Lifecycle>()
                     .complete
@@ -223,12 +223,12 @@ fn run() -> Result<()> {
         ])
         .setup(move |app| {
             let webview_data = paths.data.join("webview");
-            let service = Service::open(paths, workspace)?;
-            let control =
-                tauri::async_runtime::block_on(async { control::Server::start(service.clone()) })?;
-            app.manage(control);
-            let mut events = service.engine.subscribe();
-            app.manage(service.clone());
+            let backend = tauri::async_runtime::block_on(Backend::open(paths, workspace))?;
+            let local_service = match &backend {
+                Backend::Owned { service, .. } => Some(service.clone()),
+                Backend::Attached(_) => None,
+            };
+            app.manage(backend);
             let config = app
                 .config()
                 .app
@@ -248,43 +248,65 @@ fn run() -> Result<()> {
                 })
                 .build()?;
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    match events.recv().await {
-                        Ok(event) => {
-                            // Broadcast is only a wakeup. The UI fetches committed
-                            // rows in SQLite cursor order, including after lag.
-                            let _ = handle.emit(
-                                "shadowcode:events",
-                                json!({"session_id":event["session_id"]}),
-                            );
-                            if event["type"] == "agent.completed" {
-                                let enabled = Config::load(service.engine.paths(), None)
-                                    .ok()
-                                    .is_some_and(|c| c.ui["notify"].as_bool().unwrap_or(true));
-                                let focused = handle
-                                    .get_webview_window("main")
-                                    .is_some_and(|w| w.is_focused().unwrap_or(false));
-                                if enabled && !focused {
-                                    let summary = event["payload"]["summary"]
-                                        .as_str()
-                                        .unwrap_or("Task finished");
-                                    let _ = handle
-                                        .notification()
-                                        .builder()
-                                        .title("ShadowCode · task finished")
-                                        .body(summary.chars().take(180).collect::<String>())
-                                        .show();
+            if let Some(service) = local_service {
+                let mut events = service.engine.subscribe();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match events.recv().await {
+                            Ok(event) => {
+                                // Broadcast is only a wakeup. The UI fetches committed
+                                // rows in SQLite cursor order, including after lag.
+                                let _ = handle.emit(
+                                    "shadowcode:events",
+                                    json!({"session_id":event["session_id"]}),
+                                );
+                                if event["type"] == "agent.completed" {
+                                    let enabled = Config::load(service.engine.paths(), None)
+                                        .ok()
+                                        .is_some_and(|c| c.ui["notify"].as_bool().unwrap_or(true));
+                                    let focused = handle
+                                        .get_webview_window("main")
+                                        .is_some_and(|w| w.is_focused().unwrap_or(false));
+                                    if enabled && !focused {
+                                        let summary = event["payload"]["summary"]
+                                            .as_str()
+                                            .unwrap_or("Task finished");
+                                        let _ = handle
+                                            .notification()
+                                            .builder()
+                                            .title("ShadowCode · task finished")
+                                            .body(summary.chars().take(180).collect::<String>())
+                                            .show();
+                                    }
                                 }
                             }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                let _ = handle.emit("shadowcode:events", json!({}));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            let _ = handle.emit("shadowcode:events", json!({}));
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
-                }
-            });
+                });
+            } else {
+                // Attached windows have no in-process broadcast subscription.
+                // Wake the existing durable reader; it fetches only while a job
+                // is selected and active. No event payload or SQLite access is
+                // duplicated in this process.
+                tauri::async_runtime::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
+                    loop {
+                        tick.tick().await;
+                        if handle
+                            .state::<Lifecycle>()
+                            .requested
+                            .load(Ordering::Acquire)
+                        {
+                            break;
+                        }
+                        let _ = handle.emit("shadowcode:events", json!({}));
+                    }
+                });
+            }
             #[cfg(unix)]
             {
                 let handle = app.handle().clone();

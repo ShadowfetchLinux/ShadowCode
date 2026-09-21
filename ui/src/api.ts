@@ -194,6 +194,7 @@ export type Job = {
 };
 export type Health = {
   ok: boolean;
+  desktop_attached?: boolean;
   version?: string;
   workspace: string;
   provider?: { ok: boolean; name: string; detail: string };

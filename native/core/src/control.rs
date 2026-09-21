@@ -33,7 +33,9 @@ const REQUEST_LIMIT: usize = 8_100_000;
 const RESPONSE_LIMIT: usize = 68_000_000;
 const MAX_CLIENTS: usize = 16;
 mod owned;
+mod view;
 pub use owned::OwnedJobs;
+pub use view::ViewClient;
 
 fn uid() -> u32 {
     // SAFETY: geteuid has no arguments, dereferences no pointers, and cannot fail.
@@ -95,6 +97,7 @@ impl Endpoint {
             endpoint: self.clone(),
             workspace,
             session_id,
+            view: None,
         }
     }
 }
@@ -104,6 +107,8 @@ struct Envelope {
     profile: String,
     workspace: PathBuf,
     session_id: Option<String>,
+    #[serde(default)]
+    view: Option<String>,
     request: Request,
 }
 #[derive(Clone)]
@@ -111,6 +116,7 @@ pub struct Client {
     endpoint: Endpoint,
     workspace: PathBuf,
     session_id: Option<String>,
+    view: Option<String>,
 }
 impl Client {
     /// Each request owns its connection. Dropping a pending request closes it;
@@ -139,6 +145,7 @@ impl Client {
             profile: self.endpoint.profile.clone(),
             workspace: self.workspace.clone(),
             session_id: self.session_id.clone(),
+            view: self.view.clone(),
             request,
         }
     }
@@ -265,14 +272,15 @@ impl Server {
             let _lease = lease;
             let mut clients = JoinSet::new();
             let owners = Arc::new(Semaphore::new(8));
+            let views = view::Registry::default();
             loop {
                 tokio::select! {
                     _=running.cancel.cancelled()=>break,
                     Some(_)=clients.join_next(),if !clients.is_empty()=>{},
                     accepted=listener.accept(),if clients.len()<MAX_CLIENTS=>match accepted {
                         Ok((stream,_))=>{
-                            let service=service.clone();let profile=profile.clone();let mode=mode.clone();let owners=owners.clone();
-                            clients.spawn(async move {let _=handle(stream, service, profile, mode, owners).await;});
+                            let service=service.clone();let profile=profile.clone();let mode=mode.clone();let owners=owners.clone();let views=views.clone();
+                            clients.spawn(async move {let _=handle(stream, service, profile, mode, owners, views).await;});
                         }
                         Err(_)=>break,
                     }
@@ -313,6 +321,7 @@ async fn handle(
     profile: String,
     mode: String,
     owners: Arc<Semaphore>,
+    views: view::Registry,
 ) -> Result<()> {
     ensure!(stream.peer_cred()?.uid() == uid(), "Wrong peer user");
     let response = async {
@@ -325,6 +334,12 @@ async fn handle(
             envelope.protocol == PROTOCOL && envelope.profile == profile,
             "Local engine protocol/profile mismatch"
         );
+        if envelope.request.path == "/api/views" && envelope.request.method == "POST" {
+            ensure!(mode != "command", "A foreground CLI task owns this profile; wait for it to finish or use shadowcode serve");
+            ensure!(envelope.view.is_none(), "Cannot nest an attached view");
+            let scoped = service.fork_selection(envelope.workspace, envelope.session_id)?;
+            return view::serve(&mut stream, scoped, &profile, views).await;
+        }
         if envelope.request.path == "/api/runtime" && envelope.request.method == "GET" {
             return Ok(json!({"mode":mode,"persistent":mode!="command","pid":std::process::id(),"version":crate::VERSION}));
         }
@@ -337,8 +352,12 @@ async fn handle(
         if mode == "command" && envelope.request.method != "GET" {
             ensure!(envelope.request.path.starts_with("/api/approvals/") || (envelope.request.path.starts_with("/api/jobs/") && envelope.request.path.ends_with("/cancel")), "A foreground CLI task owns this profile. Other clients can inspect it, approve tools, or cancel it; use the desktop or shadowcode serve for concurrent work.");
         }
-        let workspace = Workspace::open(&envelope.workspace)?.path;
-        let scoped = service.fork_selection(workspace, envelope.session_id)?;
+        let scoped = if let Some(id) = envelope.view {
+            views.get(&id)?
+        } else {
+            let workspace = Workspace::open(&envelope.workspace)?.path;
+            service.fork_selection(workspace, envelope.session_id)?
+        };
         // Pipelining is deliberately unsupported. EOF or extra bytes abandon
         // this request; ordinary job execution remains durable in the engine.
         let mut extra = [0u8; 1];

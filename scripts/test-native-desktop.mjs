@@ -17,7 +17,7 @@ const binaryArgs = JSON.parse(process.env.SHADOW_DESKTOP_ARGS || "[]");
 assert.ok(Array.isArray(binaryArgs) && binaryArgs.every(arg => typeof arg === "string"), "SHADOW_DESKTOP_ARGS must be a JSON array of strings");
 const artifacts = process.env.SHADOW_NATIVE_ARTIFACTS || path.join(root, "artifacts/native");
 await mkdir(artifacts, { recursive: true });
-for (const name of ["result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "routing.png", "background.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json", "accessibility-routing.json", "accessibility-background.json", "skills.png", "accessibility-skills.json"]) {
+for (const name of ["attached-engine.png", "accessibility-attached-engine.json", "result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "routing.png", "background.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json", "accessibility-routing.json", "accessibility-background.json", "skills.png", "accessibility-skills.json"]) {
   await rm(path.join(artifacts, name), { force: true });
 }
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
@@ -43,7 +43,7 @@ nativeEnv.SHADOW_WINDOW_MCP_SECRET = "private-window-mcp-credential";
 nativeEnv.SHADOW_WINDOW_HTTP_SECRET = "http-private-fixture-key";
 const httpRoot = path.join(scratch,"http-peer");
 await mkdir(httpRoot);
-let httpPeer;
+let httpPeer, attachedOwner;
 await mkdir(nativeEnv.TMPDIR);
 await mkdir(project); await mkdir(configDirectory, { recursive: true });
 await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
@@ -894,8 +894,53 @@ try {
   await until("Terminal cleanup", () => dead(child));
   await until("Background child cleanup", () => dead(backgroundChild));
   await until("Background process cleanup", () => dead(shutdownBackground.pid));
+  // Reopen the actual window against an already running headless engine.
+  await wd("DELETE", `/session/${session}`); session = undefined;
+  let ownerOutput = "", ownerSpawnError;
+  attachedOwner = spawn(binary, [...binaryArgs.filter(arg => arg !== "ui"), ...profileArgs, "--workspace", cliProject, "serve"], {env: cliEnv, detached: true, stdio: ["ignore", "pipe", "pipe"]});
+  attachedOwner.on("error", error => { ownerSpawnError = error; });
+  attachedOwner.stdout.on("data", chunk => { ownerOutput += chunk; });
+  attachedOwner.stderr.on("data", chunk => { ownerOutput += chunk; });
+  await until("Headless owner ready", () => {
+    if(ownerSpawnError) throw ownerSpawnError;
+    assert.equal(attachedOwner.exitCode, null, ownerOutput);
+    return ownerOutput.includes(" · serving ");
+  }, 25000);
+  const ownerHealth = await cli(["health"]);
+  const attached = await wd("POST", "/session", {capabilities: {alwaysMatch: {"tauri:options": {application: binary, args: [...binaryArgs, ...profileArgs, "--workspace", project]}}}});
+  session = attached.sessionId;
+  await wd("POST", `/session/${session}/timeouts`, {script:20000, implicit:0, pageLoad:30000});
+  await until("Attached desktop ready", () => execute("return document.body.innerText.includes('Connected to your running engine')"), 25000);
+  const attachedVersion = await api("GET", "/api/version");
+  assert.equal(attachedVersion.desktop_attached, true);
+  assert.equal(ownerHealth.workspace, cliProject);
+  const attachedRuntime = await api("GET", "/api/runtime");
+  assert.equal(attachedRuntime.mode, "server");
+  assert.equal(attachedVersion.pid, attachedRuntime.pid);
+  assert.notEqual(attachedVersion.desktop_pid, attachedVersion.pid);
+  assert.equal((await api("GET", "/api/workspace/status")).workspace, project);
+  assert.equal((await api("POST", "/api/workspace/exec", {command:"printf attached-native-window"})).stdout, "attached-native-window");
+  const attachedJob = await api("POST", "/api/jobs", {task:"Wait for the attachment lifetime check.", workspace:project});
+  await until("Attached task running", async () => (await api("GET", `/api/jobs/${attachedJob.id}`)).status === "running");
+  await until("Attached task controls visible", () => execute("return !!document.querySelector('button[aria-label=\"Stop task\"]')"));
+  await screenshot("attached-engine"); await accessibility("attached-engine");
+  await execute("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('desktop_quit'),30);return true;");
+  await until("Attached window detached", () => dead(attachedVersion.desktop_pid));
+  assert.equal(await dead(attachedVersion.pid), false, "Closing an attached window must leave its engine running");
+  assert.equal((await cli(["jobs", attachedJob.id])).status, "running");
+  await cli(["jobs", attachedJob.id, "--cancel"]);
+  await until("Detached task cancelled explicitly", async () => (await cli(["jobs", attachedJob.id])).status === "cancelled");
+  await wd("DELETE", `/session/${session}`); session = undefined;
+  const reopened = await wd("POST", "/session", {capabilities: {alwaysMatch: {"tauri:options": {application: binary, args: [...binaryArgs, ...profileArgs, "--workspace", project]}}}});
+  session = reopened.sessionId;
+  await until("Reattached desktop ready", () => execute("return document.body.innerText.includes('Connected to your running engine')"), 25000);
+  const reopenedVersion = await api("GET", "/api/version");
+  attachedOwner.kill("SIGINT");
+  await until("Headless owner shutdown", () => dead(attachedVersion.pid));
+  await execute("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('desktop_quit'),30);return true;");
+  await until("Window can close after its owner exits", () => dead(reopenedVersion.desktop_pid));
   await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, missing checkout rescue, reviewed return without committing, preserved original metadata and light/dark/compact accessibility",
-    "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "12,000-event history with bounded DOM, all 94 pages, newer/latest navigation and three-layout accessibility", "managed native shutdown"] }, null, 2));
+    "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "12,000-event history with bounded DOM, all 94 pages, newer/latest navigation and three-layout accessibility", "managed native shutdown", "desktop attachment to headless owner, independent project selection, visible lifetime notice, terminal execution, durable task surviving window close and window exit after owner shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {
@@ -911,6 +956,11 @@ try {
   await delay(300);
   try { process.kill(-driver.pid, "SIGKILL"); } catch { /* Already exited. */ }
   if(httpPeer && httpPeer.exitCode === null && httpPeer.signalCode === null) { const closed=new Promise(resolve=>httpPeer.once("close",resolve)); httpPeer.kill("SIGKILL"); await closed; }
+  if(attachedOwner && attachedOwner.exitCode === null && attachedOwner.signalCode === null) {
+    const closed = new Promise(resolve => attachedOwner.once("close", resolve));
+    try { process.kill(-attachedOwner.pid, "SIGKILL"); } catch {}
+    await closed;
+  }
   output.end();
   await rm(scratch, { recursive: true, force: true });
 }

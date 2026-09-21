@@ -966,3 +966,27 @@ All 34 UI tests and the rebuilt native window suite passed locally. The native
 window run includes the 12,000-event, 94-page history fixture and its three
 accessibility layouts. This is rendering/replay evidence, not a measurement of
 constant memory during an indefinitely growing live conversation.
+
+## Desktop attached to a persistent engine
+
+The complete Rust workspace passes 241 tests after adding four private-control
+regressions: independent persistent view selection and clean detach, four-view
+limits with EOF cleanup, refusal of temporary foreground owners, and concurrent
+status reads during a slow manual command. Views share the existing engine but
+do not change the owner's selection or cancel its durable work on disconnect.
+The TUI owner mode is covered at the control-transport level.
+
+All 34 UI tests, seven browser scenarios and workspace Clippy checks passed.
+The rebuilt real native window suite made 30 fixture-model requests, including
+an attachment phase against a separately launched headless owner. It verifies
+the shared engine PID, independent desktop PID, terminal execution, visible
+shared-lifetime notice and running-task controls. After closing the window, the
+headless engine and its agent task remain running; the CLI cancels that task
+explicitly. A reopened window also closes successfully after the owner exits.
+The attachment screenshot was inspected and its accessibility check reported no
+violations. Existing owner-desktop shutdown, worktree, plugin, MCP, queue, goal
+and 94-page history scenarios still pass in the same run.
+
+Attached completion notifications and automatic reconnection to a restarted
+owner are not covered or implemented by this change. Actual GUI attachment to
+an interactive TUI process is not part of this window fixture; it uses `serve`.

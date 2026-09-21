@@ -27,6 +27,8 @@ workflows, [managed background processes and model tools](docs/NATIVE_BACKGROUND
 with Codex/Claude Code/Cursor registration output, and a
 [native CLI](docs/NATIVE_CLI.md) and [terminal interface](docs/NATIVE_TUI.md)
 that share the active desktop engine or run headlessly with their own profile.
+The [native desktop can also attach](docs/NATIVE_DESKTOP.md#attaching-to-a-running-engine)
+to a running headless/TUI engine and leave its work running when the window closes.
 Development AppImage and Debian
 packages include [dependency inventories and notices](licenses/native/README.md).
 Integrations and release checks are
