@@ -378,7 +378,10 @@ async fn handle(
     });
     send_bytes(&mut stream, &bytes).await
 }
-async fn receive(stream: &mut UnixStream, limit: usize) -> Result<Vec<u8>> {
+async fn receive(
+    stream: &mut (impl tokio::io::AsyncRead + Unpin),
+    limit: usize,
+) -> Result<Vec<u8>> {
     let size = stream.read_u32().await? as usize;
     ensure!(
         size > 0 && size <= limit,

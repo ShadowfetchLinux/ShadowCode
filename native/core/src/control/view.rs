@@ -2,7 +2,12 @@
 //! The lease keeps only the view alive; jobs belong to the persistent engine.
 use super::*;
 use std::{collections::HashMap, sync::RwLock};
-use tokio::sync::Mutex;
+use tokio::{
+    net::unix::OwnedWriteHalf,
+    sync::{broadcast, Mutex},
+};
+use tokio_util::task::AbortOnDropHandle;
+const EVENT_LIMIT: usize = 16_384;
 
 #[derive(Clone, Default)]
 pub(super) struct Registry(Arc<RwLock<HashMap<String, Service>>>);
@@ -50,8 +55,10 @@ impl Drop for Lease {
 /// cannot prevent status reads or cancellation from the same window.
 pub struct ViewClient {
     client: Client,
-    lease: Mutex<Option<UnixStream>>,
-    closed: AtomicBool,
+    writer: Mutex<Option<OwnedWriteHalf>>,
+    reader: Mutex<Option<AbortOnDropHandle<Result<()>>>>,
+    events: broadcast::Sender<Value>,
+    closed: Arc<AtomicBool>,
 }
 impl Client {
     pub async fn open_view(&self) -> Result<ViewClient> {
@@ -82,10 +89,39 @@ impl Client {
         );
         let mut client = self.clone();
         client.view = Some(id.to_owned());
+        let (mut reader, writer) = stream.into_split();
+        let (events, _) = broadcast::channel(64);
+        let closed = Arc::new(AtomicBool::new(false));
+        let event_sender = events.clone();
+        let ended = closed.clone();
+        let peer = client.clone();
+        let task = tokio::spawn(async move {
+            let result = async {
+                loop {
+                    let bytes = receive(&mut reader, EVENT_LIMIT).await?;
+                    let message = peer.result(peer.validate_response(&bytes)?)?;
+                    if message["closed"] == true {
+                        return Ok(());
+                    }
+                    let event = message
+                        .get("event")
+                        .context("Invalid desktop event notification")?;
+                    let _ = event_sender.send(event.clone());
+                }
+            }
+            .await;
+            ended.store(true, Ordering::Release);
+            if result.is_err() {
+                let _ = event_sender.send(json!({"type": "view.disconnected"}));
+            }
+            result
+        });
         Ok(ViewClient {
             client,
-            lease: Mutex::new(Some(stream)),
-            closed: AtomicBool::new(false),
+            writer: Mutex::new(Some(writer)),
+            reader: Mutex::new(Some(AbortOnDropHandle::new(task))),
+            events,
+            closed,
         })
     }
 }
@@ -97,22 +133,54 @@ impl ViewClient {
         );
         self.client.dispatch(request).await
     }
+    pub fn subscribe(&self) -> broadcast::Receiver<Value> {
+        self.events.subscribe()
+    }
     pub async fn close(&self) -> Result<()> {
         self.closed.store(true, Ordering::Release);
-        let Some(mut stream) = self.lease.lock().await.take() else {
+        let Some(mut task) = self.reader.lock().await.take() else {
             return Ok(());
         };
-        stream.write_all(&[1]).await?;
-        let result =
-            tokio::time::timeout(Duration::from_secs(10), self.client.response(&mut stream))
+        let writer = self.writer.lock().await.take();
+        let result = async {
+            if let Some(mut writer) = writer {
+                tokio::time::timeout(Duration::from_secs(2), writer.write_all(&[1]))
+                    .await
+                    .context("Desktop detach write timed out")??;
+                writer.shutdown().await?;
+            }
+            tokio::time::timeout(Duration::from_secs(10), &mut task)
                 .await
-                .context("Desktop detach timed out")??;
-        ensure!(
-            result["closed"] == true,
-            "Engine did not acknowledge desktop detach"
-        );
-        Ok(())
+                .context("Desktop detach timed out")??
+        }
+        .await;
+        if !task.is_finished() {
+            task.abort();
+            let _ = task.await;
+        }
+        result
     }
+}
+impl Drop for ViewClient {
+    fn drop(&mut self) {
+        if let Some(reader) = self.reader.get_mut().take() {
+            reader.abort();
+        }
+        self.writer.get_mut().take();
+    }
+}
+
+// Notifications are hints, never transcript payloads. In particular, a large
+// model answer must not fill each attached window's transport or event buffer.
+fn notification(event: &Value) -> Value {
+    let mut result = json!({
+        "type": event["type"].as_str().unwrap_or("").chars().take(80).collect::<String>(),
+        "session_id": event["session_id"].as_str().unwrap_or("").chars().take(128).collect::<String>(),
+    });
+    if event["type"] == "agent.completed" {
+        result["payload"] = json!({"summary": event["payload"]["summary"].as_str().unwrap_or("Task finished").chars().take(180).collect::<String>()});
+    }
+    result
 }
 
 pub(super) async fn serve(
@@ -121,6 +189,7 @@ pub(super) async fn serve(
     profile: &str,
     registry: Registry,
 ) -> Result<Value> {
+    let mut events = service.engine.subscribe();
     let lease = registry.insert(service)?;
     send(
         stream,
@@ -128,14 +197,104 @@ pub(super) async fn serve(
         RESPONSE_LIMIT,
     )
     .await?;
-    // EOF, an explicit close byte, or server task cancellation drops the lease.
-    // No periodic client heartbeat is required while the window is inactive.
+    // The lease is also a bounded wakeup feed. A slow window cannot block the
+    // engine: lag becomes one replay hint, and a blocked write releases the view.
     let mut byte = [0];
-    let count = stream.read(&mut byte).await?;
-    ensure!(
-        count == 0 || byte[0] == 1,
-        "Invalid desktop view control message"
-    );
+    loop {
+        tokio::select! {
+            count = stream.read(&mut byte) => {
+                let count = count?;
+                ensure!(count == 0 || byte[0] == 1, "Invalid desktop view control message");
+                break;
+            }
+            event = events.recv() => {
+                let event = match event {
+                    Ok(event) => notification(&event),
+                    Err(broadcast::error::RecvError::Lagged(_)) => json!({"type":"view.lagged"}),
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                tokio::time::timeout(Duration::from_secs(5), send(stream, &json!({"protocol": PROTOCOL, "profile": profile, "result": {"event": event}}), EVENT_LIMIT))
+                    .await.context("Attached desktop is not reading notifications")??;
+            }
+        }
+    }
     drop(lease);
     Ok(json!({"closed": true}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn cancelled_detach_drops_its_reader_even_when_peer_never_acknowledges() {
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let (mut reader, writer) = stream.into_split();
+        let released = Arc::new(AtomicBool::new(false));
+        let marker = Dropped(released.clone());
+        let task = tokio::spawn(async move {
+            let _marker = marker;
+            let _ = receive(&mut reader, EVENT_LIMIT).await?;
+            Ok(())
+        });
+        let (events, _) = broadcast::channel(64);
+        let view = Arc::new(ViewClient {
+            client: Client {
+                endpoint: Endpoint {
+                    path: PathBuf::new(),
+                    profile: "fixture".into(),
+                },
+                workspace: PathBuf::new(),
+                session_id: None,
+                view: Some("fixture".into()),
+            },
+            writer: Mutex::new(Some(writer)),
+            reader: Mutex::new(Some(AbortOnDropHandle::new(task))),
+            events,
+            closed: Arc::new(AtomicBool::new(false)),
+        });
+        let closing_view = view.clone();
+        let closing = tokio::spawn(async move { closing_view.close().await });
+        let mut close_byte = [0];
+        tokio::time::timeout(Duration::from_secs(1), peer.read_exact(&mut close_byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(close_byte, [1]);
+        closing.abort();
+        assert!(closing.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !released.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(view.closed.load(Ordering::Acquire));
+        view.close().await.unwrap();
+    }
+
+    #[test]
+    fn notifications_bound_unicode_summaries_and_omit_transcript_content() {
+        let event = json!({"type":"agent.completed", "session_id":"session", "payload":{"summary":"😀".repeat(100_000), "private":"hidden"}});
+        let compact = notification(&event);
+        assert_eq!(
+            compact["payload"]["summary"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            180
+        );
+        assert!(compact["payload"].get("private").is_none());
+        assert!(serde_json::to_vec(&compact).unwrap().len() < EVENT_LIMIT);
+        let text =
+            notification(&json!({"type":"model.stream","payload":{"text":"x".repeat(1_000_000)}}));
+        assert!(text.get("payload").is_none());
+    }
 }

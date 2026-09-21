@@ -108,8 +108,9 @@ Implemented foundation:
   migration remain separate requirements.
 - Desktop startup can attach to an existing persistent headless/TUI engine
   through independent connection-scoped navigation. Closing an attached window
-  leaves shared work running. Automatic reattachment and attached completion
-  notifications remain open; see [desktop lifetime](NATIVE_DESKTOP.md).
+  leaves shared work running. A bounded event feed drives durable replay and
+  completion notifications. Automatic reattachment remains open; see
+  [desktop lifetime](NATIVE_DESKTOP.md).
 - [Native terminal interface](NATIVE_TUI.md) with a shared engine, model/session/project
   pickers, Unicode composer, explicit approvals, task modes, queued follow-ups,
   tool cards and paged history. Real PTY checks cover submission, approval and

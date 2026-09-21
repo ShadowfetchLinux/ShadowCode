@@ -920,7 +920,10 @@ try {
   assert.notEqual(attachedVersion.desktop_pid, attachedVersion.pid);
   assert.equal((await api("GET", "/api/workspace/status")).workspace, project);
   assert.equal((await api("POST", "/api/workspace/exec", {command:"printf attached-native-window"})).stdout, "attached-native-window");
+  const attachedWakeHandler = await execute("window.__attachedWakeups=[]; return window.__TAURI_INTERNALS__.transformCallback(event=>window.__attachedWakeups.push(event.payload));");
+  await native("plugin:event|listen", {event:"shadowcode:events", target:{kind:"Any"}, handler:attachedWakeHandler});
   const attachedJob = await api("POST", "/api/jobs", {task:"Wait for the attachment lifetime check.", workspace:project});
+  await until("Engine event reaches attached window", () => execute("return window.__attachedWakeups.some(event=>event.session_id===arguments[0])", [attachedJob.session_id]));
   await until("Attached task running", async () => (await api("GET", `/api/jobs/${attachedJob.id}`)).status === "running");
   await until("Attached task controls visible", () => execute("return !!document.querySelector('button[aria-label=\"Stop task\"]')"));
   await screenshot("attached-engine"); await accessibility("attached-engine");

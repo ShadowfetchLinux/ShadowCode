@@ -29,12 +29,19 @@ the owner's remembered-workspace file. A temporary foreground CLI command is
 not a persistent host and rejects desktop attachment. Version mismatches are
 rejected before attachment.
 
-Attached windows wake the durable event reader every 250 ms while open; only an
-active selected job causes event reads. They currently do not deliver native
-completion notifications, which still use the owning desktop's local event
-subscription. If the owner exits or restarts, close and reopen the window to
-attach again. Automatic reattachment and attached completion notifications
-remain follow-up work; closing a disconnected window must still succeed.
+Attached windows receive event hints through their private lease connection;
+there is no window timer repeatedly waking an idle engine. The event reader
+still fetches committed rows and polls as a fallback. Completion summaries use
+the same native notification path as an engine-owning desktop, respecting the
+profile's notification setting and suppressing notifications while focused.
+Hints never contain model-stream bodies or complete tool output. Their frame
+limit is 16 KiB, the local broadcast buffer holds 64 hints, and completion
+summaries contain at most 180 Unicode characters. A lagging receiver requests
+durable replay; a blocked socket releases its view after five seconds.
+
+If the owner exits or restarts, close and reopen the window to attach again.
+Automatic reattachment remains follow-up work; closing a disconnected window
+still succeeds.
 
 ## Build and run
 

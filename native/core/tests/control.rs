@@ -420,3 +420,58 @@ async fn attached_view_status_is_available_during_slow_manual_execution() {
     view.close().await.unwrap();
     stop(server, service).await;
 }
+
+#[tokio::test]
+async fn attached_views_receive_bounded_completion_notifications_and_detect_owner_exit() {
+    let (_root, service) = setup();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let client = server.endpoint().client(service.workspace().unwrap(), None);
+    let view = client.open_view().await.unwrap();
+    let mut events = view.subscribe();
+    let started = view
+        .dispatch(request(
+            "POST",
+            "/api/jobs",
+            json!({"task":"Exercise provider failure notification"}),
+        ))
+        .await
+        .unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            assert!(serde_json::to_vec(&event).unwrap().len() < 16_384);
+            if event["type"] == "agent.completed" {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(completed["session_id"], started["session_id"]);
+    assert!(!completed["payload"]["summary"].as_str().unwrap().is_empty());
+    assert!(
+        completed.get("id").is_none(),
+        "Wakeup messages are not durable event rows"
+    );
+    server.close();
+    server.wait_closed().await;
+    let disconnected = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event["type"] == "view.disconnected" {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(disconnected["type"], "view.disconnected");
+    assert!(view
+        .dispatch(request("GET", "/api/health", Value::Null))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("closed"));
+    let _ = view.close().await;
+    service.engine.shutdown().await.unwrap();
+}

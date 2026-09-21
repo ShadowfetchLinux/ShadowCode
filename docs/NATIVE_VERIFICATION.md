@@ -987,6 +987,30 @@ The attachment screenshot was inspected and its accessibility check reported no
 violations. Existing owner-desktop shutdown, worktree, plugin, MCP, queue, goal
 and 94-page history scenarios still pass in the same run.
 
-Attached completion notifications and automatic reconnection to a restarted
-owner are not covered or implemented by this change. Actual GUI attachment to
-an interactive TUI process is not part of this window fixture; it uses `serve`.
+Automatic reconnection to a restarted owner remains unimplemented. Actual GUI
+attachment to an interactive TUI process is not part of this window fixture;
+it uses `serve`. Actual notification-daemon display is a separate OS integration
+check, distinct from the bounded notification feed described below.
+
+## Attached desktop event feed
+
+The private view lease now delivers bounded event hints and completion summaries
+instead of using a 250 ms window wake timer. Both attached and engine-owning
+windows use the same completion-notification handler, including the profile
+setting and focused-window suppression. Durable event fetching and its polling
+fallback remain unchanged.
+
+The 13 core library tests and 11 control-transport tests pass. New coverage
+checks Unicode summary bounds, omission of model-stream bodies, completion
+notifications over a real Unix connection, owner-exit detection, and cancellation
+of detach against a peer that never acknowledges it. The cancelled-detach test
+waits for the actual close byte before aborting the operation, then verifies the
+background reader is released. Workspace Clippy is clean.
+
+The rebuilt native window suite passes with 30 fixture-model requests and now
+registers a real Tauri event listener in the attached window, asserting that the
+headless engine's session-scoped event reaches it. Existing attachment, task
+lifetime, shutdown, accessibility and history checks still pass. The final
+abort-on-drop guard was verified by the focused cancellation tests after this
+window run. These checks do not assert that an OS notification daemon displayed
+a popup; that integration gate remains separate.

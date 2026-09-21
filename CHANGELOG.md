@@ -4,7 +4,8 @@
 
 - Desktop windows can attach to an existing headless/TUI engine with independent
   navigation and a visible shared-lifetime notice. Closing an attached window
-  leaves engine-owned work running.
+  leaves engine-owned work running. A bounded private event feed supports
+  live updates and completion notifications without an idle-window wake timer.
 
 - Live response updates reuse unchanged Markdown messages instead of reparsing
   earlier answers and code blocks on every update. Native catch-up combines

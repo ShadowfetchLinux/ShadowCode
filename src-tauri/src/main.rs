@@ -223,10 +223,11 @@ fn run() -> Result<()> {
         ])
         .setup(move |app| {
             let webview_data = paths.data.join("webview");
+            let notification_paths = paths.clone();
             let backend = tauri::async_runtime::block_on(Backend::open(paths, workspace))?;
-            let local_service = match &backend {
-                Backend::Owned { service, .. } => Some(service.clone()),
-                Backend::Attached(_) => None,
+            let mut events = match &backend {
+                Backend::Owned { service, .. } => service.engine.subscribe(),
+                Backend::Attached(view) => view.subscribe(),
             };
             app.manage(backend);
             let config = app
@@ -248,65 +249,43 @@ fn run() -> Result<()> {
                 })
                 .build()?;
             let handle = app.handle().clone();
-            if let Some(service) = local_service {
-                let mut events = service.engine.subscribe();
-                tauri::async_runtime::spawn(async move {
-                    loop {
-                        match events.recv().await {
-                            Ok(event) => {
-                                // Broadcast is only a wakeup. The UI fetches committed
-                                // rows in SQLite cursor order, including after lag.
-                                let _ = handle.emit(
-                                    "shadowcode:events",
-                                    json!({"session_id":event["session_id"]}),
-                                );
-                                if event["type"] == "agent.completed" {
-                                    let enabled = Config::load(service.engine.paths(), None)
-                                        .ok()
-                                        .is_some_and(|c| c.ui["notify"].as_bool().unwrap_or(true));
-                                    let focused = handle
-                                        .get_webview_window("main")
-                                        .is_some_and(|w| w.is_focused().unwrap_or(false));
-                                    if enabled && !focused {
-                                        let summary = event["payload"]["summary"]
-                                            .as_str()
-                                            .unwrap_or("Task finished");
-                                        let _ = handle
-                                            .notification()
-                                            .builder()
-                                            .title("ShadowCode · task finished")
-                                            .body(summary.chars().take(180).collect::<String>())
-                                            .show();
-                                    }
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match events.recv().await {
+                        Ok(event) => {
+                            // Broadcast is only a wakeup. The UI fetches committed
+                            // rows in SQLite cursor order, including after lag.
+                            let _ = handle.emit(
+                                "shadowcode:events",
+                                json!({"session_id":event["session_id"]}),
+                            );
+                            if event["type"] == "agent.completed" {
+                                let enabled = Config::load(&notification_paths, None)
+                                    .ok()
+                                    .is_some_and(|c| c.ui["notify"].as_bool().unwrap_or(true));
+                                let focused = handle
+                                    .get_webview_window("main")
+                                    .is_some_and(|w| w.is_focused().unwrap_or(false));
+                                if enabled && !focused {
+                                    let summary = event["payload"]["summary"]
+                                        .as_str()
+                                        .unwrap_or("Task finished");
+                                    let _ = handle
+                                        .notification()
+                                        .builder()
+                                        .title("ShadowCode · task finished")
+                                        .body(summary.chars().take(180).collect::<String>())
+                                        .show();
                                 }
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                let _ = handle.emit("shadowcode:events", json!({}));
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
-                    }
-                });
-            } else {
-                // Attached windows have no in-process broadcast subscription.
-                // Wake the existing durable reader; it fetches only while a job
-                // is selected and active. No event payload or SQLite access is
-                // duplicated in this process.
-                tauri::async_runtime::spawn(async move {
-                    let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
-                    loop {
-                        tick.tick().await;
-                        if handle
-                            .state::<Lifecycle>()
-                            .requested
-                            .load(Ordering::Acquire)
-                        {
-                            break;
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            let _ = handle.emit("shadowcode:events", json!({}));
                         }
-                        let _ = handle.emit("shadowcode:events", json!({}));
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
-                });
-            }
+                }
+            });
             #[cfg(unix)]
             {
                 let handle = app.handle().clone();
