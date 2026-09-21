@@ -8,6 +8,7 @@ export function conversationJob(
 ): Job | undefined {
   return (
     jobs.find((job) => job.status === "running") ||
+    jobs.find((job) => job.status === "paused") ||
     jobs.find((job) => job.status === "cancelling") ||
     jobs
       .slice()

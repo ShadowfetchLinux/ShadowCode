@@ -339,7 +339,7 @@ impl Store {
     pub fn delete_session(&self, sid: &str) -> Result<bool> {
         let mut db = self.lock()?;
         let tx = db.transaction()?;
-        let active: i64 = tx.query_row("SELECT count(*) FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND json_extract(payload,'$.status') IN ('queued','running','cancelling')",[sid],|r|r.get(0))?;
+        let active: i64 = tx.query_row("SELECT count(*) FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND json_extract(payload,'$.status') IN ('queued','running','paused','cancelling')",[sid],|r|r.get(0))?;
         ensure!(
             active == 0,
             "Stop the running task before deleting this session"
@@ -611,20 +611,20 @@ impl Store {
     /// amount of completed history. Insertion order is the workspace FIFO order.
     pub fn active_and_recent_jobs(&self, limit: usize) -> Result<Vec<Value>> {
         Ok(self.query(
-            "SELECT payload FROM desktop_jobs WHERE rowid IN (SELECT rowid FROM desktop_jobs ORDER BY rowid DESC LIMIT ?) OR json_extract(payload,'$.status') IN ('queued','running','cancelling') ORDER BY rowid DESC",
+            "SELECT payload FROM desktop_jobs WHERE rowid IN (SELECT rowid FROM desktop_jobs ORDER BY rowid DESC LIMIT ?) OR json_extract(payload,'$.status') IN ('queued','running','paused','cancelling') ORDER BY rowid DESC",
             [limit.clamp(1, 10000)],
         )?.into_iter().map(|row|row["payload"].clone()).collect())
     }
     /// Small polling records. Full prompts/results remain available by exact ID.
     pub fn job_summaries(&self, limit: usize) -> Result<Vec<Value>> {
         Ok(self.query(
-            "SELECT json_object('id',id,'workspace',json_extract(payload,'$.workspace'),'session_id',json_extract(payload,'$.session_id'),'task_id',json_extract(payload,'$.task_id'),'status',json_extract(payload,'$.status'),'mode',json_extract(payload,'$.mode'),'purpose',substr(json_extract(payload,'$.routing.purpose'),1,32),'model',substr(json_extract(payload,'$.model'),1,512),'started_at',json_extract(payload,'$.started_at'),'finished_at',json_extract(payload,'$.finished_at'),'event_cursor',json_extract(payload,'$.event_cursor'),'task',substr(json_extract(payload,'$.task'),1,512),'task_truncated',CASE WHEN length(json_extract(payload,'$.task'))>512 THEN json('true') ELSE json('false') END) AS payload FROM desktop_jobs WHERE rowid IN (SELECT rowid FROM desktop_jobs ORDER BY rowid DESC LIMIT ?) OR json_extract(payload,'$.status') IN ('queued','running','cancelling') ORDER BY rowid DESC",
+            "SELECT json_object('id',id,'workspace',json_extract(payload,'$.workspace'),'session_id',json_extract(payload,'$.session_id'),'task_id',json_extract(payload,'$.task_id'),'status',json_extract(payload,'$.status'),'mode',json_extract(payload,'$.mode'),'purpose',substr(json_extract(payload,'$.routing.purpose'),1,32),'model',substr(json_extract(payload,'$.model'),1,512),'started_at',json_extract(payload,'$.started_at'),'finished_at',json_extract(payload,'$.finished_at'),'event_cursor',json_extract(payload,'$.event_cursor'),'task',substr(json_extract(payload,'$.task'),1,512),'task_truncated',CASE WHEN length(json_extract(payload,'$.task'))>512 THEN json('true') ELSE json('false') END) AS payload FROM desktop_jobs WHERE rowid IN (SELECT rowid FROM desktop_jobs ORDER BY rowid DESC LIMIT ?) OR json_extract(payload,'$.status') IN ('queued','running','paused','cancelling') ORDER BY rowid DESC",
             [limit.clamp(1,100)],
         )?.into_iter().map(|row|row["payload"].clone()).collect())
     }
     pub fn current_job(&self, session: &str, include_finished: bool) -> Result<Option<Value>> {
         Ok(self.query(
-            "SELECT payload FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND (? OR json_extract(payload,'$.status') IN ('queued','running','cancelling')) ORDER BY CASE json_extract(payload,'$.status') WHEN 'running' THEN 0 WHEN 'cancelling' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END, CASE WHEN json_extract(payload,'$.status')='queued' THEN rowid END ASC, json_extract(payload,'$.finished_at') DESC, rowid DESC LIMIT 1",
+            "SELECT payload FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND (? OR json_extract(payload,'$.status') IN ('queued','running','paused','cancelling')) ORDER BY CASE json_extract(payload,'$.status') WHEN 'running' THEN 0 WHEN 'paused' THEN 0 WHEN 'cancelling' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END, CASE WHEN json_extract(payload,'$.status')='queued' THEN rowid END ASC, json_extract(payload,'$.finished_at') DESC, rowid DESC LIMIT 1",
             rusqlite::params![session,include_finished],
         )?.pop().map(|row|row["payload"].clone()))
     }
@@ -632,7 +632,7 @@ impl Store {
     pub fn recover_jobs(&self) -> Result<usize> {
         let mut db = self.lock()?;
         let tx = db.transaction()?;
-        let jobs = query_rows(&tx,"SELECT payload FROM desktop_jobs WHERE json_extract(payload,'$.status') IN ('queued','running','cancelling')",[])?;
+        let jobs = query_rows(&tx,"SELECT payload FROM desktop_jobs WHERE json_extract(payload,'$.status') IN ('queued','running','paused','cancelling')",[])?;
         for row in &jobs {
             let mut job = row["payload"].clone();
             job["status"] = json!("interrupted");

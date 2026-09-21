@@ -12,6 +12,7 @@ pub mod control;
 pub mod engine;
 pub mod events;
 pub mod hooks;
+pub mod intelligence;
 #[cfg(unix)]
 pub mod lifecycle;
 #[cfg(unix)]
@@ -26,10 +27,13 @@ pub mod permissions;
 pub mod plugins;
 pub mod process;
 pub mod project;
+pub mod redaction;
 pub mod routing;
+pub mod sandbox;
 pub mod service;
 #[cfg(unix)]
 pub mod sqlite;
+pub mod steering;
 pub mod store;
 pub mod tools;
 pub mod vision;

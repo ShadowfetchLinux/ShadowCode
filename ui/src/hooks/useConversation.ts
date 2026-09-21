@@ -22,7 +22,7 @@ import { jobEvents } from "../lib/jobEvents";
 import { isNative } from "../lib/transport";
 
 export const isActive = (job: Job | null) =>
-  !!job && ["queued", "running", "cancelling"].includes(job.status);
+  !!job && ["queued", "running", "paused", "cancelling"].includes(job.status);
 
 export function useConversation(onComplete: () => void) {
   const [liveTranscript, setLiveTranscript] = useState(emptyTranscript);

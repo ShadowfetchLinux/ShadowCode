@@ -1358,6 +1358,23 @@ impl Service {
                         self.engine.cancel(&job.id).await?
                     }))
                 }
+                ("POST", Some("pause")) => return Ok(json!(self.engine.pause_job(&job.id)?)),
+                ("POST", Some("resume")) => return Ok(json!(self.engine.resume_job(&job.id)?)),
+                ("POST", Some("steer")) => {
+                    return Ok(json!(self.engine.steer_job(
+                        &job.id,
+                        text("instruction"),
+                        body["path"].as_str().filter(|p| !p.is_empty()),
+                    )?))
+                }
+                ("POST", Some("note_edit")) => {
+                    return Ok(json!(self.engine.note_job_edit(
+                        &job.id,
+                        text("path"),
+                        text("detail"),
+                    )?))
+                }
+                ("POST", Some("rewind")) => return self.engine.rewind_job(&job.id),
                 ("GET", Some("events")) => {
                     return Ok(
                         json!({"events":store.events_after(&job.session_id,q("after").parse().unwrap_or(0),job.finished_at.map(|_|job.event_cursor),query_limit(&query,512,2000))?,"job":job}),
@@ -1902,7 +1919,7 @@ impl Service {
 fn active(job: &Value) -> bool {
     matches!(
         job["status"].as_str(),
-        Some("queued" | "running" | "cancelling")
+        Some("queued" | "running" | "paused" | "cancelling")
     )
 }
 fn query_limit(query: &HashMap<String, String>, default: usize, max: usize) -> usize {

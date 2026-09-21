@@ -54,6 +54,7 @@ import {
 } from "./components/overlays";
 import { Settings } from "./components/Settings";
 import { QueuedTasks } from "./components/QueuedTasks";
+import { TaskSteerBar } from "./components/TaskSteerBar";
 import { useConversation } from "./hooks/useConversation";
 import { modelLabel } from "./lib/models";
 import { conversationJob } from "./lib/jobs";
@@ -1083,10 +1084,11 @@ export default function App() {
             type="button"
             className={`top-action ${panel === "changes" ? "on" : ""}`}
             aria-label="Review changes"
+            title="Git changes"
             onClick={() => setPanel(panel === "changes" ? null : "changes")}
           >
             <GitPullRequest size={15} />
-            <span>Review</span>
+            <span>Changes</span>
             {git.count > 0 && <span className="count">{git.count}</span>}
           </button>
           <button
@@ -1420,17 +1422,27 @@ export default function App() {
                       : "Starting task"
                     : job?.status === "cancelling"
                       ? "Stopping safely"
-                      : job?.status === "queued"
-                        ? "Waiting for earlier work to finish"
-                        : transcript.stage === "UNDERSTAND"
-                          ? "Exploring your request"
-                          : transcript.stage.toLowerCase().replaceAll("_", " ")}
+                      : job?.status === "paused"
+                        ? "Paused — steer or resume"
+                        : job?.status === "queued"
+                          ? "Waiting for earlier work to finish"
+                          : transcript.stage === "UNDERSTAND"
+                            ? "Exploring your request"
+                            : transcript.stage.toLowerCase().replaceAll("_", " ")}
                 </span>
                 <span className="dim">
                   {elapsed >= 60
                     ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
                     : `${elapsed}s`}
                 </span>
+                {job &&
+                  isNative() &&
+                  (job.status === "running" || job.status === "paused") && (
+                    <TaskSteerBar
+                      job={job}
+                      onToast={(text, kind) => toast(text, kind || "info")}
+                    />
+                  )}
               </div>
             )}
           </div>
@@ -1717,12 +1729,11 @@ export default function App() {
             <ShieldCheck size={12} />
             <span>
               {status?.permissions.level === "read_only"
-                ? "Read-only workspace"
-                : "Workspace access"}
-              <span className="note-sep">·</span>Review changes as you go
+                ? "Read-only"
+                : "Workspace tools"}
             </span>
             <button type="button" onClick={() => setOverlay("help")}>
-              Keyboard shortcuts
+              Shortcuts
             </button>
           </div>
         </div>
@@ -1730,7 +1741,9 @@ export default function App() {
           <span className={`status-dot ${busy ? "active" : ""}`} />
           <span>
             {busy
-              ? "Working"
+              ? job?.status === "paused"
+                ? "Paused"
+                : "Working"
               : connection === "reconnecting"
                 ? "Reconnecting"
                 : "Ready"}
@@ -1792,6 +1805,11 @@ export default function App() {
           health={health}
           busy={busy}
           toast={toast}
+          onAskAgent={(prompt) => {
+            setTask(prompt);
+            setPanel(null);
+            promptRef.current?.focus();
+          }}
         />
       )}
       <div className="toasts" aria-live="polite">

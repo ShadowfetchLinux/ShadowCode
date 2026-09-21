@@ -3,13 +3,14 @@ use crate::{
     approvals::ApprovalHub,
     autonomy,
     background::BackgroundManager,
+    checkpoint,
     config::{Config, ModelConfig, PermissionLevel},
     context,
     events::TaskEvents,
     hooks,
     models::{ModelClient, Usage},
     paths::AppPaths,
-    permissions, routing,
+    permissions, routing, steering,
     store::Store,
     tools::{self, ToolExecutor},
     workflows::{Guidance, WorkflowInfo},
@@ -99,6 +100,7 @@ struct Running {
     cancel: CancellationToken,
     finished: AtomicBool,
     done: Notify,
+    steer: steering::SteerControl,
 }
 #[derive(Default)]
 struct QueueState {
@@ -466,6 +468,7 @@ impl Engine {
             cancel,
             finished: AtomicBool::new(false),
             done: Notify::new(),
+            steer: steering::SteerControl::default(),
         });
         queues.jobs.insert(job.id.clone(), running.clone());
         queues
@@ -530,6 +533,91 @@ impl Engine {
     pub async fn cancel_queued(&self, id: &str) -> Result<Job> {
         self.request_cancel_if(id, true)?;
         self.wait(id).await
+    }
+    pub fn pause_job(&self, id: &str) -> Result<Job> {
+        let job = self.running(id)?.context("Job not found or already finished")?;
+        ensure!(!job.cancel.is_cancelled(), "Task is cancelling");
+        ensure!(!job.finished.load(Ordering::Acquire), "Task already finished");
+        let hashes = {
+            // Snapshot nothing yet; await_steering refreshes from tool observations.
+            std::collections::BTreeMap::new()
+        };
+        job.steer.pause(hashes)?;
+        let mut record = job.record.lock().map_err(|_| anyhow!("Job lock poisoned"))?;
+        ensure!(
+            matches!(record.status.as_str(), "running" | "paused"),
+            "Only a running task can be paused"
+        );
+        record.status = "paused".into();
+        self.0.store.save_job(&json!(*record))?;
+        let snap = record.clone();
+        drop(record);
+        let _ = self.0.sender.send(json!({
+            "type": "agent.paused",
+            "session_id": snap.session_id,
+            "task_id": snap.task_id,
+            "payload": {"job_id": snap.id, "status": "paused"}
+        }));
+        Ok(snap)
+    }
+    pub fn steer_job(&self, id: &str, instruction: &str, edited_path: Option<&str>) -> Result<Job> {
+        let job = self.running(id)?.context("Job not found or already finished")?;
+        job.steer.set_instruction(instruction)?;
+        if let Some(path) = edited_path.filter(|p| !p.trim().is_empty()) {
+            job.steer.note_edit(path, "manual edit noted by user")?;
+        }
+        job.snapshot()
+    }
+    pub fn note_job_edit(&self, id: &str, path: &str, detail: &str) -> Result<Job> {
+        let job = self.running(id)?.context("Job not found or already finished")?;
+        job.steer.note_edit(path, detail)?;
+        job.snapshot()
+    }
+    pub fn resume_job(&self, id: &str) -> Result<Job> {
+        let job = self.running(id)?.context("Job not found or already finished")?;
+        // Capture observed hashes now if tools already ran; pause() may have empty map.
+        job.steer.resume()?;
+        let mut record = job.record.lock().map_err(|_| anyhow!("Job lock poisoned"))?;
+        if record.status == "paused" {
+            record.status = "running".into();
+            self.0.store.save_job(&json!(*record))?;
+        }
+        let snap = record.clone();
+        drop(record);
+        let _ = self.0.sender.send(json!({
+            "type": "agent.resumed",
+            "session_id": snap.session_id,
+            "task_id": snap.task_id,
+            "payload": {"job_id": snap.id, "status": "running"}
+        }));
+        Ok(snap)
+    }
+    pub fn rewind_job(&self, id: &str) -> Result<Value> {
+        let running = self.running(id)?;
+        let (task_id, session_id, workspace) = if let Some(job) = &running {
+            ensure!(
+                job.steer.is_paused() || job.cancel.is_cancelled(),
+                "Pause the task before rewinding its files, or stop it first"
+            );
+            let snap = job.snapshot()?;
+            (snap.task_id, snap.session_id, snap.workspace)
+        } else {
+            let finished = self.job(id)?.context("Job not found")?;
+            (finished.task_id, finished.session_id, finished.workspace)
+        };
+        let ws = Workspace::open(&workspace)?;
+        let restored = checkpoint::restore(&self.0.store, &ws, &task_id)?;
+        if let Some(job) = running {
+            job.steer.note_rewind(&restored)?;
+        }
+        Ok(json!({
+            "ok": true,
+            "job_id": id,
+            "task_id": task_id,
+            "session_id": session_id,
+            "restored": restored,
+            "note": "Checkpoint restored without wiping the session transcript."
+        }))
     }
     pub(crate) fn request_cancel(&self, id: &str) -> Result<()> {
         self.request_cancel_if(id, false)
@@ -750,12 +838,21 @@ impl Engine {
         } else {
             plan
         };
-        let verification = self
+        let mut verification = self
             .0
             .store
             .last_task_event(&job.task_id, "verification.summary")?
             .map(|e| e["payload"].clone())
             .unwrap_or_else(|| json!({"status":"incomplete","commands":[]}));
+        if success
+            && verification["unverified_claim"] == true
+            && verification["verified"] != true
+        {
+            verification["presented_as"] = json!("unverified");
+            if !job.summary.to_ascii_lowercase().contains("unverified") {
+                job.summary = format!("Unverified: {}", job.summary);
+            }
+        }
         job.result = Some(
             json!({"success":success,"cancelled":cancelled,"summary":job.summary,"plan":plan,"usage":job.usage,"usage_is_estimated":job.usage_is_estimated,"verification":verification}),
         );
@@ -829,6 +926,53 @@ impl Engine {
             }
         }
     }
+    async fn await_steering(
+        &self,
+        running: &Running,
+        tools: &ToolExecutor,
+        messages: &mut Vec<Value>,
+        events: &TaskEvents,
+        job_id: &str,
+    ) -> Result<()> {
+        if !running.steer.is_paused() {
+            return Ok(());
+        }
+        running
+            .steer
+            .ensure_pause_hashes(tools.observed_hashes()?)?;
+        events.emit(
+            "agent.paused",
+            json!({"job_id": job_id, "status": "paused"}),
+        )?;
+        while running.steer.is_paused() {
+            tokio::select! {
+                _ = running.steer.notify().notified() => {}
+                _ = running.cancel.cancelled() => {
+                    bail!("Task cancelled while paused");
+                }
+            }
+        }
+        let mut current = tools.observed_hashes()?;
+        for path in current.keys().cloned().collect::<Vec<_>>() {
+            let live = running
+                .workspace
+                .snapshot(&path)
+                .ok()
+                .and_then(|s| s.hash)
+                .unwrap_or_else(|| "missing".into());
+            current.insert(path, live);
+        }
+        if let Some(note) = running.steer.consume_resume(&current)? {
+            messages.push(steering::steering_system_note(&note));
+            events.emit(
+                "agent.steered",
+                json!({"job_id": job_id, "note": crate::tools::truncate(&note, 2000)}),
+            )?;
+            self.0.store.save_messages(job_id, messages)?;
+        }
+        Ok(())
+    }
+
     async fn run_with_tools(
         &self,
         running: &Running,
@@ -900,6 +1044,9 @@ impl Engine {
             image_refs.len(),
         )?;
         messages.push(crate::vision::user_message(&job.task, &image_refs));
+        if let Some(note) = autonomy::bugfix_policy(&job.task) {
+            messages.push(json!({"role":"system","content":note}));
+        }
         self.0.store.save_messages(&job.id, &messages)?;
         events.emit("agent.started",json!({"job_id":job.id,"task":job.task,"mode":job.mode,"model":job.model,"native":true,"images":job.images}))?;
         if let Some(decision) = &job.routing {
@@ -945,6 +1092,12 @@ impl Engine {
             )?;
         }
         for step in 0..running.config.agent.max_steps {
+            ensure!(
+                !running.cancel.is_cancelled(),
+                "Task cancelled. Completed changes remain checkpointed."
+            );
+            self.await_steering(running, tools, &mut messages, &events, &job.id)
+                .await?;
             ensure!(
                 !running.cancel.is_cancelled(),
                 "Task cancelled. Completed changes remain checkpointed."
@@ -1292,6 +1445,12 @@ impl Engine {
                 events.emit("verification.summary", summary)?;
                 return Ok((response.text, tools.plan()));
             }
+            self.await_steering(running, tools, &mut messages, &events, &job.id)
+                .await?;
+            ensure!(
+                !running.cancel.is_cancelled(),
+                "Task cancelled before remaining tool calls"
+            );
             // Parallelize adjacent safe observations only. Every mutation and
             // plan update is a barrier, preserving the model's requested order.
             let mut index = 0;
@@ -1335,6 +1494,10 @@ impl Engine {
                             "read_file"
                                 | "search_text"
                                 | "search_symbol"
+                                | "workspace_symbols"
+                                | "goto_definition"
+                                | "find_references"
+                                | "get_diagnostics"
                                 | "git_diff"
                                 | "git_status"
                                 | "git_log"

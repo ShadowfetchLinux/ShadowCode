@@ -728,6 +728,7 @@ kbd {
 }
 .working {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   font-size: 12px;
@@ -737,6 +738,28 @@ kbd {
 .working .dim {
   margin-left: 4px;
   font-size: 11px;
+}
+.steer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.steer-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+}
+.steer-form input {
+  flex: 1 1 160px;
+  min-width: 120px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
 }
 .spin {
   animation: spin 1.5s linear infinite;

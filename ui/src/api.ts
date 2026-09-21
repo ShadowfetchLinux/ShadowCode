@@ -718,6 +718,21 @@ export const api = {
   job: (id: string) => get<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string, only_if_queued = false) =>
     send<Job>(`/api/jobs/${id}/cancel`, "POST", { only_if_queued }),
+  pauseJob: (id: string) => send<Job>(`/api/jobs/${id}/pause`, "POST", {}),
+  resumeJob: (id: string) => send<Job>(`/api/jobs/${id}/resume`, "POST", {}),
+  steerJob: (id: string, instruction: string, path?: string) =>
+    send<Job>(`/api/jobs/${id}/steer`, "POST", {
+      instruction,
+      ...(path ? { path } : {}),
+    }),
+  noteJobEdit: (id: string, path: string, detail = "") =>
+    send<Job>(`/api/jobs/${id}/note_edit`, "POST", { path, detail }),
+  rewindJob: (id: string) =>
+    send<{
+      ok: boolean;
+      restored: string[];
+      note?: string;
+    }>(`/api/jobs/${id}/rewind`, "POST", {}),
   cancelCurrent: (session_id?: string) =>
     send<{ ok: boolean }>(
       `/api/run/cancel${session_id ? `?session_id=${session_id}` : ""}`,
