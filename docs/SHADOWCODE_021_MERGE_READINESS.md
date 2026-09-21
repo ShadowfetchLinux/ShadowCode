@@ -11,7 +11,7 @@ Package and crate version remain **0.20.0**.
 | BASE QUALIFICATION COMMIT | `c4efa493d78f68873eca9b3b4d86c63e6c96bd76` |
 | Qualification ancestry | includes `7970c45` and PATH sanitizer `c4efa49` |
 | Branch | `release/shadowcode-0.21-merge-ready` |
-| FINAL CANDIDATE COMMIT | *(branch tip after merge-readiness commits; filled after push)* |
+| FINAL CANDIDATE COMMIT | `d8c86baa831a44118a58973c49a3bf0b7ef9fcab` |
 | Main | not checked out, not merged, not force-pushed; `origin/main` stayed `ab5e7c8` |
 | Qualification branch | left in place |
 | VERSION DECISION | **keep 0.20.0** |
@@ -277,7 +277,7 @@ until a human explicitly accepts the documented limitations and bumps.
 
 ## COMMIT SHA
 
-*(filled after the merge-readiness tip commit)*
+`d8c86baa831a44118a58973c49a3bf0b7ef9fcab` (evidence + WAL fix). Branch tip after this SHA note is the pushed HEAD.
 
 ## SECOND AUDIT (merge-ready vs qualification `c4efa49`)
 
