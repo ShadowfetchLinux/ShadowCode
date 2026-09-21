@@ -1,5 +1,5 @@
 //! Real OS-process qualification: engine death, persistence, and no silent replay.
-//! These spawn the `shadowcode-engine` bin (or `SHADOW_DESKTOP_BINARY`), not an in-process Server.
+//! These spawn `target/debug/shadowcode`, not an in-process Server.
 #![cfg(unix)]
 mod support;
 use serde_json::{json, Value};
@@ -16,7 +16,9 @@ use std::{
 fn binary() -> PathBuf {
     std::env::var_os("SHADOW_DESKTOP_BINARY")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_shadowcode_engine")))
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/shadowcode")
+        })
 }
 
 fn request(method: &str, path: &str, body: Value) -> Request {
