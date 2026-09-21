@@ -2,7 +2,13 @@ use crate::paths::{atomic_write, AppPaths};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, fs, io::Read, path::Path, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Read,
+    path::{Component, Path, PathBuf},
+    sync::Mutex,
+};
 
 // A profile has one owning engine; desktop/CLI requests can still run on
 // different threads. Atomic rename alone does not protect read–modify–write.
@@ -263,7 +269,16 @@ impl Config {
     pub fn is_trusted(&self, workspace: &Path) -> bool {
         self.trusted_workspaces
             .iter()
-            .any(|p| Path::new(p).canonicalize().ok().as_deref() == Some(workspace))
+            .any(|p| same_workspace(Path::new(p.trim()), workspace))
+    }
+    /// Persist the canonical project path so later job checks match aliases.
+    pub fn grant_trust(&mut self, workspace: &Path) {
+        let stored = workspace.canonicalize().unwrap_or_else(|_| slim(workspace));
+        if stored.as_os_str().is_empty() || self.is_trusted(&stored) {
+            return;
+        }
+        self.trusted_workspaces
+            .push(stored.to_string_lossy().into_owned());
     }
     /// Replace the entire configuration. Use update/patch for edits to an
     /// existing profile, so unrelated concurrent changes remain intact.
@@ -334,6 +349,47 @@ fn read_text(path: &Path) -> Result<String> {
         "Configuration or secret file exceeds 1 MB"
     );
     Ok(text)
+}
+
+/// True when both paths name the same directory after resolving symlinks,
+/// trailing slashes, `.` / `..`, and bind-mount aliases that share an inode.
+pub fn same_workspace(left: &Path, right: &Path) -> bool {
+    if let (Ok(left), Ok(right)) = (left.canonicalize(), right.canonicalize()) {
+        if left == right {
+            return true;
+        }
+        #[cfg(unix)]
+        {
+            if let (Some(left_id), Some(right_id)) = (file_id(&left), file_id(&right)) {
+                return left_id == right_id;
+            }
+        }
+        return false;
+    }
+    let left = slim(left);
+    let right = slim(right);
+    !left.as_os_str().is_empty() && left == right
+}
+
+#[cfg(unix)]
+fn file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(path).ok()?;
+    Some((meta.dev(), meta.ino()))
+}
+
+fn slim(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 pub fn merge(base: &mut Value, overlay: Value) {

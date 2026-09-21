@@ -98,7 +98,7 @@ impl Worker {
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .any(|p| PathBuf::from(p).canonicalize().ok().as_ref() == Some(&self.view.workspace));
+            .any(|p| crate::config::same_workspace(std::path::Path::new(p), &self.view.workspace));
         Ok(())
     }
     async fn catalog(&mut self, kind: ListKind, search: &str) -> Result<()> {

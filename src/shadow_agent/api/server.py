@@ -482,8 +482,7 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         if not workspace.is_dir():
             raise HTTPException(400, friendly_error("workspace not found"))
         cfg = ensure_user_config()
-        current = runtime.get("workspace")
-        already = str(workspace) in cfg.trusted_workspaces or (current is not None and Path(current) == workspace)
+        already = any(_same_workspace(entry, workspace) for entry in cfg.trusted_workspaces)
         if not already:
             # First open of a new folder: the UI must show the trust dialog.
             return {
@@ -504,7 +503,7 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
         if not workspace.is_dir():
             raise HTTPException(400, friendly_error("workspace not found"))
         cfg = ensure_user_config()
-        if str(workspace) not in cfg.trusted_workspaces:
+        if not any(_same_workspace(entry, workspace) for entry in cfg.trusted_workspaces):
             cfg.trusted_workspaces.append(str(workspace))
             save_config(cfg)
         runtime["workspace"] = workspace
@@ -1312,6 +1311,13 @@ def create_app(store: Store | None = None, default_workspace: Path | None = None
             return FileResponse(UI_DIST / "index.html")
 
     return app
+
+
+def _same_workspace(listed: str, workspace: Path) -> bool:
+    try:
+        return Path(listed).expanduser().resolve() == workspace.resolve()
+    except OSError:
+        return Path(listed).as_posix().rstrip("/") == workspace.as_posix().rstrip("/")
 
 
 def _public_config(cfg: AppConfig) -> dict[str, Any]:

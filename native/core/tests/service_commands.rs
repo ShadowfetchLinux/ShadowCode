@@ -153,6 +153,81 @@ async fn manual_mutations_require_trust_and_respect_read_only_mode() {
 }
 
 #[tokio::test]
+async fn job_gate_blocks_untrusted_projects_until_trust_reloads() {
+    let (_root, service) = setup(false);
+    let workspace = service.workspace().unwrap();
+    let health = call(&service, "GET", "/api/health", Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(health["trusted"], false);
+    let error = call(
+        &service,
+        "POST",
+        "/api/jobs",
+        json!({"task":"Explain the project","workspace":workspace}),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Trust this project before starting an agent task"),
+        "{error}"
+    );
+    let opened = call(
+        &service,
+        "POST",
+        "/api/projects",
+        json!({"path":workspace}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(opened["needs_trust"], true);
+    call(
+        &service,
+        "POST",
+        "/api/projects/trust",
+        json!({"path":format!("{}/", workspace.display())}),
+    )
+    .await
+    .unwrap();
+    let reloaded = Config::load(service.engine.paths(), Some(&workspace)).unwrap();
+    assert!(
+        reloaded.is_trusted(&workspace),
+        "trust must persist across a config reload"
+    );
+    let status = call(&service, "GET", "/api/workspace/status", Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(status["trusted"], true);
+    let started = call(
+        &service,
+        "POST",
+        "/api/jobs",
+        json!({"task":"Explain the project","workspace":format!("{}/", workspace.display())}),
+    )
+    .await;
+    match started {
+        Ok(job) => {
+            if let Some(id) = job["id"].as_str() {
+                let _ = call(
+                    &service,
+                    "POST",
+                    &format!("/api/jobs/{id}/cancel"),
+                    json!({}),
+                )
+                .await;
+            }
+        }
+        Err(error) => assert!(
+            !error
+                .to_string()
+                .contains("Trust this project before starting an agent task"),
+            "{error}"
+        ),
+    }
+}
+
+#[tokio::test]
 async fn onboarding_preserves_custom_credential_name_and_selects_a_real_session() {
     let (_root, service) = setup(false);
     let workspace = service.workspace().unwrap();

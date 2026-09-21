@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, Result};
 use serde_json::Value;
 use shadowcode_core::{
     control,
@@ -57,15 +57,22 @@ impl Backend {
     ) -> Result<Value> {
         if view.disconnected() {
             view.reattach().await?;
-            ensure_get_only(&request)?;
+            // The request never reached the previous engine, including Trust
+            // and open. Retry it on the new view.
+            return view.dispatch(request).await;
         }
         match view.dispatch(request.clone()).await {
             Ok(result) => Ok(result),
             Err(error) if engine_gone(&error) => {
                 view.mark_disconnected();
                 view.reattach().await?;
-                ensure_get_only(&request)?;
-                view.dispatch(request).await
+                if retry_after_uncertain_reattach(&request) {
+                    view.dispatch(request).await
+                } else {
+                    bail!(
+                        "Engine reattached after a process restart. The previous request was not retried."
+                    )
+                }
             }
             Err(error) => Err(error),
         }
@@ -101,12 +108,35 @@ impl Backend {
     }
 }
 
-fn ensure_get_only(request: &Request) -> Result<()> {
-    ensure!(
-        request.method == "GET",
-        "Engine reattached after a process restart. The previous request was not retried."
-    );
-    Ok(())
+fn retry_after_uncertain_reattach(request: &Request) -> bool {
+    request.method == "GET"
+        || matches!(
+            request.path.as_str(),
+            "/api/projects" | "/api/projects/trust" | "/api/onboarding"
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn req(method: &str, path: &str) -> Request {
+        Request {
+            method: method.into(),
+            path: path.into(),
+            body: json!({}),
+        }
+    }
+    #[test]
+    fn trust_and_open_retries_after_reattach() {
+        assert!(retry_after_uncertain_reattach(&req(
+            "POST",
+            "/api/projects/trust"
+        )));
+        assert!(retry_after_uncertain_reattach(&req("POST", "/api/projects")));
+        assert!(retry_after_uncertain_reattach(&req("GET", "/api/health")));
+        assert!(!retry_after_uncertain_reattach(&req("POST", "/api/jobs")));
+    }
 }
 
 fn engine_gone(error: &anyhow::Error) -> bool {

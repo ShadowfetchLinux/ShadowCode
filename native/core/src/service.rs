@@ -568,13 +568,13 @@ impl Service {
             ("GET", "/api/health") => {
                 let cfg = self.config()?;
                 return Ok(
-                    json!({"ok":true,"app":"ShadowCode","version":crate::VERSION,"workspace":self.workspace()?,"model":cfg.model,"onboarding":cfg.onboarding,"provider":{"ok":cfg.model.provider!="mock","name":cfg.model.provider,"detail":if cfg.model.provider=="mock"{"Select a model to run coding tasks"}else{"Configured; use Test model to verify connectivity"}},"runtime":"rust"}),
+                    json!({"ok":true,"app":"ShadowCode","version":crate::VERSION,"workspace":self.workspace()?,"model":cfg.model,"onboarding":cfg.onboarding,"trusted":cfg.is_trusted(&self.workspace()?),"permissions":cfg.permissions,"provider":{"ok":cfg.model.provider!="mock","name":cfg.model.provider,"detail":if cfg.model.provider=="mock"{"Select a model to run coding tasks"}else{"Configured; use Test model to verify connectivity"}},"runtime":"rust"}),
                 );
             }
             ("GET", "/api/workspace/status") => {
                 let cfg = self.config()?;
                 return Ok(
-                    json!({"workspace":self.workspace()?,"model":cfg.model,"permissions":cfg.permissions,"onboarding":cfg.onboarding,"routing":cfg.routing}),
+                    json!({"workspace":self.workspace()?,"model":cfg.model,"permissions":cfg.permissions,"onboarding":cfg.onboarding,"routing":cfg.routing,"trusted":cfg.is_trusted(&self.workspace()?)}),
                 );
             }
             ("GET", "/api/config") => return Ok(json!(self.config()?)),
@@ -724,10 +724,7 @@ impl Service {
                         text("theme")
                     });
                     cfg.onboarding = json!({"completed":true,"workspace":workspace});
-                    if !cfg.is_trusted(&workspace) {
-                        cfg.trusted_workspaces
-                            .push(workspace.to_string_lossy().into_owned());
-                    }
+                    cfg.grant_trust(&workspace);
                     cfg.validate()?;
                     if !text("api_key").is_empty() {
                         config::set_secret(
@@ -818,10 +815,7 @@ impl Service {
                 let workspace = Workspace::open(&expand_path(text("path"))?)?.path;
                 let cfg = if path.ends_with("trust") {
                     Config::update(self.engine.paths(), |cfg| {
-                        if !cfg.is_trusted(&workspace) {
-                            cfg.trusted_workspaces
-                                .push(workspace.to_string_lossy().into_owned());
-                        }
+                        cfg.grant_trust(&workspace);
                         Ok(())
                     })?
                 } else {

@@ -57,6 +57,7 @@ import { QueuedTasks } from "./components/QueuedTasks";
 import { useConversation } from "./hooks/useConversation";
 import { modelLabel } from "./lib/models";
 import { conversationJob } from "./lib/jobs";
+import { isProjectTrustError, trustRequestFor } from "./lib/trust";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -314,6 +315,9 @@ export default function App() {
         sessionData.sessions.find((s) => s.id === saved) ||
         sessionData.sessions.find((s) => s.workspace === h.workspace);
       if (onboard.completed && initial) await openSession(initial.id);
+      if (h.trusted === false && h.workspace) {
+        setTrust(trustRequestFor(h.workspace, h.permissions));
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -486,7 +490,17 @@ export default function App() {
     try {
       const opened = await api.trustProject(trust.path);
       setTrust(null);
-      await openSession(opened.session_id);
+      const sameWorkspace =
+        !!workspace &&
+        !!opened.path &&
+        workspace.replace(/\/+$/, "") ===
+          String(opened.path).replace(/\/+$/, "");
+      if (sessionId && sameWorkspace) {
+        await reloadConfig();
+        toast("Project trusted. You can send a task.", "ok");
+      } else if (opened.session_id) {
+        await openSession(opened.session_id);
+      }
     } catch (e) {
       toast(String(e), "err");
     }
@@ -691,6 +705,9 @@ export default function App() {
       setChips(attached);
       setError(String(e));
       toast(String(e), "err");
+      if (isProjectTrustError(e) && workspace) {
+        setTrust(trustRequestFor(workspace, status?.permissions));
+      }
     } finally {
       setSubmitting(false);
       submittingRef.current = false;

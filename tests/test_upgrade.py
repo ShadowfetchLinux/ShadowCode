@@ -296,6 +296,17 @@ def test_workspace_trust_flow(isolated, workspace, monkeypatch, tmp_path):
     assert load_config().trusted_workspaces == [str(other)]
 
 
+def test_reopening_the_current_workspace_still_requires_trust(isolated, workspace, monkeypatch):
+    monkeypatch.setattr("shadow_agent.api.server.detect_providers", lambda: [])
+    store = Store()
+    app = create_app(store=store, default_workspace=workspace, detect=False)
+    client = TestClient(app)
+    opened = client.post("/api/projects", json={"path": str(workspace)})
+    assert opened.status_code == 200
+    assert opened.json()["needs_trust"] is True
+    assert client.get("/api/health").json()["trusted"] is False
+
+
 def test_workspace_exec_endpoint(client, workspace):
     res = client.post("/api/workspace/exec", json={"command": "echo shadow-rerun"})
     assert res.status_code == 200

@@ -197,6 +197,8 @@ export type Health = {
   desktop_attached?: boolean;
   version?: string;
   workspace: string;
+  trusted?: boolean;
+  permissions?: Record<string, unknown>;
   provider?: { ok: boolean; name: string; detail: string };
   tools?: Record<string, { ok: boolean; path?: string; detail?: string }>;
   model?: Record<string, unknown>;
@@ -693,6 +695,7 @@ export const api = {
       permissions: { level: string; network?: boolean };
       onboarding?: { completed: boolean };
       routing?: Record<string, string | boolean>;
+      trusted?: boolean;
     }>("/api/workspace/status"),
   startJob: (
     task: string,

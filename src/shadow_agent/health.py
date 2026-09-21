@@ -30,11 +30,23 @@ def collect_health(config: AppConfig, workspace: Path | None = None) -> dict[str
     }
     provider = ping_provider(config)
     workspace_path = str(workspace) if workspace else ""
+    trusted = False
+    if workspace is not None:
+        try:
+            current = Path(workspace).resolve()
+            trusted = any(
+                Path(entry).expanduser().resolve() == current
+                for entry in config.trusted_workspaces
+                if entry
+            )
+        except OSError:
+            trusted = False
     return {
         "ok": True,
         "name": "shadow-agent",
         "version": __version__,
         "workspace": workspace_path,
+        "trusted": trusted,
         "provider": provider,
         "tools": tools,
         "secrets": {"configured": secret_names_present(config), "file": str(paths.secrets_file())},

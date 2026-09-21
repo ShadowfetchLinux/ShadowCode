@@ -205,6 +205,42 @@ fn repository_config_cannot_escalate_access_or_redirect_model_credentials() {
 }
 
 #[test]
+fn trust_matches_canonical_symlink_and_trailing_slash_aliases() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    let project = root.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let alias = root.path().join("alias");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&project, &alias).unwrap();
+    Config::patch(
+        &paths,
+        json!({"trusted_workspaces":[format!("{}/", project.display())]}),
+    )
+    .unwrap();
+    let config = Config::load(&paths, None).unwrap();
+    let canonical = project.canonicalize().unwrap();
+    assert!(config.is_trusted(&canonical));
+    assert!(config.is_trusted(&project));
+    assert!(config.is_trusted(&project.join(".")));
+    #[cfg(unix)]
+    {
+        assert!(
+            config.is_trusted(&alias),
+            "allowlist of the real path must match a symlink job path"
+        );
+        let mut granted = Config::load(&paths, None).unwrap();
+        granted.trusted_workspaces.clear();
+        granted.grant_trust(&alias);
+        assert_eq!(
+            granted.trusted_workspaces,
+            vec![canonical.to_string_lossy().into_owned()]
+        );
+        assert!(granted.is_trusted(&canonical));
+    }
+}
+
+#[test]
 fn secrets_are_private_and_never_evaluated_as_shell() {
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::isolated(root.path()).unwrap();
