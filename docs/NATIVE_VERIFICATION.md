@@ -1014,3 +1014,19 @@ lifetime, shutdown, accessibility and history checks still pass. The final
 abort-on-drop guard was verified by the focused cancellation tests after this
 window run. These checks do not assert that an OS notification daemon displayed
 a popup; that integration gate remains separate.
+
+## Large Markdown response preview
+
+The desktop now defers parsing response text above 512 KiB until the reader
+chooses **Show full response**. The durable event, continuation context and JSON
+export retain the full provider response, including responses within the native
+engine's 16 MiB response limit. The UI regression creates a response larger than
+the preview boundary, confirms that React Markdown receives exactly the bounded
+prefix, then expands it and verifies the original full string is parsed. The
+complete UI suite passes 35 tests, along with all seven browser scenarios and a
+rebuilt native desktop binary. The real WebKit window suite also passes its full
+30-model-request workflow after the embedded-interface rebuild.
+
+This does not claim transcript virtualization or a fixed memory bound after the
+reader expands a large response. Those longer-duration live-transcript and
+WebKit-memory gates remain separate.

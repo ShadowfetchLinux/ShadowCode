@@ -6,7 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { Markdown } from "./Markdown";
+import { Markdown, MARKDOWN_PREVIEW_LIMIT } from "./Markdown";
 
 const parses = vi.hoisted(() => vi.fn());
 vi.mock("react-markdown", async (original) => {
@@ -59,4 +59,21 @@ it("parses only the changing response while earlier Markdown stays interactive",
   expect(screen.getByText("99").tagName).toBe("STRONG");
   view.rerender(<Conversation response="Streaming **99**" />);
   expect(parses).toHaveBeenCalledTimes(102);
+});
+
+it("bounds a very large response until the reader explicitly expands it", () => {
+  const large = `# Large response\n\n${"x".repeat(MARKDOWN_PREVIEW_LIMIT + 1024)}`;
+  render(<Markdown>{large}</Markdown>);
+  expect(parses).toHaveBeenCalledTimes(1);
+  expect(String(parses.mock.calls[0][0])).toHaveLength(MARKDOWN_PREVIEW_LIMIT);
+  expect(screen.getByRole("status").textContent).toContain("512 KiB");
+  expect(
+    screen.getByRole("button", { name: "Show full response" }),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show full response" }));
+  expect(parses).toHaveBeenCalledTimes(2);
+  expect(parses.mock.calls[1][0]).toBe(large);
+  expect(
+    screen.queryByRole("button", { name: "Show full response" }),
+  ).toBeNull();
 });

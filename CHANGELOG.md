@@ -2,6 +2,9 @@
 
 ## 0.20.0 — native development (unreleased)
 
+- The desktop previews a very large Markdown response before rendering all of
+  it, with an explicit control to expand the complete durable response.
+
 - Desktop windows can attach to an existing headless/TUI engine with independent
   navigation and a visible shared-lifetime notice. Closing an attached window
   leaves engine-owned work running. A bounded private event feed supports

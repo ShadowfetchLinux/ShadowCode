@@ -144,8 +144,9 @@ Implemented foundation:
   retain valid function-call histories; interrupted calls are never blindly replayed.
 - [Paged native desktop history](NATIVE_HISTORY.md) bounds saved snapshots and
   supports older/newer/latest navigation while current work continues. Original
-  records and exports remain intact. Long-running live transcript memory and
-  renderer virtualization remain separate gates.
+  records and exports remain intact. Large single responses preview the first
+  512 KiB before an explicit full render. Long-running live transcript memory
+  and renderer virtualization remain separate gates.
 - A [desktop follow-up queue](NATIVE_QUEUE.md) with visible project-wide waiting
   messages, model/mode snapshots, independent queued cancellation, continued
   streaming, conversation switching and reload recovery. Active history remains

@@ -30,6 +30,21 @@ These are saved-history/initial-load bounds, not a claim of constant memory for 
 long-running live task or a virtualized Markdown renderer. Further live-stream,
 large-single-message and WebKit memory stress remain native release gates.
 
+## Large response previews
+
+The desktop renders the first 512 KiB of a single Markdown response by default.
+For a larger response, a visible **Show full response** control expands the
+complete text in place. This avoids parsing a provider's maximum 16 MiB response
+into the WebKit DOM while it is still streaming. It does not alter the event,
+continuation context, task export or JSON export; the full saved text remains
+available through those paths. The preview is measured in JavaScript UTF-16 code
+units, so the displayed byte size is approximate for non-ASCII text.
+
+This is an initial rendering bound, not transcript virtualization. Expanding a
+large response deliberately accepts the cost of rendering it. A regression test
+verifies that the Markdown parser receives only the preview until the reader
+chooses to expand it.
+
 ## Live rendering
 
 Unchanged Markdown messages reuse their rendered output during live updates.

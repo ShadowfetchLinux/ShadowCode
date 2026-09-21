@@ -587,6 +587,20 @@ kbd {
 .markdown {
   overflow-wrap: anywhere;
 }
+.markdown-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.markdown-preview p {
+  margin: 0;
+}
 .markdown > :first-child {
   margin-top: 0;
 }
