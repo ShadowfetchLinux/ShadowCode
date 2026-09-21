@@ -4160,7 +4160,7 @@ dependencies = [
 
 [[package]]
 name = "shadowcode-core"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4198,7 +4198,7 @@ dependencies = [
 
 [[package]]
 name = "shadowcode-desktop"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "serde_json",

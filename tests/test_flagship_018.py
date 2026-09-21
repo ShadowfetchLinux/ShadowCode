@@ -28,7 +28,7 @@ from shadow_agent.api.server import create_app
 from shadow_agent.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL = "0.20.0"
+CANONICAL = "0.21.0"
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ def test_version_is_canonical_everywhere() -> None:
     assert f"X-ShadowCode-Version={CANONICAL}" in desktop
     assert "Icon=shadow-agent" in desktop and "Name=ShadowCode" in desktop
     # No stray older version strings left in the package or README.
-    for stale in ("0.19.0", "0.17.0", "0.16.0", "0.15.0", "0.13.0"):
+    for stale in ("0.20.0", "0.19.0", "0.17.0", "0.16.0", "0.15.0", "0.13.0"):
         assert stale not in pyproject
         assert stale not in readme
 

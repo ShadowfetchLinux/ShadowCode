@@ -1,6 +1,6 @@
 # ShadowCode
 
-![version](https://img.shields.io/badge/version-0.20.0--dev-386c51) ![Rust](https://img.shields.io/badge/runtime-Rust%201.95-orange) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-0.21.0-386c51) ![Rust](https://img.shields.io/badge/runtime-Rust%201.95-orange) ![license](https://img.shields.io/badge/license-MIT-green)
 
 **Your ideas. Your models. Your machine.**
 
@@ -37,7 +37,7 @@ published.
 
 ## Native AppImage
 
-After the `v0.20.0` native release is tagged, download the **x86_64 AppImage**
+After the `v0.21.0` native release is tagged, download the **x86_64 AppImage**
 and its `SHA256SUMS` file from [GitHub releases](https://github.com/ShadowfetchLinux/ShadowCode/releases/latest).
 The native application embeds its interface; Python, Node.js and a browser
 launcher are not runtime dependencies. The release targets **Ubuntu 24.04 or
@@ -45,8 +45,8 @@ newer / glibc 2.39+**. Git and a model provider such as Ollama remain external.
 
 ```bash
 sha256sum -c SHA256SUMS
-chmod +x ShadowCode_0.20.0_amd64.AppImage
-./ShadowCode_0.20.0_amd64.AppImage --appimage-extract-and-run
+chmod +x ShadowCode_0.21.0_amd64.AppImage
+./ShadowCode_0.21.0_amd64.AppImage --appimage-extract-and-run
 ```
 
 Extraction mode works without FUSE. To install into `~/Applications`, add a
@@ -55,7 +55,7 @@ stable `shadow` command, and replace the desktop launcher:
 ```bash
 git clone https://github.com/ShadowfetchLinux/ShadowCode.git
 cd ShadowCode
-./scripts/install-appimage.sh /path/to/ShadowCode_0.20.0_amd64.AppImage
+./scripts/install-appimage.sh /path/to/ShadowCode_0.21.0_amd64.AppImage
 ```
 
 Keep `SHA256SUMS` beside the download and the installer verifies its matching

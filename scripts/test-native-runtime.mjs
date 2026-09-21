@@ -20,7 +20,7 @@ const binary = path.resolve(
   process.argv[2] ||
     path.join(
       root,
-      "target/release/bundle/appimage/ShadowCode_0.20.0_amd64.AppImage",
+      "target/release/bundle/appimage/ShadowCode_0.21.0_amd64.AppImage",
     ),
 );
 const artifacts = path.resolve(

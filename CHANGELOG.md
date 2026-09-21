@@ -1,10 +1,9 @@
 # Changelog
 
-## 0.21.0 — merge-ready notes (package version remains 0.20.0)
+## 0.21.0
 
-This section records the 0.21 architecture that survived qualification and
-merge-readiness. Crate, Tauri, AppImage, and Debian versions are still
-**0.20.0** until a human bumps them.
+Crate, Tauri, CLI, AppImage, and Debian versions are **0.21.0**. Rebuild
+packages from this tag; existing 0.20.0 AppImage/Debian filenames are stale.
 
 - Long sessions keep an inspectable layered budget and a structured keep-list
   (intent, constraints, decisions, failures, plan). Compaction is still
