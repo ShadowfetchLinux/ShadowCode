@@ -71,17 +71,17 @@ const CHAMPIONS: ChampionModel[] = [
     tags: ["Chain of Thought", "Architecture", "Deep Debugging"],
   },
   {
-    id: "gpt-oss:20b",
-    name: "GPT-OSS 20B",
-    creator: "Open Source Community",
+    id: "codestral:22b",
+    name: "Mistral Codestral 22B",
+    creator: "Mistral AI",
     size: "13.0 GB",
     vramReq: "14 GB VRAM",
     vramFit: "optimal",
-    context: "128k",
+    context: "32k",
     description:
-      "Tailored open-weight coding agent harness model. Highly optimized for file reading, lint verification, and diff patch generation.",
-    pullCmd: "ollama pull gpt-oss:20b",
-    tags: ["Local Installed", "Long Context", "Autonomous"],
+      "Mistral's dedicated coding model. Exceptional at fill-in-the-middle, refactoring, test generation, and multi-language fluency with concise, clean output.",
+    pullCmd: "ollama pull codestral:22b",
+    tags: ["Mistral AI", "Long Context", "Code Specialist"],
   },
   {
     id: "huihui_ai/gemma-4-abliterated:12b",
@@ -175,7 +175,7 @@ export function OpenWeightHub({
 
   const localProviders = useMemo(() => {
     return providers.filter((p) =>
-      ["ollama", "local", "llamacpp", "vllm"].includes(p.id)
+      ["ollama", "local", "llamacpp", "vllm", "lm_studio", "lmstudio"].includes(p.id)
     );
   }, [providers]);
 

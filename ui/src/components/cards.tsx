@@ -163,7 +163,7 @@ export function ThinkingCard({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <span className="thinking-icon">🧠</span>
+        <span className="thinking-icon" aria-hidden="true">🧠</span>
         <span className="thinking-title">
           {live ? "Reasoning in progress…" : "Reasoning process"}
           {durationSec ? ` (${durationSec.toFixed(1)}s)` : ""}

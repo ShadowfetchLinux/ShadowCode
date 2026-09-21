@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   BookOpen,
   Check,
@@ -24,10 +24,34 @@ interface FlowGuideProps {
   onSelectPrompt?: (prompt: string, mode?: string) => void;
 }
 
+const TAB_IDS = ["overview", "modes", "loop", "steering", "shortcuts"] as const;
+type TabId = (typeof TAB_IDS)[number];
+
 export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
-  const [activeTab, setActiveTab] = useState<
-    "overview" | "modes" | "loop" | "steering" | "shortcuts"
-  >("overview");
+  const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const [learned, setLearned] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("shadow:flow-learned");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("shadow:flow-learned", JSON.stringify([...learned]));
+  }, [learned]);
+
+  const toggleLearned = useCallback((id: string) => {
+    setLearned((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const activeIndex = TAB_IDS.indexOf(activeTab);
 
   const startTask = (prompt: string, mode = "coder") => {
     if (onSelectPrompt) {
@@ -79,6 +103,24 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
             </button>
           ))}
         </nav>
+
+        <div className="flow-progress">
+          {TAB_IDS.map((id, i) => (
+            <>
+              <span
+                key={id}
+                className={`flow-progress-dot ${activeTab === id ? "active" : ""} ${learned.has(id) ? "completed" : ""}`}
+                title={learned.has(id) ? "Learned" : `Section ${i + 1}`}
+              />
+              {i < TAB_IDS.length - 1 && (
+                <span
+                  key={`line-${id}`}
+                  className={`flow-progress-line ${learned.has(id) ? "completed" : ""}`}
+                />
+              )}
+            </>
+          ))}
+        </div>
 
         <div className="flow-guide-content">
           {activeTab === "overview" && (
@@ -146,6 +188,13 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
                   <strong>Zero data leaves your machine:</strong> When using local providers (Ollama on <code>:11434</code> or LM Studio on <code>:1234</code>), every file, prompt, and tool execution stays strictly inside your Linux environment.
                 </span>
               </div>
+              <button
+                type="button"
+                className={`learned-check ${learned.has("overview") ? "done" : ""}`}
+                onClick={() => toggleLearned("overview")}
+              >
+                {learned.has("overview") ? <><Check size={12} /> Learned</> : "Mark as learned"}
+              </button>
             </div>
           )}
 
@@ -229,6 +278,13 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
                   </button>
                 </div>
               </div>
+              <button
+                type="button"
+                className={`learned-check ${learned.has("modes") ? "done" : ""}`}
+                onClick={() => toggleLearned("modes")}
+              >
+                {learned.has("modes") ? <><Check size={12} /> Learned</> : "Mark as learned"}
+              </button>
             </div>
           )}
 
@@ -280,6 +336,13 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
                   </div>
                 </div>
               </div>
+              <button
+                type="button"
+                className={`learned-check ${learned.has("loop") ? "done" : ""}`}
+                onClick={() => toggleLearned("loop")}
+              >
+                {learned.has("loop") ? <><Check size={12} /> Learned</> : "Mark as learned"}
+              </button>
             </div>
           )}
 
@@ -328,6 +391,13 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
                   ShadowCode records dirty-state snapshots before file edits. If an automated change fails verification or a command is interrupted, your git working tree is safeguarded and can be reverted with one click.
                 </p>
               </div>
+              <button
+                type="button"
+                className={`learned-check ${learned.has("steering") ? "done" : ""}`}
+                onClick={() => toggleLearned("steering")}
+              >
+                {learned.has("steering") ? <><Check size={12} /> Learned</> : "Mark as learned"}
+              </button>
             </div>
           )}
 
@@ -357,6 +427,10 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
                       </tr>
                       <tr>
                         <td><kbd>Ctrl</kbd> + <kbd>B</kbd></td>
+                        <td>Toggle Sidebar</td>
+                      </tr>
+                      <tr>
+                        <td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd></td>
                         <td>Toggle Right Drawer (Files / Diff / Goals)</td>
                       </tr>
                       <tr>
@@ -403,6 +477,13 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
                   </table>
                 </div>
               </div>
+              <button
+                type="button"
+                className={`learned-check ${learned.has("shortcuts") ? "done" : ""}`}
+                onClick={() => toggleLearned("shortcuts")}
+              >
+                {learned.has("shortcuts") ? <><Check size={12} /> Learned</> : "Mark as learned"}
+              </button>
             </div>
           )}
         </div>

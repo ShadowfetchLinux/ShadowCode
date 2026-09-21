@@ -2306,3 +2306,495 @@ kbd {
   color: var(--muted);
 }
 
+/* ==========================================================================
+   Debug & Polish: Dark Mode Overrides for Flagship UI
+   ========================================================================== */
+[data-theme="dark"] .flow-guide-badge,
+[data-theme="dark"] .hub-badge {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2));
+  color: #a5b4fc;
+}
+[data-theme="dark"] .flow-guide-header h2,
+[data-theme="dark"] .hub-header h2 {
+  color: var(--text);
+}
+[data-theme="dark"] .flow-nav-btn.active {
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.35);
+  background: var(--surface-3);
+}
+[data-theme="dark"] .flow-hero-card {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(16, 185, 129, 0.08));
+  border-color: rgba(99, 102, 241, 0.25);
+}
+[data-theme="dark"] .hero-icon-wrap {
+  background: var(--surface-3);
+  color: #a5b4fc;
+}
+[data-theme="dark"] .flow-callout {
+  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+}
+[data-theme="dark"] .flow-callout code {
+  background: rgba(255, 255, 255, 0.06);
+}
+[data-theme="dark"] .vram-badge.optimal {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+[data-theme="dark"] .vram-badge.quant {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+[data-theme="dark"] .vram-badge.offload {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+[data-theme="dark"] .mode-card:hover {
+  border-color: rgba(99, 102, 241, 0.35);
+}
+[data-theme="dark"] .starter-btn:hover {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: #fff;
+}
+[data-theme="dark"] .timeline-num {
+  background: #6366f1;
+}
+[data-theme="dark"] .shortcuts-table kbd {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+[data-theme="dark"] .chip-btn:hover {
+  border-color: #a5b4fc;
+  color: #a5b4fc;
+}
+[data-theme="dark"] .top-action.flow-guide-btn {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.15));
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+[data-theme="dark"] .top-action.flow-guide-btn:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25));
+  color: #c7d2fe;
+}
+[data-theme="dark"] .top-action.open-weights-btn {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(14, 165, 233, 0.12));
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+[data-theme="dark"] .top-action.open-weights-btn:hover {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(14, 165, 233, 0.2));
+  color: #a7f3d0;
+}
+[data-theme="dark"] .model-hero-badge .badge-tag {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+[data-theme="dark"] .guide-hero-badge {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(168, 85, 247, 0.12));
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+}
+[data-theme="dark"] .guide-hero-badge:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2));
+}
+[data-theme="dark"] .onboarding-flagship-badge {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(16, 185, 129, 0.15));
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+}
+[data-theme="dark"] .onboarding-guide-btn {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1));
+  border-color: rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+}
+[data-theme="dark"] .onboarding-guide-btn:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.18), rgba(168, 85, 247, 0.18));
+  border-color: #a5b4fc;
+}
+[data-theme="dark"] .thinking-card {
+  border-color: rgba(147, 51, 234, 0.25);
+  background: rgba(147, 51, 234, 0.05);
+}
+[data-theme="dark"] .thinking-card.live {
+  border-color: rgba(147, 51, 234, 0.45);
+  background: rgba(147, 51, 234, 0.08);
+}
+[data-theme="dark"] .thinking-header {
+  color: #c084fc;
+}
+[data-theme="dark"] .thinking-header:hover {
+  background: rgba(147, 51, 234, 0.1);
+}
+[data-theme="dark"] .thinking-body {
+  border-top-color: rgba(147, 51, 234, 0.2);
+}
+[data-theme="dark"] .champion-card:hover {
+  border-color: rgba(99, 102, 241, 0.45);
+}
+[data-theme="dark"] .champion-card.selected {
+  border-color: #818cf8;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+}
+[data-theme="dark"] .vram-fit-badge.optimal {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+[data-theme="dark"] .vram-fit-badge.quant {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+[data-theme="dark"] .vram-fit-badge.offload {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+[data-theme="dark"] .installed-badge {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+[data-theme="dark"] .primary-btn {
+  background: #6366f1;
+}
+[data-theme="dark"] .primary-btn:hover:not(:disabled) {
+  background: #818cf8;
+}
+[data-theme="dark"] .primary-btn.active {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+[data-theme="dark"] .filter-btn.active {
+  border-color: #818cf8;
+  color: #a5b4fc;
+}
+[data-theme="dark"] .accent-icon {
+  color: #a5b4fc;
+}
+[data-theme="dark"] .provider-pill.online .dot {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
+}
+
+/* ==========================================================================
+   Debug & Polish: Missing CSS Classes
+   ========================================================================== */
+.success-icon {
+  color: #059669;
+}
+[data-theme="dark"] .success-icon {
+  color: #6ee7b7;
+}
+
+/* ==========================================================================
+   Debug & Polish: Mobile Responsive Modals
+   ========================================================================== */
+@media (max-width: 760px) {
+  .flow-guide-backdrop,
+  .open-weight-hub-backdrop {
+    padding: 8px;
+    align-items: flex-end;
+  }
+  .flow-guide-modal,
+  .open-weight-hub-modal {
+    max-width: 100%;
+    max-height: 95vh;
+    border-radius: 14px 14px 0 0;
+    animation: modalSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes modalSlideUp {
+    0% { opacity: 0; transform: translateY(40px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .flow-guide-header,
+  .hub-header {
+    padding: 16px 18px 12px;
+  }
+  .flow-guide-header h2,
+  .hub-header h2 {
+    font-size: 17px;
+  }
+  .flow-guide-nav {
+    padding: 8px 12px;
+    gap: 3px;
+  }
+  .flow-nav-btn {
+    padding: 6px 10px;
+    font-size: 11px;
+    gap: 5px;
+  }
+  .flow-nav-btn span {
+    display: none;
+  }
+  .flow-guide-content {
+    padding: 16px 18px;
+  }
+  .flow-grid-2 {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .hub-toolbar {
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 18px;
+  }
+  .search-box {
+    width: 100%;
+  }
+  .hub-filters {
+    width: 100%;
+    overflow-x: auto;
+  }
+  .hub-champions-grid {
+    grid-template-columns: 1fr;
+    padding: 14px 18px;
+    gap: 12px;
+  }
+  .hub-status-bar {
+    padding: 8px 18px;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .flow-guide-footer,
+  .hub-footer {
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 18px;
+  }
+  .guide-starter-chips {
+    width: 100%;
+    justify-content: center;
+  }
+  .guide-footer-actions {
+    width: 100%;
+  }
+  .guide-footer-actions button {
+    width: 100%;
+    justify-content: center;
+  }
+  .flow-hero-card {
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+  }
+  .vram-row {
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+  }
+  .welcome-meta-bar {
+    flex-direction: column;
+    gap: 6px;
+  }
+}
+
+/* ==========================================================================
+   Debug & Polish: Focus-visible States for Flagship Buttons
+   ========================================================================== */
+.model-hero-badge:focus-visible,
+.guide-hero-badge:focus-visible,
+.workspace-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.flow-nav-btn:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+.starter-btn:focus-visible,
+.chip-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.champion-card:focus-within {
+  border-color: rgba(99, 102, 241, 0.5);
+}
+.primary-btn:focus-visible,
+.ghost-btn:focus-visible,
+.filter-btn:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+/* ==========================================================================
+   Debug & Polish: Micro-animations & Visual Premium Feel
+   ========================================================================== */
+@keyframes subtlePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+  50% { box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
+}
+.submit-btn:not(:disabled):not(.stop) {
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.submit-btn:not(:disabled):not(.stop):hover {
+  transform: scale(1.05);
+}
+.submit-btn:not(:disabled):not(.stop):active {
+  transform: scale(0.95);
+}
+.op-card {
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.op-card header {
+  transition: background 0.12s ease;
+  border-radius: 6px;
+}
+.op-card header:active {
+  background: var(--surface-3);
+}
+.thinking-card {
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.thinking-card.live {
+  animation: thinkingPulse 2.5s ease-in-out infinite;
+}
+@keyframes thinkingPulse {
+  0%, 100% { border-color: rgba(147, 51, 234, 0.4); }
+  50% { border-color: rgba(147, 51, 234, 0.6); }
+}
+[data-theme="dark"] .thinking-card.live {
+  animation: thinkingPulseDark 2.5s ease-in-out infinite;
+}
+@keyframes thinkingPulseDark {
+  0%, 100% { border-color: rgba(147, 51, 234, 0.45); }
+  50% { border-color: rgba(147, 51, 234, 0.7); }
+}
+.suggestion {
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.suggestion:hover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+}
+[data-theme="dark"] .suggestion:hover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+}
+.welcome-symbol {
+  transition: transform 0.3s ease;
+}
+.welcome-symbol:hover {
+  transform: rotate(0deg) scale(1.05);
+}
+
+/* Composer focus glow enhancement */
+.composer:focus-within {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 3px rgba(56, 108, 81, 0.1),
+    0 4px 24px rgba(0, 0, 0, 0.08);
+}
+[data-theme="dark"] .composer:focus-within {
+  box-shadow:
+    0 0 0 3px rgba(177, 212, 184, 0.08),
+    0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* Toast type-based styling */
+.toast.err {
+  border-left: 3px solid var(--danger);
+}
+.toast.ok {
+  border-left: 3px solid var(--ok);
+}
+.toast.info {
+  border-left: 3px solid var(--info);
+}
+
+/* Op-card live state glow */
+.op-card.live {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Progress bar for FlowGuide */
+.flow-progress {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 26px 12px;
+}
+.flow-progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+.flow-progress-dot.active {
+  background: #6366f1;
+  transform: scale(1.2);
+}
+.flow-progress-dot.completed {
+  background: #059669;
+}
+[data-theme="dark"] .flow-progress-dot.active {
+  background: #a5b4fc;
+}
+[data-theme="dark"] .flow-progress-dot.completed {
+  background: #34d399;
+}
+.flow-progress-line {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  min-width: 12px;
+}
+.flow-progress-line.completed {
+  background: #059669;
+}
+[data-theme="dark"] .flow-progress-line.completed {
+  background: #34d399;
+}
+
+/* Boot screen timeout state */
+.boot-timeout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.boot-timeout p {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  max-width: 320px;
+  line-height: 1.5;
+}
+.boot-timeout button {
+  padding: 8px 18px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+.boot-timeout button:hover {
+  opacity: 0.9;
+}
+
+/* Learned indicator for FlowGuide */
+.learned-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.learned-check.done {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #059669;
+}
+[data-theme="dark"] .learned-check.done {
+  background: rgba(16, 185, 129, 0.08);
+  color: #6ee7b7;
+}
+

@@ -164,9 +164,10 @@ export default function App() {
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastSeq.current;
     setToasts((prev) => [...prev.slice(-3), { id, text, kind }]);
+    const duration = kind === "err" ? 8000 : 5000;
     setTimeout(
       () => setToasts((prev) => prev.filter((t) => t.id !== id)),
-      5000,
+      duration,
     );
   }, []);
 
@@ -957,6 +958,10 @@ export default function App() {
         e.preventDefault();
         setSidebar((v) => !v);
       }
+      if (mod && e.shiftKey && key === "b") {
+        e.preventDefault();
+        setPanel((p) => (p ? null : "changes"));
+      }
       if (mod && key === ",") {
         e.preventDefault();
         setOverlay("settings");
@@ -988,7 +993,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, [overlay, trust, slashOpen, panel, workspace, sessionId, busy, modelChoice, mode]);
   const reloadCommands = useCallback(async () => {
     const result = await api.commands();
     setCommands(result.commands);
@@ -1036,16 +1041,33 @@ export default function App() {
     ? commands.filter((c) => c.name.startsWith(task.slice(1))).slice(0, 8)
     : [];
   const empty =
-    !transcript.items.length && !commandCards.length && !busy && !submitting;
+    !transcript.items.length && !commandCards.length && !busy && !submitting && !switching;
   const completedSteps = transcript.plan.filter(
     (p) => p.status === "done",
   ).length;
+  const [bootTimeout, setBootTimeout] = useState(false);
+  useEffect(() => {
+    if (!ready) {
+      const timer = setTimeout(() => setBootTimeout(true), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [ready]);
   if (!ready)
     return (
       <div className="boot">
         <img src="/icon.svg" alt="" />
         <span>Opening your workspace…</span>
         <LoaderCircle className="spin" size={18} />
+        {bootTimeout && (
+          <div className="boot-timeout">
+            <p>
+              Taking longer than expected. The backend may be starting up or unreachable.
+            </p>
+            <button type="button" onClick={() => { setBootTimeout(false); void boot(); }}>
+              Retry connection
+            </button>
+          </div>
+        )}
       </div>
     );
   if (needsOnboard)
@@ -1915,7 +1937,12 @@ export default function App() {
       )}
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.kind}`}>
+          <div
+            key={t.id}
+            className={`toast ${t.kind}`}
+            role={t.kind === "err" ? "alert" : "status"}
+            aria-live={t.kind === "err" ? "assertive" : "polite"}
+          >
             <span>{t.text}</span>
             <button
               type="button"
