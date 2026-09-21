@@ -57,7 +57,7 @@ import { QueuedTasks } from "./components/QueuedTasks";
 import { useConversation } from "./hooks/useConversation";
 import { modelLabel } from "./lib/models";
 import { conversationJob } from "./lib/jobs";
-import { isProjectTrustError, trustRequestFor } from "./lib/trust";
+import { isProjectTrustError, trustErrorHint, trustRequestFor } from "./lib/trust";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -1114,7 +1114,21 @@ export default function App() {
             )}
             {error && (
               <div className="notice bad" role="alert">
-                <span>{error}</span>
+                <span>
+                  {error}
+                  {trustErrorHint(error) ? ` ${trustErrorHint(error)}` : ""}
+                </span>
+                {isProjectTrustError(error) && workspace && (
+                  <button
+                    type="button"
+                    className="mini"
+                    onClick={() =>
+                      setTrust(trustRequestFor(workspace, status?.permissions))
+                    }
+                  >
+                    Trust this folder
+                  </button>
+                )}
                 <button
                   type="button"
                   className="mini"

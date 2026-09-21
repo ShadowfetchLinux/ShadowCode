@@ -2,6 +2,11 @@ export function isProjectTrustError(error: unknown): boolean {
   return /Trust this project before starting/i.test(String(error));
 }
 
+export function trustErrorHint(error: unknown): string | undefined {
+  if (!isProjectTrustError(error)) return undefined;
+  return "This folder is not trusted. Click Trust this folder, then Trust and open, and send the task again.";
+}
+
 export function trustRequestFor(
   path: string,
   permissions?: Record<string, unknown>,
