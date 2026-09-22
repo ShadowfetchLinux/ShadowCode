@@ -1060,6 +1060,14 @@ impl Engine {
         if let Some(note) = autonomy::bugfix_policy(&job.task) {
             messages.push(json!({"role":"system","content":note}));
         }
+        if let Some(cmd) = autonomy::narrow_verify_command(&job.task, &running.workspace.path) {
+            messages.push(json!({
+                "role":"system",
+                "content": format!(
+                    "Verification requested: after edits, run the narrowest relevant command if approvals allow: `{cmd}`. Never mark verified from prose alone; only observed command evidence counts."
+                )
+            }));
+        }
         self.0.store.save_messages(&job.id, &messages)?;
         events.emit("agent.started",json!({"job_id":job.id,"task":job.task,"mode":job.mode,"model":job.model,"native":true,"images":job.images}))?;
         if let Some(decision) = &job.routing {
@@ -1512,6 +1520,7 @@ impl Engine {
                                 | "goto_definition"
                                 | "find_references"
                                 | "get_diagnostics"
+                                | "get_type_signature"
                                 | "git_diff"
                                 | "git_status"
                                 | "git_log"

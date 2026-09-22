@@ -34,6 +34,9 @@ pub mod service;
 #[cfg(unix)]
 pub mod sqlite;
 pub mod steering;
+pub mod symbol_index;
+pub mod parallel;
+pub mod guardian;
 pub mod store;
 pub mod system_info;
 pub mod tools;

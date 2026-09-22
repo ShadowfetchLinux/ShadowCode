@@ -438,18 +438,31 @@ impl ToolExecutor {
         }
         if matches!(
             call.name.as_str(),
-            "workspace_symbols" | "goto_definition" | "find_references"
+            "workspace_symbols"
+                | "goto_definition"
+                | "find_references"
+                | "get_type_signature"
         ) {
             let root = self.workspace.path.clone();
             let name = call.name.clone();
             let args = call.arguments.clone();
             return tokio::task::spawn_blocking(move || {
-                let query = args["query"].as_str().or_else(|| args["symbol"].as_str()).unwrap_or("");
+                let query = args["query"]
+                    .as_str()
+                    .or_else(|| args["symbol"].as_str())
+                    .unwrap_or("");
                 let max_hits = args["max_hits"].as_u64().unwrap_or(40) as usize;
                 match name.as_str() {
-                    "workspace_symbols" => crate::intelligence::workspace_symbols(&root, query, max_hits),
-                    "goto_definition" => crate::intelligence::goto_definition(&root, query, max_hits),
-                    "find_references" => crate::intelligence::find_references(&root, query, max_hits),
+                    "workspace_symbols" => {
+                        crate::intelligence::workspace_symbols(&root, query, max_hits)
+                    }
+                    "goto_definition" => {
+                        crate::intelligence::goto_definition(&root, query, max_hits)
+                    }
+                    "find_references" => {
+                        crate::intelligence::find_references(&root, query, max_hits)
+                    }
+                    "get_type_signature" => crate::intelligence::get_type_signature(&root, query),
                     _ => unreachable!(),
                 }
             })
@@ -501,7 +514,9 @@ impl ToolExecutor {
                 sandbox_note = json!({
                     "mode": "bubblewrap",
                     "network": profile.network,
-                    "note": "Optional bubblewrap profile; not a full OS sandbox."
+                    "scratch": profile.scratch_dir.as_ref().map(|p| p.to_string_lossy()),
+                    "workspace_cow": profile.workspace_cow,
+                    "note": "Optional bubblewrap profile with ephemeral scratch at SHADOWCODE_SCRATCH; not a full OS sandbox. Real home is read-only."
                 });
                 ProcessSpec {
                     program: profile.program.to_string_lossy().into_owned(),
@@ -976,13 +991,20 @@ impl ToolExecutor {
                         .map(hash)
                         .unwrap_or_else(|| "missing".into()),
                 );
+            let _ = crate::symbol_index::touch(&self.workspace.path, &path);
             changed.push(path);
         }
         self.events.emit(
             "checkpoint.updated",
             checkpoint::summary(&self.events.store, &self.workspace, &self.events.task_id)?,
         )?;
-        Ok(json!({"paths":changed,"checkpointed":true}))
+        let mut payload = json!({"paths":changed.clone(),"checkpointed":true});
+        if let Some(first) = changed.first() {
+            if let Some(callers) = callers_note(&self.workspace.path, first, first) {
+                payload["callers"] = callers;
+            }
+        }
+        Ok(payload)
     }
 }
 fn edit_line_hunks(text: &str, hunks: &[Value]) -> Result<String> {
@@ -1011,6 +1033,32 @@ fn edit_line_hunks(text: &str, hunks: &[Value]) -> Result<String> {
     }
     Ok(lines.concat())
 }
+
+fn callers_note(root: &std::path::Path, path: &str, content_hint: &str) -> Option<Value> {
+    // Best-effort: if the edited region looks like a Rust/TS function name, list callers.
+    let name = content_hint
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("fn ").or_else(|| line.strip_prefix("pub fn ")) {
+                Some(rest.split(|c: char| c == '(' || c.is_whitespace()).next()?.to_owned())
+            } else if let Some(rest) = line.strip_prefix("function ") {
+                Some(rest.split(|c: char| c == '(' || c.is_whitespace()).next()?.to_owned())
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            std::path::Path::new(path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+        })?;
+    if name.is_empty() || name.len() > 64 {
+        return None;
+    }
+    crate::intelligence::callers_for_patch(root, &name).ok()
+}
+
 fn git_ref(value: &str) -> Result<String> {
     ensure!(
         !value.is_empty()
@@ -1062,6 +1110,7 @@ pub fn schemas() -> Vec<Value> {
         ("workspace_symbols","Tree-sitter workspace symbol search for Rust/TypeScript. Bounded; not a vector index.",json!({"query":s,"max_hits":n}),vec!["query"]),
         ("goto_definition","Best-effort tree-sitter definition lookup for a symbol name.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
         ("find_references","Tree-sitter identifier references for a symbol name. Not type-aware.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
+        ("get_type_signature","Parser signature for a symbol when LSP is absent (tree-sitter AST).",json!({"symbol":s,"query":s}),vec![]),
         ("get_diagnostics","One-shot rust-analyzer diagnostics when rust-analyzer is already installed. Does not start a persistent LSP.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_tables","List tables and CREATE TABLE definitions in a project SQLite file. Native read-only tool; no registration. SQLite may maintain WAL sidecars.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_query","Read a project SQLite file with SELECT/WITH or schema PRAGMA (table_info etc). Bind ? placeholders with params; check truncated. Unique column aliases required. SQLite may maintain WAL sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]}},"limit":n}),vec!["path","sql"]),

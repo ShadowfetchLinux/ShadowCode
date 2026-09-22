@@ -21,6 +21,7 @@ pub fn read_only(tool: &str) -> bool {
             | "goto_definition"
             | "find_references"
             | "get_diagnostics"
+            | "get_type_signature"
             | "mcp_sqlite_tables"
             | "mcp_sqlite_query"
             | "background_list"
