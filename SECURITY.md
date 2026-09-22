@@ -98,7 +98,9 @@ SQLite and releases its connection; an OS filesystem stall may delay return.
 
 ## Secrets and transcript content
 
-Keys belong in `~/.config/shadow-agent/secrets.env` with mode 600, or environment
+Keys belong in `~/.config/shadow-agent/secrets.env` with mode 600 (recommended on this
+machine; libsecret/secret-service was not required for day-to-day use and is not
+wired as a hard dependency), or environment
 variables named in config. Never commit keys, tokens, sessions, or personal
 workspace data. The installer does not source the secrets file as shell code.
 

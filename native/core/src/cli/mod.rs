@@ -540,7 +540,45 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 "This profile already has an engine"
             );
             errln!("ShadowCode {} · serving {}\nPress Ctrl-C to stop managed work and close the engine.",crate::VERSION,workspace.display());
+            let guardian_ws = workspace.to_path_buf();
+            let guardian_paths = backend
+                .service()
+                .map(|service| service.engine.paths().clone());
+            let guardian = tokio::spawn(async move {
+                loop {
+                    let cfg = guardian_paths
+                        .as_ref()
+                        .and_then(|paths| crate::config::Config::load(paths, None).ok())
+                        .map(|config| crate::guardian::from_config_value(&config.guardian))
+                        .unwrap_or_default();
+                    crate::guardian::apply_config(&cfg);
+                    if !cfg.enabled {
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        continue;
+                    }
+                    tokio::time::sleep(crate::guardian::interval(&cfg)).await;
+                    if !crate::guardian::is_enabled() {
+                        continue;
+                    }
+                    match crate::guardian::run_health_check(&guardian_ws) {
+                        Ok(result) => {
+                            let _ = writeln!(
+                                std::io::stderr(),
+                                "Guardian check finished (review needed): {}",
+                                result["note"].as_str().unwrap_or("ok")
+                            );
+                        }
+                        Err(error) => {
+                            let _ = writeln!(
+                                std::io::stderr(),
+                                "Guardian check error: {error:#}"
+                            );
+                        }
+                    }
+                }
+            });
             watch::interrupted(backend.parent).await;
+            guardian.abort();
             return Ok(Outcome::value(json!({"status":"stopped"})));
         }
         Command::Run(Run {

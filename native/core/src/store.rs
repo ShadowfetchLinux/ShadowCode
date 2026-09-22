@@ -288,6 +288,71 @@ impl Store {
     pub fn branch_session(&self, sid: &str, title: &str) -> Result<Value> {
         self.branch_session_with_memory(sid, title, "")
     }
+
+    /// Fork session state from a checkpoint/event id into a new session branch
+    /// without deleting the original. Copies only events with id <= event_id.
+    pub fn fork_session_from_event(&self, sid: &str, event_id: i64, title: &str) -> Result<Value> {
+        ensure!(event_id > 0, "event_id must be positive");
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        let parent = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [sid])?
+            .pop()
+            .context("Session not found")?;
+        let max_id: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(id),0) FROM events WHERE session_id=?",
+            [sid],
+            |r| r.get(0),
+        )?;
+        ensure!(event_id <= max_id, "event_id is beyond this session's events");
+        let branch = id();
+        let time = now();
+        let title = if title.is_empty() {
+            format!("{} (fork@{event_id})", parent["title"].as_str().unwrap_or("Task"))
+        } else {
+            title.into()
+        };
+        tx.execute(
+            "INSERT INTO sessions(id,workspace,created_at,updated_at,model_id,status,title,parent_id,branched_at) VALUES(?,?,?,?,?,'active',?,?,?)",
+            params![
+                branch,
+                parent["workspace"].as_str(),
+                time,
+                time,
+                parent["model_id"].as_str(),
+                title,
+                sid,
+                time
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO events(ts,type,session_id,task_id,payload) SELECT ts,type,?,task_id,payload FROM events WHERE session_id=? AND id<=? ORDER BY id",
+            params![branch, sid, event_id],
+        )?;
+        tx.execute(
+            "INSERT INTO session_meta(session_id,key,value) VALUES(?,'forked_from_event',?)",
+            params![branch, event_id.to_string()],
+        )?;
+        let result = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [&branch])?
+            .pop()
+            .context("Fork not found")?;
+        // Prove original still intact
+        let original_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM events WHERE session_id=?",
+            [sid],
+            |r| r.get(0),
+        )?;
+        ensure!(original_count >= 1 || max_id == 0, "Original session events missing after fork");
+        let original = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [sid])?
+            .pop()
+            .context("Original session missing after fork")?;
+        tx.commit()?;
+        Ok(json!({
+            "fork": result,
+            "original": original,
+            "forked_from_event": event_id,
+            "original_intact": true
+        }))
+    }
     pub fn branch_session_with_memory(
         &self,
         sid: &str,

@@ -954,3 +954,48 @@ mod tests {
         assert_eq!(verified["verified"], true);
     }
 }
+
+
+/// Suggest the narrowest relevant test command when the user/task asked to verify.
+/// Returns None when verification was not requested.
+pub fn narrow_verify_command(task: &str, workspace: &std::path::Path) -> Option<String> {
+    let lower = task.to_ascii_lowercase();
+    let asks = [
+        "verify",
+        "run the test",
+        "run tests",
+        "run the tests",
+        "cargo test",
+        "npm test",
+        "pytest",
+        "make sure tests",
+        "check that",
+    ];
+    if !asks.iter().any(|a| lower.contains(a)) && bugfix_policy(task).is_none() {
+        // Only auto-suggest for bug/fix when combined with verify language elsewhere;
+        // bugfix_policy alone asks for failing test first, not necessarily to run suite.
+        return None;
+    }
+    if !asks.iter().any(|a| lower.contains(a)) {
+        return None;
+    }
+    if workspace.join("Cargo.toml").is_file() {
+        // Prefer package-scoped when path hint present.
+        if let Some(pkg) = lower.split_whitespace().find(|w| w.starts_with("-p")) {
+            return Some(format!("cargo test {pkg}"));
+        }
+        // Look for `cargo test -p foo` already in the prompt.
+        if let Some(idx) = lower.find("cargo test -p ") {
+            let rest = &task[idx..];
+            return Some(rest.split('\n').next().unwrap_or("cargo test").trim().to_owned());
+        }
+        return Some("cargo test".into());
+    }
+    if workspace.join("package.json").is_file() {
+        return Some("npm test".into());
+    }
+    if workspace.join("pyproject.toml").is_file() || workspace.join("pytest.ini").is_file() {
+        return Some("pytest".into());
+    }
+    None
+}

@@ -193,6 +193,19 @@ mod tests {
     }
 
     #[test]
+    fn redacts_anthropic_and_stripe_fixtures() {
+        let anthropic = format!("{}{}", "sk-ant-api03-", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF");
+        let stripe = format!("{}{}", "sk_live_", "abcdefghijklmnopqrstuvwxyz012345");
+        let npm = format!("{}{}", "npm_", "abcdefghijklmnopqrstuvwxyz0123456789");
+        for sample in [anthropic, stripe, npm] {
+            let result = redact_text(&sample);
+            assert!(result.redacted, "expected redaction in {sample}");
+            assert!(result.text.contains(PLACEHOLDER));
+            assert!(!result.text.contains("abcdefghijklmnopqrstuvwxyz"));
+        }
+    }
+
+    #[test]
     fn secret_paths_are_detected() {
         assert!(is_secret_path(".env"));
         assert!(is_secret_path("app/.env.local"));
