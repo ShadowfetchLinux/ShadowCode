@@ -641,4 +641,26 @@ mod tests {
         assert!(status["storage"].as_str().unwrap().contains("private"));
         assert!(!root.path().join(".shadow").exists());
     }
+
+    #[test]
+    fn indexes_typescript_definitions_references_and_signatures() {
+        let root = tempfile::tempdir().unwrap();
+        let src = root.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("math.ts"),
+            "export function add(a: number, b: number): number { return a + b; }\nexport function useAdd() { return add(1, 2); }\n",
+        )
+        .unwrap();
+        let status = ensure_index(root.path(), &["src/math.ts".into()], false).unwrap();
+        assert!(status["symbols_total"].as_i64().unwrap() >= 2);
+        let defs = query_definitions(root.path(), "add", 10).unwrap();
+        assert!(!defs["definitions"].as_array().unwrap().is_empty());
+        let refs = query_references(root.path(), "add", 16).unwrap();
+        assert!(!refs["references"].as_array().unwrap().is_empty());
+        let sig = get_type_signature(root.path(), "add").unwrap();
+        assert!(sig["ok"].as_bool().unwrap());
+        let callers = callers_for(root.path(), "add", 8).unwrap();
+        assert!(callers["count"].as_u64().unwrap() >= 1);
+    }
 }

@@ -277,4 +277,35 @@ mod tests {
         assert_eq!(report["ok"], false);
         assert_eq!(report["kernel_proof"], false);
     }
+
+    #[test]
+    fn missing_bubblewrap_reports_honest_fallback() {
+        let previous = std::env::var_os("PATH");
+        // Empty PATH: bwrap cannot be resolved even if installed on the host.
+        std::env::set_var("PATH", "");
+        let mode = detect();
+        let report = probe_workspace_cow();
+        let checks = doctor_checks();
+        match previous {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+        assert!(matches!(
+            mode,
+            SandboxMode::Off { reason } if reason.contains("bubblewrap")
+        ));
+        assert_eq!(report["shell_available"], false);
+        assert_eq!(report["mode"], "unavailable");
+        assert_eq!(report["kernel_proof"], false);
+        let bubble = checks
+            .iter()
+            .find(|c| c["id"] == "bubblewrap")
+            .expect("doctor includes bubblewrap");
+        assert_eq!(bubble["status"], "info");
+        assert!(bubble["detail"]
+            .as_str()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .contains("bubblewrap"));
+    }
 }

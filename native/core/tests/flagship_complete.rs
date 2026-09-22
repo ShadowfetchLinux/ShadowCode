@@ -119,9 +119,30 @@ fn sandbox_scratch_and_home_readonly_args() {
     assert!(args
         .windows(3)
         .any(|w| w[0] == "--bind" && w[2] == "/shadowcode-scratch"));
+    if std::path::Path::new("/home").exists() {
+        assert!(args
+            .windows(3)
+            .any(|w| w == ["--ro-bind", "/home", "/home"]));
+    }
+    assert!(args.iter().any(|a| a == "--unshare-net"));
     sandbox::discard_scratch(&scratch.path).unwrap();
     let cow = sandbox::probe_workspace_cow();
     assert_eq!(cow["kernel_proof"], false);
+    // Fallback: Doctor reports unavailable when bubblewrap cannot be found.
+    let previous = std::env::var_os("PATH");
+    std::env::set_var("PATH", "");
+    let fallback = sandbox::probe_workspace_cow();
+    let doctor = sandbox::doctor_checks();
+    match previous {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+    assert_eq!(fallback["mode"], "unavailable");
+    assert_eq!(fallback["shell_available"], false);
+    assert_eq!(
+        doctor.iter().find(|c| c["id"] == "bubblewrap").unwrap()["status"],
+        "info"
+    );
 }
 
 #[test]
@@ -134,12 +155,26 @@ fn symbol_index_fixture_tools() {
         "pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn use_add() { let _ = add(1, 2); }\n",
     )
     .unwrap();
-    let status = symbol_index::ensure_index(root.path(), &["src/lib.rs".into()], false).unwrap();
-    assert!(status["symbols_total"].as_i64().unwrap() >= 2);
+    fs::write(
+        src.join("math.ts"),
+        "export function mul(a: number, b: number): number { return a * b; }\nexport function useMul() { return mul(2, 3); }\n",
+    )
+    .unwrap();
+    let status = symbol_index::ensure_index(
+        root.path(),
+        &["src/lib.rs".into(), "src/math.ts".into()],
+        false,
+    )
+    .unwrap();
+    assert!(status["symbols_total"].as_i64().unwrap() >= 4);
     let sig = symbol_index::get_type_signature(root.path(), "add").unwrap();
     assert!(sig["ok"].as_bool().unwrap());
     let callers = symbol_index::callers_for(root.path(), "add", 8).unwrap();
     assert!(callers["count"].as_u64().unwrap() >= 1);
+    let ts_defs = symbol_index::query_definitions(root.path(), "mul", 8).unwrap();
+    assert!(!ts_defs["definitions"].as_array().unwrap().is_empty());
+    let ts_refs = symbol_index::query_references(root.path(), "mul", 16).unwrap();
+    assert!(!ts_refs["references"].as_array().unwrap().is_empty());
 }
 
 #[test]
