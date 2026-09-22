@@ -7,7 +7,7 @@ wheel, source distribution, portable archive, or browser launcher.
 ## Prepare the release
 
 1. Update the shared version in `Cargo.toml` and `src-tauri/tauri.conf.json`.
-   They must match the tag exactly, for example `v0.22.2`.
+   They must match the tag exactly, for example `v0.22.3`.
 2. Update `CHANGELOG.md`, `docs/RELEASE_NOTES.md`, README download commands and
    native migration/verification records with only evidence that is current for
    the tagged commit.

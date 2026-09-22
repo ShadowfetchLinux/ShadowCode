@@ -140,8 +140,8 @@ From the repository root, build both package formats with:
 ```sh
 node scripts/build-native.mjs
 node scripts/check-native-package.mjs \
-  target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage \
-  target/release/bundle/deb/ShadowCode_0.22.2_amd64.deb
+  target/release/bundle/appimage/ShadowCode_0.22.3_amd64.AppImage \
+  target/release/bundle/deb/ShadowCode_0.22.3_amd64.deb
 node scripts/test-native-runtime.mjs
 node --test scripts/test-native-source-fetch.mjs
 node scripts/test-native-runtime-sources.mjs

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.22.3
+
+- Preserve the caller directory and relative project/profile paths in AppImage
+  launches. Replace the generic launcher that selected the extraction directory
+  and injected nonexistent Python and GStreamer paths. External Python tools
+  remain usable without bundling Python.
+- Verify both extraction modes, relative paths with spaces and external Python
+  execution in packaged runtime checks. Install both `shadow` and `shadowcode`
+  aliases from the same verified release.
+
 ## 0.22.2
 
 - Retain the selected Cargo home when sanitizing packaging PATH, so clean

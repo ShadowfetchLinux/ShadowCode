@@ -14,6 +14,16 @@ checks. These patches leave application behavior unchanged. The tag workflow
 repeats verification before publishing; failed candidate tags are retained
 without release downloads.
 
+Installation of the published 0.22.2 package exposed the generic AppImageKit
+launcher changing the working directory and injecting nonexistent language-runtime
+paths. Version 0.22.3 uses a native launcher that preserves the caller directory,
+relative projects/profiles and external Python tooling. Packaged runtime tests
+cover these cases in both extraction modes, including directory names with spaces.
+The desktop resolves user paths before selecting the bundled WebKit resource
+directory; CLI commands retain the caller directory. Desktop checks start without
+an explicit workspace and also exercise a relative isolated profile. Both installed
+command aliases resolve to the same verified release.
+
 ## Verified behavior
 
 - 343 native Rust tests cover the engine, permissions, cancellation, history,

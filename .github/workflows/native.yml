@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, native-0.20]
   pull_request:
-    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'scripts/*native*.mjs', 'scripts/native-packaging-env.sh', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml', '.github/workflows/release.yml']
+    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'packaging/native-app-run.sh', 'scripts/install-appimage.sh', 'scripts/test-install-appimage.sh', 'scripts/*native*.mjs', 'scripts/native-packaging-env.sh', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml', '.github/workflows/release.yml']
 permissions:
   contents: read
 jobs:
@@ -77,46 +77,46 @@ jobs:
       - name: Build native development packages with dependency notices
         run: node scripts/build-native.mjs
       - name: Inspect both packages
-        run: node scripts/check-native-package.mjs target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage target/release/bundle/deb/ShadowCode_0.22.2_amd64.deb
+        run: node scripts/check-native-package.mjs target/release/bundle/appimage/ShadowCode_0.22.3_amd64.AppImage target/release/bundle/deb/ShadowCode_0.22.3_amd64.deb
       - name: Rebuild the shipped runtime sources without network access
         run: node scripts/test-native-runtime-sources.mjs
       - name: Exercise concurrent AppImage extraction and shutdown
         run: node scripts/test-native-runtime.mjs
       - name: Exercise the packaged CLI without a display
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.3_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_CLI_ARTIFACTS: artifacts/native-package/cli
         run: node scripts/test-native-cli.mjs
       - name: Exercise the packaged native terminal
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.3_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_TUI_ARTIFACTS: artifacts/native-package/tui
         run: node scripts/test-native-tui.mjs
       - name: Exercise the packaged native window
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.3_amd64.AppImage
           SHADOW_DESKTOP_ARGS: '["--appimage-extract-and-run","ui"]'
           SHADOW_NATIVE_DEFAULT_PROFILE: '1'
           SHADOW_NATIVE_ARTIFACTS: artifacts/native-package/window
         run: xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- node scripts/test-native-desktop.mjs
       - name: Exercise the packaged native MCP server
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.3_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_MCP_ARTIFACTS: artifacts/native-package/mcp-server
         run: node scripts/test-native-mcp-server.mjs
       - name: Exercise the packaged native MCP HTTP server
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.3_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_MCP_ARTIFACTS: artifacts/native-package/mcp-server-http
           SHADOW_MCP_TRANSPORT: http
         run: node scripts/test-native-mcp-server.mjs
       - name: Verify packaged MCP interoperability with official TypeScript clients
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.22.3_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_MCP_PEER_ARTIFACTS: artifacts/native-package/mcp-peer
         run: node scripts/test-native-mcp-peer.mjs

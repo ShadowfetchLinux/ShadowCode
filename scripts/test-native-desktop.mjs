@@ -216,7 +216,7 @@ const output = createWriteStream(path.join(artifacts, "webdriver.log"));
 const args = ["--port", String(port), "--native-port", String(nativePort)];
 if (process.env.SHADOW_WEBKIT_DRIVER) args.push("--native-driver", process.env.SHADOW_WEBKIT_DRIVER);
 const driver = spawn(process.env.SHADOW_TAURI_DRIVER || "tauri-driver", args, {
-  detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...nativeEnv, WEBKIT_DISABLE_DMABUF_RENDERER: "1" },
+  cwd: project, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...nativeEnv, WEBKIT_DISABLE_DMABUF_RENDERER: "1" },
 });
 driver.stdout.pipe(output); driver.stderr.pipe(output);
 let spawnError;
@@ -277,11 +277,15 @@ async function accessibility(name) {
 }
 try {
   await until("WebDriver startup", async () => { if (spawnError) throw spawnError; return wd("GET", "/status"); });
-  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: binary, args: [...binaryArgs, ...profileArgs, "--workspace", project] } } } });
+  // First launch has no explicit workspace and uses a relative isolated profile.
+  // This catches AppImage launchers selecting their extraction directory.
+  const initialProfileArgs = defaultProfile ? [] : ["--profile", path.relative(project, profile)];
+  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: binary, args: [...binaryArgs, ...initialProfileArgs] } } } });
   session = created.sessionId;
   await wd("POST", `/session/${session}/timeouts`, { script: 20000, implicit: 0, pageLoad: 30000 });
   await until("Native workspace", () => execute("return !!document.querySelector('textarea[aria-label=\"Message ShadowCode\"]') && !document.querySelector('textarea[aria-label=\"Message ShadowCode\"]').disabled;"), 25000);
   const version = await api("GET", "/api/version");
+  assert.equal((await api("GET", "/api/workspace/status")).workspace, project, "First desktop launch selects the caller project");
   assert.equal(version.runtime, "rust"); assert.equal(version.transport, "native");
   const expectedScript = (await readFile(path.join(root,"ui/dist/index.html"),"utf8")).match(/src="([^"]+\.js)"/)[1];
   assert.equal(await execute("return new URL(document.querySelector('script[type=module]').src).pathname"), expectedScript, "Desktop binary must embed the current compiled interface");

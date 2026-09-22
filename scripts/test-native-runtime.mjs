@@ -16,7 +16,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
-const expectedVersion=JSON.parse(await readFile(path.join(root,"src-tauri/tauri.conf.json"),"utf8")).version;
+const expectedVersion = JSON.parse(
+  await readFile(path.join(root, "src-tauri/tauri.conf.json"), "utf8"),
+).version;
 const binary = path.resolve(
   process.argv[2] ||
     path.join(
@@ -61,6 +63,7 @@ function launch(
   extraEnv = {},
   environmentMode = false,
   ignoreHangup = false,
+  cwd = root,
 ) {
   const options = environmentMode ? { APPIMAGE_EXTRACT_AND_RUN: "1" } : {};
   const child = spawn(
@@ -71,6 +74,7 @@ function launch(
       ...args,
     ],
     {
+      cwd,
       env: { ...env, ...extraEnv, ...options },
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -212,6 +216,55 @@ async function dead(pid) {
   }
 }
 try {
+  const launchDirectory = path.join(scratch, "launch directory with spaces");
+  await mkdir(path.join(launchDirectory, "nested project"), {
+    recursive: true,
+  });
+  for (const environmentMode of [false, true]) {
+    const args = ["--profile", "relative profile", "--json", "health"];
+    const health = JSON.parse(
+      (
+        await finish(
+          launch(
+            args,
+            { PWD: "/deliberately-stale" },
+            environmentMode,
+            false,
+            launchDirectory,
+          ),
+        )
+      ).stdout,
+    );
+    assert.equal(
+      health.workspace,
+      launchDirectory,
+      "Default project must be the actual caller directory",
+    );
+    assert.ok(
+      (
+        await stat(path.join(launchDirectory, "relative profile"))
+      ).isDirectory(),
+      "Relative profiles resolve from the caller directory",
+    );
+    const nested = JSON.parse(
+      (
+        await finish(
+          launch(
+            [...args, "--workspace", "nested project"],
+            {},
+            environmentMode,
+            false,
+            launchDirectory,
+          ),
+        )
+      ).stdout,
+    );
+    assert.equal(
+      nested.workspace,
+      path.join(launchDirectory, "nested project"),
+      "Explicit relative projects remain caller-relative",
+    );
+  }
   const first = await owner("first"),
     second = await owner("second");
   assert.notEqual(
@@ -234,6 +287,20 @@ try {
   await intact(first);
   await intact(second);
   await cli(first.profile, first.workspace, ["trust"]);
+  // Python is supplied by the test host, never bundled by ShadowCode. The
+  // launcher must not poison language tools run by the coding agent.
+  await cli(first.profile, first.workspace, [
+    "background",
+    "start",
+    "--command",
+    'python3 -c \'from pathlib import Path; Path("python-ok.txt").write_text("external-python-ok")\'',
+  ]);
+  await until(
+    "External Python tool",
+    async () =>
+      (await readFile(path.join(first.workspace, "python-ok.txt"), "utf8")) ===
+      "external-python-ok",
+  );
   const background = await cli(first.profile, first.workspace, [
     "background",
     "start",
@@ -351,6 +418,8 @@ try {
         appimage: binary,
         sha256: hash(await readFile(binary)),
         checks: [
+          "caller directory and relative profiles/projects survive both extraction launch modes",
+          "external Python tools run without injected runtime paths",
           "simultaneous owners use private unique directories in a shared TMPDIR",
           "eight concurrent short clients preserve both owners' executable and WebKit subprocess resources",
           "environment extraction mode preserves argv",

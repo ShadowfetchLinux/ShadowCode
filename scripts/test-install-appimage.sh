@@ -29,6 +29,8 @@ test "$(readlink "$HOME/Applications/ShadowCode.AppImage")" = ShadowCode-0.21.0-
 test ! -e "$HOME/Applications/ShadowCode-0.19.0-x86_64.AppImage"
 test "$(cat "$XDG_DATA_HOME/shadow-agent/profile.txt")" = 'keep this profile data'
 "$HOME/.local/bin/shadow" --version | grep -Fx 'ShadowCode 0.21.0'
+test "$(readlink "$HOME/.local/bin/shadowcode")" = shadow
+"$HOME/.local/bin/shadowcode" --version | grep -Fx 'ShadowCode 0.21.0'
 printf '# modified after checksum\n' >> "$APPIMAGE"
 if "$ROOT/scripts/install-appimage.sh" "$APPIMAGE" > /dev/null 2>&1; then
   echo 'Installer accepted a changed AppImage' >&2

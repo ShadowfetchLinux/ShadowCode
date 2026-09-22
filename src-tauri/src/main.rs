@@ -193,8 +193,29 @@ fn run() -> Result<()> {
         std::process::exit(code);
     }
     let isolated = options.profile.is_some();
-    let paths = options.paths()?;
-    let workspace = options.workspace;
+    let mut paths = options.paths()?;
+    // Resolve user paths before selecting the resource directory required by
+    // the AppImage's relocated WebKit subprocesses. CLI commands retain cwd.
+    paths.config = paths.config.canonicalize()?;
+    paths.data = paths.data.canonicalize()?;
+    paths.state = paths.state.canonicalize()?;
+    let workspace = Some(
+        options
+            .workspace
+            .or_else(|| paths.remembered_workspace())
+            .unwrap_or(std::env::current_dir()?)
+            .canonicalize()?,
+    );
+    if let Some(appdir) = std::env::var_os("APPDIR").map(PathBuf::from) {
+        if std::env::current_exe()?.starts_with(&appdir)
+            && appdir
+                .join("usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess")
+                .is_file()
+        {
+            // No GTK or asynchronous runtime has been started at this point.
+            std::env::set_current_dir(appdir.join("usr"))?;
+        }
+    }
     let mut builder = tauri::Builder::default();
     if !isolated {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {

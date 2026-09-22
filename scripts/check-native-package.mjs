@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 const run = promisify(execFile);
 const [appimagePath, debPath] = process.argv
   .slice(2)
@@ -118,6 +119,13 @@ try {
   assert.match(version, /^ShadowCode \d+\.\d+\.\d+$/);
   await run(appimagePath, ["--appimage-extract"], { ...options, cwd: scratch });
   const appdir = path.join(scratch, "squashfs-root");
+  assert.equal(
+    await digest(path.join(appdir, "AppRun")),
+    await digest(
+      fileURLToPath(new URL("../packaging/native-app-run.sh", import.meta.url)),
+    ),
+    "The package must use the launcher that preserves caller paths and external language runtimes",
+  );
   const appimageNotices = await verifyNotices(appdir, true);
   const runtimeBase = path.join(
     appdir,
@@ -271,6 +279,7 @@ try {
     bundleFiles: files.length,
     checks: [
       "FUSE-free AppImage version",
+      "caller-preserving native AppRun launcher",
       "ELF executable",
       "legacy ui launcher compatibility",
       "no Python runtime or sidecars",

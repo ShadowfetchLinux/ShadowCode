@@ -1,7 +1,14 @@
 // Package each format from the original executable. The bundler patches its
 // bundle type into the binary; reusing an already patched binary loses that tag.
 import { execFile, spawn } from "node:child_process";
-import { copyFile, mkdtemp, readFile, rename, rm } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -82,6 +89,12 @@ try {
         throw new Error(
           "AppImage runtime changed; update and verify its dependency notices before packaging",
         );
+      await copyFile(
+        path.join(root, "packaging/native-app-run.sh"),
+        path.join(appdir, "AppRun"),
+      );
+      await chmod(path.join(appdir, "AppRun"), 0o755);
+      await rm(path.join(appdir, "AppRun.wrapped"), { force: true });
       await appdirNotices(appdir);
       await runtimeNotices(appdir, nativeRuntime);
       const repacked = path.join(scratch, path.basename(appimage));
