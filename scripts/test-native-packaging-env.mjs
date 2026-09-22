@@ -38,6 +38,12 @@ test("packaging PATH is constructed, not inherited", () => {
   assert.doesNotMatch(joined, /\.hermes/);
   const rustDev = path.resolve(root, "../tools/rust-dev/extracted/usr/bin");
   if (existsSync(rustDev)) assert.ok(dirs.includes(rustDev));
+  const rustcDir = dirs.find((dir) => existsSync(path.join(dir, "rustc")));
+  assert.ok(
+    rustcDir,
+    "sanitized PATH must still find rustc for dependency notices",
+  );
+  assert.notEqual(path.resolve(rustcDir), "/usr/local/bin");
   const tauriTools = path.join(root, "target/.tauri");
   if (existsSync(tauriTools)) assert.ok(dirs.includes(tauriTools));
 });
@@ -64,6 +70,10 @@ test("applyPackagingPath overwrites a dirty process PATH", () => {
     assert.doesNotMatch(next, /(^|:)\/usr\/local\/bin(:|$)/);
     assert.match(next, /(^|:)\/usr\/bin(:|$)/);
     assert.notEqual(next, dirtyPath);
+    assert.ok(
+      next.split(path.delimiter).some((dir) => existsSync(path.join(dir, "rustc"))),
+      "dirty caller PATH must not drop rustc",
+    );
   } finally {
     process.env.PATH = previous;
   }

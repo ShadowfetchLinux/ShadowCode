@@ -56,11 +56,45 @@ export function isUnsafePackagingDir(dir) {
   );
 }
 
+function dirContains(dir, name) {
+  try {
+    statSync(path.join(dir, name));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// rustc/cargo live on the caller PATH (rustup ~/.cargo/bin, CARGO_HOME).
+// linuxdeploy still must not see /usr/local/bin or Hermes; keep only the
+// toolchain directories themselves when they pass the same safety checks.
+function rustToolchainDirs() {
+  const candidates = [];
+  if (process.env.CARGO_HOME) {
+    candidates.push(path.join(process.env.CARGO_HOME, "bin"));
+  }
+  if (process.env.HOME) {
+    candidates.push(path.join(process.env.HOME, ".cargo", "bin"));
+  }
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue;
+    const resolved = resolveExistingDir(dir);
+    if (
+      resolved &&
+      (dirContains(resolved, "rustc") || dirContains(resolved, "cargo"))
+    ) {
+      candidates.push(resolved);
+    }
+  }
+  return candidates;
+}
+
 export function packagingDirs(root, options = {}) {
   const execDir = options.execDir ?? path.dirname(process.execPath);
   const extras = [
     path.join(root, "tools/rust-dev/extracted/usr/bin"),
     path.join(root, "..", "tools/rust-dev/extracted/usr/bin"),
+    ...rustToolchainDirs(),
     path.join(root, "target/release"),
     path.join(root, "target/debug"),
     path.join(root, "target/.tauri"),

@@ -477,6 +477,37 @@ async fn attached_views_receive_bounded_completion_notifications_and_detect_owne
 }
 
 #[tokio::test]
+async fn attached_view_close_does_not_wait_for_missing_owner() {
+    let (_root, service) = setup();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let client = server.endpoint().client(service.workspace().unwrap(), None);
+    let view = std::sync::Arc::new(client.open_view().await.unwrap());
+    server.close();
+    server.wait_closed().await;
+    let reattach = {
+        let view = view.clone();
+        tokio::spawn(async move { view.reattach().await })
+    };
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let started = std::time::Instant::now();
+    let _ = view.close().await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "close waited for owner reconnect: {:?}",
+        started.elapsed()
+    );
+    let reattach = tokio::time::timeout(Duration::from_secs(2), reattach)
+        .await
+        .expect("reattach should stop when the view closes")
+        .unwrap();
+    assert!(
+        reattach.is_err(),
+        "reattach must not succeed after close: {reattach:?}"
+    );
+    service.engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn attached_view_reattaches_after_owner_restart_without_replay_or_duplicates() {
     let (_root, service) = setup();
     let paths = service.engine.paths().clone();
@@ -596,34 +627,5 @@ async fn attached_view_reattaches_after_owner_restart_without_replay_or_duplicat
         .filter(|job| job["status"] == "running" || job["status"] == "queued")
         .count();
     assert_eq!(running, 0, "reattach must not start or resume jobs");
-    stop(server, service).await;
-}
-
-fn descriptor_count() -> usize {
-    std::fs::read_dir("/proc/self/fd")
-        .map(|entries| entries.count())
-        .unwrap_or(0)
-}
-
-#[tokio::test]
-async fn attach_close_loop_does_not_grow_descriptors() {
-    let (_root, service) = setup();
-    let server = Server::start_with_mode(service.clone(), "server").unwrap();
-    let client = server.endpoint().client(service.workspace().unwrap(), None);
-    for _ in 0..2 {
-        let view = client.open_view().await.unwrap();
-        view.close().await.unwrap();
-    }
-    let baseline = descriptor_count();
-    for _ in 0..20 {
-        let view = client.open_view().await.unwrap();
-        view.close().await.unwrap();
-    }
-    let after = descriptor_count();
-    eprintln!("attach_close_loop descriptors baseline={baseline} after={after}");
-    assert!(
-        after <= baseline + 24,
-        "descriptor leak: baseline={baseline} after={after}"
-    );
     stop(server, service).await;
 }

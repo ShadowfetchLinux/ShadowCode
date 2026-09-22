@@ -16,6 +16,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
+const version = JSON.parse(
+  await readFile(path.join(root, "src-tauri/tauri.conf.json"), "utf8"),
+).version;
+const versionLine = new RegExp(
+  `^ShadowCode ${String(version).replaceAll(".", "\\.")}\\s*$`,
+);
 const binary = path.resolve(
   process.argv[2] ||
     path.join(
@@ -224,10 +230,10 @@ try {
     Array.from({ length: 8 }, () => finish(launch(["--version"]))),
   );
   for (const reply of replies)
-    assert.match(reply.stdout, /^ShadowCode 0\.20\.0\s*$/);
+    assert.match(reply.stdout, versionLine);
   assert.match(
     (await finish(launch(["ui", "--version"], {}, true))).stdout,
-    /^ShadowCode 0\.20\.0\s*$/,
+    versionLine,
     "Environment-based extraction preserves arguments",
   );
   await intact(first);

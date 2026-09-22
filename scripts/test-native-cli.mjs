@@ -9,6 +9,12 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const version = JSON.parse(
+  await readFile(path.join(root, "src-tauri/tauri.conf.json"), "utf8"),
+).version;
+const versionLine = new RegExp(
+  `^ShadowCode ${String(version).replaceAll(".", "\\.")}\\s*$`,
+);
 const binary = process.env.SHADOW_DESKTOP_BINARY || path.join(root, "target/debug/shadowcode");
 const binaryArgs = JSON.parse(process.env.SHADOW_CLI_ARGS || "[]");
 assert.ok(Array.isArray(binaryArgs) && binaryArgs.every(arg => typeof arg === "string"));
@@ -124,8 +130,8 @@ await writeFile(path.join(profile, "config/config.yaml"), JSON.stringify({
 }));
 let server;
 try {
-  assert.match((await finish(launch(["--version"]))).stdout, /^ShadowCode 0\.20\.0\s*$/);
-  assert.match((await finish(launch(["ui", "--version"]))).stdout, /^ShadowCode 0\.20\.0\s*$/);
+  assert.match((await finish(launch(["--version"]))).stdout, versionLine);
+  assert.match((await finish(launch(["ui", "--version"]))).stdout, versionLine);
   assert.match((await finish(launch(["--help"]))).stdout, /serve/);
   await finish(launch(["--unknown-option"]), 2);
   assert.equal((await cli(["health"])).runtime, "rust");
