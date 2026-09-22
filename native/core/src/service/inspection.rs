@@ -304,7 +304,7 @@ impl Service {
                     .unwrap_or("not an OS sandbox"),
                 "",
             ));
-            checks.push(crate::sandbox::doctor_check());
+            checks.extend(crate::sandbox::doctor_checks());
         }
         let failures = checks.iter().filter(|c| c["status"] == "fail").count();
         Ok(
