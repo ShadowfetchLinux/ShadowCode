@@ -35,6 +35,7 @@ pub mod service;
 pub mod sqlite;
 pub mod steering;
 pub mod store;
+pub mod system_info;
 pub mod tools;
 pub mod vision;
 pub mod workflows;

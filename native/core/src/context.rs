@@ -24,6 +24,28 @@ pub fn system(workspace: &Workspace, mode: &str) -> String {
     prompt
 }
 
+/// Describe the effective catalog, after mode/permission and context filtering.
+pub fn capability_guidance(config: &crate::config::Config, schemas: &[Value]) -> String {
+    let available = |name| schemas.iter().any(|schema| schema["function"]["name"] == name);
+    let mut note = format!(
+        "\n\nRuntime: {}. Answer greetings directly. For computer/workspace questions, use the supplied tools and actual results; do not repeat earlier claims that tools are unavailable or invent observations.",
+        std::env::consts::OS
+    );
+    if available("system_info") {
+        note.push_str(" Use system_info for OS and connected monitor/screen counts; it is read-only and cannot see screen contents.");
+    }
+    if available("exec") {
+        note.push_str(if config.permissions.approve_shell {
+            " exec is available for terminal commands; call it to request approval when needed."
+        } else {
+            " exec is available for terminal commands subject to the configured permission policy."
+        });
+    } else {
+        note.push_str(" Shell execution is unavailable in this task; explain that specific limit if relevant.");
+    }
+    note
+}
+
 /// Recovery never replays an unacknowledged mutation. Complete the protocol with
 /// an explicit unknown-result record, then let the new user request decide what
 /// to inspect next.

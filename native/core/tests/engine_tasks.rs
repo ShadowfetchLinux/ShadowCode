@@ -49,6 +49,60 @@ async fn wait(engine: &Engine, id: &str) -> Job {
 }
 
 #[tokio::test]
+async fn host_inspection_uses_real_tool_results_and_respects_read_only_mode() {
+    let server = support::server(|index, body| {
+        context::validate_pairs(body["messages"].as_array().unwrap()).unwrap();
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(system.contains("Runtime: "));
+        assert!(system.contains("Shell execution is unavailable"));
+        let schemas = body["tools"].as_array().unwrap();
+        assert!(schemas.iter().any(|s| s["function"]["name"] == "system_info"));
+        assert!(!schemas.iter().any(|s| s["function"]["name"] == "exec"));
+        let result = if index == 0 {
+            response("", json!([tool("host", "system_info", json!({}))]))
+        } else {
+            let message = body["messages"].as_array().unwrap().last().unwrap();
+            assert_eq!(message["name"], "system_info");
+            let output: Value = serde_json::from_str(message["content"].as_str().unwrap()).unwrap();
+            assert_eq!(output["success"], true);
+            assert_eq!(output["output"]["os"], std::env::consts::OS);
+            response("The native host inspection returned current display information.", json!([]))
+        };
+        (result, Duration::ZERO)
+    }).await;
+    let (root, engine) = setup(&server.endpoint);
+    let mut req = request(root.path(), "How many screens do I have on my computer right now?", None);
+    req.mode = "review".into();
+    let job = engine.start(req).await.unwrap();
+    let result = wait(&engine, &job.id).await;
+    assert_eq!(result.status, "completed", "{}", result.summary);
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+    let events = engine.store().recent_events(&job.session_id, 100).unwrap();
+    assert!(events.iter().any(|e| e["type"] == "tool.completed"
+        && e["payload"]["tool"] == "system_info" && e["payload"]["success"] == true));
+    assert!(!events.iter().any(|e| e["type"] == "approval.requested"));
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ordinary_greeting_does_not_force_tools_and_shell_approval_stays_enabled() {
+    let server = support::server(|_, body| {
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(system.contains("call it to request approval"));
+        assert!(body["tools"].as_array().unwrap().iter().any(|s| s["function"]["name"] == "exec"));
+        (response("Hello!", json!([])), Duration::ZERO)
+    }).await;
+    let (root, engine) = setup(&server.endpoint);
+    Config::patch(engine.paths(), json!({"permissions":{"approve_shell":true}})).unwrap();
+    let job = engine.start(request(root.path(), "hi", None)).await.unwrap();
+    assert_eq!(wait(&engine, &job.id).await.status, "completed");
+    let events = engine.store().recent_events(&job.session_id, 100).unwrap();
+    assert!(!events.iter().any(|e| e["type"] == "tool.started"));
+    assert!(Config::load(engine.paths(), None).unwrap().permissions.approve_shell);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn model_loop_edits_verifies_persists_and_continues_a_real_workspace() {
     let server = support::server(|index, body| {
         context::validate_pairs(body["messages"].as_array().unwrap()).unwrap();

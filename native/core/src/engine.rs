@@ -997,7 +997,7 @@ impl Engine {
         // when a larger context model is selected.
         if running.config.model.context_limit <= 4096 {
             const CORE: &[&str] = &[
-                "list_files", "read_file", "search_files", "search_text",
+                "system_info", "list_files", "read_file", "search_files", "search_text",
                 "search_symbol", "write_file", "edit_file", "apply_patch",
                 "create_directory", "exec", "git_status", "git_diff", "update_plan",
             ];
@@ -1048,6 +1048,7 @@ impl Engine {
             system.push_str("\n\n");
             system.push_str(extra);
         }
+        system.push_str(&context::capability_guidance(&running.config, &schemas));
         messages.insert(0, json!({"role":"system","content":system}));
         let image_refs = crate::vision::refs_from_paths(&running.workspace, &job.images)?;
         crate::vision::ensure_vision_or_bail(
@@ -1503,7 +1504,8 @@ impl Engine {
                     if result.success
                         && matches!(
                             call.name.as_str(),
-                            "read_file"
+                            "system_info"
+                                | "read_file"
                                 | "search_text"
                                 | "search_symbol"
                                 | "workspace_symbols"

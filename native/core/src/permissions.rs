@@ -11,7 +11,8 @@ pub enum Decision {
 pub fn read_only(tool: &str) -> bool {
     matches!(
         tool,
-        "list_files"
+        "system_info"
+            | "list_files"
             | "read_file"
             | "search_files"
             | "search_text"

@@ -637,6 +637,10 @@ impl ToolExecutor {
     fn files(&self, name: &str, args: &Value) -> Result<Value> {
         ensure!(!self.cancel.is_cancelled(), "Task cancelled");
         match name {
+            "system_info" => {
+                ensure!(args.as_object().is_some_and(|args| args.is_empty()), "system_info takes no arguments");
+                Ok(crate::system_info::inspect())
+            }
             "list_files" => {
                 let entries = self.workspace.list(args["path"].as_str().unwrap_or("."))?;
                 let count = integer(args, "max_entries", 400, 1, 10_000)?;
@@ -1049,6 +1053,7 @@ pub fn schemas() -> Vec<Value> {
     let n = json!({"type":"integer"});
     let b = json!({"type":"boolean"});
     let specs=vec![
+        ("system_info","Inspect OS and connected displays. Read-only.",json!({}),vec![]),
         ("list_files","List direct children of a workspace directory.",json!({"path":s,"max_entries":n}),vec![]),
         ("read_file","Read UTF-8 text with 1-based offset/limit. Returns truncated=true and next_offset when the range or byte budget is exceeded; do not assume omitted lines.",json!({"path":s,"offset":n,"limit":n}),vec!["path"]),
         ("search_files","Find filenames by substring; respects ignore rules.",json!({"query":s,"path":s}),vec!["query"]),
@@ -1080,5 +1085,7 @@ pub fn schemas() -> Vec<Value> {
         ("git_commit","Commit staged changes after approval. Hooks and signing are disabled; no push.",json!({"message":s}),vec!["message"]),
         ("update_plan","Update the visible plan. Only one step may be in progress; mark completed only with evidence.",json!({"goal":s,"steps":{"type":"array","items":{"type":"object","properties":{"id":s,"title":s,"status":{"type":"string","enum":["pending","in_progress","completed","blocked","failed"]},"detail":s},"required":["title","status"]}}}),vec!["steps"]),
     ];
-    specs.into_iter().map(|(name,description,properties,required)|json!({"type":"function","function":{"name":name,"description":truncate(description, 80),"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
+    // Keep the catalog usable for 4K local models; argument names and focused
+    // descriptions carry the important contract while full docs remain in source.
+    specs.into_iter().map(|(name,description,properties,required)|json!({"type":"function","function":{"name":name,"description":truncate(description, 64),"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
 }

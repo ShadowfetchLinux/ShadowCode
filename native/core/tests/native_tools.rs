@@ -52,6 +52,23 @@ async fn call(tools: &ToolExecutor, name: &str, args: Value) -> shadowcode_core:
 }
 
 #[tokio::test]
+async fn system_info_is_read_only_and_cannot_read_an_arbitrary_path() {
+    let mut config = Config::default();
+    config.permissions.level = PermissionLevel::ReadOnly;
+    let (_root, tools) = fixture(config);
+    let result = call(&tools, "system_info", json!({})).await;
+    assert!(result.success, "{}", result.error);
+    assert_eq!(result.output["read_only"], true);
+    assert_eq!(result.output["os"], std::env::consts::OS);
+    assert!(result.output["displays"]["connectors"].is_array());
+    assert!(shadowcode_core::permissions::parallel_safe("system_info", &json!({})));
+    assert_eq!(shadowcode_core::autonomy::replay_class("system_info"), shadowcode_core::autonomy::ReplayClass::SafeToReplay);
+    let denied = call(&tools, "system_info", json!({"path":"/etc/shadow"})).await;
+    assert!(!denied.success);
+    assert!(denied.error.contains("takes no arguments"));
+}
+
+#[tokio::test]
 async fn sqlite_builtins_work_in_read_only_mode_without_external_activation() {
     let mut config = Config::default();
     config.permissions.level = PermissionLevel::ReadOnly;

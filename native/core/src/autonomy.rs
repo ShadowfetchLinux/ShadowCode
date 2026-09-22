@@ -111,7 +111,7 @@ pub fn tool_class(name: &str) -> ToolClass {
 /// repeated; shell and Git history changes need a human.
 pub fn replay_class(name: &str) -> ReplayClass {
     match name {
-        "list_files" | "read_file" | "search_files" | "search_text" | "search_symbol"
+        "system_info" | "list_files" | "read_file" | "search_files" | "search_text" | "search_symbol"
         | "workspace_symbols" | "goto_definition" | "find_references" | "get_diagnostics"
         | "mcp_sqlite_tables" | "mcp_sqlite_query" | "background_list" | "background_output"
         | "git_status" | "git_diff" | "git_log" | "update_plan" | "update_todos" => {
