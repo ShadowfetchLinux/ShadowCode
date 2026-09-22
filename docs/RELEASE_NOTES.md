@@ -1,4 +1,4 @@
-ShadowCode 0.22 improves native Linux coding workflows, project isolation and recovery.
+ShadowCode 0.22.1 improves native Linux coding workflows, project isolation and recovery.
 The Rust/Tauri app embeds its interface and needs no Python or Node runtime.
 
 - **Conversation control:** fork from a response with completed tool context;
@@ -19,13 +19,13 @@ The Rust/Tauri app embeds its interface and needs no Python or Node runtime.
 - **Guardian:** optional diagnostics and properly scoped proposal approval.
   Diagnostics identify test commands but do not run tests or generate patches.
 
-Downloads: `ShadowCode_0.22.0_amd64.AppImage`,
-`ShadowCode_0.22.0_amd64.deb`, the AppImage runtime source archive, and `SHA256SUMS`.
+Downloads: `ShadowCode_0.22.1_amd64.AppImage`,
+`ShadowCode_0.22.1_amd64.deb`, the AppImage runtime source archive, and `SHA256SUMS`.
 Binaries target x86_64, Ubuntu 24.04+ / glibc 2.39+. Git and model providers such
 as Ollama remain external.
 
 Keep SHA256SUMS beside the AppImage and run
-`scripts/install-appimage.sh /path/to/ShadowCode_0.22.0_amd64.AppImage` to verify
+`scripts/install-appimage.sh /path/to/ShadowCode_0.22.1_amd64.AppImage` to verify
 and install it in `~/Applications`. Existing settings, keys and task history
 are preserved. Extraction mode works without FUSE.
 

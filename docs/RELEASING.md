@@ -7,7 +7,7 @@ wheel, source distribution, portable archive, or browser launcher.
 ## Prepare the release
 
 1. Update the shared version in `Cargo.toml` and `src-tauri/tauri.conf.json`.
-   They must match the tag exactly, for example `v0.22.0`.
+   They must match the tag exactly, for example `v0.22.1`.
 2. Update `CHANGELOG.md`, `docs/RELEASE_NOTES.md`, README download commands and
    native migration/verification records with only evidence that is current for
    the tagged commit.
@@ -20,8 +20,8 @@ wheel, source distribution, portable archive, or browser launcher.
    npm --prefix ui run test:e2e
    cargo +1.95.0 fmt --all --check
    cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
+   cargo +1.95.0 build -p shadowcode-desktop --locked
    cargo +1.95.0 test --workspace --locked
-   cargo build -p shadowcode-desktop --locked
    node scripts/test-native-cli.mjs
    node scripts/test-native-stress.mjs
    node scripts/test-native-tui.mjs
@@ -48,6 +48,10 @@ wheel, source distribution, portable archive, or browser launcher.
    notices and their digests. The installer test uses a disposable home to prove
    a checked AppImage replaces an old application, preserves profile data, and
    refuses a checksum mismatch before changing the installed target.
+
+   Build the desktop executable before running the Rust suite: process-death
+   and reconnection tests launch that real executable. `cargo test` alone builds
+   test harnesses, which do not provide `target/debug/shadowcode` on a clean host.
 
 5. Push the reviewed commit, create and push the matching annotated tag:
 

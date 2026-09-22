@@ -254,6 +254,7 @@ Developer checks:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo build -p shadowcode-desktop --locked
 cargo test --workspace
 # Read-only protocol probe against an already installed local model:
 cargo run -p shadowcode-core --example probe_model -- gpt-oss:20b

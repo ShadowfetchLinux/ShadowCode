@@ -4,6 +4,13 @@ Qualification date: 2026-09-22. Linux x86_64, Rust 1.95.0 and Node 24.19.0.
 This release builds on the recent symbol-index, worktree, steering, fork and
 Guardian changes and corrects their integration and reliability issues.
 
+Local application qualification below used the 0.22.0 candidate. Clean GitHub
+CI then exposed a workflow ordering error: process tests ran before the real
+desktop executable existed. Patch 0.22.1 corrects that order and version metadata
+without changing application behavior. Its tag workflow repeats native source,
+application and package verification before publishing; the failed candidate tag
+is retained without a release download.
+
 ## Verified behavior
 
 - 343 native Rust tests cover the engine, permissions, cancellation, history,

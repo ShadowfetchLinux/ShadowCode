@@ -231,8 +231,12 @@ The host's distro `rustdoc` needs its LLVM library directory in the loader path
 for doc tests. The full suite was run with:
 
 ```sh
+cargo build -p shadowcode-desktop --locked
 LD_LIBRARY_PATH=/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib cargo test --workspace --locked
 ```
+
+The explicit desktop build is required on a clean checkout because process-death
+and reconnection tests launch `target/debug/shadowcode`.
 
 The pinned CI toolchain does not require this host-specific workaround.
 

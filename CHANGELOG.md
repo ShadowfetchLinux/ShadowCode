@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.22.0
+## 0.22.1
+
+- Fix clean-build CI ordering: build the real desktop executable before running
+  process-death and reconnection tests. Repeat qualification through the release
+  workflow before publishing. Includes the 0.22 upgrade described below.
+
+## 0.22.0 — unpublished candidate
 
 - Native desktop controls for context windows, Ollama residency, response forks,
   parallel workspace preparation and combined integration checks.
