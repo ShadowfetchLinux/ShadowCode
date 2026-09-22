@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Check,
   CheckCircle2,
@@ -163,6 +163,14 @@ export function OpenWeightHub({
   const [copiedId, setCopiedId] = useState("");
   const [testingModel, setTestingModel] = useState<string | null>(null);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   // Installed models list
   const installedMap = useMemo(() => {
     const map = new Map<string, ModelInfo>();
@@ -201,11 +209,16 @@ export function OpenWeightHub({
     });
   }, [filter, search, installedMap]);
 
-  const copyCommand = (cmd: string, id: string) => {
-    navigator.clipboard.writeText(cmd);
-    setCopiedId(id);
-    onToast(`Copied command: ${cmd}`, "ok");
-    setTimeout(() => setCopiedId(""), 3000);
+  const copyCommand = async (cmd: string, id: string) => {
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard access is unavailable");
+      await navigator.clipboard.writeText(cmd);
+      setCopiedId(id);
+      onToast(`Copied command: ${cmd}`, "ok");
+      setTimeout(() => setCopiedId(""), 3000);
+    } catch (error) {
+      onToast(`Could not copy command: ${String(error)}`, "err");
+    }
   };
 
   const testModel = async (championId: string) => {
@@ -266,7 +279,7 @@ export function OpenWeightHub({
         <div className="hub-status-bar">
           <div className="hub-hardware-pill">
             <Zap size={14} className="accent-icon" />
-            <span><strong>Target GPU:</strong> NVIDIA RTX 5060 Ti · 16 GB VRAM</span>
+            <span><strong>Hardware guide:</strong> match model size to your available VRAM</span>
           </div>
 
           <div className="hub-provider-pills">
@@ -449,7 +462,7 @@ export function OpenWeightHub({
                         type="button"
                         className="ghost-btn copy-btn"
                         title="Copy pull command"
-                        onClick={() => copyCommand(c.pullCmd, c.id)}
+                        onClick={() => void copyCommand(c.pullCmd, c.id)}
                       >
                         {copiedId === c.id ? (
                           <Check size={13} className="success-icon" />

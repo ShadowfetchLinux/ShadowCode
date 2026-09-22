@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { Fragment, useState, useEffect, useCallback } from "react";
 import {
   BookOpen,
   Check,
@@ -39,8 +39,20 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
   });
 
   useEffect(() => {
-    localStorage.setItem("shadow:flow-learned", JSON.stringify([...learned]));
+    try {
+      localStorage.setItem("shadow:flow-learned", JSON.stringify([...learned]));
+    } catch {
+      // Private browsing and embedded webviews may disable persistent storage.
+    }
   }, [learned]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   const toggleLearned = useCallback((id: string) => {
     setLearned((prev) => {
@@ -106,19 +118,17 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
 
         <div className="flow-progress">
           {TAB_IDS.map((id, i) => (
-            <>
+            <Fragment key={id}>
               <span
-                key={id}
                 className={`flow-progress-dot ${activeTab === id ? "active" : ""} ${learned.has(id) ? "completed" : ""}`}
                 title={learned.has(id) ? "Learned" : `Section ${i + 1}`}
               />
               {i < TAB_IDS.length - 1 && (
                 <span
-                  key={`line-${id}`}
                   className={`flow-progress-line ${learned.has(id) ? "completed" : ""}`}
                 />
               )}
-            </>
+            </Fragment>
           ))}
         </div>
 
@@ -159,7 +169,7 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
                 <div className="flow-card">
                   <h4>🖥️ Hardware & VRAM Compatibility</h4>
                   <p className="flow-card-desc">
-                    ShadowCode automatically inspects your GPU and memory to ensure high-performance token generation:
+                    Use these estimates to match a model and quantization to your available VRAM. ShadowCode does not probe GPU memory automatically:
                   </p>
                   <div className="vram-guide-table">
                     <div className="vram-row">
@@ -321,7 +331,7 @@ export function FlowGuide({ onClose, onSelectPrompt }: FlowGuideProps) {
                   <div className="timeline-content">
                     <h4>Review Diffs with Inline Hunk Controls</h4>
                     <p>
-                      Open the Changes drawer (<code>Ctrl+B</code>) or click on any operation card to inspect color-coded additions and deletions. Accept or reject changes per-hunk or per-file.
+                      Open the Changes drawer (<code>Ctrl+Shift+B</code>) or click on any operation card to inspect color-coded additions and deletions. Accept or reject changes per-hunk or per-file.
                     </p>
                   </div>
                 </div>
