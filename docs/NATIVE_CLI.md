@@ -31,6 +31,12 @@ Use `--session <ID-or-unique-prefix>` to continue a saved conversation,
 to select a route, and `--queue` to wait behind an active task in the project.
 Planning and review retain their read-only permissions.
 
+Computer and workspace questions are grounded in the tools supplied to the
+model. On Linux, the read-only `system_info` tool reports the OS and connected
+kernel display outputs (including a separate enabled count); it cannot inspect
+screen contents. If the host interface is unavailable or incomplete, counts are
+reported as unknown rather than guessed.
+
 `command <name> "arguments"` invokes a native slash command; no name lists the
 catalog. `skill --list` lists project skills and
 `skill <name> "arguments"` runs one with recorded source provenance. Desktop

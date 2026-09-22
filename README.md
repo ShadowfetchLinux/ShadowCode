@@ -82,6 +82,10 @@ a changed download before it can alter the installed application.
 - **Local coding workflows.** Durable queues, goals, model routing, approvals,
   worktrees, background processes, MCP, project skills and hooks all share one
   local task engine.
+- **Grounded host inspection.** Local models can answer OS and connected-display
+  questions with the read-only `system_info` tool. It reports kernel display
+  outputs from the machine running ShadowCode, never screen contents, and marks
+  incomplete detection as unknown instead of guessing zero.
 
 See [CHANGELOG.md](CHANGELOG.md) for the release history and
 [the user guide](docs/USER_GUIDE.md) for workflows and recovery.

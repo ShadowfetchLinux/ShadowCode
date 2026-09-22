@@ -39,6 +39,9 @@ packages from this tag; existing 0.20.0 AppImage/Debian filenames are stale.
 - Shell execution is a lexical word list. **It is not an OS sandbox.**
   Checkpoints cover native file-tool changes, not arbitrary shell or Git side
   effects.
+- Local models receive explicit runtime capability guidance and a read-only
+  `system_info` tool for grounded OS and connected-display answers. Incomplete
+  host detection is represented as unknown; greetings do not trigger tools.
 
 ## 0.20.0 — native development (unreleased)
 
