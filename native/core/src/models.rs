@@ -126,10 +126,37 @@ impl ModelClient {
                 }
                 m
             }));
-            let mut body = json!({"model":self.config.name,"messages":converted,"stream":true,"think":false,
-                "options":{"num_predict":max_tokens,"num_ctx":self.config.context_limit}});
+            // keep_alive: keep the loaded model resident between turns (Ollama).
+            // Prefix reuse: Ollama HTTP does not expose a safe prompt-prefix cache
+            // API; we still avoid inventing a speedup claim. Unchanged system+tool
+            // text is hashed for diagnostics only.
+            let prefix_hash = {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                if let Some(sys) = converted.iter().find(|m| m["role"] == "system") {
+                    h.update(sys["content"].as_str().unwrap_or("").as_bytes());
+                }
+                h.update(serde_json::to_vec(tools).unwrap_or_default());
+                format!("{:x}", h.finalize())[..16].to_owned()
+            };
+            let mut body = json!({
+                "model": self.config.name,
+                "messages": converted,
+                "stream": true,
+                "think": false,
+                "keep_alive": self.config.keep_alive.clone(),
+                "options": {
+                    "num_predict": max_tokens,
+                    "num_ctx": self.config.context_limit
+                },
+                "_shadow_prefix_hash": prefix_hash,
+            });
             if !tools.is_empty() {
                 body["tools"] = json!(tools);
+            }
+            // Strip internal diagnostic fields before send.
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("_shadow_prefix_hash");
             }
             body
         } else {

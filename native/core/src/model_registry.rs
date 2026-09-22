@@ -78,7 +78,7 @@ pub fn record_detected(store: &Store, providers: &[Value]) -> Result<()> {
                     .as_str()
                     .unwrap_or("OPENAI_API_KEY")
                     .into(),
-                context_limit: recommended_context(name, row["context_limit"].as_u64()),
+                keep_alive: "30m".into(), context_limit: recommended_context(name, row["context_limit"].as_u64()),
             };
             validate(&model)?;
             store.upsert_detected_model(&json!({"id":model.default,"name":model.name,"provider":model.provider,"endpoint":model.endpoint,"context_limit":model.context_limit,"metadata":{"detected":true,"capabilities":row["capabilities"]}}))?;
@@ -102,7 +102,7 @@ pub fn from_row(row: &Value) -> Result<ModelConfig> {
                 _ => "OPENAI_API_KEY",
             })
             .into(),
-        context_limit: row["context_limit"].as_u64().unwrap_or(16384) as usize,
+        keep_alive: "30m".into(), context_limit: row["context_limit"].as_u64().unwrap_or(16384) as usize,
     };
     validate(&model)?;
     Ok(model)

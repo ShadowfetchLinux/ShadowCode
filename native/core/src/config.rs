@@ -44,6 +44,9 @@ pub struct ModelConfig {
     pub api_key_env: String,
     pub name: String,
     pub context_limit: usize,
+    /// Ollama keep_alive duration string (e.g. "30m", "-1" for indefinite).
+    #[serde(default = "default_keep_alive")]
+    pub keep_alive: String,
 }
 impl Default for ModelConfig {
     fn default() -> Self {
@@ -54,8 +57,13 @@ impl Default for ModelConfig {
             api_key_env: "OPENAI_API_KEY".into(),
             name: "mock-coder".into(),
             context_limit: 128_000,
+            keep_alive: default_keep_alive(),
         }
     }
+}
+
+fn default_keep_alive() -> String {
+    "30m".into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -128,6 +136,8 @@ pub struct Config {
     pub git: Value,
     pub logging: Value,
     pub trusted_workspaces: Vec<String>,
+    #[serde(default)]
+    pub guardian: Value,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -145,6 +155,7 @@ impl Default for Config {
             git: json!({"auto_commit":false,"allow_destructive":false}),
             logging: json!({"level":"info"}),
             trusted_workspaces: Vec::new(),
+            guardian: json!({"enabled":false,"interval_sec":3600,"allow_prepare_patch":false}),
             extra: BTreeMap::new(),
         }
     }

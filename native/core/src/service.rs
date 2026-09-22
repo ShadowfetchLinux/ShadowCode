@@ -469,6 +469,62 @@ impl Service {
                     .await
             }
             ("GET", "/api/doctor") => return self.doctor(q("test_model") == "true").await,
+            ("GET", "/api/guardian") => {
+                crate::guardian::apply_config(&crate::guardian::from_config_value(
+                    &self.config()?.guardian,
+                ));
+                return Ok(crate::guardian::status());
+            }
+            ("POST", "/api/guardian/run") => {
+                let cfg = crate::guardian::from_config_value(&self.config()?.guardian);
+                crate::guardian::apply_config(&cfg);
+                ensure!(cfg.enabled, "Guardian is disabled (default OFF)");
+                let workspace = self.workspace()?;
+                return crate::guardian::run_health_check(&workspace);
+            }
+            ("POST", "/api/guardian/request-patch") => {
+                crate::guardian::apply_config(&crate::guardian::from_config_value(
+                    &self.config()?.guardian,
+                ));
+                return crate::guardian::request_prepare_patch(text("summary"));
+            }
+            ("POST", "/api/guardian/approve-patch") => {
+                crate::guardian::apply_config(&crate::guardian::from_config_value(
+                    &self.config()?.guardian,
+                ));
+                let workspace = self.workspace()?;
+                let checkout = self.engine.paths().data.join("guardian-worktrees");
+                return crate::guardian::approve_prepare_patch(
+                    &workspace,
+                    &checkout,
+                    text("summary"),
+                );
+            }
+            ("POST", "/api/parallel/prepare") => {
+                let workspace = self.workspace()?;
+                let goal = text("goal");
+                let checkout = self.engine.paths().data.join("parallel-worktrees");
+                return crate::parallel::prepare(&workspace, goal, &checkout);
+            }
+            ("GET", "/api/parallel") => {
+                return Ok(json!({
+                    "max_workers": crate::parallel::MAX_WORKERS,
+                    "plan": crate::parallel::active_plan(),
+                    "note": "Cap 2 concurrent worker worktrees plus lead; disabled outside git."
+                }));
+            }
+            ("POST", "/api/parallel/worker-status") => {
+                return crate::parallel::mark_worker_status(text("worker_id"), text("status"));
+            }
+            ("POST", "/api/parallel/verify") => {
+                let workspace = self.workspace()?;
+                return crate::parallel::verify(&workspace);
+            }
+            ("POST", "/api/parallel/cleanup") => return crate::parallel::cleanup(),
+            ("POST", "/api/sandbox/discard-scratch") => {
+                let path = PathBuf::from(text("path"));
+                return crate::sandbox::discard_scratch(&path);
+            }
             #[cfg(unix)]
             ("GET", "/api/mcp/servers") => {
                 let workspace = Workspace::open(&self.workspace()?)?;
@@ -1306,6 +1362,13 @@ impl Service {
                         crate::memory::archive(self.engine.paths(), &store, &workspace, sid)?;
                     return store.branch_session_with_memory(sid, text("title"), &memory);
                 }
+                ("POST", Some("fork")) => {
+                    let event_id = body["event_id"]
+                        .as_i64()
+                        .or_else(|| body["event_id"].as_u64().map(|v| v as i64))
+                        .context("event_id required")?;
+                    return store.fork_session_from_event(sid, event_id, text("title"));
+                }
                 ("GET", Some("events")) => {
                     if q("view") == "window" {
                         let through = if q("before").is_empty() {
@@ -1514,7 +1577,7 @@ impl Service {
                     }
                 })
                 .into(),
-            context_limit: body["context_limit"]
+            keep_alive: "30m".into(), context_limit: body["context_limit"]
                 .as_u64()
                 .map(|v| v as usize)
                 .unwrap_or_else(|| {
