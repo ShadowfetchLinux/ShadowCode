@@ -79,7 +79,9 @@ Test maintenance preserves the behaviors being checked: namespace PIDs are
 resolved to actual host children before asserting cleanup; descriptor-leak checks
 run in an isolated process with a tighter allowance; the 4,096-token boundary
 fixture accounts for the expanded tool catalog without raising the limit. Native
-accessibility checks wait for theme transitions to finish.
+and browser accessibility checks wait for theme transitions to finish. The
+browser fixture was aligned after CI captured an intermediate animated color;
+the contrast assertions and application styling remain unchanged.
 
 ## Scope
 

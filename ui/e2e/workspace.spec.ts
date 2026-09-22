@@ -104,10 +104,17 @@ test("light and dark home screens pass accessibility checks", async ({
   page,
 }) => {
   for (const theme of ["light", "dark"]) {
-    await page.evaluate(
-      (theme) => (document.documentElement.dataset.theme = theme),
-      theme,
-    );
+    await page.evaluate(async (theme) => {
+      document.documentElement.dataset.theme = theme;
+      // Measure the settled theme, not an intermediate background color.
+      getComputedStyle(document.body).color;
+      await Promise.all(
+        document
+          .getAnimations()
+          .filter((animation) => "transitionProperty" in animation)
+          .map((animation) => animation.finished.catch(() => {})),
+      );
+    }, theme);
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
       .analyze();
