@@ -22,7 +22,8 @@ type Section =
   | "hooks"
   | "mcp"
   | "plugins"
-  | "worktrees";
+  | "worktrees"
+  | "advanced";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "model", label: "Model" },
   { id: "permissions", label: "Permissions" },
@@ -31,6 +32,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
   { id: "worktrees", label: "Worktrees" },
+  { id: "advanced", label: "Advanced" },
 ];
 
 export function Settings({
@@ -82,6 +84,13 @@ export function Settings({
   // Appearance
   const [theme, setTheme] = useState(String(ui.theme || "light"));
   const [ability, setAbility] = useState(String(ui.ability || "none"));
+  const guardianCfg = (cfg.guardian || {}) as Record<string, string | number | boolean>;
+  const [guardianEnabled, setGuardianEnabled] = useState(
+    Boolean(guardianCfg.enabled),
+  );
+  const [guardianInterval, setGuardianInterval] = useState(
+    Number(guardianCfg.interval_sec ?? 3600),
+  );
   const [notify, setNotify] = useState(ui.notify !== false);
   const [notifyAfter, setNotifyAfter] = useState(
     Number(ui.notify_after_sec ?? 4),
@@ -235,6 +244,11 @@ export function Settings({
             require_approval_for_dangerous: approveDangerous,
           },
           ui: { theme, ability, notify, notify_after_sec: notifyAfter },
+          guardian: {
+            enabled: guardianEnabled,
+            interval_sec: guardianInterval,
+            allow_prepare_patch: false,
+          },
         },
         apiKey,
         keyEnv,
@@ -771,13 +785,52 @@ export function Settings({
         {section === "worktrees" && isNative() && (
           <WorktreeSettings onOpen={onOpenProject} onToast={onToast} />
         )}
+
+      {section === "advanced" && (
+        <div className="stack gap">
+          <h3>Advanced</h3>
+          <p className="muted">
+            Parallel worktrees (cap 2), optional Guardian health checks, and
+            sandbox details live here so the main task view stays focused.
+          </p>
+          <label className="row gap">
+            <input
+              type="checkbox"
+              checked={guardianEnabled}
+              onChange={(e) => setGuardianEnabled(e.target.checked)}
+            />
+            Enable Guardian scheduled health check (default off)
+          </label>
+          <label>
+            Guardian interval (seconds)
+            <input
+              type="number"
+              min={60}
+              max={86400}
+              value={guardianInterval}
+              onChange={(e) => setGuardianInterval(Number(e.target.value) || 3600)}
+            />
+          </label>
+          <p className="muted">
+            Guardian never pushes, opens a PR, or merges while idle. Patch
+            prepare requires explicit approval. Bubblewrap is optional isolation
+            with an ephemeral scratch dir — not kernel-proof.
+          </p>
+          <p className="muted">
+            Parallel workers: at most 2 git worktrees plus the lead task. Disabled
+            outside git repositories.
+          </p>
+        </div>
+      )}
+
         <div className="row end settings-foot">
           <button type="button" className="ghost" onClick={onClose}>
             Close
           </button>
           {(section === "model" ||
             section === "permissions" ||
-            section === "appearance") && (
+            section === "appearance" ||
+            section === "advanced") && (
             <button
               type="button"
               className="primary"

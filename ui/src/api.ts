@@ -601,6 +601,16 @@ export const api = {
       rewindable: boolean;
       checkpoint: { changes: number; paths: string[] } | null;
     }>(`/api/checkpoints/tasks/${taskId}`),
+  forkSession: (id: string, eventId: number, title?: string) =>
+    send<{
+      fork: { id: string; title: string };
+      original: { id: string };
+      original_intact: boolean;
+      forked_from_event: number;
+    }>(`/api/sessions/${id}/fork`, "POST", {
+      event_id: eventId,
+      title: title || "",
+    }),
   rewindTask: (taskId: string) =>
     send<{ ok: boolean; restored: string[] }>(
       `/api/checkpoints/tasks/${taskId}/restore`,

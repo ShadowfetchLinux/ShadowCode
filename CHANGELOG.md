@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (flagship complete)
+
+- **Code intelligence:** On-demand SQLite AST symbol index for Rust/TypeScript
+  (ordinary tables). Tools: `find_references`, `goto_definition`,
+  `get_diagnostics`, `get_type_signature`. Patch prep includes bounded callers.
+- **Sandbox:** Ephemeral scratch upper (`SHADOWCODE_SCRATCH`) with discard path;
+  real home stays read-only; CoW probe is honest (not kernel-proof).
+- **Parallel worktrees:** Cap 2 workers + lead; verifier reports unclean merges;
+  disabled outside git.
+- **Inference:** Ollama `keep_alive` retained; no fake prefix-cache 3× claim
+  (see `docs/NATIVE_INFERENCE.md`).
+- **Verification:** Bug/fix prompts still ask for a failing case first; narrow
+  test commands when verification is requested; model prose never verifies.
+- **Session fork:** `POST /api/sessions/{id}/fork` from an event id; original
+  intact.
+- **Guardian:** Optional scheduled read-only health check (default OFF); patch
+  prepare only after approval; never silent auto-PR.
+- **UI:** Advanced settings group for guardian/parallel/sandbox; vitest uses
+  happy-dom (jsdom ESM break on Node 22.11).
+
 ## 0.21.0
 
 Crate, Tauri, CLI, AppImage, and Debian versions are **0.21.0**. Rebuild
