@@ -140,8 +140,8 @@ From the repository root, build both package formats with:
 ```sh
 node scripts/build-native.mjs
 node scripts/check-native-package.mjs \
-  target/release/bundle/appimage/ShadowCode_0.22.1_amd64.AppImage \
-  target/release/bundle/deb/ShadowCode_0.22.1_amd64.deb
+  target/release/bundle/appimage/ShadowCode_0.22.2_amd64.AppImage \
+  target/release/bundle/deb/ShadowCode_0.22.2_amd64.deb
 node scripts/test-native-runtime.mjs
 node --test scripts/test-native-source-fetch.mjs
 node scripts/test-native-runtime-sources.mjs
@@ -173,8 +173,9 @@ default-profile activation using isolated XDG storage and a private DBus session
 
 `scripts/build-native.mjs` constructs a deterministic packaging PATH before
 spawning cargo, Tauri, or linuxdeploy. It keeps `/usr/bin`, `/bin`, `/usr/sbin`,
-`/sbin`, the Node directory that launched the script, rust-dev extract bins when
-present, and `target/{release,debug,.tauri}`. It drops `/usr/local/bin`,
+`/sbin`, the Node directory that launched the script, the selected `CARGO_HOME/bin`
+(default `~/.cargo/bin`) for Rustup, rust-dev extract bins when present, and
+`target/{release,debug,.tauri}`. It drops `/usr/local/bin`,
 `/snap/bin`, and any directory whose `node`/`npm` resolves into Hermes or
 `/root`. The calling shell does not need to sanitize PATH; a dirty host PATH
 that includes `/usr/local/bin/node` → `/root/.hermes/...` is ignored. The same

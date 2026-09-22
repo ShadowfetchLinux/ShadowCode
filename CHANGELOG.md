@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.22.1
+## 0.22.2
+
+- Retain the selected Cargo home when sanitizing packaging PATH, so clean
+  Rustup-based runners can invoke the compiler and package manager. Add compiler
+  discovery and unsafe-node-link regression checks. Includes the native 0.22
+  workflow and reliability upgrade below.
+
+## 0.22.1 — unpublished candidate
 
 - Fix clean-build CI ordering: build the real desktop executable before running
   process-death and reconnection tests. Repeat qualification through the release

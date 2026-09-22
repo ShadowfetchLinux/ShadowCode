@@ -6,10 +6,13 @@ Guardian changes and corrects their integration and reliability issues.
 
 Local application qualification below used the 0.22.0 candidate. Clean GitHub
 CI then exposed a workflow ordering error: process tests ran before the real
-desktop executable existed. Patch 0.22.1 corrects that order and version metadata
-without changing application behavior. Its tag workflow repeats native source,
-application and package verification before publishing; the failed candidate tag
-is retained without a release download.
+desktop executable existed. Candidate 0.22.1 corrected that order and passed
+native source, CLI, stress, terminal, MCP and desktop checks on GitHub. Packaging
+then exposed missing Rustup discovery in the sanitized PATH. Release 0.22.2
+preserves the selected Cargo home, with six packaging-environment regression
+checks. These patches leave application behavior unchanged. The tag workflow
+repeats verification before publishing; failed candidate tags are retained
+without release downloads.
 
 ## Verified behavior
 

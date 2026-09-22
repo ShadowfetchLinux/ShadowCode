@@ -1,7 +1,7 @@
 // Prove packaging PATH ignores host Hermes/node hijacks and is enough for linuxdeploy.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, symlink, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { existsSync, readlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,7 +18,10 @@ import {
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
-const linuxdeploy = path.join(root, "target/.tauri/linuxdeploy-x86_64.AppImage");
+const linuxdeploy = path.join(
+  root,
+  "target/.tauri/linuxdeploy-x86_64.AppImage",
+);
 const hermesNode = "/usr/local/bin/node";
 const dirtyPath = `${path.dirname(hermesNode)}:/snap/bin:/usr/bin:/bin`;
 
@@ -44,7 +47,9 @@ test("packaging PATH is constructed, not inherited", () => {
 
 test("Hermes and /usr/local/bin node hijacks are rejected", async () => {
   assert.equal(isUnsafePackagingDir("/usr/local/bin"), true);
-  const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-packaging-path-"));
+  const scratch = await mkdtemp(
+    path.join(tmpdir(), "shadowcode-packaging-path-"),
+  );
   try {
     await symlink("/root/.hermes/node/bin/node", path.join(scratch, "node"));
     assert.equal(isUnsafePackagingDir(scratch), true);
@@ -53,6 +58,42 @@ test("Hermes and /usr/local/bin node hijacks are rejected", async () => {
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
+});
+
+test("Rustup Cargo home survives PATH cleanup and still rejects node hijacks", async () => {
+  const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-rustup-path-"));
+  const cargoHome = path.join(scratch, "custom-cargo");
+  const bin = path.join(cargoHome, "bin");
+  await mkdir(bin, { recursive: true });
+  try {
+    for (const name of ["cargo", "rustc"]) {
+      await writeFile(
+        path.join(bin, name),
+        `#!/bin/sh\nprintf '${name} rustup-fixture\\n'\n`,
+        { mode: 0o755 },
+      );
+    }
+    const next = packagingPath(scratch, { cargoHome });
+    assert.ok(next.split(":").includes(bin));
+    for (const name of ["cargo", "rustc"]) {
+      const result = await exec(name, ["--version"], {
+        env: { ...process.env, PATH: next },
+      });
+      assert.equal(result.stdout.trim(), `${name} rustup-fixture`);
+    }
+    await symlink("/root/.hermes/node/bin/node", path.join(bin, "node"));
+    assert.ok(!packagingDirs(scratch, { cargoHome }).includes(bin));
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("packaging PATH retains the real compiler and Cargo", async () => {
+  const env = { ...process.env, PATH: packagingPath(root) };
+  const compiler = await exec("rustc", ["--version", "--verbose"], { env });
+  const cargo = await exec("cargo", ["--version"], { env });
+  assert.match(compiler.stdout, /^rustc /);
+  assert.match(cargo.stdout, /^cargo /);
 });
 
 test("applyPackagingPath overwrites a dirty process PATH", () => {
@@ -96,7 +137,10 @@ test("linuxdeploy plugin scan survives a dirty caller PATH", async (t) => {
       }),
       (error) => {
         const text = `${error.stderr || ""}${error.stdout || ""}${error.message}`;
-        assert.match(text, /Permission denied.*\/usr\/local\/bin\/node|\/usr\/local\/bin\/node/);
+        assert.match(
+          text,
+          /Permission denied.*\/usr\/local\/bin\/node|\/usr\/local\/bin\/node/,
+        );
         return true;
       },
     );

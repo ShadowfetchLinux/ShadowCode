@@ -5,10 +5,15 @@
 // PATH itself; it must not depend on the human sanitizing the shell.
 import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 export const SYSTEM_PACKAGING_DIRS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
-const BLOCKED_DIRS = new Set(["/usr/local/bin", "/usr/local/sbin", "/snap/bin"]);
+const BLOCKED_DIRS = new Set([
+  "/usr/local/bin",
+  "/usr/local/sbin",
+  "/snap/bin",
+]);
 
 function resolveExistingDir(dir) {
   try {
@@ -16,7 +21,8 @@ function resolveExistingDir(dir) {
     const st = lstatSync(resolved);
     if (st.isDirectory()) return resolved;
     // Debian /bin → /usr/bin: keep the PATH name linuxdeploy will scan.
-    if (st.isSymbolicLink() && statSync(resolved).isDirectory()) return resolved;
+    if (st.isSymbolicLink() && statSync(resolved).isDirectory())
+      return resolved;
     return null;
   } catch {
     return null;
@@ -32,7 +38,8 @@ function entryResolvesToHijack(file) {
       try {
         const real = realpathSync(file);
         return (
-          real.includes(`${path.sep}.hermes${path.sep}`) || real.startsWith("/root/")
+          real.includes(`${path.sep}.hermes${path.sep}`) ||
+          real.startsWith("/root/")
         );
       } catch {
         // Broken node/npm links are the linuxdeploy Permission-denied case.
@@ -50,7 +57,8 @@ export function isUnsafePackagingDir(dir) {
   if (!resolved) return true;
   if (BLOCKED_DIRS.has(resolved)) return true;
   if (resolved.split(path.sep).includes(".hermes")) return true;
-  if (resolved === "/root" || resolved.startsWith(`/root${path.sep}`)) return true;
+  if (resolved === "/root" || resolved.startsWith(`/root${path.sep}`))
+    return true;
   return ["node", "npm", "npx"].some((name) =>
     entryResolvesToHijack(path.join(resolved, name)),
   );
@@ -58,6 +66,12 @@ export function isUnsafePackagingDir(dir) {
 
 export function packagingDirs(root, options = {}) {
   const execDir = options.execDir ?? path.dirname(process.execPath);
+  // Rustup installs compiler/package-manager proxies here, including on GitHub
+  // runners. Keep the selected Cargo home without inheriting the caller PATH.
+  const cargoHome =
+    options.cargoHome ??
+    process.env.CARGO_HOME ??
+    path.join(homedir(), ".cargo");
   const extras = [
     path.join(root, "tools/rust-dev/extracted/usr/bin"),
     path.join(root, "..", "tools/rust-dev/extracted/usr/bin"),
@@ -65,6 +79,7 @@ export function packagingDirs(root, options = {}) {
     path.join(root, "target/debug"),
     path.join(root, "target/.tauri"),
     execDir,
+    path.join(cargoHome, "bin"),
   ];
   const seen = new Set();
   const dirs = [];
@@ -97,7 +112,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === self) {
   else if (process.argv[2] === "--apply")
     process.stdout.write(applyPackagingPath(root));
   else {
-    console.error("Usage: node scripts/native-packaging-env.mjs --print|--apply [repo-root]");
+    console.error(
+      "Usage: node scripts/native-packaging-env.mjs --print|--apply [repo-root]",
+    );
     process.exit(2);
   }
 }

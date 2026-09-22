@@ -1,3 +1,3 @@
 """ShadowCode — Linux-native autonomous coding-agent harness (brand: ShadowCode; binary: shadow; desktop id: shadow-agent)."""
 
-__version__ = "0.22.1"
+__version__ = "0.22.2"
