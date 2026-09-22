@@ -298,16 +298,47 @@ impl Store {
         let parent = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [sid])?
             .pop()
             .context("Session not found")?;
-        let max_id: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(id),0) FROM events WHERE session_id=?",
-            [sid],
-            |r| r.get(0),
+        let selected: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM events WHERE session_id=? AND id=?",
+            params![sid, event_id],
+            |row| row.get(0),
         )?;
-        ensure!(event_id <= max_id, "event_id is beyond this session's events");
+        ensure!(selected == 1, "event_id does not belong to this session");
+        // Reuse only the tape of a task completed at or before the cut. A newer
+        // tape would leak future turns into the fork; events alone lose tool results.
+        let completed = query_rows(&tx,
+            "SELECT e.id,e.task_id FROM events e WHERE e.session_id=? AND e.id<=? AND e.type='agent.completed' ORDER BY e.id DESC LIMIT 1",
+            params![sid,event_id])?;
+        let mut seed: Vec<Value> = Vec::new();
+        let mut after = 0;
+        if let Some(event) = completed.first() {
+            let tape = query_rows(&tx,
+                "SELECT payload FROM job_messages WHERE job_id=(SELECT id FROM desktop_jobs WHERE json_extract(payload,'$.task_id')=? ORDER BY rowid DESC LIMIT 1) ORDER BY ordinal",
+                [event["task_id"].as_str().unwrap_or("")])?;
+            if !tape.is_empty() {
+                seed = tape.into_iter().map(|row| row["payload"].clone()).collect();
+                after = event["id"].as_i64().unwrap_or(0);
+            }
+        }
+        // A mid-turn cut contains only observed text. Do not reconstruct or
+        // replay unfinished tool calls from transcript fragments.
+        for event in query_rows(&tx,
+            "SELECT type,payload FROM events WHERE session_id=? AND id>? AND id<=? AND type IN ('user.message','model.delta','agent.message') ORDER BY id",
+            params![sid,after,event_id])? {
+            let kind = event["type"].as_str().unwrap_or("");
+            if kind == "model.delta" && event["payload"]["complete"] != true { continue; }
+            if let Some(text) = event["payload"]["text"].as_str() {
+                seed.push(json!({"role":if kind=="user.message" {"user"} else {"assistant"},"content":text}));
+            }
+        }
+        crate::context::repair_incomplete(&mut seed);
         let branch = id();
         let time = now();
         let title = if title.is_empty() {
-            format!("{} (fork@{event_id})", parent["title"].as_str().unwrap_or("Task"))
+            format!(
+                "{} (fork@{event_id})",
+                parent["title"].as_str().unwrap_or("Task")
+            )
         } else {
             title.into()
         };
@@ -335,13 +366,10 @@ impl Store {
         let result = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [&branch])?
             .pop()
             .context("Fork not found")?;
-        // Prove original still intact
-        let original_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM events WHERE session_id=?",
-            [sid],
-            |r| r.get(0),
+        tx.execute(
+            "INSERT INTO session_meta(session_id,key,value) VALUES(?,'message_seed',?)",
+            params![branch, serde_json::to_string(&seed)?],
         )?;
-        ensure!(original_count >= 1 || max_id == 0, "Original session events missing after fork");
         let original = query_rows(&tx, "SELECT * FROM sessions WHERE id=?", [sid])?
             .pop()
             .context("Original session missing after fork")?;

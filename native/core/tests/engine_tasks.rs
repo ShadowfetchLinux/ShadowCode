@@ -56,7 +56,9 @@ async fn host_inspection_uses_real_tool_results_and_respects_read_only_mode() {
         assert!(system.contains("Runtime: "));
         assert!(system.contains("Shell execution is unavailable"));
         let schemas = body["tools"].as_array().unwrap();
-        assert!(schemas.iter().any(|s| s["function"]["name"] == "system_info"));
+        assert!(schemas
+            .iter()
+            .any(|s| s["function"]["name"] == "system_info"));
         assert!(!schemas.iter().any(|s| s["function"]["name"] == "exec"));
         let result = if index == 0 {
             response("", json!([tool("host", "system_info", json!({}))]))
@@ -66,12 +68,20 @@ async fn host_inspection_uses_real_tool_results_and_respects_read_only_mode() {
             let output: Value = serde_json::from_str(message["content"].as_str().unwrap()).unwrap();
             assert_eq!(output["success"], true);
             assert_eq!(output["output"]["os"], std::env::consts::OS);
-            response("The native host inspection returned current display information.", json!([]))
+            response(
+                "The native host inspection returned current display information.",
+                json!([]),
+            )
         };
         (result, Duration::ZERO)
-    }).await;
+    })
+    .await;
     let (root, engine) = setup(&server.endpoint);
-    let mut req = request(root.path(), "How many screens do I have on my computer right now?", None);
+    let mut req = request(
+        root.path(),
+        "How many screens do I have on my computer right now?",
+        None,
+    );
     req.mode = "review".into();
     let job = engine.start(req).await.unwrap();
     let result = wait(&engine, &job.id).await;
@@ -79,7 +89,8 @@ async fn host_inspection_uses_real_tool_results_and_respects_read_only_mode() {
     assert_eq!(server.requests.lock().unwrap().len(), 2);
     let events = engine.store().recent_events(&job.session_id, 100).unwrap();
     assert!(events.iter().any(|e| e["type"] == "tool.completed"
-        && e["payload"]["tool"] == "system_info" && e["payload"]["success"] == true));
+        && e["payload"]["tool"] == "system_info"
+        && e["payload"]["success"] == true));
     assert!(!events.iter().any(|e| e["type"] == "approval.requested"));
     engine.shutdown().await.unwrap();
 }
@@ -89,16 +100,33 @@ async fn ordinary_greeting_does_not_force_tools_and_shell_approval_stays_enabled
     let server = support::server(|_, body| {
         let system = body["messages"][0]["content"].as_str().unwrap();
         assert!(system.contains("call it to request approval"));
-        assert!(body["tools"].as_array().unwrap().iter().any(|s| s["function"]["name"] == "exec"));
+        assert!(body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["function"]["name"] == "exec"));
         (response("Hello!", json!([])), Duration::ZERO)
-    }).await;
+    })
+    .await;
     let (root, engine) = setup(&server.endpoint);
-    Config::patch(engine.paths(), json!({"permissions":{"approve_shell":true}})).unwrap();
-    let job = engine.start(request(root.path(), "hi", None)).await.unwrap();
+    Config::patch(
+        engine.paths(),
+        json!({"permissions":{"approve_shell":true}}),
+    )
+    .unwrap();
+    let job = engine
+        .start(request(root.path(), "hi", None))
+        .await
+        .unwrap();
     assert_eq!(wait(&engine, &job.id).await.status, "completed");
     let events = engine.store().recent_events(&job.session_id, 100).unwrap();
     assert!(!events.iter().any(|e| e["type"] == "tool.started"));
-    assert!(Config::load(engine.paths(), None).unwrap().permissions.approve_shell);
+    assert!(
+        Config::load(engine.paths(), None)
+            .unwrap()
+            .permissions
+            .approve_shell
+    );
     engine.shutdown().await.unwrap();
 }
 
@@ -860,7 +888,9 @@ async fn thinking_channel_markup_is_hidden_from_transcript_events() {
         .filter_map(|e| e["payload"]["text"].as_str())
         .collect();
     assert!(!deltas.is_empty());
-    assert!(deltas.iter().all(|text| !text.to_ascii_lowercase().contains("thought")));
+    assert!(deltas
+        .iter()
+        .all(|text| !text.to_ascii_lowercase().contains("thought")));
     assert!(deltas.iter().all(|text| !text.contains("<channel")));
     assert!(deltas.iter().any(|text| text.contains("Fixed the typo")));
     engine.shutdown().await.unwrap();
@@ -897,9 +927,9 @@ async fn prose_command_without_tool_is_nudged_then_pauses() {
     );
     let events = engine.store().recent_events(&job.session_id, 200).unwrap();
     assert!(
-        events.iter().any(|e| {
-            e["type"] == "runaway.warning" && e["payload"]["kind"] == "prose_command"
-        }),
+        events
+            .iter()
+            .any(|e| { e["type"] == "runaway.warning" && e["payload"]["kind"] == "prose_command" }),
         "{events:?}"
     );
     engine.shutdown().await.unwrap();
@@ -952,5 +982,59 @@ async fn model_success_claim_without_tests_is_not_verified() {
     assert_eq!(summary["payload"]["verified"], false);
     assert_eq!(summary["payload"]["unverified_claim"], true);
     assert_eq!(summary["payload"]["claim"], "model_claim");
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn event_fork_keeps_completed_context_without_future_turns() {
+    let server = support::server(|index, _| {
+        (
+            response(
+                if index == 0 {
+                    "First answer: amber."
+                } else {
+                    "Future answer: violet."
+                },
+                json!([]),
+            ),
+            Duration::ZERO,
+        )
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let first = engine
+        .start(request(root.path(), "Remember amber", None))
+        .await
+        .unwrap();
+    assert_eq!(wait(&engine, &first.id).await.status, "completed");
+    let cut = engine.store().event_cursor(&first.session_id).unwrap();
+    let second = engine
+        .start(request(
+            root.path(),
+            "Now remember violet",
+            Some(first.session_id.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(wait(&engine, &second.id).await.status, "completed");
+    let fork = engine
+        .store()
+        .fork_session_from_event(&first.session_id, cut, "Earlier state")
+        .unwrap();
+    let sid = fork["fork"]["id"].as_str().unwrap();
+    let tape = engine.store().latest_session_messages(sid, "").unwrap();
+    context::validate_pairs(&tape).unwrap();
+    assert!(json!(tape).to_string().contains("amber"));
+    assert!(!json!(tape).to_string().contains("violet"));
+    assert!(engine
+        .store()
+        .fork_session_from_event(sid, cut, "Wrong event ownership")
+        .is_err());
+    engine.store().delete_session(&first.session_id).unwrap();
+    assert!(
+        json!(engine.store().latest_session_messages(sid, "").unwrap())
+            .to_string()
+            .contains("amber")
+    );
     engine.shutdown().await.unwrap();
 }

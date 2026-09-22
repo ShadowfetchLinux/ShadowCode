@@ -352,7 +352,44 @@ async function send<T>(
   return request<T>(path, method, body);
 }
 
+export type ParallelPlan = {
+  id: string;
+  goal: string;
+  source: string;
+  lead_note: string;
+  verify_status: string;
+  workers: {
+    item: { id: string; title: string; prompt: string };
+    worktree_path: string;
+    branch: string;
+    status: string;
+  }[];
+};
+export type GuardianStatus = {
+  enabled: boolean;
+  last_run?: number;
+  last_result?: { tests: { hint?: string; executed: boolean } };
+};
 export const api = {
+  parallelPlan: () => get<{ plan: ParallelPlan | null }>("/api/parallel"),
+  prepareParallel: (goal: string) =>
+    send<{ ok: boolean; error?: string; plan?: ParallelPlan }>(
+      "/api/parallel/prepare",
+      "POST",
+      { goal },
+    ),
+  parallelWorkerStatus: (worker_id: string, status: string) =>
+    send("/api/parallel/worker-status", "POST", { worker_id, status }),
+  verifyParallel: () =>
+    send<{ ok: boolean; conflicts?: { worker: string; detail: string }[] }>(
+      "/api/parallel/verify",
+      "POST",
+      {},
+    ),
+  cleanupParallel: () =>
+    send<{ cleaned: number }>("/api/parallel/cleanup", "POST", {}),
+  guardianStatus: () => get<GuardianStatus>("/api/guardian"),
+  runGuardian: () => send("/api/guardian/run", "POST", {}),
   health: () => get<Health>("/api/health"),
   onboarding: () =>
     get<{

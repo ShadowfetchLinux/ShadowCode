@@ -116,6 +116,21 @@ fn retry_after_uncertain_reattach(request: &Request) -> bool {
         )
 }
 
+fn engine_gone(error: &anyhow::Error) -> bool {
+    let text = error.to_string();
+    text.contains("Attached view is closed")
+        || text.contains("No running engine")
+        || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,23 +148,11 @@ mod tests {
             "POST",
             "/api/projects/trust"
         )));
-        assert!(retry_after_uncertain_reattach(&req("POST", "/api/projects")));
+        assert!(retry_after_uncertain_reattach(&req(
+            "POST",
+            "/api/projects"
+        )));
         assert!(retry_after_uncertain_reattach(&req("GET", "/api/health")));
         assert!(!retry_after_uncertain_reattach(&req("POST", "/api/jobs")));
     }
-}
-
-fn engine_gone(error: &anyhow::Error) -> bool {
-    let text = error.to_string();
-    text.contains("Attached view is closed")
-        || text.contains("No running engine")
-        || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-            matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound
-                    | std::io::ErrorKind::ConnectionRefused
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::BrokenPipe
-            )
-        })
 }

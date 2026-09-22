@@ -1,13 +1,13 @@
 # Native release procedure
 
-This procedure publishes the Rust/Tauri 0.21 application. The tag workflow is
+This procedure publishes the Rust/Tauri 0.22 application. The tag workflow is
 the release authority: it does not build, upload, or mention the legacy Python
 wheel, source distribution, portable archive, or browser launcher.
 
 ## Prepare the release
 
 1. Update the shared version in `Cargo.toml` and `src-tauri/tauri.conf.json`.
-   They must match the tag exactly, for example `v0.21.0`.
+   They must match the tag exactly, for example `v0.22.0`.
 2. Update `CHANGELOG.md`, `docs/RELEASE_NOTES.md`, README download commands and
    native migration/verification records with only evidence that is current for
    the tagged commit.
@@ -67,7 +67,7 @@ runs the packaged CLI, TUI, MCP and window checks. It creates `SHA256SUMS` only
 after those checks and uploads:
 
 - `ShadowCode_VERSION_amd64.AppImage`
-- `shadowcode_VERSION_amd64.deb`
+- `ShadowCode_VERSION_amd64.deb`
 - `ShadowCode_VERSION_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
@@ -80,7 +80,7 @@ Download the AppImage and `SHA256SUMS` into the same directory, then verify and
 install it:
 
 ```sh
-sha256sum -c SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
 ./scripts/install-appimage.sh /path/to/ShadowCode_VERSION_amd64.AppImage
 ```
 

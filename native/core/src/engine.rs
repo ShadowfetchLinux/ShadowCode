@@ -535,15 +535,23 @@ impl Engine {
         self.wait(id).await
     }
     pub fn pause_job(&self, id: &str) -> Result<Job> {
-        let job = self.running(id)?.context("Job not found or already finished")?;
+        let job = self
+            .running(id)?
+            .context("Job not found or already finished")?;
         ensure!(!job.cancel.is_cancelled(), "Task is cancelling");
-        ensure!(!job.finished.load(Ordering::Acquire), "Task already finished");
+        ensure!(
+            !job.finished.load(Ordering::Acquire),
+            "Task already finished"
+        );
         let hashes = {
             // Snapshot nothing yet; await_steering refreshes from tool observations.
             std::collections::BTreeMap::new()
         };
         job.steer.pause(hashes)?;
-        let mut record = job.record.lock().map_err(|_| anyhow!("Job lock poisoned"))?;
+        let mut record = job
+            .record
+            .lock()
+            .map_err(|_| anyhow!("Job lock poisoned"))?;
         ensure!(
             matches!(record.status.as_str(), "running" | "paused"),
             "Only a running task can be paused"
@@ -561,7 +569,9 @@ impl Engine {
         Ok(snap)
     }
     pub fn steer_job(&self, id: &str, instruction: &str, edited_path: Option<&str>) -> Result<Job> {
-        let job = self.running(id)?.context("Job not found or already finished")?;
+        let job = self
+            .running(id)?
+            .context("Job not found or already finished")?;
         job.steer.set_instruction(instruction)?;
         if let Some(path) = edited_path.filter(|p| !p.trim().is_empty()) {
             job.steer.note_edit(path, "manual edit noted by user")?;
@@ -569,15 +579,22 @@ impl Engine {
         job.snapshot()
     }
     pub fn note_job_edit(&self, id: &str, path: &str, detail: &str) -> Result<Job> {
-        let job = self.running(id)?.context("Job not found or already finished")?;
+        let job = self
+            .running(id)?
+            .context("Job not found or already finished")?;
         job.steer.note_edit(path, detail)?;
         job.snapshot()
     }
     pub fn resume_job(&self, id: &str) -> Result<Job> {
-        let job = self.running(id)?.context("Job not found or already finished")?;
+        let job = self
+            .running(id)?
+            .context("Job not found or already finished")?;
         // Capture observed hashes now if tools already ran; pause() may have empty map.
         job.steer.resume()?;
-        let mut record = job.record.lock().map_err(|_| anyhow!("Job lock poisoned"))?;
+        let mut record = job
+            .record
+            .lock()
+            .map_err(|_| anyhow!("Job lock poisoned"))?;
         if record.status == "paused" {
             record.status = "running".into();
             self.0.store.save_job(&json!(*record))?;
@@ -594,30 +611,24 @@ impl Engine {
     }
     pub fn rewind_job(&self, id: &str) -> Result<Value> {
         let running = self.running(id)?;
-        let (task_id, session_id, workspace) = if let Some(job) = &running {
-            ensure!(
-                job.steer.is_paused() || job.cancel.is_cancelled(),
-                "Pause the task before rewinding its files, or stop it first"
-            );
-            let snap = job.snapshot()?;
-            (snap.task_id, snap.session_id, snap.workspace)
+        let job = self.job(id)?.context("Job not found")?;
+        let _reservation = if running.is_none() {
+            Some(self.reserve_workspace(&job.workspace)?)
         } else {
-            let finished = self.job(id)?.context("Job not found")?;
-            (finished.task_id, finished.session_id, finished.workspace)
+            None
         };
-        let ws = Workspace::open(&workspace)?;
-        let restored = checkpoint::restore(&self.0.store, &ws, &task_id)?;
-        if let Some(job) = running {
-            job.steer.note_rewind(&restored)?;
-        }
-        Ok(json!({
-            "ok": true,
-            "job_id": id,
-            "task_id": task_id,
-            "session_id": session_id,
-            "restored": restored,
-            "note": "Checkpoint restored without wiping the session transcript."
-        }))
+        let _background = self.0.background.reserve_idle_workspace(&job.workspace)?;
+        let ws = Workspace::open(&job.workspace)?;
+        let restore = || checkpoint::restore(&self.0.store, &ws, &job.task_id);
+        let restored = if let Some(active) = running {
+            active.steer.rewind(restore)?
+        } else {
+            restore()?
+        };
+        Ok(
+            json!({"ok":true,"job_id":id,"task_id":job.task_id,"session_id":job.session_id,"restored":restored,
+            "note":"Checkpoint restored without wiping the session transcript."}),
+        )
     }
     pub(crate) fn request_cancel(&self, id: &str) -> Result<()> {
         self.request_cancel_if(id, false)
@@ -844,10 +855,7 @@ impl Engine {
             .last_task_event(&job.task_id, "verification.summary")?
             .map(|e| e["payload"].clone())
             .unwrap_or_else(|| json!({"status":"incomplete","commands":[]}));
-        if success
-            && verification["unverified_claim"] == true
-            && verification["verified"] != true
-        {
+        if success && verification["unverified_claim"] == true && verification["verified"] != true {
             verification["presented_as"] = json!("unverified");
             if !job.summary.to_ascii_lowercase().contains("unverified") {
                 job.summary = format!("Unverified: {}", job.summary);
@@ -937,6 +945,7 @@ impl Engine {
         if !running.steer.is_paused() {
             return Ok(());
         }
+        let _parked = running.steer.park()?;
         running
             .steer
             .ensure_pause_hashes(tools.observed_hashes()?)?;
@@ -997,11 +1006,23 @@ impl Engine {
         // when a larger context model is selected.
         if running.config.model.context_limit <= 4096 {
             const CORE: &[&str] = &[
-                "system_info", "list_files", "read_file", "search_files", "search_text",
-                "search_symbol", "write_file", "edit_file", "apply_patch",
-                "create_directory", "exec", "git_status", "git_diff", "update_plan",
+                "system_info",
+                "list_files",
+                "read_file",
+                "search_files",
+                "search_text",
+                "search_symbol",
+                "write_file",
+                "edit_file",
+                "apply_patch",
+                "create_directory",
+                "exec",
+                "git_status",
+                "git_diff",
+                "update_plan",
             ];
-            schemas.retain(|schema| CORE.contains(&schema["function"]["name"].as_str().unwrap_or("")));
+            schemas
+                .retain(|schema| CORE.contains(&schema["function"]["name"].as_str().unwrap_or("")));
         }
         let mut messages = self
             .0
@@ -1169,48 +1190,51 @@ impl Engine {
                         &schemas,
                         running.cancel.clone(),
                         |delta| {
-                        if text_loop_hit {
-                            return;
-                        }
-                        partial.push_str(delta);
-                        if autonomy::text_loop_stats(&partial).is_some_and(|(_, count)| {
-                            matches!(
-                                autonomy::runaway_action(count),
-                                autonomy::RunawayAction::Pause
-                            )
-                        }) {
-                            // Stop feeding the UI, but do not cancel the task token —
-                            // finish() would mark a deliberate loop pause as cancelled.
-                            text_loop_hit = true;
-                            return;
-                        }
-                        let visible = autonomy::public_assistant_text(&partial);
-                        if visible.starts_with(&visible_emitted) {
-                            pending.push_str(&visible[visible_emitted.len()..]);
-                            visible_emitted = visible;
-                        } else if let Err(error) = events.emit(
-                            "model.delta",
-                            json!({"text":visible,"message_id":message_id,"complete":false}),
-                        ) {
-                            event_error = Some(error);
-                            running.cancel.cancel();
-                            return;
-                        } else {
-                            pending.clear();
-                            visible_emitted = visible;
-                        }
-                        if pending.len() >= 4000 || flushed.elapsed() >= Duration::from_millis(80) {
-                            if let Err(error) = events.emit(
-                                "model.stream",
-                                json!({"text":pending,"message_id":message_id}),
+                            if text_loop_hit {
+                                return;
+                            }
+                            partial.push_str(delta);
+                            if autonomy::text_loop_stats(&partial).is_some_and(|(_, count)| {
+                                matches!(
+                                    autonomy::runaway_action(count),
+                                    autonomy::RunawayAction::Pause
+                                )
+                            }) {
+                                // Stop feeding the UI, but do not cancel the task token —
+                                // finish() would mark a deliberate loop pause as cancelled.
+                                text_loop_hit = true;
+                                return;
+                            }
+                            let visible = autonomy::public_assistant_text(&partial);
+                            if visible.starts_with(&visible_emitted) {
+                                pending.push_str(&visible[visible_emitted.len()..]);
+                                visible_emitted = visible;
+                            } else if let Err(error) = events.emit(
+                                "model.delta",
+                                json!({"text":visible,"message_id":message_id,"complete":false}),
                             ) {
                                 event_error = Some(error);
                                 running.cancel.cancel();
+                                return;
+                            } else {
+                                pending.clear();
+                                visible_emitted = visible;
                             }
-                            pending.clear();
-                            flushed = Instant::now();
-                        }
-                    })
+                            if pending.len() >= 4000
+                                || flushed.elapsed() >= Duration::from_millis(80)
+                            {
+                                if let Err(error) = events.emit(
+                                    "model.stream",
+                                    json!({"text":pending,"message_id":message_id}),
+                                ) {
+                                    event_error = Some(error);
+                                    running.cancel.cancel();
+                                }
+                                pending.clear();
+                                flushed = Instant::now();
+                            }
+                        },
+                    )
                     .await;
                 if let Some(error) = event_error {
                     return Err(error);
@@ -1225,13 +1249,13 @@ impl Engine {
                     Ok(mut response) => {
                         response.text = autonomy::public_assistant_text(&response.text);
                         if text_loop_hit {
-                            if let Some((unit, count)) = autonomy::text_loop_stats(
-                                if response.text.is_empty() {
+                            if let Some((unit, count)) =
+                                autonomy::text_loop_stats(if response.text.is_empty() {
                                     &partial
                                 } else {
                                     &response.text
-                                },
-                            ) {
+                                })
+                            {
                                 events.emit(
                                     "runaway.warning",
                                     json!({"kind":"assistant_text","action":"pause","repeats":count,"sample":crate::tools::truncate(&unit,120)}),

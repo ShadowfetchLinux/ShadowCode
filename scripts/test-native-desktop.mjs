@@ -269,7 +269,7 @@ async function screenshot(name) {
 }
 async function accessibility(name) {
   const report = await wd("POST", `/session/${session}/execute/async`, {
-    script: `${axeSource}\nconst done=arguments[arguments.length-1];window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}).then(result=>done({violations:result.violations}),error=>done({error:String(error)}));`, args: [],
+    script: `${axeSource}\nconst done=arguments[arguments.length-1];getComputedStyle(document.body).color;Promise.all(document.getAnimations().filter(a=>"transitionProperty" in a).map(a=>a.finished.catch(()=>{}))).then(()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}})).then(result=>done({violations:result.violations}),error=>done({error:String(error)}));`, args: [],
   });
   await writeFile(path.join(artifacts, `accessibility-${name}.json`), JSON.stringify(report, null, 2));
   assert.equal(report.error, undefined);
@@ -303,6 +303,16 @@ try {
   await execute("document.documentElement.dataset.theme='dark'"); await screenshot("workspace-dark");
   await accessibility("dark");
   await execute("document.documentElement.dataset.theme='light'");
+  await openSettings();
+  await until("Context control",()=>execute("return !!document.querySelector('#model-context')"));
+  assert.ok(Number(await execute("return document.querySelector('#model-context').value"))>=1024);
+  await screenshot("model-settings"); await accessibility("model-settings");
+  await clickButton("Advanced");
+  await until("Advanced workspaces loaded",()=>execute("return !!document.querySelector('textarea[aria-label=\"Work items\"]')"));
+  await screenshot("advanced-light"); await accessibility("advanced-light");
+  await execute("document.documentElement.dataset.theme='dark'");await screenshot("advanced-dark");await accessibility("advanced-dark");
+  await execute("document.documentElement.dataset.theme='light'");
+  await clickButton("Close");
   const registered = await api("POST", "/api/models/register", { provider: "local", endpoint: `http://127.0.0.1:${model.address().port}/v1`, name: "native-build" });
   await click('button[aria-label="Terminal"]');
   await clickButton("Health");
@@ -425,6 +435,15 @@ try {
   assert.equal(await execute("return document.querySelectorAll('.msg-user').length"), 1);
   assert.equal(await execute("return [...document.querySelectorAll('.msg-agent')].filter(e=>e.textContent.includes('Created hello.txt and verified')).length"), 1);
   await screenshot("task-complete");
+  const forkSource=await execute("return localStorage.getItem('shadow:selected')");
+  if(await execute("return !!document.querySelector('button[aria-label=\"Show sidebar\"]')")) await click('button[aria-label="Show sidebar"]');
+  await until("Response fork action",()=>execute("return !!document.querySelector('.fork-action:not(:disabled)')"));
+  await click('.fork-action:not(:disabled)');
+  await until("Fork selected",()=>execute("const el=document.querySelector('.task-link[aria-current=\"page\"]');return el && el.dataset.sessionId!==arguments[0] && !document.querySelector('.loading-task')",[forkSource]));
+  await screenshot("response-fork");await accessibility("response-fork");
+  await click(`button.task-link[data-session-id="${forkSource}"]`);
+  await until("Original conversation restored",()=>execute("return document.querySelector('.task-link[aria-current=\"page\"]')?.dataset.sessionId===arguments[0] && !document.querySelector('.loading-task')",[forkSource]));
+
   await wd("POST", `/session/${session}/refresh`, {});
   await until("Persisted conversation", () => execute("return document.querySelectorAll('.msg-user').length===1 && [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Created hello.txt and verified'));"));
   assert.equal(await execute("return [...document.querySelectorAll('.msg-note')].filter(e=>e.textContent.includes('native-build')).length"), 1);
@@ -943,7 +962,7 @@ try {
   await execute("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('desktop_quit'),30);return true;");
   await until("Window can close after its owner exits", () => dead(reopenedVersion.desktop_pid));
   await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, missing checkout rescue, reviewed return without committing, preserved original metadata and light/dark/compact accessibility",
-    "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "12,000-event history with bounded DOM, all 94 pages, newer/latest navigation and three-layout accessibility", "managed native shutdown", "desktop attachment to headless owner, independent project selection, visible lifetime notice, terminal execution, durable task surviving window close and window exit after owner shutdown"] }, null, 2));
+    "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "model context controls, parallel and Guardian diagnostics with light/dark accessibility", "response fork opens a new conversation and original can be reopened", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "12,000-event history with bounded DOM, all 94 pages, newer/latest navigation and three-layout accessibility", "managed native shutdown", "desktop attachment to headless owner, independent project selection, visible lifetime notice, terminal execution, durable task surviving window close and window exit after owner shutdown"] }, null, 2));
   console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
 } catch (error) {
   if (session) {

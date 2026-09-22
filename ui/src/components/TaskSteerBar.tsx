@@ -37,11 +37,13 @@ export function TaskSteerBar({
           type="button"
           className="mini"
           disabled={busy || job.status === "cancelling"}
-          title="Pause before the next model turn"
-          onClick={() => void run("Paused", () => api.pauseJob(job.id))}
+          title="Pause at the next safe boundary; a running command finishes first"
+          onClick={() =>
+            void run("Pause requested", () => api.pauseJob(job.id))
+          }
         >
           <Pause size={12} />
-          Pause
+          Pause task
         </button>
       ) : (
         <button
@@ -52,14 +54,16 @@ export function TaskSteerBar({
           onClick={() => void run("Resumed", () => api.resumeJob(job.id))}
         >
           <Play size={12} />
-          Resume
+          Resume task
         </button>
       )}
       <button
         type="button"
         className="mini"
         disabled={busy || (!paused && job.status !== "running")}
-        title={paused ? "Add a steering instruction" : "Pause first, then steer"}
+        title={
+          paused ? "Add a steering instruction" : "Pause first, then steer"
+        }
         onClick={() => setSteerOpen((v) => !v)}
       >
         <CornerDownLeft size={12} />
@@ -68,21 +72,12 @@ export function TaskSteerBar({
       <button
         type="button"
         className="mini"
-        disabled={busy}
-        title="Restore the latest file checkpoint without wiping the session"
-        onClick={() =>
-          void run("Rewound files", async () => {
-            if (paused || job.status === "cancelling") {
-              await api.rewindJob(job.id);
-            } else {
-              await api.pauseJob(job.id);
-              await api.rewindJob(job.id);
-            }
-          })
-        }
+        disabled={busy || !paused}
+        title="Restore checkpointed files after the current operation has reached the pause boundary"
+        onClick={() => void run("Rewound files", () => api.rewindJob(job.id))}
       >
         <RotateCcw size={12} />
-        Rewind
+        Rewind files
       </button>
       {steerOpen && (
         <form

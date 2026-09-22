@@ -1,13 +1,20 @@
-# Optional bubblewrap sandbox
+# Optional shell isolation
 
-Shell/exec may run under `bwrap` when present:
+Before an approved shell command runs, ShadowCode probes bubblewrap when it is
+installed. The profile makes system directories and `/home` read-only, then
+binds the selected project read-write. Network namespaces are isolated unless
+network permission is enabled. A private temporary directory is mounted at
+`/shadowcode-scratch` and exposed as `SHADOWCODE_SCRATCH`.
 
-- Workspace is bind-mounted read-write.
-- `/home` and `/root` are read-only (never writable).
-- Network is off unless permissions allow it.
-- An ephemeral scratch upper dir is bind-mounted at `/shadowcode-scratch`
-  (`SHADOWCODE_SCRATCH`). Discard it via the discard-scratch API when done.
+The scratch directory is removed when the command returns. Cleanup accepts only
+scratch directories created and retained by this process; it cannot delete an
+arbitrary supplied path. It is ordinary temporary storage, **not copy-on-write**.
+Approved commands still modify the live project. File checkpoints do not cover
+arbitrary shell or Git side effects.
 
-This is **not** a full OS sandbox, not Landlock/ZFS/whole-disk OverlayFS, and
-not kernel-proof. If user namespaces block bwrap, Doctor reports the fallback
-and shell continues with the ordinary heuristic policy.
+If the initial probe fails, execution uses the ordinary approved shell path and
+reports that fallback. Once execution begins, errors are returned without
+replaying the command outside bubblewrap. Doctor reports the probe result.
+
+This optional profile is not a complete operating-system security boundary.
+Commands run as your account. Review approvals and resulting changes.

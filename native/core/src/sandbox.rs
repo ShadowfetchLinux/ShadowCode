@@ -1,13 +1,13 @@
-//! Optional bubblewrap profile for shell/exec. Not an OS guarantee when bwrap
-//! is missing or user namespaces are blocked — Doctor reports that clearly.
-//! Scratch upper dirs hold non-workspace side effects; the real home stays
-//! read-only. Workspace copy-on-write is attempted only when user namespaces
-//! allow it; otherwise Doctor records the fallback.
+//! Optional shell isolation. Availability is probed before a user command runs;
+//! commands are never replayed outside bubblewrap after a runtime failure.
+use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{
-    fs,
+    collections::HashMap,
     path::{Path, PathBuf},
-    sync::Mutex,
+    process::{Command, Stdio},
+    sync::{LazyLock, Mutex},
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,7 +15,6 @@ pub enum SandboxMode {
     Off { reason: String },
     Bubblewrap,
 }
-
 #[derive(Clone, Debug)]
 pub struct BubblewrapProfile {
     pub program: PathBuf,
@@ -24,183 +23,146 @@ pub struct BubblewrapProfile {
     pub scratch_dir: Option<PathBuf>,
     pub workspace_cow: bool,
 }
-
 #[derive(Clone, Debug, Default)]
 pub struct ScratchSession {
     pub path: PathBuf,
 }
-
-static LAST_SCRATCH: Mutex<Option<PathBuf>> = Mutex::new(None);
+static SCRATCH: LazyLock<Mutex<HashMap<PathBuf, tempfile::TempDir>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static COW_STATUS: Mutex<Option<String>> = Mutex::new(None);
-
-pub fn detect() -> SandboxMode {
-    match which("bwrap") {
-        Some(_) => SandboxMode::Bubblewrap,
-        None => SandboxMode::Off {
-            reason: "bwrap not found on PATH; shell runs without bubblewrap".into(),
-        },
-    }
-}
 
 pub fn which(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
             let candidate = dir.join(name);
-            candidate.is_file().then_some(candidate)
+            let metadata = candidate.metadata().ok()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if metadata.permissions().mode() & 0o111 == 0 {
+                    return None;
+                }
+            }
+            metadata.is_file().then_some(candidate)
         })
     })
 }
-
-/// Create an ephemeral scratch upper dir for command side effects that are not
-/// the workspace source (temp installs). Caller should discard when done.
-pub fn create_scratch(base: &Path) -> anyhow::Result<ScratchSession> {
-    let root = base.join("sandbox-scratch");
-    fs::create_dir_all(&root)?;
-    let path = root.join(format!("run-{}", crate::id()));
-    fs::create_dir_all(&path)?;
-    if let Ok(mut guard) = LAST_SCRATCH.lock() {
-        *guard = Some(path.clone());
+pub fn detect() -> SandboxMode {
+    match which("bwrap") {
+        Some(_) => SandboxMode::Bubblewrap,
+        None => SandboxMode::Off {
+            reason: "bubblewrap is not installed".into(),
+        },
     }
+}
+
+/// Only directories created and retained by this process can be discarded.
+pub fn create_scratch(base: &Path) -> Result<ScratchSession> {
+    crate::paths::private_directory(base)?;
+    let owned = tempfile::Builder::new()
+        .prefix("shadowcode-scratch-")
+        .tempdir_in(base)?;
+    let path = owned.path().canonicalize()?;
+    SCRATCH
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Scratch lock poisoned"))?
+        .insert(path.clone(), owned);
     Ok(ScratchSession { path })
 }
-
-pub fn discard_scratch(path: &Path) -> anyhow::Result<Value> {
-    if path.exists() {
-        fs::remove_dir_all(path)?;
-    }
-    if let Ok(mut guard) = LAST_SCRATCH.lock() {
-        if guard.as_ref() == Some(&path.to_path_buf()) {
-            *guard = None;
-        }
-    }
-    Ok(json!({
-        "ok": true,
-        "discarded": path.to_string_lossy(),
-        "note": "Scratch upper dir removed; workspace source was never mounted writable as home."
-    }))
+pub fn discard_scratch(path: &Path) -> Result<Value> {
+    let mut scratch = SCRATCH
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Scratch lock poisoned"))?;
+    let owned = scratch
+        .remove(path)
+        .context("Refusing to remove an unregistered scratch directory")?;
+    owned.close()?;
+    Ok(
+        json!({"ok":true,"discarded":path,"note":"Removed this command's managed temporary directory."}),
+    )
 }
-
 pub fn last_scratch() -> Option<PathBuf> {
-    LAST_SCRATCH.lock().ok().and_then(|g| g.clone())
+    SCRATCH.lock().ok().and_then(|g| g.keys().next().cloned())
 }
 
-/// Probe whether a single-exec workspace overlay is usable. Never claims
-/// Landlock/ZFS/whole-disk OverlayFS.
-pub fn probe_workspace_cow() -> Value {
-    let Some(bwrap) = which("bwrap") else {
-        let note = "bwrap missing; workspace CoW unavailable".to_owned();
-        set_cow_status(&note);
-        return json!({"ok":false,"mode":"unavailable","detail":note});
-    };
-    let Ok(tmp) = tempfile::tempdir() else {
-        let note = "tempdir failed; workspace CoW unavailable".to_owned();
-        set_cow_status(&note);
-        return json!({"ok":false,"mode":"unavailable","detail":note});
-    };
-    let lower = tmp.path().join("lower");
-    let upper = tmp.path().join("upper");
-    let work = tmp.path().join("work");
-    let merged = tmp.path().join("merged");
-    let _ = fs::create_dir_all(&lower);
-    let _ = fs::create_dir_all(&upper);
-    let _ = fs::create_dir_all(&work);
-    let _ = fs::create_dir_all(&merged);
-    let _ = fs::write(lower.join("probe.txt"), b"lower\n");
-    // Prefer fuse-overlayfs style via bwrap --overlay-src if available; else
-    // bind-RO + tmpfs upper is not true CoW of workspace. Detect user-ns block.
-    let status = std::process::Command::new(&bwrap)
-        .args([
-            "--die-with-parent",
-            "--unshare-user",
-            "--uid",
-            "0",
-            "--gid",
-            "0",
-            "--ro-bind",
-            lower.to_str().unwrap_or("/"),
-            "/lower",
-            "--tmpfs",
-            "/tmp",
-            "--bind",
-            upper.to_str().unwrap_or("/tmp"),
-            "/upper",
-            "--",
-            "/bin/sh",
-            "-c",
-            "echo cow-ok > /upper/ok.txt",
-        ])
-        .output();
-    match status {
-        Ok(out) if out.status.success() && upper.join("ok.txt").is_file() => {
-            let note = "User-namespace bwrap write to scratch upper works; workspace remains bind-RW with explicit approve-before-keep for CoW attempts".to_owned();
-            set_cow_status(&note);
-            json!({"ok":true,"mode":"scratch-upper","detail":note,"kernel_proof":false})
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let note = format!(
-                "User namespaces or bwrap overlay blocked; falling back without workspace CoW. {}",
-                stderr.chars().take(200).collect::<String>()
+fn probe(program: &Path, workspace: &Path) -> Result<()> {
+    let mut child = Command::new(program)
+        .args(profile_args(workspace, "true", false, None))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            ensure!(
+                status.success(),
+                "bubblewrap is installed but its namespace/mount probe failed ({status})"
             );
-            set_cow_status(&note);
-            json!({"ok":false,"mode":"fallback","detail":note,"kernel_proof":false})
+            return Ok(());
         }
-        Err(error) => {
-            let note = format!("Could not probe bwrap CoW: {error}");
-            set_cow_status(&note);
-            json!({"ok":false,"mode":"fallback","detail":note,"kernel_proof":false})
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("bubblewrap availability probe timed out");
         }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
-fn set_cow_status(note: &str) {
-    if let Ok(mut guard) = COW_STATUS.lock() {
-        *guard = Some(note.to_owned());
+/// Scratch availability is not evidence of workspace copy-on-write.
+pub fn probe_workspace_cow() -> Value {
+    let result = (|| -> Result<()> {
+        let program = which("bwrap").context("bubblewrap is not installed")?;
+        let temp = tempfile::tempdir()?;
+        probe(&program, temp.path())
+    })();
+    let available = result.is_ok();
+    let detail = match result {
+        Ok(()) => "Bubblewrap works. Workspace writes are live; copy-on-write and approve-before-keep are not implemented.".into(),
+        Err(error) => format!("{error}. Workspace copy-on-write is unavailable."),
+    };
+    if let Ok(mut state) = COW_STATUS.lock() {
+        *state = Some(detail.clone());
     }
+    json!({"ok":false,"workspace_cow":false,"shell_available":available,
+        "mode":if available {"scratch-only"} else {"unavailable"},
+        "detail":detail,"kernel_proof":false})
 }
-
 pub fn cow_status_note() -> String {
     COW_STATUS
         .lock()
         .ok()
         .and_then(|g| g.clone())
-        .unwrap_or_else(|| "Workspace CoW not probed yet".into())
+        .unwrap_or_else(|| "Workspace writes are live; copy-on-write is unavailable".into())
 }
 
-/// Build bwrap argv that wraps `/bin/sh -c <command>`. Workspace is visible and
-/// writable; home/system secret roots are not writable; network is off unless
-/// allowed. Scratch upper is bind-mounted at /shadowcode-scratch when provided.
-/// Never claims this is a full OS sandbox.
 pub fn build_shell_profile(
     workspace: &Path,
     command: &str,
     allow_network: bool,
-) -> anyhow::Result<BubblewrapProfile> {
-    let scratch_base = std::env::temp_dir().join("shadowcode");
-    let scratch = create_scratch(&scratch_base)?;
+) -> Result<BubblewrapProfile> {
+    let program = which("bwrap").context("bubblewrap is not installed")?;
+    probe(&program, workspace)?;
+    let base =
+        std::env::temp_dir().join(format!("shadowcode-scratch-{}", unsafe { libc::geteuid() }));
+    let scratch = create_scratch(&base)?;
     build_shell_profile_with_scratch(workspace, command, allow_network, Some(scratch.path))
 }
-
 pub fn build_shell_profile_with_scratch(
     workspace: &Path,
     command: &str,
     allow_network: bool,
     scratch: Option<PathBuf>,
-) -> anyhow::Result<BubblewrapProfile> {
-    let program = which("bwrap").ok_or_else(|| {
-        anyhow::anyhow!("bwrap not found on PATH; shell continues without bubblewrap")
-    })?;
-    let cow = probe_workspace_cow();
-    let workspace_cow = cow["ok"].as_bool().unwrap_or(false);
+) -> Result<BubblewrapProfile> {
     Ok(BubblewrapProfile {
-        program,
+        program: which("bwrap").context("bubblewrap is not installed")?,
         args: profile_args(workspace, command, allow_network, scratch.as_deref()),
         network: allow_network,
         scratch_dir: scratch,
-        workspace_cow,
+        workspace_cow: false,
     })
 }
-
 pub fn profile_args(
     workspace: &Path,
     command: &str,
@@ -210,28 +172,22 @@ pub fn profile_args(
     let ws = workspace
         .canonicalize()
         .unwrap_or_else(|_| workspace.to_path_buf());
-    let ws_str = ws.to_string_lossy().into_owned();
-    let mut args = vec![
-        "--die-with-parent".into(),
-        "--unshare-ipc".into(),
-        "--unshare-uts".into(),
-        "--new-session".into(),
-        "--ro-bind".into(),
-        "/usr".into(),
-        "/usr".into(),
-        "--ro-bind".into(),
-        "/bin".into(),
-        "/bin".into(),
-        "--ro-bind".into(),
-        "/lib".into(),
-        "/lib".into(),
-    ];
-    if Path::new("/lib64").exists() {
-        args.extend(["--ro-bind".into(), "/lib64".into(), "/lib64".into()]);
+    let mut args: Vec<String> = [
+        "--die-with-parent",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--new-session",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    for root in ["/usr", "/bin", "/lib", "/lib64", "/etc", "/home"] {
+        if Path::new(root).exists() {
+            args.extend(["--ro-bind".into(), root.into(), root.into()]);
+        }
     }
-    if Path::new("/etc").is_dir() {
-        args.extend(["--ro-bind".into(), "/etc".into(), "/etc".into()]);
-    }
+    // Bind the project after home, otherwise /home hides a project mount.
     args.extend([
         "--tmpfs".into(),
         "/tmp".into(),
@@ -242,22 +198,15 @@ pub fn profile_args(
         "--proc".into(),
         "/proc".into(),
         "--bind".into(),
-        ws_str.clone(),
-        ws_str.clone(),
+        ws.to_string_lossy().into_owned(),
+        ws.to_string_lossy().into_owned(),
         "--chdir".into(),
-        ws_str,
+        ws.to_string_lossy().into_owned(),
     ]);
-    // Real home is read-only — never writable.
-    for root in ["/home", "/root"] {
-        if Path::new(root).exists() {
-            args.extend(["--ro-bind".into(), root.into(), root.into()]);
-        }
-    }
     if let Some(scratch) = scratch {
-        let s = scratch.to_string_lossy().into_owned();
         args.extend([
             "--bind".into(),
-            s.clone(),
+            scratch.to_string_lossy().into_owned(),
             "/shadowcode-scratch".into(),
             "--setenv".into(),
             "SHADOWCODE_SCRATCH".into(),
@@ -267,114 +216,65 @@ pub fn profile_args(
     if !allow_network {
         args.push("--unshare-net".into());
     }
-    args.extend([
-        "--".into(),
-        "/bin/sh".into(),
-        "-c".into(),
-        command.into(),
-    ]);
+    args.extend(["--".into(), "/bin/sh".into(), "-c".into(), command.into()]);
     args
 }
-
 pub fn doctor_checks() -> Vec<Value> {
-    let cow = probe_workspace_cow();
-    let base = match detect() {
-        SandboxMode::Bubblewrap => check(
-            "bubblewrap",
-            "pass",
-            "Optional bubblewrap shell",
-            "bwrap found; exec may run inside a limited bubblewrap profile when enabled. Scratch upper dir is ephemeral and discardable. Real home stays read-only.",
-            "Bubblewrap limits write/network reach but is not a full OS sandbox. Pop!_OS may block user namespaces — ShadowCode falls back clearly. Not kernel-proof.",
-        ),
-        SandboxMode::Off { reason } => check(
-            "bubblewrap",
-            "info",
-            "Optional bubblewrap shell",
-            reason,
-            "Install bubblewrap (bwrap) for optional shell isolation. Without it, shell policy remains heuristic only — not an OS sandbox.",
-        ),
-    };
+    let report = probe_workspace_cow();
     vec![
-        base,
-        check(
-            "sandbox-scratch",
-            "info",
-            "Ephemeral scratch upper",
-            "Non-workspace side effects can use SHADOWCODE_SCRATCH; discard path removes the upper dir.",
-            "Do not treat scratch as durable storage.",
-        ),
-        check(
-            "workspace-cow",
-            if cow["ok"] == true { "pass" } else { "info" },
-            "Workspace copy-on-write probe",
-            cow["detail"].as_str().unwrap_or("unprobed"),
-            "If blocked, shell writes go to the live workspace bind (still not an OS sandbox).",
-        ),
+        json!({"id":"bubblewrap","status":if report["shell_available"]==true {"pass"} else {"info"},
+        "title":"Optional shell isolation","detail":report["detail"],
+        "fix":"In automatic mode, unavailable bubblewrap is detected before running a command. A command is never replayed after a sandbox failure."}),
+        json!({"id":"workspace-cow","status":"info","title":"Live workspace writes",
+        "detail":"Shell writes affect the current workspace. Scratch storage is temporary, not copy-on-write.",
+        "fix":"Use an isolated Git worktree for changes you want to review before integrating."}),
     ]
 }
-
 pub fn doctor_check() -> Value {
-    json!({"checks": doctor_checks()})
-}
-
-fn check(id: &str, status: &str, title: &str, detail: impl Into<String>, fix: &str) -> Value {
-    json!({"id":id,"status":status,"title":title,"detail":detail.into(),"fix":fix})
+    json!({"checks":doctor_checks()})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
+    use std::fs;
     #[test]
-    fn profile_builder_includes_workspace_and_blocks_network_by_default() {
-        let ws = PathBuf::from("/tmp/shadowcode-bwrap-fixture");
-        let args = profile_args(&ws, "echo hi", false, None);
-        assert!(args.iter().any(|a| a == "--unshare-net"));
-        assert!(args.windows(3).any(|w| {
-            w[0] == "--bind" && w[1].contains("shadowcode-bwrap-fixture")
-        }));
-        assert_eq!(&args[args.len() - 3..], ["/bin/sh", "-c", "echo hi"]);
-        // Home stays read-only when present.
-        if Path::new("/home").exists() {
-            assert!(args.windows(3).any(|w| w[0] == "--ro-bind" && w[1] == "/home"));
-        }
-    }
-
-    #[test]
-    fn network_permission_skips_unshare_net() {
-        let ws = PathBuf::from("/tmp/shadowcode-bwrap-fixture");
-        let args = profile_args(&ws, "curl example", true, None);
-        assert!(!args.iter().any(|a| a == "--unshare-net"));
-    }
-
-    #[test]
-    fn scratch_is_created_and_discardable() {
+    fn cleanup_refuses_user_data_and_symlinks() {
         let base = tempfile::tempdir().unwrap();
-        let session = create_scratch(base.path()).unwrap();
-        assert!(session.path.is_dir());
-        let marker = session.path.join("tmp-install");
-        fs::write(&marker, b"x").unwrap();
-        discard_scratch(&session.path).unwrap();
-        assert!(!session.path.exists());
+        let user = base.path().join("project");
+        fs::create_dir(&user).unwrap();
+        fs::write(user.join("important"), "keep").unwrap();
+        assert!(discard_scratch(&user).is_err());
+        let scratch = create_scratch(base.path()).unwrap();
+        fs::write(scratch.path.join("temp"), "x").unwrap();
+        discard_scratch(&scratch.path).unwrap();
+        assert!(!scratch.path.exists());
+        assert!(user.join("important").exists());
     }
-
     #[test]
-    fn profile_binds_scratch_when_provided() {
-        let ws = PathBuf::from("/tmp/shadowcode-bwrap-fixture");
-        let scratch = PathBuf::from("/tmp/shadowcode-scratch-fixture");
-        let args = profile_args(&ws, "echo hi", false, Some(&scratch));
-        assert!(args.windows(3).any(|w| {
-            w[0] == "--bind" && w[2] == "/shadowcode-scratch"
-        }));
-        assert!(args.windows(3).any(|w| {
-            w[0] == "--setenv" && w[1] == "SHADOWCODE_SCRATCH"
-        }));
+    fn workspace_mount_overrides_read_only_home_and_network_is_scoped() {
+        let args = profile_args(Path::new("/home/test/project"), "echo hi", false, None);
+        let ws = args
+            .windows(3)
+            .position(|w| w == ["--bind", "/home/test/project", "/home/test/project"])
+            .unwrap();
+        if Path::new("/home").exists() {
+            assert!(
+                args.windows(3)
+                    .position(|w| w == ["--ro-bind", "/home", "/home"])
+                    .unwrap()
+                    < ws
+            );
+        }
+        assert!(args.iter().any(|a| a == "--unshare-net"));
+        assert!(!profile_args(Path::new("/tmp"), "true", true, None)
+            .iter()
+            .any(|a| a == "--unshare-net"));
     }
-
     #[test]
-    fn cow_probe_never_claims_kernel_proof() {
+    fn scratch_probe_never_claims_copy_on_write() {
         let report = probe_workspace_cow();
+        assert_eq!(report["ok"], false);
         assert_eq!(report["kernel_proof"], false);
     }
 }

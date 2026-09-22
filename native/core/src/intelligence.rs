@@ -8,7 +8,6 @@ const MAX_HITS: usize = 80;
 
 pub fn workspace_symbols(root: &Path, query: &str, max_hits: usize) -> Result<Value> {
     let max_hits = max_hits.clamp(1, MAX_HITS);
-    let _ = crate::symbol_index::ensure_index(root, &[], true)?;
     let defs = crate::symbol_index::query_definitions(root, query, max_hits)?;
     Ok(json!({
         "ok": true,
@@ -47,11 +46,15 @@ pub async fn get_diagnostics(root: &Path, path: &str) -> Result<Value> {
     if !rust_analyzer_available() {
         bail!("rust-analyzer is not installed on PATH; diagnostics are unavailable");
     }
-    let rel = Path::new(path);
-    anyhow::ensure!(!rel.is_absolute(), "path must be workspace-relative");
-    let full = root.join(rel);
-    anyhow::ensure!(full.starts_with(root), "path escapes workspace");
-    anyhow::ensure!(full.is_file(), "file not found");
+    let workspace = crate::workspace::Workspace::open(root)?;
+    let rel = workspace.relative(path)?;
+    let full = root.join(&rel).canonicalize()?;
+    anyhow::ensure!(full.starts_with(&workspace.path), "path escapes workspace");
+    anyhow::ensure!(
+        !crate::redaction::is_secret_path(&rel.to_string_lossy()),
+        "Secret paths cannot be inspected"
+    );
+    workspace.read(&rel.to_string_lossy())?;
     let mut spec = crate::process::ProcessSpec::command(
         "rust-analyzer",
         &["diagnostics", &full.to_string_lossy()],

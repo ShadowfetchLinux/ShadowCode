@@ -61,8 +61,14 @@ async fn system_info_is_read_only_and_cannot_read_an_arbitrary_path() {
     assert_eq!(result.output["read_only"], true);
     assert_eq!(result.output["os"], std::env::consts::OS);
     assert!(result.output["displays"]["connectors"].is_array());
-    assert!(shadowcode_core::permissions::parallel_safe("system_info", &json!({})));
-    assert_eq!(shadowcode_core::autonomy::replay_class("system_info"), shadowcode_core::autonomy::ReplayClass::SafeToReplay);
+    assert!(shadowcode_core::permissions::parallel_safe(
+        "system_info",
+        &json!({})
+    ));
+    assert_eq!(
+        shadowcode_core::autonomy::replay_class("system_info"),
+        shadowcode_core::autonomy::ReplayClass::SafeToReplay
+    );
     let denied = call(&tools, "system_info", json!({"path":"/etc/shadow"})).await;
     assert!(!denied.success);
     assert!(denied.error.contains("takes no arguments"));
@@ -447,7 +453,6 @@ async fn denied_approval_is_not_success_and_does_not_run_the_command() {
         .is_none());
 }
 
-
 #[tokio::test]
 async fn secret_env_is_refused_and_tokens_redacted_in_tool_messages() {
     let (_root, tools) = fixture(Config::default());
@@ -464,7 +469,11 @@ async fn secret_env_is_refused_and_tokens_redacted_in_tool_messages() {
     )
     .unwrap();
     let blocked = call(&tools, "read_file", json!({"path":".env"})).await;
-    assert!(!blocked.success || blocked.output["redacted"] == true, "{}", blocked.output);
+    assert!(
+        !blocked.success || blocked.output["redacted"] == true,
+        "{}",
+        blocked.output
+    );
     assert!(
         blocked.output["error"]
             .as_str()
@@ -497,4 +506,25 @@ async fn workspace_symbols_find_rust_fixture() {
     .await;
     assert!(result.success, "{}", result.error);
     assert!(result.output.to_string().contains("alpha"));
+}
+
+#[tokio::test]
+async fn sandbox_subdirectory_command_can_access_project_and_discards_its_scratch() {
+    let mut config = Config::default();
+    config.permissions.approve_shell = false;
+    let (_root, tools) = fixture(config);
+    fs::create_dir(tools.workspace.path.join("src")).unwrap();
+    let result=call(&tools,"exec",json!({"cwd":"src","command":"printf once >> ../marker.txt; if test -n \"$SHADOWCODE_SCRATCH\"; then printf temporary > \"$SHADOWCODE_SCRATCH/temp\"; fi"})).await;
+    assert!(result.success, "{} {:?}", result.error, result.output);
+    assert_eq!(
+        fs::read_to_string(tools.workspace.path.join("marker.txt")).unwrap(),
+        "once"
+    );
+    if let Some(path) = result
+        .output
+        .pointer("/sandbox/scratch")
+        .and_then(Value::as_str)
+    {
+        assert!(!std::path::Path::new(path).exists());
+    }
 }

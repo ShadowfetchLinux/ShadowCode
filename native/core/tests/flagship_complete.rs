@@ -2,15 +2,17 @@
 //! and symbol tools on fixtures.
 use serde_json::json;
 use shadowcode_core::{
-    guardian, parallel, paths::AppPaths, redaction, sandbox, steering,
-    store::Store, symbol_index,
+    guardian, parallel, paths::AppPaths, redaction, sandbox, steering, store::Store, symbol_index,
 };
 use std::{collections::BTreeMap, fs, process::Command};
 
 #[test]
 fn redaction_blocks_secret_paths_and_tokens() {
     assert!(redaction::is_secret_path(".env"));
-    let r = redaction::redact_text(&format!("token={}", format!("{}{}", "ghp_", "abcdefghijklmnopqrstuvwxyz012345")));
+    let r = redaction::redact_text(&format!(
+        "token={}{}",
+        "ghp_", "abcdefghijklmnopqrstuvwxyz012345"
+    ));
     assert!(r.redacted);
     assert!(r.text.contains("[redacted secret]"));
 }
@@ -21,7 +23,9 @@ fn steering_pause_resume_hash_and_rewind_note() {
     let mut hashes = BTreeMap::new();
     hashes.insert("src/lib.rs".into(), "aaa".into());
     control.pause(hashes).unwrap();
-    control.set_instruction("prefer Option over unwrap").unwrap();
+    control
+        .set_instruction("prefer Option over unwrap")
+        .unwrap();
     control.note_rewind(&["src/lib.rs".into()]).unwrap();
     control.resume().unwrap();
     let mut current = BTreeMap::new();
@@ -39,16 +43,41 @@ fn parallel_cap_and_non_git_disabled() {
     assert_eq!(disabled["enabled"], false);
     let repo = root.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
-    assert!(Command::new("git").args(["init", "-q"]).current_dir(&repo).status().unwrap().success());
-    assert!(Command::new("git").args(["config", "user.email", "t@example.invalid"]).current_dir(&repo).status().unwrap().success());
-    assert!(Command::new("git").args(["config", "user.name", "t"]).current_dir(&repo).status().unwrap().success());
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&repo)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["config", "user.email", "t@example.invalid"])
+        .current_dir(&repo)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["config", "user.name", "t"])
+        .current_dir(&repo)
+        .status()
+        .unwrap()
+        .success());
     fs::write(repo.join("f.txt"), "x\n").unwrap();
-    assert!(Command::new("git").args(["add", "f.txt"]).current_dir(&repo).status().unwrap().success());
-    assert!(Command::new("git").args(["commit", "-qm", "i"]).current_dir(&repo).status().unwrap().success());
+    assert!(Command::new("git")
+        .args(["add", "f.txt"])
+        .current_dir(&repo)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["commit", "-qm", "i"])
+        .current_dir(&repo)
+        .status()
+        .unwrap()
+        .success());
     let plan = parallel::prepare(&repo, "docs and tests", &root.path().join("checkouts")).unwrap();
     assert_eq!(plan["ok"], true);
     assert!(plan["plan"]["workers"].as_array().unwrap().len() <= parallel::MAX_WORKERS);
-    let _ = parallel::cleanup();
+    let _ = parallel::cleanup(&repo, &root.path().join("checkouts"));
 }
 
 #[test]
@@ -60,8 +89,12 @@ fn fork_session_keeps_original() {
     fs::create_dir_all(&ws).unwrap();
     let session = store.create_session(&ws, "mock", "Original").unwrap();
     let sid = session["id"].as_str().unwrap().to_owned();
-    store.add_event("user.message", &json!({"text":"hello"}), Some(&sid), None).unwrap();
-    store.add_event("agent.message", &json!({"text":"world"}), Some(&sid), None).unwrap();
+    store
+        .add_event("user.message", &json!({"text":"hello"}), Some(&sid), None)
+        .unwrap();
+    store
+        .add_event("agent.message", &json!({"text":"world"}), Some(&sid), None)
+        .unwrap();
     let events = store.events_after(&sid, 0, None, 100).unwrap();
     let eid = events[0]["id"].as_i64().unwrap();
     let fork = store.fork_session_from_event(&sid, eid, "Forked").unwrap();
@@ -83,7 +116,9 @@ fn sandbox_scratch_and_home_readonly_args() {
         false,
         Some(&scratch.path),
     );
-    assert!(args.windows(3).any(|w| w[0] == "--bind" && w[2] == "/shadowcode-scratch"));
+    assert!(args
+        .windows(3)
+        .any(|w| w[0] == "--bind" && w[2] == "/shadowcode-scratch"));
     sandbox::discard_scratch(&scratch.path).unwrap();
     let cow = sandbox::probe_workspace_cow();
     assert_eq!(cow["kernel_proof"], false);
@@ -110,14 +145,15 @@ fn symbol_index_fixture_tools() {
 #[test]
 fn guardian_default_off_and_readonly_when_enabled() {
     assert!(!guardian::GuardianConfig::default().enabled);
-    guardian::apply_config(&guardian::GuardianConfig {
+    let cfg = guardian::GuardianConfig {
         enabled: true,
         interval_sec: 60,
         allow_prepare_patch: false,
-    });
+    };
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("README"), "x").unwrap();
-    let result = guardian::run_health_check(root.path()).unwrap();
+    let result = guardian::Guardian::default()
+        .run_health_check(&cfg, root.path())
+        .unwrap();
     assert_eq!(result["wrote_main_tree"], false);
-    guardian::apply_config(&guardian::GuardianConfig::default());
 }

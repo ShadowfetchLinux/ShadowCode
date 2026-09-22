@@ -1,3 +1,4 @@
+import { AdvancedTools } from "./AdvancedTools";
 import { Dialog } from "./Dialog";
 import { WorktreeSettings } from "./WorktreeSettings";
 import { PluginSettings } from "./PluginSettings";
@@ -67,6 +68,10 @@ export function Settings({
   const [name, setName] = useState(model.name || "");
   const [endpoint, setEndpoint] = useState(model.endpoint || "");
   const [keyEnv, setKeyEnv] = useState(model.api_key_env || "OPENAI_API_KEY");
+  const [contextLimit, setContextLimit] = useState(
+    Number(model.context_limit) || 16384,
+  );
+  const [keepAlive, setKeepAlive] = useState(model.keep_alive || "30m");
   const [apiKey, setApiKey] = useState("");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [detected, setDetected] = useState<DetectedProvider[]>([]);
@@ -84,7 +89,10 @@ export function Settings({
   // Appearance
   const [theme, setTheme] = useState(String(ui.theme || "light"));
   const [ability, setAbility] = useState(String(ui.ability || "none"));
-  const guardianCfg = (cfg.guardian || {}) as Record<string, string | number | boolean>;
+  const guardianCfg = (cfg.guardian || {}) as Record<
+    string,
+    string | number | boolean
+  >;
   const [guardianEnabled, setGuardianEnabled] = useState(
     Boolean(guardianCfg.enabled),
   );
@@ -237,6 +245,8 @@ export function Settings({
             endpoint,
             name,
             api_key_env: keyEnv,
+            context_limit: contextLimit,
+            keep_alive: keepAlive,
           },
           permissions: {
             level,
@@ -247,7 +257,7 @@ export function Settings({
           guardian: {
             enabled: guardianEnabled,
             interval_sec: guardianInterval,
-            allow_prepare_patch: false,
+            allow_prepare_patch: Boolean(guardianCfg.allow_prepare_patch),
           },
         },
         apiKey,
@@ -370,6 +380,45 @@ export function Settings({
                 placeholder={preset?.endpoint || "https://host/v1"}
               />
             </div>
+            <div className="field">
+              <label htmlFor="model-context">Context window (tokens)</label>
+              <input
+                id="model-context"
+                type="number"
+                min={1024}
+                max={4000000}
+                step={1024}
+                value={contextLimit}
+                onChange={(e) => setContextLimit(Number(e.target.value))}
+              />
+              <p className="hint">
+                Match your model and available memory. Larger windows use more
+                memory; 16,384 is a practical starting point for local models.
+              </p>
+            </div>
+            {provider === "ollama" && (
+              <div className="field">
+                <label htmlFor="model-residency">Keep model loaded</label>
+                <select
+                  id="model-residency"
+                  value={keepAlive}
+                  onChange={(e) => setKeepAlive(e.target.value)}
+                >
+                  {!["0", "5m", "30m", "1h", "-1"].includes(keepAlive) && (
+                    <option value={keepAlive}>{keepAlive}</option>
+                  )}
+                  <option value="0">Unload after each reply</option>
+                  <option value="5m">5 minutes</option>
+                  <option value="30m">30 minutes</option>
+                  <option value="1h">1 hour</option>
+                  <option value="-1">Until Ollama stops</option>
+                </select>
+                <p className="hint">
+                  Keeping the model loaded reduces startup delays between turns
+                  and reserves its memory.
+                </p>
+              </div>
+            )}
             {(preset?.needs_key || provider === "openai_compatible") && (
               <>
                 <div className="field">
@@ -786,42 +835,50 @@ export function Settings({
           <WorktreeSettings onOpen={onOpenProject} onToast={onToast} />
         )}
 
-      {section === "advanced" && (
-        <div className="stack gap">
-          <h3>Advanced</h3>
-          <p className="muted">
-            Parallel worktrees (cap 2), optional Guardian health checks, and
-            sandbox details live here so the main task view stays focused.
-          </p>
-          <label className="row gap">
-            <input
-              type="checkbox"
-              checked={guardianEnabled}
-              onChange={(e) => setGuardianEnabled(e.target.checked)}
-            />
-            Enable Guardian scheduled health check (default off)
-          </label>
-          <label>
-            Guardian interval (seconds)
-            <input
-              type="number"
-              min={60}
-              max={86400}
-              value={guardianInterval}
-              onChange={(e) => setGuardianInterval(Number(e.target.value) || 3600)}
-            />
-          </label>
-          <p className="muted">
-            Guardian never pushes, opens a PR, or merges while idle. Patch
-            prepare requires explicit approval. Bubblewrap is optional isolation
-            with an ephemeral scratch dir — not kernel-proof.
-          </p>
-          <p className="muted">
-            Parallel workers: at most 2 git worktrees plus the lead task. Disabled
-            outside git repositories.
-          </p>
-        </div>
-      )}
+        {section === "advanced" && (
+          <div className="stack gap">
+            <h3>Advanced</h3>
+            {isNative() ? (
+              <AdvancedTools onOpen={onOpenProject} />
+            ) : (
+              <p className="hint">
+                Workspace preparation and Guardian diagnostics require the
+                native desktop.
+              </p>
+            )}
+            <section className="settings-section advanced-card guardian-schedule">
+              <h3>Guardian schedule</h3>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={guardianEnabled}
+                  onChange={(e) => setGuardianEnabled(e.target.checked)}
+                />{" "}
+                Enable scheduled diagnostics
+              </label>
+              <div className="field">
+                <label htmlFor="guardian-interval">Check every (seconds)</label>
+                <input
+                  id="guardian-interval"
+                  type="number"
+                  min={60}
+                  max={86400}
+                  value={guardianInterval}
+                  onChange={(e) => setGuardianInterval(Number(e.target.value))}
+                />
+              </div>
+              <p className="hint">
+                Scheduled checks run while the headless server is running.
+                Guardian is off by default and does not generate patches or run
+                tests.
+              </p>
+              <p className="hint">
+                Shell isolation uses bubblewrap when available. Approved
+                commands can write to the live project.
+              </p>
+            </section>
+          </div>
+        )}
 
         <div className="row end settings-foot">
           <button type="button" className="ghost" onClick={onClose}>

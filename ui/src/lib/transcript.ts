@@ -115,10 +115,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
           : event.type === "context.compacted"
             ? `Context compacted; ${String(p.omitted_messages || 0)} earlier messages omitted`
             : `Context ${String(p.used_estimated_tokens || 0)}/${String(p.limit || 0)} estimated tokens`;
-    items = [
-      ...items,
-      { kind: "note", taskId, text: detail },
-    ];
+    items = [...items, { kind: "note", taskId, text: detail }];
   }
   if (event.type === "workflow.selected") {
     items = [
@@ -203,7 +200,11 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
           event.type === "model.stream" && previous?.kind === "agent"
             ? previous.text + text
             : text,
-        live: event.type === "model.stream",
+        live: event.type === "model.stream" || p.complete === false,
+        eventId:
+          event.type === "model.delta" && p.complete !== false
+            ? event.id
+            : undefined,
       };
       items = [...items];
       if (index < 0) items.push(next);
@@ -304,6 +305,19 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
               : "Needs attention",
         },
       ];
+    let forkIndex = -1;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].kind === "agent" && items[i].taskId === taskId) {
+        forkIndex = i;
+        break;
+      }
+    }
+    if (forkIndex >= 0) {
+      items = [...items];
+      const item = items[forkIndex];
+      if (item.kind === "agent")
+        items[forkIndex] = { ...item, eventId: event.id, live: false };
+    }
     if (!activeTaskId || activeTaskId === taskId) {
       stage = p.cancelled ? "CANCELLED" : p.success ? "DONE" : "FAILED";
       usage = (p.usage as Record<string, number>) || {};

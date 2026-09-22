@@ -52,7 +52,8 @@ impl ToolResult {
         } else {
             content
         };
-        let mut message = json!({"role":"tool","tool_call_id":self.id,"name":name,"content":content});
+        let mut message =
+            json!({"role":"tool","tool_call_id":self.id,"name":name,"content":content});
         if redacted > 0 {
             message["redacted"] = json!(true);
             message["redaction_count"] = json!(redacted);
@@ -163,7 +164,10 @@ impl ToolExecutor {
             .observed
             .lock()
             .map_err(|_| anyhow::anyhow!("File observations lock poisoned"))?;
-        Ok(observed.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        Ok(observed
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
     }
     pub fn has_hooks(&self) -> bool {
         !self.hooks.is_empty()
@@ -438,10 +442,7 @@ impl ToolExecutor {
         }
         if matches!(
             call.name.as_str(),
-            "workspace_symbols"
-                | "goto_definition"
-                | "find_references"
-                | "get_type_signature"
+            "workspace_symbols" | "goto_definition" | "find_references" | "get_type_signature"
         ) {
             let root = self.workspace.path.clone();
             let name = call.name.clone();
@@ -505,12 +506,20 @@ impl ToolExecutor {
             self.workspace.path.clone()
         };
         let allow_network = self.config.permissions.network;
-        let mut sandbox_note = json!({
-            "mode": "none",
-            "note": "Shell policy is heuristic; not an OS sandbox."
-        });
-        let primary = match crate::sandbox::build_shell_profile(&cwd, command, allow_network) {
-            Ok(profile) => {
+        let sandbox_note;
+        let mut scratch_path = None;
+        let probe_cwd = self.workspace.path.clone();
+        let probe_command = command.to_owned();
+        let profile = tokio::task::spawn_blocking(move || {
+            crate::sandbox::build_shell_profile(&probe_cwd, &probe_command, allow_network)
+        })
+        .await?;
+        let primary = match profile {
+            Ok(mut profile) => {
+                if let Some(index) = profile.args.iter().position(|arg| arg == "--chdir") {
+                    profile.args[index + 1] = cwd.to_string_lossy().into_owned();
+                }
+                scratch_path = profile.scratch_dir.clone();
                 sandbox_note = json!({
                     "mode": "bubblewrap",
                     "network": profile.network,
@@ -533,27 +542,18 @@ impl ToolExecutor {
                     "reason": format!("{error:#}"),
                     "note": "Shell continues without bubblewrap; policy remains heuristic, not an OS sandbox."
                 });
-                let mut spec = ProcessSpec::shell(command, cwd.clone(), Duration::from_secs(seconds as u64));
+                let mut spec =
+                    ProcessSpec::shell(command, cwd.clone(), Duration::from_secs(seconds as u64));
                 spec.output_limit = self.config.agent.max_output_bytes;
                 spec
             }
         };
-        let used_bwrap = sandbox_note["mode"] == "bubblewrap";
-        let result = match process::run(primary, self.cancel.clone(), None).await {
-            Ok(result) => result,
-            Err(error) if used_bwrap => {
-                sandbox_note = json!({
-                    "mode": "fallback",
-                    "reason": format!("{error:#}"),
-                    "note": "bubblewrap failed (user namespaces may be blocked); fell back to unsandboxed shell. Not an OS sandbox."
-                });
-                let mut fallback =
-                    ProcessSpec::shell(command, cwd, Duration::from_secs(seconds as u64));
-                fallback.output_limit = self.config.agent.max_output_bytes;
-                process::run(fallback, self.cancel.clone(), None).await?
-            }
-            Err(error) => return Err(error),
-        };
+        // Never replay a command after a process failure: it may have changed files.
+        let result = process::run(primary, self.cancel.clone(), None).await;
+        if let Some(path) = scratch_path {
+            crate::sandbox::discard_scratch(&path)?;
+        }
+        let result = result?;
         let mut value = serde_json::to_value(result)?;
         value["sandbox"] = sandbox_note;
         Ok(value)
@@ -653,7 +653,10 @@ impl ToolExecutor {
         ensure!(!self.cancel.is_cancelled(), "Task cancelled");
         match name {
             "system_info" => {
-                ensure!(args.as_object().is_some_and(|args| args.is_empty()), "system_info takes no arguments");
+                ensure!(
+                    args.as_object().is_some_and(|args| args.is_empty()),
+                    "system_info takes no arguments"
+                );
                 Ok(crate::system_info::inspect())
             }
             "list_files" => {
@@ -1040,10 +1043,21 @@ fn callers_note(root: &std::path::Path, path: &str, content_hint: &str) -> Optio
         .lines()
         .find_map(|line| {
             let line = line.trim();
-            if let Some(rest) = line.strip_prefix("fn ").or_else(|| line.strip_prefix("pub fn ")) {
-                Some(rest.split(|c: char| c == '(' || c.is_whitespace()).next()?.to_owned())
+            if let Some(rest) = line
+                .strip_prefix("fn ")
+                .or_else(|| line.strip_prefix("pub fn "))
+            {
+                Some(
+                    rest.split(|c: char| c == '(' || c.is_whitespace())
+                        .next()?
+                        .to_owned(),
+                )
             } else if let Some(rest) = line.strip_prefix("function ") {
-                Some(rest.split(|c: char| c == '(' || c.is_whitespace()).next()?.to_owned())
+                Some(
+                    rest.split(|c: char| c == '(' || c.is_whitespace())
+                        .next()?
+                        .to_owned(),
+                )
             } else {
                 None
             }

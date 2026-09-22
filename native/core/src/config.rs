@@ -62,6 +62,23 @@ impl Default for ModelConfig {
     }
 }
 
+pub fn valid_keep_alive(value: &str) -> bool {
+    if matches!(value, "-1" | "0") {
+        return true;
+    }
+    let Some(number) = value
+        .strip_suffix("ms")
+        .or_else(|| value.strip_suffix('s'))
+        .or_else(|| value.strip_suffix('m'))
+        .or_else(|| value.strip_suffix('h'))
+    else {
+        return false;
+    };
+    number
+        .parse::<u32>()
+        .is_ok_and(|n| (1..=86400).contains(&n))
+}
+
 fn default_keep_alive() -> String {
     "30m".into()
 }
@@ -199,6 +216,17 @@ impl Config {
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.ui.is_object(), "UI configuration must be an object");
+        ensure!(
+            valid_keep_alive(&self.model.keep_alive),
+            "Ollama residency must be -1, 0, or a positive duration such as 5m, 30m or 1h"
+        );
+        let guardian: crate::guardian::GuardianConfig =
+            serde_json::from_value(self.guardian.clone())
+                .context("Invalid Guardian configuration")?;
+        ensure!(
+            (60..=86400).contains(&guardian.interval_sec),
+            "Guardian interval must be between 60 and 86400 seconds"
+        );
         ensure!(
             (1024..=4_000_000).contains(&self.model.context_limit),
             "Context limit must be between 1024 and 4000000"

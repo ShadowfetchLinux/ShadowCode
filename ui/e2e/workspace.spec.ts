@@ -14,7 +14,7 @@ test.beforeEach(async ({ page, request }) => {
   );
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "What are we building?" }),
+    page.getByRole("heading", { name: "What are we building today?" }),
   ).toBeVisible();
 });
 

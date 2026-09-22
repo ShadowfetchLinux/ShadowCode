@@ -64,9 +64,7 @@ jobs:
           npm --prefix scripts/native-mcp-peer ci --ignore-scripts --no-audit --no-fund
           SHADOW_DESKTOP_BINARY="$BINARY" SHADOW_CLI_ARGS='["--appimage-extract-and-run"]' node scripts/test-native-mcp-peer.mjs
       - name: Create release checksums
-        run: |
-          cd target/release/bundle
-          sha256sum appimage/*.AppImage appimage/*runtime-sources.tar.gz deb/*.deb > SHA256SUMS
+        run: cp artifacts/native-package/SHA256SUMS target/release/bundle/SHA256SUMS
       - name: Verify installer replacement and checksum refusal
         run: bash scripts/test-install-appimage.sh
       - name: Publish checked native artifacts

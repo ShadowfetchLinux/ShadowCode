@@ -19,6 +19,7 @@ async fn main() -> Result<()> {
             endpoint: "http://127.0.0.1:11434/v1".into(),
             api_key_env: "OLLAMA_API_KEY".into(),
             context_limit: 4096,
+            ..Default::default()
         },
         &paths,
     )?;

@@ -79,3 +79,16 @@ with an exclusive positive cursor, `first_cursor`, `event_cursor`, and
 scopes every page to one session; page limits are enforced by the store before
 serializing data for the desktop. The existing event stream, CLI history and
 export routes retain their contracts. The legacy browser transport is unchanged.
+
+## Fork from a response
+
+**Fork from here** beneath a completed response opens a separate conversation
+without changing the original. Completed task boundaries retain the saved model
+message tape, including tool results. A cut inside a task retains completed prior
+task context and the subsequent visible conversation through the selected event;
+uncompleted tool exchanges are omitted. Events after the cut are not inherited.
+The new conversation retains its context even if the original is later deleted.
+
+`POST /api/sessions/ID/fork` accepts `event_id` belonging to that session and an
+optional `title`. An event ID from another session is rejected. Forking copies
+conversation context only; it does not rewind files or create a Git branch.

@@ -137,6 +137,32 @@ async fn call(client: &mut Client, name: &str, args: Value) -> Value {
 fn rpc(method: &str, params: Value) -> Value {
     json!({"jsonrpc":"2.0","id":1,"method":method,"params":params})
 }
+// A sandbox child reports a namespace-local PID. Resolve its host identity
+// while it is alive, then assert that exact process is reaped on shutdown.
+fn host_pid(project: &std::path::Path, namespace_pid: u32) -> u32 {
+    let project = project.canonicalize().unwrap();
+    let matches: Vec<_> = fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(|e| {
+            let path = e.ok()?.path();
+            let pid = path.file_name()?.to_str()?.parse::<u32>().ok()?;
+            if fs::read_link(path.join("cwd")).ok()? != project {
+                return None;
+            }
+            let status = fs::read_to_string(path.join("status")).ok()?;
+            let inner = status
+                .lines()
+                .find(|line| line.starts_with("NSpid:"))?
+                .split_whitespace()
+                .last()?
+                .parse::<u32>()
+                .ok()?;
+            (inner == namespace_pid).then_some(pid)
+        })
+        .collect();
+    assert_eq!(matches.len(), 1, "Expected exactly one live fixture child");
+    matches[0]
+}
 fn dead(pid: u32) -> bool {
     fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |stat| {
         stat.rsplit_once(") ")
@@ -394,6 +420,7 @@ async fn owned_tasks_survive_http_reconnect_and_shutdown_cancels_only_this_gatew
     })
     .await
     .unwrap();
+    let pid = host_pid(&f.project, pid);
     assert!(!dead(pid));
     c.close().await.unwrap();
     let mut c = g.client().await;

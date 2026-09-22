@@ -63,9 +63,19 @@ pub struct ViewClient {
     events: broadcast::Sender<Value>,
     closed: Arc<AtomicBool>,
     attach: Mutex<()>,
+    closing: CancellationToken,
 }
 impl Client {
     pub async fn open_view(&self) -> Result<ViewClient> {
+        let (events, _) = broadcast::channel(64);
+        self.open_view_with_state(events, Arc::new(AtomicBool::new(false)))
+            .await
+    }
+    async fn open_view_with_state(
+        &self,
+        events: broadcast::Sender<Value>,
+        closed: Arc<AtomicBool>,
+    ) -> Result<ViewClient> {
         ensure!(
             self.available().await?,
             "No running engine is available to attach"
@@ -94,8 +104,7 @@ impl Client {
         let mut client = self.clone();
         client.view = Some(id.to_owned());
         let (mut reader, writer) = stream.into_split();
-        let (events, _) = broadcast::channel(64);
-        let closed = Arc::new(AtomicBool::new(false));
+        closed.store(false, Ordering::Release);
         let event_sender = events.clone();
         let ended = closed.clone();
         let peer = client.clone();
@@ -127,6 +136,7 @@ impl Client {
             events,
             closed,
             attach: Mutex::new(()),
+            closing: CancellationToken::new(),
         })
     }
 }
@@ -145,7 +155,7 @@ impl ViewClient {
     }
     pub async fn dispatch(&self, request: Request) -> Result<Value> {
         ensure!(
-            !self.closed.load(Ordering::Acquire),
+            !self.closing.is_cancelled() && !self.closed.load(Ordering::Acquire),
             "Attached view is closed"
         );
         self.client()?.dispatch(request).await
@@ -158,17 +168,34 @@ impl ViewClient {
     /// tools, or emit durable events. Existing subscribers keep this
     /// broadcast and receive `view.reattached`.
     pub async fn reattach(&self) -> Result<Value> {
-        let _gate = self.attach.lock().await;
+        let _gate = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => bail!("Attached view is closed"),
+            gate = self.attach.lock() => gate,
+        };
         ensure!(
             self.closed.load(Ordering::Acquire),
             "Attached view is still connected; detach before reattaching"
         );
         let mut base = self.client()?;
         base.view = None;
-        base.wait_available(Duration::from_secs(20)).await?;
-        let _ = self.reader.lock().await.take();
+        tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => bail!("Attached view is closed"),
+            result = base.wait_available(Duration::from_secs(20)) => result?,
+        }
+        if let Some(task) = self.reader.lock().await.take() {
+            task.abort();
+            let _ = task.await;
+        }
         let _ = self.writer.lock().await.take();
-        let fresh = base.open_view().await?;
+        // Reuse both the event channel and disconnect flag: existing subscribers
+        // must see events and subsequent disconnects from the replacement owner.
+        let fresh = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => bail!("Attached view is closed"),
+            result = base.open_view_with_state(self.events.clone(), self.closed.clone()) => result?,
+        };
         *self.writer.lock().await = fresh.writer.lock().await.take();
         *self.reader.lock().await = fresh.reader.lock().await.take();
         {
@@ -182,7 +209,6 @@ impl ViewClient {
                 .map_err(|_| anyhow::anyhow!("View client lock poisoned"))?
                 .clone();
         }
-        self.closed.store(false, Ordering::Release);
         let notice = json!({
             "type": "view.reattached",
             "jobs_started": 0,
@@ -196,6 +222,9 @@ impl ViewClient {
         }))
     }
     pub async fn close(&self) -> Result<()> {
+        // Interrupt owner discovery before taking its gate; window close must
+        // not wait for the reconnect timeout when the owner has gone away.
+        self.closing.cancel();
         let _gate = self.attach.lock().await;
         self.closed.store(true, Ordering::Release);
         let Some(mut task) = self.reader.lock().await.take() else {
@@ -318,6 +347,7 @@ mod tests {
             events,
             closed: Arc::new(AtomicBool::new(false)),
             attach: Mutex::new(()),
+            closing: CancellationToken::new(),
         });
         let closing_view = view.clone();
         let closing = tokio::spawn(async move { closing_view.close().await });

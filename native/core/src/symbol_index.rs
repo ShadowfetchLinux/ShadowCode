@@ -1,9 +1,11 @@
 //! On-demand AST symbol index for Rust and TypeScript in ordinary SQLite tables.
 //! Not sqlite-vec, not embeddings, not BM25. Files are indexed when touched or
 //! during a bounded project scan — never the whole world at startup.
+use crate::workspace::Workspace;
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS files (
   lang TEXT NOT NULL,
   mtime_ns INTEGER NOT NULL,
   size INTEGER NOT NULL,
+  digest TEXT NOT NULL,
   indexed_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS symbols (
@@ -76,7 +79,8 @@ fn language(lang: Lang) -> tree_sitter::Language {
 
 fn definition_query(lang: Lang) -> &'static str {
     match lang {
-        Lang::Rust => r#"
+        Lang::Rust => {
+            r#"
             (function_item name: (identifier) @name)
             (struct_item name: (type_identifier) @name)
             (enum_item name: (type_identifier) @name)
@@ -86,8 +90,10 @@ fn definition_query(lang: Lang) -> &'static str {
             (const_item name: (identifier) @name)
             (static_item name: (identifier) @name)
             (type_item name: (type_identifier) @name)
-        "#,
-        Lang::TypeScript | Lang::Tsx => r#"
+        "#
+        }
+        Lang::TypeScript | Lang::Tsx => {
+            r#"
             (function_declaration name: (identifier) @name)
             (class_declaration name: (type_identifier) @name)
             (interface_declaration name: (type_identifier) @name)
@@ -95,7 +101,8 @@ fn definition_query(lang: Lang) -> &'static str {
             (enum_declaration name: (identifier) @name)
             (lexical_declaration (variable_declarator name: (identifier) @name))
             (method_definition name: (property_identifier) @name)
-        "#,
+        "#
+        }
     }
 }
 
@@ -131,21 +138,50 @@ fn relative(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn db_path(root: &Path) -> PathBuf {
-    root.join(".shadow").join("symbol-index.sqlite")
-}
-
-fn open_db(root: &Path) -> Result<Connection> {
-    let path = db_path(root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+// Keep derived data out of the project (including read-only reviews). The
+// private process cache cannot be redirected by a project's .shadow symlink.
+static CACHE: Mutex<Option<tempfile::TempDir>> = Mutex::new(None);
+fn db_path(root: &Path) -> Result<PathBuf> {
+    let root = root.canonicalize()?;
+    let key = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
+    let mut cache = CACHE
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Index cache lock poisoned"))?;
+    if cache.is_none() {
+        *cache = Some(
+            tempfile::Builder::new()
+                .prefix("shadowcode-symbols-")
+                .tempdir()?,
+        );
     }
+    Ok(cache
+        .as_ref()
+        .context("Index cache unavailable")?
+        .path()
+        .join(format!("{key}.sqlite")))
+}
+fn open_db(root: &Path) -> Result<Connection> {
+    let path = db_path(root)?;
     let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(3))?;
     conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")?;
     conn.execute_batch(SCHEMA)?;
     Ok(conn)
 }
-
+fn read_source(root: &Path, path: &Path) -> Result<String> {
+    let workspace = Workspace::open(root)?;
+    let rel = workspace.relative(path.to_str().context("Source path is not UTF-8")?)?;
+    ensure!(
+        !crate::redaction::is_secret_path(&rel.to_string_lossy()),
+        "Secret paths are not indexed"
+    );
+    let file = workspace.read(&rel.to_string_lossy())?;
+    ensure!(
+        file.bytes <= MAX_FILE_BYTES,
+        "Source exceeds the AST index byte limit"
+    );
+    Ok(file.content)
+}
 fn extract_signature(source: &str, node: tree_sitter::Node) -> String {
     let parent = node.parent().unwrap_or(node);
     let start = parent.start_byte();
@@ -154,13 +190,18 @@ fn extract_signature(source: &str, node: tree_sitter::Node) -> String {
     let first = slice.lines().next().unwrap_or(slice).trim();
     let mut out = first.to_owned();
     if out.len() > 240 {
-        out.truncate(240);
+        let mut end = 240;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
         out.push('…');
     }
     out
 }
 
-fn parse_symbols(_path: &Path, source: &str, lang: Lang) -> Result<Vec<(String, String, usize, usize, String)>> {
+type ParsedSymbol = (String, String, usize, usize, String);
+fn parse_symbols(_path: &Path, source: &str, lang: Lang) -> Result<Vec<ParsedSymbol>> {
     let mut parser = Parser::new();
     parser.set_language(&language(lang))?;
     let Some(tree) = parser.parse(source, None) else {
@@ -200,38 +241,29 @@ fn parse_symbols(_path: &Path, source: &str, lang: Lang) -> Result<Vec<(String, 
 }
 
 fn walk_sources(root: &Path, limit: usize) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if out.len() >= limit {
-                return out;
-            }
-            let path = entry.path();
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with('.')
-                || name == "target"
-                || name == "node_modules"
-                || name == "dist"
-                || name == ".git"
-            {
-                continue;
-            }
-            let Ok(meta) = entry.metadata() else {
-                continue;
-            };
-            if meta.is_dir() {
-                stack.push(path);
-            } else if lang_for(&path).is_some() && meta.len() <= MAX_FILE_BYTES as u64 {
-                out.push(path);
-            }
-        }
-    }
-    out
+    ignore::WalkBuilder::new(root)
+        .follow_links(false)
+        .max_depth(Some(32))
+        .filter_entry(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            entry.depth() == 0
+                || (!name.starts_with('.')
+                    && !matches!(name.as_ref(), "node_modules" | "target" | "dist")
+                    && !crate::redaction::is_secret_path(&entry.path().to_string_lossy()))
+        })
+        .build()
+        .take(20_000)
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.file_type().is_some_and(|kind| kind.is_file())
+                && lang_for(entry.path()).is_some()
+                && entry
+                    .metadata()
+                    .is_ok_and(|metadata| metadata.len() <= MAX_FILE_BYTES as u64)
+        })
+        .take(limit)
+        .map(|entry| entry.into_path())
+        .collect()
 }
 
 fn index_file(conn: &Connection, root: &Path, path: &Path) -> Result<usize> {
@@ -239,7 +271,7 @@ fn index_file(conn: &Connection, root: &Path, path: &Path) -> Result<usize> {
         return Ok(0);
     };
     let rel = relative(root, path);
-    let Ok(source) = fs::read_to_string(path) else {
+    let Ok(source) = read_source(root, path) else {
         return Ok(0);
     };
     if source.len() > MAX_FILE_BYTES {
@@ -247,22 +279,23 @@ fn index_file(conn: &Connection, root: &Path, path: &Path) -> Result<usize> {
     }
     let mt = mtime_ns(path) as i64;
     let size = source.len() as i64;
-    let existing: Option<(i64, i64)> = conn
+    let digest = format!("{:x}", Sha256::digest(source.as_bytes()));
+    let existing: Option<(i64, i64, String)> = conn
         .query_row(
-            "SELECT mtime_ns, size FROM files WHERE path=?",
+            "SELECT mtime_ns, size, digest FROM files WHERE path=?",
             [&rel],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .ok();
-    if existing == Some((mt, size)) {
+    if existing == Some((mt, size, digest.clone())) {
         return Ok(0);
     }
     let symbols = parse_symbols(path, &source, lang)?;
     conn.execute("DELETE FROM symbols WHERE path=?", [&rel])?;
     conn.execute("DELETE FROM files WHERE path=?", [&rel])?;
     conn.execute(
-        "INSERT INTO files(path, lang, mtime_ns, size, indexed_at) VALUES(?,?,?,?,?)",
-        params![rel, lang_name(lang), mt, size, now()],
+        "INSERT INTO files(path, lang, mtime_ns, size, digest, indexed_at) VALUES(?,?,?,?,?,?)",
+        params![rel, lang_name(lang), mt, size, digest, now()],
     )?;
     for (name, kind, line, column, signature) in &symbols {
         conn.execute(
@@ -280,6 +313,18 @@ pub fn ensure_index(root: &Path, touched: &[String], scan: bool) -> Result<Value
         .lock()
         .map_err(|_| anyhow::anyhow!("symbol index lock poisoned"))?;
     let conn = open_db(root)?;
+    let transaction = conn.unchecked_transaction()?;
+    let workspace = Workspace::open(root)?;
+    for path in touched {
+        let rel = workspace.relative(path)?;
+        ensure!(
+            !crate::redaction::is_secret_path(&rel.to_string_lossy()),
+            "Secret paths are not indexed"
+        );
+        if root.join(&rel).exists() {
+            read_source(root, &root.join(&rel))?;
+        }
+    }
     let mut indexed_files = 0usize;
     let mut symbol_count = 0usize;
     let mut paths: Vec<PathBuf> = touched
@@ -318,6 +363,17 @@ pub fn ensure_index(root: &Path, touched: &[String], scan: bool) -> Result<Value
             symbol_count += n;
         }
     }
+    // Remove stale entries for deleted, renamed, oversized, or inaccessible files.
+    let stored: Vec<String> = conn
+        .prepare("SELECT path FROM files")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for path in stored {
+        if read_source(root, &root.join(&path)).is_err() {
+            conn.execute("DELETE FROM files WHERE path=?", [path])?;
+        }
+    }
+    transaction.commit()?;
     let total: i64 = conn.query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))?;
     Ok(json!({
         "ok": true,
@@ -326,7 +382,7 @@ pub fn ensure_index(root: &Path, touched: &[String], scan: bool) -> Result<Value
         "symbols_total": total,
         "scanned_files": scanned,
         "bounded": true,
-        "db": relative(root, &db_path(root)),
+        "storage": "private process cache; workspace is unchanged",
         "note": "Ordinary SQLite AST tables; not embeddings or a world index."
     }))
 }
@@ -343,11 +399,11 @@ fn hit_json(path: &str, name: &str, kind: &str, line: i64, column: i64, signatur
 }
 
 pub fn query_definitions(root: &Path, symbol: &str, max_hits: usize) -> Result<Value> {
-    ensure!(!symbol.is_empty(), "symbol required");
+    let max_hits = max_hits.clamp(1, 80);
     let _ = ensure_index(root, &[], true)?;
     let conn = open_db(root)?;
     let mut stmt = conn.prepare(
-        "SELECT path, name, kind, line, column, signature FROM symbols WHERE name = ?1 OR name LIKE '%' || ?1 || '%' LIMIT ?2",
+        "SELECT path, name, kind, line, column, signature FROM symbols WHERE instr(name, ?1)>0 OR ?1='' ORDER BY name = ?1 DESC,path,line,column LIMIT ?2",
     )?;
     let rows = stmt
         .query_map(params![symbol, max_hits as i64], |r| {
@@ -382,7 +438,11 @@ pub fn query_definitions(root: &Path, symbol: &str, max_hits: usize) -> Result<V
 }
 
 pub fn query_references(root: &Path, symbol: &str, max_hits: usize) -> Result<Value> {
+    references(root, symbol, max_hits, false)
+}
+fn references(root: &Path, symbol: &str, max_hits: usize, calls_only: bool) -> Result<Value> {
     ensure!(!symbol.is_empty(), "symbol required");
+    let max_hits = max_hits.clamp(1, 80);
     let _ = ensure_index(root, &[], true)?;
     let files = walk_sources(root, MAX_SCAN_FILES);
     let mut hits = Vec::new();
@@ -391,7 +451,7 @@ pub fn query_references(root: &Path, symbol: &str, max_hits: usize) -> Result<Va
         let Some(lang) = lang_for(&path) else {
             continue;
         };
-        let Ok(source) = fs::read_to_string(&path) else {
+        let Ok(source) = read_source(root, &path) else {
             continue;
         };
         let mut parser = Parser::new();
@@ -407,6 +467,33 @@ pub fn query_references(root: &Path, symbol: &str, max_hits: usize) -> Result<Va
                 let name = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
                 if name != symbol {
                     continue;
+                }
+                if calls_only {
+                    let mut node = capture.node;
+                    let mut called = false;
+                    while let Some(parent) = node.parent() {
+                        if parent.kind() == "call_expression" {
+                            called = parent.child_by_field_name("function").is_some_and(|f| {
+                                f.start_byte() <= capture.node.start_byte()
+                                    && f.end_byte() >= capture.node.end_byte()
+                            });
+                            break;
+                        }
+                        if !matches!(
+                            parent.kind(),
+                            "scoped_identifier"
+                                | "field_expression"
+                                | "member_expression"
+                                | "generic_function"
+                                | "parenthesized_expression"
+                        ) {
+                            break;
+                        }
+                        node = parent;
+                    }
+                    if !called {
+                        continue;
+                    }
                 }
                 hits.push(hit_json(
                     &relative(root, &path),
@@ -481,33 +568,9 @@ pub fn get_type_signature(root: &Path, symbol: &str) -> Result<Value> {
 /// Bounded in-repo callers for a function name, for patch preparation context.
 pub fn callers_for(root: &Path, symbol: &str, cap: usize) -> Result<Value> {
     let cap = cap.clamp(1, MAX_CALLERS);
-    let refs = query_references(root, symbol, cap + 8)?;
-    let defs = query_definitions(root, symbol, 16)?;
-    let def_keys: Vec<(String, i64)> = defs["definitions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|d| {
-            Some((
-                d["path"].as_str()?.to_owned(),
-                d["line"].as_i64().unwrap_or(0),
-            ))
-        })
-        .collect();
-    let mut callers = Vec::new();
-    let mut truncated = refs["truncated"].as_bool().unwrap_or(false);
-    for r in refs["references"].as_array().into_iter().flatten() {
-        let path = r["path"].as_str().unwrap_or("");
-        let line = r["line"].as_i64().unwrap_or(0);
-        if def_keys.iter().any(|(p, l)| p == path && *l == line) {
-            continue;
-        }
-        callers.push(r.clone());
-        if callers.len() >= cap {
-            truncated = true;
-            break;
-        }
-    }
+    let refs = references(root, symbol, cap, true)?;
+    let callers = refs["references"].as_array().cloned().unwrap_or_default();
+    let truncated = refs["truncated"].as_bool().unwrap_or(false);
     Ok(json!({
         "symbol": symbol,
         "callers": callers,
@@ -517,7 +580,7 @@ pub fn callers_for(root: &Path, symbol: &str, cap: usize) -> Result<Value> {
         "note": if truncated {
             format!("Caller list truncated at {cap}; more in-repo references may exist.")
         } else {
-            "Bounded in-repo callers from the AST index.".into()
+            "Syntactic call sites in bounded project sources; receiver types are not resolved.".into()
         }
     }))
 }
@@ -528,7 +591,13 @@ pub fn touch(root: &Path, relative_path: &str) -> Result<()> {
         .lock()
         .map_err(|_| anyhow::anyhow!("symbol index lock poisoned"))?;
     let conn = open_db(root)?;
-    let full = root.join(relative_path);
+    let workspace = Workspace::open(root)?;
+    let full = root.join(workspace.relative(relative_path)?);
+    if !full.exists() {
+        conn.execute("DELETE FROM files WHERE path=?", [relative_path])?;
+        return Ok(());
+    }
+    read_source(root, &full)?;
     let _ = index_file(&conn, root, &full)?;
     Ok(())
 }
@@ -569,6 +638,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let status = ensure_index(root.path(), &[], false).unwrap();
         assert_eq!(status["ok"], true);
-        assert!(status["db"].as_str().unwrap().contains("symbol-index"));
+        assert!(status["storage"].as_str().unwrap().contains("private"));
+        assert!(!root.path().join(".shadow").exists());
     }
 }

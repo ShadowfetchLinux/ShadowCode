@@ -41,7 +41,12 @@ import {
   type ProviderInfo,
   type Session,
 } from "./api";
-import { ApprovalCard, CommandCardView, OpCard, ThinkingCard } from "./components/cards";
+import {
+  ApprovalCard,
+  CommandCardView,
+  OpCard,
+  ThinkingCard,
+} from "./components/cards";
 import { Drawer, type DrawerTab } from "./components/Drawer";
 import { Sidebar } from "./components/Sidebar";
 import { Markdown } from "./components/Markdown";
@@ -103,6 +108,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
+  const [forking, setForking] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
   const [cfg, setCfg] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState<Awaited<
@@ -525,7 +531,10 @@ export default function App() {
       }
       setTrust(null);
       await reloadConfig();
-      if (sessionId && sameWorkspacePath(workspace, opened.path || latest.workspace)) {
+      if (
+        sessionId &&
+        sameWorkspacePath(workspace, opened.path || latest.workspace)
+      ) {
         toast("Project trusted. You can send a task.", "ok");
       } else if (opened.session_id) {
         await openSession(opened.session_id);
@@ -693,16 +702,12 @@ export default function App() {
     const submitTicket = selection.current;
     const original = task;
     const attached = [...chips];
-    const imagePaths = attached.filter((p) =>
-      /\.(png|jpe?g|webp)$/i.test(p),
-    );
+    const imagePaths = attached.filter((p) => /\.(png|jpe?g|webp)$/i.test(p));
     const textPaths = attached.filter((p) => !imagePaths.includes(p));
     const text = (
       task.trim() +
       (textPaths.length ? `\n\nAttached paths: ${textPaths.join(", ")}` : "") +
-      (imagePaths.length
-        ? `\n\nAttached images: ${imagePaths.join(", ")}`
-        : "")
+      (imagePaths.length ? `\n\nAttached images: ${imagePaths.join(", ")}` : "")
     ).trim();
     submittingRef.current = true;
     setSubmitting(true);
@@ -954,7 +959,7 @@ export default function App() {
         e.preventDefault();
         setOverlay("palette");
       }
-      if (mod && key === "b") {
+      if (mod && key === "b" && !e.shiftKey) {
         e.preventDefault();
         setSidebar((v) => !v);
       }
@@ -993,7 +998,19 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [overlay, trust, slashOpen, panel, workspace, sessionId, busy, modelChoice, mode]);
+  }, [
+    overlay,
+    trust,
+    slashOpen,
+    panel,
+    workspace,
+    sessionId,
+    busy,
+    modelChoice,
+    mode,
+    submitting,
+    switching,
+  ]);
   const reloadCommands = useCallback(async () => {
     const result = await api.commands();
     setCommands(result.commands);
@@ -1041,7 +1058,11 @@ export default function App() {
     ? commands.filter((c) => c.name.startsWith(task.slice(1))).slice(0, 8)
     : [];
   const empty =
-    !transcript.items.length && !commandCards.length && !busy && !submitting && !switching;
+    !transcript.items.length &&
+    !commandCards.length &&
+    !busy &&
+    !submitting &&
+    !switching;
   const completedSteps = transcript.plan.filter(
     (p) => p.status === "done",
   ).length;
@@ -1061,9 +1082,16 @@ export default function App() {
         {bootTimeout && (
           <div className="boot-timeout">
             <p>
-              Taking longer than expected. The backend may be starting up or unreachable.
+              Taking longer than expected. The backend may be starting up or
+              unreachable.
             </p>
-            <button type="button" onClick={() => { setBootTimeout(false); void boot(); }}>
+            <button
+              type="button"
+              onClick={() => {
+                setBootTimeout(false);
+                void boot();
+              }}
+            >
               Retry connection
             </button>
           </div>
@@ -1361,7 +1389,10 @@ export default function App() {
                   PILLAR FOR OPEN SOURCE & OPEN WEIGHTS · LINUX NATIVE
                 </div>
                 <h1>What are we building today?</h1>
-                <p>A focused, autonomous workspace powered by local open-weight models.</p>
+                <p>
+                  A focused, autonomous workspace powered by local open-weight
+                  models.
+                </p>
 
                 <div className="welcome-meta-bar">
                   <button
@@ -1371,7 +1402,9 @@ export default function App() {
                     onClick={() => setOverlay("project")}
                   >
                     <FolderOpen size={14} />
-                    <span>{workspace.split("/").pop() || "Choose a project"}</span>
+                    <span>
+                      {workspace.split("/").pop() || "Choose a project"}
+                    </span>
                     <ChevronRight size={13} />
                   </button>
 
@@ -1409,7 +1442,8 @@ export default function App() {
                       icon: ListChecks,
                       title: "Plan milestones",
                       body: "Non-destructive plan & architectural blueprint",
-                      prompt: "Create a detailed implementation plan and milestone roadmap for ",
+                      prompt:
+                        "Create a detailed implementation plan and milestone roadmap for ",
                       mode: "planner",
                     },
                     {
@@ -1518,6 +1552,35 @@ export default function App() {
                     <div key={i} className="msg-agent">
                       {item.who && <div className="who">{item.who}</div>}
                       <Markdown>{item.text}</Markdown>
+                      {isNative() && item.eventId && !item.live && (
+                        <button
+                          type="button"
+                          className="ghost fork-action"
+                          disabled={busy || submitting || switching || forking}
+                          onClick={() =>
+                            void (async () => {
+                              setForking(true);
+                              try {
+                                const branch = await api.forkSession(
+                                  sessionId,
+                                  item.eventId!,
+                                );
+                                await openSession(branch.fork.id);
+                                toast(
+                                  "New conversation created from this point",
+                                  "ok",
+                                );
+                              } catch (error) {
+                                toast(String(error), "err");
+                              } finally {
+                                setForking(false);
+                              }
+                            })()
+                          }
+                        >
+                          Fork from here
+                        </button>
+                      )}
                     </div>
                   ),
                 )}
@@ -1551,7 +1614,9 @@ export default function App() {
                           ? "Waiting for earlier work to finish"
                           : transcript.stage === "UNDERSTAND"
                             ? "Exploring your request"
-                            : transcript.stage.toLowerCase().replaceAll("_", " ")}
+                            : transcript.stage
+                                .toLowerCase()
+                                .replaceAll("_", " ")}
                 </span>
                 <span className="dim">
                   {elapsed >= 60

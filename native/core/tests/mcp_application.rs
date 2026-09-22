@@ -546,7 +546,7 @@ async fn engine_waits_for_mcp_cleanup_on_success_failure_limits_cancellation_and
                 mode: "code".into(),
                 queue: false,
                 images: Vec::new(),
-        })
+            })
             .await
             .unwrap();
         if scenario != "step_limit" {
@@ -751,7 +751,7 @@ async fn engine_http_streams_close_on_completion_cancellation_and_shutdown() {
                 mode: "code".into(),
                 queue: false,
                 images: Vec::new(),
-        })
+            })
             .await
             .unwrap();
         let record = approval(&f.service).await;

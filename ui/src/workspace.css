@@ -1426,7 +1426,7 @@ kbd {
 }
 .top-action.open-weights-btn {
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(14, 165, 233, 0.1));
-  color: #059669;
+  color: #047857;
   border: 1px solid rgba(16, 185, 129, 0.25);
   font-weight: 500;
   gap: 5px;
@@ -1472,7 +1472,7 @@ kbd {
 }
 .model-hero-badge .badge-tag {
   background: rgba(16, 185, 129, 0.15);
-  color: #059669;
+  color: #065f46;
   font-size: 10px;
   font-weight: 600;
   padding: 1px 6px;
@@ -1800,7 +1800,7 @@ kbd {
 }
 .vram-badge.optimal {
   background: rgba(16, 185, 129, 0.15);
-  color: #059669;
+  color: #047857;
 }
 .vram-badge.quant {
   background: rgba(245, 158, 11, 0.15);
@@ -1819,7 +1819,7 @@ kbd {
   border: 1px solid rgba(16, 185, 129, 0.25);
   border-radius: 8px;
   font-size: 12px;
-  color: #059669;
+  color: #047857;
   line-height: 1.4;
 }
 .flow-callout code {
@@ -2169,7 +2169,7 @@ kbd {
 }
 .vram-fit-badge.optimal {
   background: rgba(16, 185, 129, 0.15);
-  color: #059669;
+  color: #047857;
 }
 .vram-fit-badge.quant {
   background: rgba(245, 158, 11, 0.15);
@@ -2186,7 +2186,7 @@ kbd {
   font-size: 11px;
   font-weight: 600;
   background: rgba(16, 185, 129, 0.15);
-  color: #059669;
+  color: #047857;
   padding: 3px 8px;
   border-radius: 6px;
 }
@@ -2262,7 +2262,7 @@ kbd {
 }
 .primary-btn.active {
   background: rgba(16, 185, 129, 0.15);
-  color: #059669;
+  color: #047857;
   cursor: default;
 }
 .ghost-btn {
@@ -2480,7 +2480,7 @@ kbd {
    Debug & Polish: Missing CSS Classes
    ========================================================================== */
 .success-icon {
-  color: #059669;
+  color: #047857;
 }
 [data-theme="dark"] .success-icon {
   color: #6ee7b7;
@@ -2791,7 +2791,7 @@ kbd {
 .learned-check.done {
   background: rgba(16, 185, 129, 0.1);
   border-color: rgba(16, 185, 129, 0.3);
-  color: #059669;
+  color: #047857;
 }
 [data-theme="dark"] .learned-check.done {
   background: rgba(16, 185, 129, 0.08);

@@ -119,3 +119,16 @@ checkpoints. This is user-level command execution, not an OS sandbox.
 The existing desktop `/test <command>` and CLI `exec` remain direct commands
 explicitly entered by the user. An external MCP request uses the agent approval
 path instead of treating its command text as human approval.
+
+## AST symbol tools
+
+Rust and TypeScript/TSX definitions, signatures, references and syntactic call
+sites use tree-sitter and ordinary SQLite tables in a private process cache.
+Reads do not create `.shadow` or write an index into the project. The cache is
+rebuilt after restart, hashes source contents, and removes stale file records.
+
+Scans are bounded to 200 source files, 512 KB per file, 32 directory levels and
+20,000 visited entries. Ignored/build directories, secret paths and symlinks
+outside the workspace are excluded. Results may be incomplete in large projects.
+Exact definitions rank before substring matches. Call sites are syntactic matches;
+receiver types and cross-project references are not resolved like a language server.

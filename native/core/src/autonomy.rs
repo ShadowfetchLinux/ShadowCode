@@ -111,12 +111,11 @@ pub fn tool_class(name: &str) -> ToolClass {
 /// repeated; shell and Git history changes need a human.
 pub fn replay_class(name: &str) -> ReplayClass {
     match name {
-        "system_info" | "list_files" | "read_file" | "search_files" | "search_text" | "search_symbol"
-        | "workspace_symbols" | "goto_definition" | "find_references" | "get_diagnostics"
-        | "mcp_sqlite_tables" | "mcp_sqlite_query" | "background_list" | "background_output"
-        | "git_status" | "git_diff" | "git_log" | "update_plan" | "update_todos" => {
-            ReplayClass::SafeToReplay
-        }
+        "system_info" | "list_files" | "read_file" | "search_files" | "search_text"
+        | "search_symbol" | "workspace_symbols" | "goto_definition" | "find_references"
+        | "get_diagnostics" | "mcp_sqlite_tables" | "mcp_sqlite_query" | "background_list"
+        | "background_output" | "git_status" | "git_diff" | "git_log" | "update_plan"
+        | "update_todos" => ReplayClass::SafeToReplay,
         "git_branch" => ReplayClass::ReEvaluate,
         "exec" | "background_start" | "background_stop" | "mcp_call" | "git_commit"
         | "git_checkout" | "git_add" => ReplayClass::RequiresConfirmation,
@@ -255,18 +254,15 @@ pub fn public_assistant_text(text: &str) -> String {
     .expect("thinking tag regex");
     out = tag.replace_all(&out, "").into_owned();
     // Standalone channel markers that never formed a closed tag.
-    let bare = regex::Regex::new(r"(?i)<\|?channel\|?>")
-        .expect("bare channel regex");
+    let bare = regex::Regex::new(r"(?i)<\|?channel\|?>").expect("bare channel regex");
     out = bare.replace_all(&out, "").into_owned();
     // Line-leading thinking labels dumped into content by local models.
-    let labeled = regex::Regex::new(
-        r"(?im)^[ \t]*(?:thought|thinking|analysis|reasoning)\b[^\n]*\n?",
-    )
-    .expect("thinking label regex");
+    let labeled =
+        regex::Regex::new(r"(?im)^[ \t]*(?:thought|thinking|analysis|reasoning)\b[^\n]*\n?")
+            .expect("thinking label regex");
     out = labeled.replace_all(&out, "").into_owned();
     // Inline "thought …" prefixes before the real sentence.
-    let inline = regex::Regex::new(r"(?i)\bthought\b[ \t]*")
-        .expect("inline thought regex");
+    let inline = regex::Regex::new(r"(?i)\bthought\b[ \t]*").expect("inline thought regex");
     out = inline.replace_all(&out, "").into_owned();
     let blank = regex::Regex::new(r"\n{3,}").expect("blank collapse regex");
     blank.replace_all(out.trim(), "\n\n").into_owned()
@@ -287,10 +283,7 @@ pub fn text_loop_stats(text: &str) -> Option<(String, usize)> {
         if unit.chars().count() < 12 || count < 3 {
             return;
         }
-        if best
-            .as_ref()
-            .is_none_or(|(_, previous)| count > *previous)
-        {
+        if best.as_ref().is_none_or(|(_, previous)| count > *previous) {
             best = Some((unit, count));
         }
     };
@@ -376,8 +369,8 @@ pub fn claims_command_execution(text: &str) -> bool {
         return true;
     }
     // Bare "Actually, I'll do: cmd …" lines seen from abliterated local models.
-    let do_colon = regex::Regex::new(r"(?i)\bi(?:'ll| will)\s+do\s*:")
-        .expect("do-colon claim regex");
+    let do_colon =
+        regex::Regex::new(r"(?i)\bi(?:'ll| will)\s+do\s*:").expect("do-colon claim regex");
     do_colon.is_match(&lower)
 }
 
@@ -516,7 +509,8 @@ pub fn preserve(messages: &[Value]) -> Value {
                 collect_paths(&body, &mut files);
                 let name = message["name"].as_str().unwrap_or("");
                 if body["success"] == false || body["ok"] == false {
-                    let error_text = tools::truncate(body["error"].as_str().unwrap_or(content), 160);
+                    let error_text =
+                        tools::truncate(body["error"].as_str().unwrap_or(content), 160);
                     if failed.len() < 8 {
                         failed.push(format!("{name}: {error_text}"));
                     }
@@ -853,6 +847,52 @@ pub fn shell_policy_limits() -> Value {
     })
 }
 
+/// Suggest the narrowest relevant test command when the user/task asked to verify.
+/// Returns None when verification was not requested.
+pub fn narrow_verify_command(task: &str, workspace: &std::path::Path) -> Option<String> {
+    let lower = task.to_ascii_lowercase();
+    let asks = [
+        "verify",
+        "run the test",
+        "run tests",
+        "run the tests",
+        "cargo test",
+        "npm test",
+        "pytest",
+        "make sure tests",
+        "check that",
+    ];
+    if !asks.iter().any(|a| lower.contains(a)) && bugfix_policy(task).is_none() {
+        // Only auto-suggest for bug/fix when combined with verify language elsewhere;
+        // bugfix_policy alone asks for failing test first, not necessarily to run suite.
+        return None;
+    }
+    if !asks.iter().any(|a| lower.contains(a)) {
+        return None;
+    }
+    if workspace.join("Cargo.toml").is_file() {
+        let words: Vec<_> = task.split_whitespace().collect();
+        for pair in words.windows(2) {
+            if pair[0] == "-p"
+                && !pair[1].is_empty()
+                && pair[1]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            {
+                return Some(format!("cargo test -p {}", pair[1]));
+            }
+        }
+        return Some("cargo test".into());
+    }
+    if workspace.join("package.json").is_file() {
+        return Some("npm test".into());
+    }
+    if workspace.join("pyproject.toml").is_file() || workspace.join("pytest.ini").is_file() {
+        return Some("pytest".into());
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -893,7 +933,8 @@ mod tests {
         assert!(unit.contains("xpaper"));
         assert!(count >= 5, "{count}");
         assert!(text_loop_stats("Short unique answer about the edit.").is_none());
-        let normal = "First I read the file.\n\nThen I patched the helper.\n\nFinally I ran cargo test.";
+        let normal =
+            "First I read the file.\n\nThen I patched the helper.\n\nFinally I ran cargo test.";
         assert!(text_loop_stats(normal).is_none());
     }
 
@@ -902,12 +943,18 @@ mod tests {
         assert!(claims_command_execution(
             "Actually, I'll do: xpaper -bg green on each monitor"
         ));
-        assert!(claims_command_execution("I'll run xset root solid green now."));
-        assert!(claims_command_execution("Running `feh --bg-fill green.png`."));
+        assert!(claims_command_execution(
+            "I'll run xset root solid green now."
+        ));
+        assert!(claims_command_execution(
+            "Running `feh --bg-fill green.png`."
+        ));
         assert!(!claims_command_execution(
             "You can run cargo test after reviewing the diff."
         ));
-        assert!(!claims_command_execution("Updated README with install steps."));
+        assert!(!claims_command_execution(
+            "Updated README with install steps."
+        ));
     }
 
     #[test]
@@ -953,49 +1000,4 @@ mod tests {
         assert_eq!(verified["claim"], "verified");
         assert_eq!(verified["verified"], true);
     }
-}
-
-
-/// Suggest the narrowest relevant test command when the user/task asked to verify.
-/// Returns None when verification was not requested.
-pub fn narrow_verify_command(task: &str, workspace: &std::path::Path) -> Option<String> {
-    let lower = task.to_ascii_lowercase();
-    let asks = [
-        "verify",
-        "run the test",
-        "run tests",
-        "run the tests",
-        "cargo test",
-        "npm test",
-        "pytest",
-        "make sure tests",
-        "check that",
-    ];
-    if !asks.iter().any(|a| lower.contains(a)) && bugfix_policy(task).is_none() {
-        // Only auto-suggest for bug/fix when combined with verify language elsewhere;
-        // bugfix_policy alone asks for failing test first, not necessarily to run suite.
-        return None;
-    }
-    if !asks.iter().any(|a| lower.contains(a)) {
-        return None;
-    }
-    if workspace.join("Cargo.toml").is_file() {
-        // Prefer package-scoped when path hint present.
-        if let Some(pkg) = lower.split_whitespace().find(|w| w.starts_with("-p")) {
-            return Some(format!("cargo test {pkg}"));
-        }
-        // Look for `cargo test -p foo` already in the prompt.
-        if let Some(idx) = lower.find("cargo test -p ") {
-            let rest = &task[idx..];
-            return Some(rest.split('\n').next().unwrap_or("cargo test").trim().to_owned());
-        }
-        return Some("cargo test".into());
-    }
-    if workspace.join("package.json").is_file() {
-        return Some("npm test".into());
-    }
-    if workspace.join("pyproject.toml").is_file() || workspace.join("pytest.ini").is_file() {
-        return Some("pytest".into());
-    }
-    None
 }

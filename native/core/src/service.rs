@@ -52,6 +52,7 @@ pub struct Service {
     pub engine: Engine,
     selection: Arc<RwLock<Selection>>,
     detection: DetectionCache,
+    guardian: Arc<crate::guardian::Guardian>,
     remember_selection: bool,
     job_owner: Option<JobOwner>,
 }
@@ -76,6 +77,7 @@ impl Service {
                 session: None,
             })),
             detection: Arc::new(tokio::sync::Mutex::new(None)),
+            guardian: Arc::new(crate::guardian::Guardian::default()),
             remember_selection: true,
             job_owner: None,
         })
@@ -103,6 +105,7 @@ impl Service {
                 generation: 0,
             })),
             detection: self.detection.clone(),
+            guardian: self.guardian.clone(),
             remember_selection: false,
             job_owner: None,
         })
@@ -470,57 +473,80 @@ impl Service {
             }
             ("GET", "/api/doctor") => return self.doctor(q("test_model") == "true").await,
             ("GET", "/api/guardian") => {
-                crate::guardian::apply_config(&crate::guardian::from_config_value(
-                    &self.config()?.guardian,
-                ));
-                return Ok(crate::guardian::status());
+                return self.guardian.status(
+                    &crate::guardian::from_config_value(&self.config()?.guardian),
+                    &self.workspace()?,
+                );
             }
             ("POST", "/api/guardian/run") => {
                 let cfg = crate::guardian::from_config_value(&self.config()?.guardian);
-                crate::guardian::apply_config(&cfg);
-                ensure!(cfg.enabled, "Guardian is disabled (default OFF)");
                 let workspace = self.workspace()?;
-                return crate::guardian::run_health_check(&workspace);
+                let guardian = self.guardian.clone();
+                return tokio::task::spawn_blocking(move || {
+                    guardian.run_health_check(&cfg, &workspace)
+                })
+                .await?;
             }
             ("POST", "/api/guardian/request-patch") => {
-                crate::guardian::apply_config(&crate::guardian::from_config_value(
-                    &self.config()?.guardian,
-                ));
-                return crate::guardian::request_prepare_patch(text("summary"));
-            }
-            ("POST", "/api/guardian/approve-patch") => {
-                crate::guardian::apply_config(&crate::guardian::from_config_value(
-                    &self.config()?.guardian,
-                ));
-                let workspace = self.workspace()?;
-                let checkout = self.engine.paths().data.join("guardian-worktrees");
-                return crate::guardian::approve_prepare_patch(
-                    &workspace,
-                    &checkout,
+                return self.guardian.request_prepare_patch(
+                    &crate::guardian::from_config_value(&self.config()?.guardian),
+                    &self.workspace()?,
                     text("summary"),
                 );
             }
-            ("POST", "/api/parallel/prepare") => {
-                let workspace = self.workspace()?;
-                let goal = text("goal");
-                let checkout = self.engine.paths().data.join("parallel-worktrees");
-                return crate::parallel::prepare(&workspace, goal, &checkout);
+            ("POST", "/api/guardian/approve-patch") => {
+                return self.guardian.approve_prepare_patch(
+                    &crate::guardian::from_config_value(&self.config()?.guardian),
+                    &self.workspace()?,
+                    &self.engine.paths().data.join("guardian-proposals"),
+                    text("approval_id"),
+                );
             }
             ("GET", "/api/parallel") => {
-                return Ok(json!({
-                    "max_workers": crate::parallel::MAX_WORKERS,
-                    "plan": crate::parallel::active_plan(),
-                    "note": "Cap 2 concurrent worker worktrees plus lead; disabled outside git."
-                }));
+                return Ok(json!({"max_workers":crate::parallel::MAX_WORKERS,
+                    "plan":crate::parallel::active_plan(&self.workspace()?, &self.engine.paths().data.join("parallel-worktrees"))?,
+                    "note":"Prepared checkouts require explicit tasks. No automatic dispatch or integration."}));
             }
-            ("POST", "/api/parallel/worker-status") => {
-                return crate::parallel::mark_worker_status(text("worker_id"), text("status"));
+            (
+                "POST",
+                "/api/parallel/prepare"
+                | "/api/parallel/worker-status"
+                | "/api/parallel/verify"
+                | "/api/parallel/cleanup",
+            ) => {
+                let workspace = self.mutable_workspace()?;
+                let root = self.engine.paths().data.join("parallel-worktrees");
+                let mut worker_reservations = Vec::new();
+                if let Some(plan) = crate::parallel::active_plan(&workspace.path, &root)? {
+                    for worker in plan.workers.iter().filter(|w| w.status != "removed") {
+                        worker_reservations
+                            .push(self.engine.reserve_workspace(&worker.worktree_path)?);
+                    }
+                }
+                let action = path.to_owned();
+                let goal = text("goal").to_owned();
+                let id = text("worker_id").to_owned();
+                let status = text("status").to_owned();
+                return tokio::task::spawn_blocking(move || {
+                    let _workers = worker_reservations;
+                    let result = match action.as_str() {
+                        "/api/parallel/prepare" => {
+                            crate::parallel::prepare(&workspace.path, &goal, &root)
+                        }
+                        "/api/parallel/worker-status" => crate::parallel::mark_worker_status(
+                            &workspace.path,
+                            &root,
+                            &id,
+                            &status,
+                        ),
+                        "/api/parallel/verify" => crate::parallel::verify(&workspace.path, &root),
+                        _ => crate::parallel::cleanup(&workspace.path, &root),
+                    };
+                    drop(workspace);
+                    result
+                })
+                .await?;
             }
-            ("POST", "/api/parallel/verify") => {
-                let workspace = self.workspace()?;
-                return crate::parallel::verify(&workspace);
-            }
-            ("POST", "/api/parallel/cleanup") => return crate::parallel::cleanup(),
             ("POST", "/api/sandbox/discard-scratch") => {
                 let path = PathBuf::from(text("path"));
                 return crate::sandbox::discard_scratch(&path);
@@ -1164,7 +1190,9 @@ impl Service {
                 let bytes = crate::vision::decode_data_base64(text("data_base64"))?;
                 let ws = self.mutable_workspace()?;
                 let stored = crate::vision::store_attachment(&ws, name, &bytes)?;
-                return Ok(json!({"path":stored.path,"mime":stored.mime,"bytes":stored.bytes,"kind":"image"}));
+                return Ok(
+                    json!({"path":stored.path,"mime":stored.mime,"bytes":stored.bytes,"kind":"image"}),
+                );
             }
             ("POST", "/api/workspace/exec") => {
                 let selection = self.snapshot_selection()?;
@@ -1577,7 +1605,11 @@ impl Service {
                     }
                 })
                 .into(),
-            keep_alive: "30m".into(), context_limit: body["context_limit"]
+            keep_alive: body["keep_alive"]
+                .as_str()
+                .unwrap_or(&fallback.keep_alive)
+                .into(),
+            context_limit: body["context_limit"]
                 .as_u64()
                 .map(|v| v as usize)
                 .unwrap_or_else(|| {
@@ -1604,6 +1636,7 @@ impl Service {
             .filter(Value::is_object)
             .unwrap_or(json!({}));
         metadata["api_key_env"] = json!(model.api_key_env);
+        metadata["keep_alive"] = json!(model.keep_alive);
         store.upsert_model(&json!({"id":model.default,"name":model.name,"provider":model.provider,"endpoint":model.endpoint,"context_limit":model.context_limit,"metadata":metadata}))
     }
     fn check_model_identity(&self, model: &ModelConfig) -> Result<()> {

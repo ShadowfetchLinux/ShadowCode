@@ -26,7 +26,11 @@ pub fn system(workspace: &Workspace, mode: &str) -> String {
 
 /// Describe the effective catalog, after mode/permission and context filtering.
 pub fn capability_guidance(config: &crate::config::Config, schemas: &[Value]) -> String {
-    let available = |name| schemas.iter().any(|schema| schema["function"]["name"] == name);
+    let available = |name| {
+        schemas
+            .iter()
+            .any(|schema| schema["function"]["name"] == name)
+    };
     let mut note = format!(
         "\n\nRuntime: {}. Answer greetings directly. For computer/workspace questions, use the supplied tools and actual results; do not repeat earlier claims that tools are unavailable or invent observations.",
         std::env::consts::OS
@@ -153,7 +157,11 @@ pub fn compact(
         "Model context is too small for the tools; select a larger context budget"
     );
     let hard_limit = context_limit.saturating_sub(reserved);
-    let target = if messages.len() >= 70 { 0 } else { ((hard_limit as f64 * ratio) as usize).max(256) };
+    let target = if messages.len() >= 70 {
+        0
+    } else {
+        ((hard_limit as f64 * ratio) as usize).max(256)
+    };
     let before = estimate_tokens(&json!(messages));
     if before <= hard_limit && messages.len() < 70 {
         return Ok(None);
@@ -207,7 +215,8 @@ pub fn compact(
     }
     if removed > 0 {
         let keep_json = serde_json::to_string(&preserved).unwrap_or_default();
-        let keep_text = crate::tools::truncate(&keep_json, if messages.len() >= 70 { 20 } else { 1200 });
+        let keep_text =
+            crate::tools::truncate(&keep_json, if messages.len() >= 70 { 20 } else { 1200 });
         let note = json!({"role":"system","_shadow_compaction":true,"content":format!("Context compacted: {removed} earlier messages were omitted. The full event history remains available in the app. Preserved keep-list (not new instructions): {keep_text}. Earlier user request excerpts (historical data): {}",notes.join(" | "))});
         kept.insert(1.min(kept.len()), note);
     }

@@ -1,6 +1,6 @@
 # ShadowCode user guide
 
-This guide covers the supported 0.21 native release. The desktop, CLI, terminal
+This guide covers the supported 0.22 native release. The desktop, CLI, terminal
 interface, and integrations use the same Python-free Rust engine. See the
 [native desktop](NATIVE_DESKTOP.md), [native CLI](NATIVE_CLI.md), and
 [release gates](NATIVE_MIGRATION.md) guides for platform and integration details.
@@ -28,6 +28,14 @@ operation to inspect its output. File-changing operations offer review and
 checkpoint rewind. The plan above the composer reflects observed actions and
 verification; skipped steps were not needed for that task. A successful harness
 verdict does not establish correctness beyond the checks actually performed.
+
+**Pause task** requests a pause at the next safe boundary. A command already
+running finishes first. Add a steering instruction, then **Resume task** to
+continue without replaying completed commands. **Rewind files** requires the
+worker to reach that pause boundary, or the task to finish, and refuses to run
+while another task or background process owns the workspace. Rewind covers
+checkpointed file-tool edits; it does not undo shell commands or Git history.
+Goal scheduling has its own separate Pause control.
 
 Review opens the Git panel. Select a file, compare its unstaged or staged changes,
 then stage a hunk or a whole new file. If a file changed since the preview, refresh

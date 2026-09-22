@@ -451,6 +451,32 @@ async fn command_completion_hooks_run_once_and_cannot_hide_test_output_or_failur
     service.engine.shutdown().await.unwrap();
 }
 
+// A sandbox child reports a namespace-local PID. Resolve its host identity
+// while it is alive, then assert that exact process is reaped on shutdown.
+fn host_pid(project: &std::path::Path, namespace_pid: u32) -> u32 {
+    let project = project.canonicalize().unwrap();
+    let matches: Vec<_> = fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(|e| {
+            let path = e.ok()?.path();
+            let pid = path.file_name()?.to_str()?.parse::<u32>().ok()?;
+            if fs::read_link(path.join("cwd")).ok()? != project {
+                return None;
+            }
+            let status = fs::read_to_string(path.join("status")).ok()?;
+            let inner = status
+                .lines()
+                .find(|line| line.starts_with("NSpid:"))?
+                .split_whitespace()
+                .last()?
+                .parse::<u32>()
+                .ok()?;
+            (inner == namespace_pid).then_some(pid)
+        })
+        .collect();
+    assert_eq!(matches.len(), 1, "Expected exactly one live fixture child");
+    matches[0]
+}
 #[tokio::test]
 async fn test_timeouts_stop_command_children_and_keep_the_workspace_reusable() {
     let (_root, service) = fixture();
@@ -469,12 +495,24 @@ async fn test_timeouts_stop_command_children_and_keep_the_workspace_reusable() {
         .approvals()
         .decide(&approval.id, &approval.session_id, true)
         .unwrap();
+    let namespace_pid = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let Some(pid) = fs::read_to_string(path.join("test-child.pid"))
+                .ok()
+                .and_then(|v| v.trim().parse::<u32>().ok())
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid = host_pid(&path, namespace_pid);
     let done = wait(&service, &job).await;
     assert_eq!(done["status"], "failed");
     assert_eq!(done["result"]["command"]["timed_out"], true);
-    let pid = fs::read_to_string(path.join("test-child.pid")).unwrap();
-    assert!(!fs::read_to_string(format!("/proc/{}/stat", pid.trim()))
-        .is_ok_and(|s| !s.contains(") Z ")));
+    assert!(!fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| !s.contains(") Z ")));
     let next = api(
         &service,
         "POST",

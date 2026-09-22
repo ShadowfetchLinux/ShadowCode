@@ -1,24 +1,32 @@
 # Changelog
 
-## Unreleased (flagship complete)
+## 0.22.0
 
-- **Code intelligence:** On-demand SQLite AST symbol index for Rust/TypeScript
-  (ordinary tables). Tools: `find_references`, `goto_definition`,
-  `get_diagnostics`, `get_type_signature`. Patch prep includes bounded callers.
-- **Sandbox:** Ephemeral scratch upper (`SHADOWCODE_SCRATCH`) with discard path;
-  real home stays read-only; CoW probe is honest (not kernel-proof).
-- **Parallel worktrees:** Cap 2 workers + lead; verifier reports unclean merges;
-  disabled outside git.
-- **Inference:** Ollama `keep_alive` retained; no fake prefix-cache 3× claim
-  (see `docs/NATIVE_INFERENCE.md`).
-- **Verification:** Bug/fix prompts still ask for a failing case first; narrow
-  test commands when verification is requested; model prose never verifies.
-- **Session fork:** `POST /api/sessions/{id}/fork` from an event id; original
-  intact.
-- **Guardian:** Optional scheduled read-only health check (default OFF); patch
-  prepare only after approval; never silent auto-PR.
-- **UI:** Advanced settings group for guardian/parallel/sandbox; vitest uses
-  happy-dom (jsdom ESM break on Node 22.11).
+- Native desktop controls for context windows, Ollama residency, response forks,
+  parallel workspace preparation and combined integration checks.
+- Durable, workspace-scoped parallel plans; cleanup refuses dirty or active
+  checkouts and retains worker branches. Git filters and custom merge drivers
+  cannot execute through these operations.
+- Event forks retain completed tool context, exclude later turns and reject
+  events belonging to other sessions. Original deletion preserves fork context.
+- Rewind waits for a confirmed pause boundary and reserves idle workspaces;
+  in-flight commands and other tasks cannot race checkpoint restoration.
+  Task pause/resume controls are distinct from goal scheduling controls.
+- Attached windows close promptly during owner reconnection and retain live
+  event notifications across engine replacements and subsequent disconnects.
+- Private AST cache with path confinement, content hashes, Unicode-safe
+  signatures, deletion refresh, exact-name priority and syntactic call sites.
+- Managed temporary scratch cleanup, corrected project mount order, operational
+  bubblewrap probing and no automatic shell replay after an execution failure.
+- Guardian state and proposal approvals scoped to profile/workspace. Diagnostics
+  and draft proposals now accurately describe their limited behavior.
+- Validated Ollama residency, numeric unload/indefinite wire values and saved
+  routing preferences. Removed unused prompt hash computation.
+- Fixed Ctrl+N after session activation and shortcut modifier overlap; improved
+  model badge contrast in light, dark and dimmed dialog layouts.
+- Split Markdown rendering into a separate UI bundle. Updated Happy DOM to a
+  patched release and declared the supported Node minimum.
+- Updated native build, packaging version, regression coverage and feature docs.
 
 ## 0.21.0
 

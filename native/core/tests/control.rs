@@ -5,7 +5,7 @@ use shadowcode_core::{
     paths::AppPaths,
     service::{Request, Service},
 };
-use std::{fs, os::unix::fs::MetadataExt, time::Duration};
+use std::{fs, os::unix::fs::MetadataExt, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
@@ -596,7 +596,65 @@ async fn attached_view_reattaches_after_owner_restart_without_replay_or_duplicat
         .filter(|job| job["status"] == "running" || job["status"] == "queued")
         .count();
     assert_eq!(running, 0, "reattach must not start or resume jobs");
+    let next = view
+        .dispatch(request(
+            "POST",
+            "/api/jobs",
+            json!({"task": "Check events after owner replacement"}),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event["type"] == "agent.completed" && event["session_id"] == next["session_id"] {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("existing subscribers must receive replacement-owner events");
     stop(server, service).await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if events.recv().await.unwrap()["type"] == "view.disconnected" {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("a second owner shutdown must notify existing subscribers");
+    assert!(view.disconnected());
+}
+
+#[tokio::test]
+async fn closing_view_interrupts_pending_owner_discovery() {
+    let (_root, service) = setup();
+    let server = Server::start_with_mode(service.clone(), "server").unwrap();
+    let view = Arc::new(
+        server
+            .endpoint()
+            .client(service.workspace().unwrap(), None)
+            .open_view()
+            .await
+            .unwrap(),
+    );
+    stop(server, service).await;
+    view.mark_disconnected();
+    let reconnecting = view.clone();
+    let reconnect = tokio::spawn(async move { reconnecting.reattach().await });
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), view.close())
+        .await
+        .expect("close must interrupt reconnect");
+    assert!(reconnect.await.unwrap().is_err());
+    assert!(view.disconnected());
+    assert!(view
+        .reattach()
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("closed"));
 }
 
 fn descriptor_count() -> usize {
@@ -607,6 +665,28 @@ fn descriptor_count() -> usize {
 
 #[tokio::test]
 async fn attach_close_loop_does_not_grow_descriptors() {
+    // /proc/self/fd counts the whole process. Other concurrent tests own
+    // sockets/databases too, so measure in an isolated test process.
+    if std::env::var_os("SHADOWCODE_CONTROL_FD_TEST_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "attach_close_loop_does_not_grow_descriptors",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("SHADOWCODE_CONTROL_FD_TEST_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
     let (_root, service) = setup();
     let server = Server::start_with_mode(service.clone(), "server").unwrap();
     let client = server.endpoint().client(service.workspace().unwrap(), None);
@@ -619,10 +699,17 @@ async fn attach_close_loop_does_not_grow_descriptors() {
         let view = client.open_view().await.unwrap();
         view.close().await.unwrap();
     }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while descriptor_count() > baseline + 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Closed views must release descriptors");
     let after = descriptor_count();
     eprintln!("attach_close_loop descriptors baseline={baseline} after={after}");
     assert!(
-        after <= baseline + 24,
+        after <= baseline + 2,
         "descriptor leak: baseline={baseline} after={after}"
     );
     stop(server, service).await;

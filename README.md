@@ -1,6 +1,6 @@
 # ShadowCode
 
-![version](https://img.shields.io/badge/version-0.21.0-386c51) ![Rust](https://img.shields.io/badge/runtime-Rust%201.95-orange) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-0.22.0-386c51) ![Rust](https://img.shields.io/badge/runtime-Rust%201.95-orange) ![license](https://img.shields.io/badge/license-MIT-green)
 
 **Your ideas. Your models. Your machine.**
 
@@ -10,7 +10,7 @@ context, tools, permissions, checkpoints, plans, and verification.
 
 ![ShadowCode workspace](docs/images/workspace-light.png)
 
-**Native 0.21 release:** the `main` branch builds a Rust/Tauri desktop window
+**Native 0.22 release:** the `main` branch builds a Rust/Tauri desktop window
 with the interface embedded in the executable. It needs no Python runtime or
 browser launcher. See the [native desktop guide](docs/NATIVE_DESKTOP.md)
 and the [goals](docs/NATIVE_GOALS.md) and [model routing](docs/NATIVE_ROUTING.md)
@@ -35,25 +35,25 @@ Integrations and release checks are tracked under the [release gates](docs/NATIV
 
 ## Native AppImage
 
-Download the `v0.21.0` **x86_64 AppImage**
-and its `SHA256SUMS` file from [GitHub releases](https://github.com/ShadowfetchLinux/ShadowCode/releases/latest).
+Download the `v0.22.0` **x86_64 AppImage**
+and its `SHA256SUMS` file from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest).
 The native application embeds its interface; Python, Node.js and a browser
 launcher are not runtime dependencies. The release targets **Ubuntu 24.04 or
 newer / glibc 2.39+**. Git and a model provider such as Ollama remain external.
 
 ```bash
-sha256sum -c SHA256SUMS
-chmod +x ShadowCode_0.21.0_amd64.AppImage
-./ShadowCode_0.21.0_amd64.AppImage --appimage-extract-and-run
+sha256sum --ignore-missing -c SHA256SUMS
+chmod +x ShadowCode_0.22.0_amd64.AppImage
+./ShadowCode_0.22.0_amd64.AppImage --appimage-extract-and-run
 ```
 
 Extraction mode works without FUSE. To install into `~/Applications`, add a
 stable `shadow` command, and replace the desktop launcher:
 
 ```bash
-git clone https://github.com/ShadowfetchLinux/ShadowCode.git
+git clone https://github.com/Shadowfetchapps/ShadowCode.git
 cd ShadowCode
-./scripts/install-appimage.sh /path/to/ShadowCode_0.21.0_amd64.AppImage
+./scripts/install-appimage.sh /path/to/ShadowCode_0.22.0_amd64.AppImage
 ```
 
 Keep `SHA256SUMS` beside the download and the installer verifies its matching
@@ -61,7 +61,7 @@ entry automatically. It replaces older ShadowCode AppImages only after the new
 executable starts, preserves settings, keys, memory and task history, and refuses
 a changed download before it can alter the installed application.
 
-## Native 0.21 highlights
+## Native 0.22 highlights
 
 - **A focused workspace.** Persistent projects and tasks, search, pinned tasks,
   a refined light/dark interface, and responsive layouts. Files, review, terminal,
@@ -87,16 +87,17 @@ a changed download before it can alter the installed application.
   outputs from the machine running ShadowCode, never screen contents, and marks
   incomplete detection as unknown instead of guessing zero.
 
-See [CHANGELOG.md](CHANGELOG.md) for the release history and
+See the [0.22 qualification report](docs/SHADOWCODE_022_QUALIFICATION_REPORT.md),
+[CHANGELOG.md](CHANGELOG.md) for the release history, and
 [the user guide](docs/USER_GUIDE.md) for workflows and recovery.
 
 ## Native development build
 
-Requires Rust 1.95, Node 22+, and the packages listed in the [native desktop
+Requires Rust 1.95, Node 22.12+ or 24+, and the packages listed in the [native desktop
 guide](docs/NATIVE_DESKTOP.md#build-and-run).
 
 ```bash
-git clone https://github.com/ShadowfetchLinux/ShadowCode.git
+git clone https://github.com/Shadowfetchapps/ShadowCode.git
 cd ShadowCode
 npm --prefix ui ci
 npm --prefix ui run build
@@ -108,39 +109,27 @@ cargo build -p shadowcode-desktop --locked
 the [native migration guide](docs/NATIVE_MIGRATION.md) for validation and release
 requirements.
 
-## Open-Weight Model Flagship Pillar
+## Local models and a focused workflow
 
-ShadowCode is purpose-built to serve as the definitive harness for open-source, open-weight models:
+Connect Ollama, LM Studio, llama.cpp, vLLM, or a compatible hosted endpoint.
+Tool use and answer quality depend on the selected model. ShadowCode provides
+workspace tools, explicit approvals, saved history, and verification evidence.
+A model is useful for coding only when it reliably calls those tools.
 
-- **Open-Weight Coding Champions:** First-class showcase and prompt tuning for **Qwen 2.5 Coder** (7B, 14B, 32B), **DeepSeek R1 & V3** (14B, 32B, 671B), **Llama 3.3** (70B), **Mistral Devstral** (22B), **GPT-OSS** (20B), and **Gemma 4** (12B).
-- **Hardware & VRAM Compatibility Advisor:** Automatically checks your GPU and VRAM (e.g. NVIDIA RTX 16GB) to suggest optimal model quantization and parameters (7B ~5GB, 14B ~10GB, 32B ~20GB, 70B ~40GB).
-- **Local Privacy & Zero Telemetry:** Connects seamlessly to local inference runtimes:
-  - **Ollama** (`http://127.0.0.1:11434`)
-  - **LM Studio** (`http://127.0.0.1:1234`)
-  - **vLLM** (`http://127.0.0.1:8000`)
-  - **llama.cpp** (`http://127.0.0.1:8080`)
-- **Reasoning Channel Visualizer:** Transparent chain-of-thought streaming for reasoning models like DeepSeek R1 with live timers and collapsible thought traces.
+Settings → Model exposes the context window and Ollama model residency. Start
+with 16,384 tokens on a local model and increase it only within the model's
+supported window and your available memory. Model weights and inference engines
+remain external; see [inference settings](docs/NATIVE_INFERENCE.md).
 
-## 20-Minute Fast-Track Mastery (Codex & Cursor Workflow)
+During a task, pause and steer the next model turn, or queue a follow-up.
+**Fork from here** creates a separate conversation at a response while retaining
+available completed tool context. See [history](docs/NATIVE_HISTORY.md).
 
-Anyone with basic coding intent can master the autonomous agent loop in under 20 minutes:
-
-1. **Pick Model & Workspace:** Connect your local Ollama / open-weight server in one click or select from the Open-Weights Showcase.
-2. **Select Agent Mode:**
-   - 🔨 **Build (Coder):** Autonomous file modification, command execution, and test repair.
-   - 🧭 **Plan (Architect):** Non-destructive milestone blueprints and roadmaps before editing code.
-   - 🛡️ **Review (Auditor):** Strict security audits, vulnerability scanning, and bug discovery.
-   - 🧪 **Test (QA):** Unit test authoring and behavioral regression checks.
-3. **The Codex / Cursor Iterative Loop:**
-   - Prompt with clear intent and file attachments.
-   - Watch live tool execution and file inspection cards.
-   - Inspect color-coded diff hunks in the Changes drawer (`Ctrl+B`).
-   - Accept or reject edits per-hunk, per-file, or rewind previous tasks with one click.
-4. **Live Steering & Queueing:**
-   - Click **Pause** to give live redirection advice, then **Resume** to inject context.
-   - Queue follow-ups while an active task is executing without waiting.
-5. **Interactive Flow Guide:**
-   - Launch the visual **20-Min Flow Guide** anytime from the top bar or welcome screen.
+Settings → Advanced prepares up to two workspaces, opens them for explicit
+tasks, checks their combined merge result, and removes clean checkouts while
+retaining branches. It does not launch workers automatically. Optional Guardian
+diagnostics are off by default. See [parallel workspaces](docs/NATIVE_PARALLEL.md)
+and [Guardian](docs/NATIVE_GUARDIAN.md).
 
 ## Workflows
 

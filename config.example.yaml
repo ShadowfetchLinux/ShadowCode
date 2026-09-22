@@ -13,7 +13,8 @@ model:
   endpoint: ""
   api_key_env: OPENAI_API_KEY
   name: mock-coder
-  context_limit: 128000
+  context_limit: 16384
+  keep_alive: "30m"  # Ollama only: duration, "0" to unload, "-1" indefinite
 
 permissions:
   level: workspace          # read_only | workspace | elevated

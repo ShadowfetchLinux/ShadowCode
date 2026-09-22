@@ -340,12 +340,18 @@ mod tests {
         assert!(validate_image_bytes(&[1, 2, 3], "a.png").is_err());
         let big = vec![0u8; MAX_IMAGE_BYTES + 1];
         assert!(validate_image_bytes(&big, "a.png").is_err());
-        assert_eq!(validate_image_bytes(&png_bytes(), "shot.png").unwrap(), "image/png");
+        assert_eq!(
+            validate_image_bytes(&png_bytes(), "shot.png").unwrap(),
+            "image/png"
+        );
     }
 
     #[test]
     fn vision_capability_heuristics() {
-        assert!(model_supports_vision("ollama", "huihui_ai/gemma-4-abliterated:12b"));
+        assert!(model_supports_vision(
+            "ollama",
+            "huihui_ai/gemma-4-abliterated:12b"
+        ));
         assert!(model_supports_vision("ollama", "gemma4:12b"));
         assert!(!model_supports_vision("ollama", "gpt-oss:20b"));
         assert!(!model_supports_vision("ollama", "qwen3:14b"));
@@ -359,14 +365,17 @@ mod tests {
         std::fs::create_dir_all(&ws_path).unwrap();
         let ws = Workspace::open(&ws_path).unwrap();
         let stored = store_attachment(&ws, "ok.png", &png_bytes()).unwrap();
-        let message = user_message("What color?", &[stored.clone()]);
+        let message = user_message("What color?", std::slice::from_ref(&stored));
         assert!(message["content"].as_str().unwrap().contains("What color"));
         assert_eq!(message["_shadow_images"][0]["path"], stored.path);
         assert!(!message.to_string().contains("iVBORw0KGgo")); // no raw b64 dump in stored form
 
-        let ollama = hydrate_for_provider(&[message.clone()], &ws, "ollama").unwrap();
+        let ollama = hydrate_for_provider(std::slice::from_ref(&message), &ws, "ollama").unwrap();
         assert!(ollama[0]["images"].as_array().unwrap().len() == 1);
-        assert!(ollama[0]["images"][0].as_str().unwrap().starts_with("iVBOR"));
+        assert!(ollama[0]["images"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("iVBOR"));
         assert!(ollama[0].get("_shadow_images").is_none());
 
         let openai = hydrate_for_provider(&[message], &ws, "openai").unwrap();

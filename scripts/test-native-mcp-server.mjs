@@ -8,6 +8,7 @@ import {
   mkdir,
   readFile,
   readlink,
+  readdir,
   writeFile,
   rm,
 } from "node:fs/promises";
@@ -666,11 +667,18 @@ try {
     false,
   );
   const childPid = await until("Owned terminal child", async () => {
-    const value = await readFile(
-      path.join(project, "mcp-child.pid"),
-      "utf8",
-    ).catch(() => "");
-    return /^\d+\s*$/.test(value) && value.trim();
+    const inner = (await readFile(path.join(project,"mcp-child.pid"),"utf8").catch(()=>"")).trim();
+    if (!/^\d+$/.test(inner)) return false;
+    const candidates=[];
+    for (const pid of await readdir("/proc")) {
+      if (!/^\d+$/.test(pid)) continue;
+      if (await readlink(`/proc/${pid}/cwd`).catch(()=>"") !== project) continue;
+      const status=await readFile(`/proc/${pid}/status`,"utf8").catch(()=>"");
+      const row=status.split("\n").find(line=>line.startsWith("NSpid:"));
+      if (row?.trim().split(/\s+/).at(-1)===inner) candidates.push(pid);
+    }
+    assert.equal(candidates.length,1,"Fixture child must have one host identity");
+    return candidates[0];
   });
   const queued = (
     await gateway.call("shadow_run", {

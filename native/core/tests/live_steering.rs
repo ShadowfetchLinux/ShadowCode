@@ -51,7 +51,7 @@ async fn pause_does_not_replay_shell_and_steering_enters_next_context() {
                 json!([tool(
                     "e1",
                     "exec",
-                    json!({"command":"sleep 1; echo first-only"})
+                    json!({"command":"printf started > running.flag; sleep 1; echo first-only"})
                 )]),
             ),
             1 => {
@@ -69,6 +69,7 @@ async fn pause_does_not_replay_shell_and_steering_enters_next_context() {
         (value, Duration::from_millis(30))
     })
     .await;
+    assert!(server.requests.lock().unwrap().is_empty());
     let (root, engine) = setup(&server.endpoint);
     fs::create_dir_all(root.path().join("project/db")).unwrap();
     fs::write(root.path().join("project/db/v2.sql"), "-- v2\n").unwrap();
@@ -85,9 +86,20 @@ async fn pause_does_not_replay_shell_and_steering_enters_next_context() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !root.path().join("project/running.flag").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
     engine.pause_job(&job.id).unwrap();
     assert_eq!(engine.job(&job.id).unwrap().unwrap().status, "paused");
+    assert!(engine
+        .rewind_job(&job.id)
+        .unwrap_err()
+        .to_string()
+        .contains("pause boundary"));
     engine
         .steer_job(
             &job.id,
@@ -97,6 +109,7 @@ async fn pause_does_not_replay_shell_and_steering_enters_next_context() {
         .unwrap();
     // Let the in-flight shell finish under pause; resume afterward.
     tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(engine.rewind_job(&job.id).unwrap()["ok"], true);
     engine.resume_job(&job.id).unwrap();
     let completed = tokio::time::timeout(Duration::from_secs(8), engine.wait(&job.id))
         .await
@@ -140,6 +153,7 @@ async fn rewind_does_not_duplicate_side_effects() {
         (value, Duration::ZERO)
     })
     .await;
+    assert!(server.requests.lock().unwrap().is_empty());
     let (root, engine) = setup(&server.endpoint);
     let job = engine
         .start(request(root.path(), "Write note.txt"))
@@ -154,16 +168,23 @@ async fn rewind_does_not_duplicate_side_effects() {
         fs::read_to_string(root.path().join("project/note.txt")).unwrap(),
         "alpha"
     );
+    let reservation = engine
+        .reserve_workspace(&root.path().join("project"))
+        .unwrap();
+    assert!(engine.rewind_job(&job.id).is_err());
+    drop(reservation);
     let restored = engine.rewind_job(&job.id).unwrap();
     assert_eq!(restored["ok"], true);
-    assert!(root.path().join("project/note.txt").exists() == false
-        || fs::read_to_string(root.path().join("project/note.txt")).is_err()
-        || !fs::read_to_string(root.path().join("project/note.txt"))
-            .unwrap()
-            .contains("alpha")
-        || restored["restored"]
-            .as_array()
-            .is_some_and(|v| !v.is_empty()));
+    assert!(
+        !root.path().join("project/note.txt").exists()
+            || fs::read_to_string(root.path().join("project/note.txt")).is_err()
+            || !fs::read_to_string(root.path().join("project/note.txt"))
+                .unwrap()
+                .contains("alpha")
+            || restored["restored"]
+                .as_array()
+                .is_some_and(|v| !v.is_empty())
+    );
     // Session messages remain (not wiped).
     assert!(!engine.store().messages(&job.id).unwrap().is_empty());
     engine.shutdown().await.unwrap();

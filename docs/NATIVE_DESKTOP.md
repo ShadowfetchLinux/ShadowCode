@@ -1,4 +1,4 @@
-# Native desktop — 0.21
+# Native desktop — 0.22
 
 The `main` branch builds one Rust desktop executable with the React
 interface embedded. Tauri hosts it in the system WebKit webview. The interface
@@ -53,7 +53,7 @@ sudo apt-get install build-essential pkg-config libgtk-3-dev \
   libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev patchelf
 ```
 
-Use Rust 1.95 and Node 22 or newer for development. From the repository root:
+Use Rust 1.95 and Node 22.12+ or 24+ for development. From the repository root:
 
 ```sh
 npm --prefix ui ci
@@ -140,8 +140,8 @@ From the repository root, build both package formats with:
 ```sh
 node scripts/build-native.mjs
 node scripts/check-native-package.mjs \
-  target/release/bundle/appimage/ShadowCode_0.21.0_amd64.AppImage \
-  target/release/bundle/deb/ShadowCode_0.21.0_amd64.deb
+  target/release/bundle/appimage/ShadowCode_0.22.0_amd64.AppImage \
+  target/release/bundle/deb/ShadowCode_0.22.0_amd64.deb
 node scripts/test-native-runtime.mjs
 node --test scripts/test-native-source-fetch.mjs
 node scripts/test-native-runtime-sources.mjs

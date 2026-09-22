@@ -38,12 +38,19 @@ fn workspace_at(path: &std::path::Path) -> Workspace {
     Workspace::open(path).unwrap()
 }
 
-/// Nested dirs stay under the 255-byte filename limit while making the
-/// workspace path long enough for the keep-list note to cross 4096.
+/// Size the path against today's catalog, keeping the same 4096-token limit
+/// and 512-token combined protocol/response reserve as the actual request.
+/// A fixed 400-byte path stops being a fitting fixture when tools are added.
 fn long_project(root: &std::path::Path) -> std::path::PathBuf {
-    root.join("p".repeat(200))
-        .join("q".repeat(200))
-        .join("project")
+    let workspace = workspace_at(root);
+    let base = needed(&tester_messages(&workspace), &tools::schemas());
+    assert!(
+        base < 4080,
+        "Short tester request must leave room for path pressure"
+    );
+    let padding = (4088 - base) * 3;
+    root.join("p".repeat(padding.min(200)))
+        .join("q".repeat(padding.saturating_sub(200).clamp(1, 200)))
 }
 
 #[test]
@@ -121,8 +128,7 @@ fn compact_must_not_inflate_a_fitting_4096_tester_request() {
 #[test]
 fn compact_does_not_fail_a_fitting_4096_request_when_the_workspace_path_is_long() {
     let root = tempfile::tempdir().unwrap();
-    // ~400 extra path bytes is enough for the keep-list note to cross 4096
-    // after compact while the live request still fits. Do not raise 4096.
+    // Keep the live request close to 4096 before testing compaction.
     let project = long_project(root.path());
     let workspace = workspace_at(&project);
     let mut messages = tester_messages(&workspace);

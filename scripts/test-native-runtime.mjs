@@ -16,11 +16,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
+const expectedVersion=JSON.parse(await readFile(path.join(root,"src-tauri/tauri.conf.json"),"utf8")).version;
 const binary = path.resolve(
   process.argv[2] ||
     path.join(
       root,
-      "target/release/bundle/appimage/ShadowCode_0.21.0_amd64.AppImage",
+      `target/release/bundle/appimage/ShadowCode_${expectedVersion}_amd64.AppImage`,
     ),
 );
 const artifacts = path.resolve(
@@ -224,10 +225,10 @@ try {
     Array.from({ length: 8 }, () => finish(launch(["--version"]))),
   );
   for (const reply of replies)
-    assert.match(reply.stdout, /^ShadowCode 0\.20\.0\s*$/);
-  assert.match(
-    (await finish(launch(["ui", "--version"], {}, true))).stdout,
-    /^ShadowCode 0\.20\.0\s*$/,
+    assert.equal(reply.stdout.trim(), `ShadowCode ${expectedVersion}`);
+  assert.equal(
+    (await finish(launch(["ui", "--version"], {}, true))).stdout.trim(),
+    `ShadowCode ${expectedVersion}`,
     "Environment-based extraction preserves arguments",
   );
   await intact(first);

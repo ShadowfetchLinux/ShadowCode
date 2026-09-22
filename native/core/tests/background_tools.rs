@@ -509,7 +509,7 @@ async fn model_tasks_share_project_processes_after_completion_and_cancellation()
         mode: mode.into(),
         queue: false,
         images: Vec::new(),
-        };
+    };
     let job = service
         .engine
         .start(request("Start a project watcher", "code"))

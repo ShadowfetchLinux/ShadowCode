@@ -173,14 +173,9 @@ async fn job_gate_blocks_untrusted_projects_until_trust_reloads() {
         error.contains("Trust this project before starting an agent task"),
         "{error}"
     );
-    let opened = call(
-        &service,
-        "POST",
-        "/api/projects",
-        json!({"path":workspace}),
-    )
-    .await
-    .unwrap();
+    let opened = call(&service, "POST", "/api/projects", json!({"path":workspace}))
+        .await
+        .unwrap();
     assert_eq!(opened["needs_trust"], true);
     call(
         &service,
@@ -422,7 +417,7 @@ async fn workspace_reservation_excludes_tasks_and_is_released_on_drop() {
         mode: "code".into(),
         queue: true,
         images: Vec::new(),
-        };
+    };
     assert!(service
         .engine
         .start(start())

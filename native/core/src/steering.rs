@@ -12,6 +12,7 @@ use tokio::sync::Notify;
 
 #[derive(Default)]
 pub struct SteerState {
+    parked: bool,
     pub instruction: Option<String>,
     pub file_notes: Vec<String>,
     pub pause_hashes: BTreeMap<String, String>,
@@ -34,7 +35,36 @@ impl Default for SteerControl {
     }
 }
 
+pub(crate) struct Parked<'a>(&'a SteerControl);
+impl Drop for Parked<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.state.lock() {
+            state.parked = false;
+        }
+    }
+}
 impl SteerControl {
+    pub(crate) fn park(&self) -> anyhow::Result<Parked<'_>> {
+        self.state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Steer lock poisoned"))?
+            .parked = true;
+        Ok(Parked(self))
+    }
+    pub(crate) fn rewind(
+        &self,
+        restore: impl FnOnce() -> anyhow::Result<Vec<String>>,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Steer lock poisoned"))?;
+        anyhow::ensure!(self.is_paused() && state.parked,"Wait for the current operation to finish at the pause boundary before rewinding, or stop the task first");
+        let paths = restore()?;
+        state.rewind_note=Some(format!("File checkpoint restored for {} path(s): {}. Re-read the restored files before editing; do not replay completed commands.",paths.len(),paths.join(", ")));
+        Ok(paths)
+    }
+
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Acquire)
     }
@@ -49,10 +79,7 @@ impl SteerControl {
         Ok(())
     }
 
-    pub fn ensure_pause_hashes(
-        &self,
-        hashes: BTreeMap<String, String>,
-    ) -> anyhow::Result<()> {
+    pub fn ensure_pause_hashes(&self, hashes: BTreeMap<String, String>) -> anyhow::Result<()> {
         let mut state = self
             .state
             .lock()
@@ -107,9 +134,13 @@ impl SteerControl {
     }
 
     pub fn resume(&self) -> anyhow::Result<()> {
+        let _state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Steer lock poisoned"))?;
         anyhow::ensure!(self.is_paused(), "Task is not paused");
         self.paused.store(false, Ordering::Release);
-        self.notify.notify_waiters();
+        self.notify.notify_one();
         Ok(())
     }
 
@@ -143,7 +174,9 @@ pub fn take_resume_messages(
 ) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(instruction) = state.instruction.take() {
-        parts.push(format!("Live steering instruction from the user:\n{instruction}"));
+        parts.push(format!(
+            "Live steering instruction from the user:\n{instruction}"
+        ));
     }
     for note in state.file_notes.drain(..) {
         parts.push(note);

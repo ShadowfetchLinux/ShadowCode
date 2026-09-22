@@ -1,27 +1,23 @@
-//! Up to two concurrent worker jobs in separate ShadowCode-managed git
-//! worktrees for one goal, plus the lead task. Not a fake swarm: capped at 2
-//! because a 16 GB GPU typically holds one local model. Workers never share a
-//! dirty tree. A verifier step reports conflicts instead of silently merging.
-use anyhow::{bail, ensure, Context, Result};
+//! Durable, workspace-scoped preparation of at most two Git worktrees.
+//! This prepares checkouts; it does not pretend to dispatch model workers.
+use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
     sync::Mutex,
 };
-use uuid::Uuid;
-
 pub const MAX_WORKERS: usize = 2;
-
+static LOCK: Mutex<()> = Mutex::new(());
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkItem {
     pub id: String,
     pub title: String,
     pub prompt: String,
 }
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerSlot {
     pub item: WorkItem,
@@ -29,7 +25,6 @@ pub struct WorkerSlot {
     pub branch: String,
     pub status: String,
 }
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ParallelPlan {
     pub id: String,
@@ -39,161 +34,226 @@ pub struct ParallelPlan {
     pub workers: Vec<WorkerSlot>,
     pub verify_status: String,
 }
-
-static ACTIVE: Mutex<Option<ParallelPlan>> = Mutex::new(None);
-
-fn git(cwd: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .args(["-c", "core.hooksPath=/dev/null"])
+fn raw_git(cwd: &Path, args: &[&str]) -> Result<Output> {
+    let configured = Command::new("git")
+        .args([
+            "config",
+            "--name-only",
+            "--get-regexp",
+            r"^(filter|merge)\..*\.(smudge|clean|process|driver)$",
+        ])
+        .current_dir(cwd)
+        .output()?;
+    ensure!(
+        configured.status.success() || configured.status.code() == Some(1),
+        "Cannot inspect Git drivers"
+    );
+    let mut command = Command::new("git");
+    command.args([
+        "--no-pager",
+        "--no-optional-locks",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "commit.gpgSign=false",
+    ]);
+    // Never execute configured filters/drivers. Unused global filters (e.g. LFS)
+    // do not prevent ordinary repositories from preparing worktrees.
+    for key in String::from_utf8_lossy(&configured.stdout).lines() {
+        let value = if key.ends_with(".process") {
+            ""
+        } else {
+            "false"
+        };
+        command.arg("-c").arg(format!("{key}={value}"));
+        if let Some((prefix, _)) = key.rsplit_once('.') {
+            if prefix.starts_with("filter.") {
+                command.arg("-c").arg(format!("{prefix}.required=true"));
+            }
+        }
+    }
+    command
         .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .current_dir(cwd)
         .output()
-        .context("git failed to start")?;
+        .context("Git failed to start")
+}
+fn git(cwd: &Path, args: &[&str]) -> Result<String> {
+    let out = raw_git(cwd, args)?;
     ensure!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        out.status.success(),
+        "Git operation failed: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
-
-pub fn is_git_repo(path: &Path) -> bool {
-    git(path, &["rev-parse", "--is-inside-work-tree"])
-        .map(|v| v == "true")
-        .unwrap_or(false)
+pub fn is_git_repo(source: &Path) -> bool {
+    git(source, &["rev-parse", "--is-inside-work-tree"]).is_ok_and(|v| v == "true")
 }
-
-/// Lead splits a goal into at most two concrete work items (deterministic,
-/// no extra model spawn). Returns a clear disabled message when not git.
+fn plan_file(source: &Path, root: &Path) -> Result<PathBuf> {
+    crate::paths::private_directory(root)?;
+    let key = format!(
+        "{:x}",
+        Sha256::digest(source.canonicalize()?.as_os_str().as_encoded_bytes())
+    );
+    Ok(root.join(format!("plan-{key}.json")))
+}
+fn load(source: &Path, root: &Path) -> Result<Option<ParallelPlan>> {
+    let path = plan_file(source, root)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let plan: ParallelPlan = serde_json::from_slice(&fs::read(path)?)?;
+    ensure!(
+        plan.source == source.canonicalize()? && plan.workers.len() <= MAX_WORKERS,
+        "Invalid parallel plan scope"
+    );
+    uuid::Uuid::parse_str(&plan.id).context("Invalid plan id")?;
+    for (index, worker) in plan.workers.iter().enumerate() {
+        let id = format!("w{}", index + 1);
+        ensure!(
+            worker.item.id == id
+                && worker.branch == format!("shadowcode/parallel-{}-{id}", plan.id)
+                && worker.worktree_path == root.canonicalize()?.join(format!("{}-{id}", plan.id)),
+            "Invalid managed worktree record"
+        );
+    }
+    Ok(Some(plan))
+}
+fn save(plan: &ParallelPlan, root: &Path) -> Result<()> {
+    crate::paths::atomic_write(
+        &plan_file(&plan.source, root)?,
+        &serde_json::to_vec_pretty(plan)?,
+        false,
+    )
+}
 pub fn split_goal(goal: &str) -> Result<Vec<WorkItem>> {
     let goal = goal.trim();
-    ensure!(!goal.is_empty(), "Goal required");
-    // Prefer explicit "1) ... 2) ..." / "and" split; otherwise one item only.
-    let parts: Vec<&str> = if goal.contains('\n') {
+    ensure!(
+        !goal.is_empty() && goal.len() <= 64000,
+        "A bounded goal is required"
+    );
+    let parts: Vec<_> = if goal.contains('\n') {
         goal.lines()
             .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .take(MAX_WORKERS)
-            .collect()
-    } else if let Some((a, b)) = goal.split_once(" and ") {
-        vec![a.trim(), b.trim()]
-            .into_iter()
-            .filter(|s| !s.is_empty())
-            .take(MAX_WORKERS)
+            .filter(|v| !v.is_empty())
             .collect()
     } else {
-        vec![goal]
+        goal.splitn(2, " and ")
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .collect()
     };
-    Ok(parts
+    // Preserve all requested work in the last item instead of silently dropping lines.
+    let groups = if parts.len() > 2 {
+        vec![parts[0].to_owned(), parts[1..].join("\n")]
+    } else {
+        parts.into_iter().map(str::to_owned).collect()
+    };
+    Ok(groups
         .into_iter()
         .enumerate()
-        .map(|(i, title)| WorkItem {
+        .map(|(i, text)| WorkItem {
             id: format!("w{}", i + 1),
-            title: title.chars().take(80).collect(),
-            prompt: format!("Worker {}: complete this concrete item for the shared goal.\n\nItem: {title}\n\nShared goal: {goal}", i + 1),
+            title: text.chars().take(80).collect(),
+            prompt: format!("Complete this item:\n{text}\n\nShared goal:\n{goal}"),
         })
         .collect())
 }
-
-pub fn prepare(
-    source: &Path,
-    goal: &str,
-    checkout_root: &Path,
-) -> Result<Value> {
+pub fn prepare(source: &Path, goal: &str, root: &Path) -> Result<Value> {
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Parallel lock poisoned"))?;
     if !is_git_repo(source) {
-        return Ok(json!({
-            "ok": false,
-            "enabled": false,
-            "error": "Parallel worktrees require a git repository. Initialize git or open a git project.",
-            "max_workers": MAX_WORKERS
-        }));
+        return Ok(
+            json!({"ok":false,"enabled":false,"error":"Open a Git repository to prepare worker worktrees.","max_workers":MAX_WORKERS}),
+        );
     }
-    let items = split_goal(goal)?;
+    let source = source.canonicalize()?;
     ensure!(
-        items.len() <= MAX_WORKERS,
-        "At most {MAX_WORKERS} workers are allowed on this machine"
+        PathBuf::from(git(&source, &["rev-parse", "--show-toplevel"])?).canonicalize()? == source,
+        "Open the repository root to prepare worktrees"
     );
-    fs::create_dir_all(checkout_root)?;
-    let plan_id = Uuid::new_v4().simple().to_string();
-    let head = git(source, &["rev-parse", "HEAD"])?;
-    let mut workers = Vec::new();
+    ensure!(
+        load(&source, root)?.is_none(),
+        "This workspace already has a parallel plan; review or clean it up first"
+    );
+    let items = split_goal(goal)?;
+    let head = git(&source, &["rev-parse", "HEAD"])?;
+    let mut plan=ParallelPlan {id:crate::id(),goal:goal.into(),source:source.clone(),workers:vec![],verify_status:"pending".into(),lead_note:"Checkouts start from committed HEAD. Source edits stay in the lead checkout. Start tasks in the prepared worktrees explicitly.".into()};
+    save(&plan, root)?;
     for item in items {
-        let branch = format!("shadowcode/parallel-{plan_id}-{}", item.id);
-        let path = checkout_root.join(format!("{plan_id}-{}", item.id));
-        if path.exists() {
-            bail!("Worktree path already exists: {}", path.display());
-        }
-        // Separate worktree — never share one dirty tree.
+        let branch = format!("shadowcode/parallel-{}-{}", plan.id, item.id);
+        let path = root
+            .canonicalize()?
+            .join(format!("{}-{}", plan.id, item.id));
         git(
-            source,
+            &source,
             &[
                 "worktree",
                 "add",
                 "-b",
                 &branch,
-                path.to_str().context("path")?,
+                path.to_str().context("Non-UTF-8 worktree path")?,
                 &head,
             ],
         )?;
-        workers.push(WorkerSlot {
+        plan.workers.push(WorkerSlot {
             item,
             worktree_path: path,
             branch,
             status: "ready".into(),
         });
+        save(&plan, root)?;
     }
-    let plan = ParallelPlan {
-        id: plan_id,
-        goal: goal.to_owned(),
-        source: source.to_path_buf(),
-        lead_note: format!(
-            "Lead retains the source checkout. {} worker worktree(s) prepared (cap {MAX_WORKERS}).",
-            workers.len()
-        ),
-        workers,
-        verify_status: "pending".into(),
-    };
-    *ACTIVE
-        .lock()
-        .map_err(|_| anyhow::anyhow!("parallel lock poisoned"))? = Some(plan.clone());
-    Ok(json!({
-        "ok": true,
-        "enabled": true,
-        "max_workers": MAX_WORKERS,
-        "plan": plan,
-        "note": "Workers do not share a dirty tree. Verifier reports conflicts instead of silent merge."
-    }))
+    Ok(
+        json!({"ok":true,"enabled":true,"max_workers":MAX_WORKERS,"plan":plan,"note":"Worktrees prepared. No model jobs have been started."}),
+    )
 }
-
-pub fn active_plan() -> Option<ParallelPlan> {
-    ACTIVE.lock().ok().and_then(|g| g.clone())
-}
-
-pub fn mark_worker_status(worker_id: &str, status: &str) -> Result<Value> {
-    let mut guard = ACTIVE
+pub fn active_plan(source: &Path, root: &Path) -> Result<Option<ParallelPlan>> {
+    let _guard = LOCK
         .lock()
-        .map_err(|_| anyhow::anyhow!("parallel lock poisoned"))?;
-    let plan = guard.as_mut().context("No active parallel plan")?;
-    let worker = plan
-        .workers
-        .iter_mut()
-        .find(|w| w.item.id == worker_id)
-        .context("Unknown worker")?;
-    worker.status = status.to_owned();
-    Ok(json!({"ok":true,"worker":worker_id,"status":status}))
+        .map_err(|_| anyhow::anyhow!("Parallel lock poisoned"))?;
+    load(source, root)
 }
-
-/// After both workers finish, attempt a clean merge into a verify branch.
-/// Unclean merges are reported — never silently merged.
-pub fn verify(source: &Path) -> Result<Value> {
-    let mut guard = ACTIVE
-        .lock()
-        .map_err(|_| anyhow::anyhow!("parallel lock poisoned"))?;
-    let plan = guard.as_mut().context("No active parallel plan")?;
+pub fn mark_worker_status(source: &Path, root: &Path, id: &str, status: &str) -> Result<Value> {
     ensure!(
-        plan.source == source,
-        "Verify must run against the plan's source repository"
+        ["ready", "running", "finished", "failed"].contains(&status),
+        "Invalid worker status"
     );
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Parallel lock poisoned"))?;
+    let mut plan = load(source, root)?.context("No parallel plan for this workspace")?;
+    plan.workers
+        .iter_mut()
+        .find(|w| w.item.id == id)
+        .context("Unknown worker")?
+        .status = status.into();
+    plan.verify_status = "pending".into();
+    save(&plan, root)?;
+    Ok(json!({"ok":true,"worker":id,"status":status}))
+}
+fn clean(worker: &WorkerSlot) -> Result<bool> {
+    Ok(git(
+        &worker.worktree_path,
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ],
+    )?
+    .is_empty())
+}
+pub fn verify(source: &Path, root: &Path) -> Result<Value> {
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Parallel lock poisoned"))?;
+    let mut plan = load(source, root)?.context("No parallel plan for this workspace")?;
     let unfinished: Vec<_> = plan
         .workers
         .iter()
@@ -201,168 +261,109 @@ pub fn verify(source: &Path) -> Result<Value> {
         .map(|w| w.item.id.clone())
         .collect();
     if !unfinished.is_empty() {
-        plan.verify_status = "waiting".into();
-        return Ok(json!({
-            "ok": false,
-            "verify_status": "waiting",
-            "unfinished": unfinished,
-            "note": "Verifier runs only after both workers finish."
-        }));
+        return Ok(json!({"ok":false,"verify_status":"waiting","unfinished":unfinished}));
     }
-    let verify_branch = format!("shadowcode/verify-{}", plan.id);
-    let base = git(source, &["rev-parse", "HEAD"])?;
-    let _ = git(source, &["branch", "-f", &verify_branch, &base]);
+    let mut combined = git(source, &["rev-parse", "HEAD"])?;
+    let mut checked = Vec::new();
     let mut conflicts = Vec::new();
-    let mut merged = Vec::new();
     for worker in &plan.workers {
-        // Dry merge check: merge-tree if available, else merge --no-commit --no-ff then abort.
-        let attempt = Command::new("git")
-            .args(["-c", "core.hooksPath=/dev/null"])
-            .args([
-                "merge-tree",
-                "--write-tree",
-                &base,
+        ensure!(
+            clean(worker)?,
+            "Commit or preserve changes in {} before verification",
+            worker.item.id
+        );
+        let out = raw_git(
+            source,
+            &["merge-tree", "--write-tree", &combined, &worker.branch],
+        )?;
+        if !out.status.success() {
+            conflicts.push(json!({"worker":worker.item.id,"branch":worker.branch,
+                "detail":crate::tools::truncate(&format!("{}{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr)),4000)}));
+            break;
+        }
+        let tree = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .context("Git returned no merge tree")?
+            .to_owned();
+        // A temporary commit object lets the next worker be checked against all
+        // prior workers together. No branch, index or checkout is changed.
+        combined = git(
+            source,
+            &[
+                "-c",
+                "user.name=ShadowCode verifier",
+                "-c",
+                "user.email=verifier@shadowcode.invalid",
+                "commit-tree",
+                &tree,
+                "-p",
+                &combined,
+                "-p",
                 &worker.branch,
-            ])
-            .current_dir(source)
-            .output();
-        match attempt {
-            Ok(out) if out.status.success() => {
-                merged.push(json!({
-                    "worker": worker.item.id,
-                    "branch": worker.branch,
-                    "clean": true
-                }));
-            }
-            Ok(out) => {
-                let detail = String::from_utf8_lossy(&out.stderr);
-                conflicts.push(json!({
-                    "worker": worker.item.id,
-                    "branch": worker.branch,
-                    "clean": false,
-                    "detail": detail.chars().take(400).collect::<String>()
-                }));
-            }
-            Err(_) => {
-                // Fallback: try merge --no-commit and abort.
-                let merge = Command::new("git")
-                    .args(["-c", "core.hooksPath=/dev/null"])
-                    .args(["merge", "--no-commit", "--no-ff", &worker.branch])
-                    .current_dir(source)
-                    .output();
-                let clean = merge.as_ref().map(|o| o.status.success()).unwrap_or(false);
-                let _ = Command::new("git")
-                    .args(["merge", "--abort"])
-                    .current_dir(source)
-                    .output();
-                if clean {
-                    merged.push(json!({
-                        "worker": worker.item.id,
-                        "branch": worker.branch,
-                        "clean": true
-                    }));
-                } else {
-                    conflicts.push(json!({
-                        "worker": worker.item.id,
-                        "branch": worker.branch,
-                        "clean": false,
-                        "detail": "merge --no-commit reported conflicts; aborted without changing HEAD"
-                    }));
-                }
-            }
-        }
+                "-m",
+                "Temporary worktree verification",
+            ],
+        )?;
+        checked.push(json!({"worker":worker.item.id,"branch":worker.branch,"clean":true}));
     }
-    let unclean = !conflicts.is_empty();
-    plan.verify_status = if unclean {
-        "conflicts".into()
+    plan.verify_status = if conflicts.is_empty() {
+        "clean"
     } else {
-        "clean".into()
-    };
-    Ok(json!({
-        "ok": !unclean,
-        "verify_status": plan.verify_status,
-        "merged": merged,
-        "conflicts": conflicts,
-        "note": if unclean {
-            "Merge is unclean; conflicts reported instead of silently merging."
-        } else {
-            "Worker branches merge cleanly against the lead HEAD (check only; main tree not rewritten)."
-        }
-    }))
+        "conflicts"
+    }
+    .into();
+    save(&plan, root)?;
+    Ok(
+        json!({"ok":conflicts.is_empty(),"verify_status":plan.verify_status,"checked":checked,"conflicts":conflicts,
+        "note":"Combined merge check only. Source checkout and branches are unchanged; no worker changes were integrated."}),
+    )
 }
-
-pub fn cleanup() -> Result<Value> {
-    let mut guard = ACTIVE
+pub fn cleanup(source: &Path, root: &Path) -> Result<Value> {
+    let _guard = LOCK
         .lock()
-        .map_err(|_| anyhow::anyhow!("parallel lock poisoned"))?;
-    let Some(plan) = guard.take() else {
+        .map_err(|_| anyhow::anyhow!("Parallel lock poisoned"))?;
+    let Some(mut plan) = load(source, root)? else {
         return Ok(json!({"ok":true,"cleaned":0}));
     };
-    let mut cleaned = 0;
+    // Preflight every checkout before removing any. Keep every branch so commits
+    // cannot disappear even after a clean working tree is removed.
     for worker in &plan.workers {
-        let _ = Command::new("git")
-            .args([
+        if worker.status == "removed" {
+            continue;
+        }
+        ensure!(
+            worker.status != "running",
+            "Worker {} is still running",
+            worker.item.id
+        );
+        ensure!(
+            clean(worker)?,
+            "Worker {} contains changes or ignored files; preserve them before cleanup",
+            worker.item.id
+        );
+    }
+    let mut removed = Vec::new();
+    for index in 0..plan.workers.len() {
+        let worker = plan.workers[index].clone();
+        removed.push(worker.branch.clone());
+        if worker.status == "removed" {
+            continue;
+        }
+        git(
+            source,
+            &[
                 "worktree",
                 "remove",
-                "--force",
-                worker.worktree_path.to_str().unwrap_or(""),
-            ])
-            .current_dir(&plan.source)
-            .output();
-        let _ = Command::new("git")
-            .args(["branch", "-D", &worker.branch])
-            .current_dir(&plan.source)
-            .output();
-        cleaned += 1;
+                worker
+                    .worktree_path
+                    .to_str()
+                    .context("Non-UTF-8 worktree path")?,
+            ],
+        )?;
+        plan.workers[index].status = "removed".into();
+        save(&plan, root)?;
     }
-    Ok(json!({"ok":true,"cleaned":cleaned,"plan_id":plan.id}))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    fn repo(root: &Path) {
-        fs::create_dir_all(root).unwrap();
-        for args in [
-            vec!["init", "-q"],
-            vec!["config", "user.name", "Parallel Test"],
-            vec!["config", "user.email", "test@example.invalid"],
-        ] {
-            assert!(Command::new("git").args(&args).current_dir(root).status().unwrap().success());
-        }
-        fs::write(root.join("README.md"), "hi\n").unwrap();
-        assert!(Command::new("git").args(["add", "README.md"]).current_dir(root).status().unwrap().success());
-        assert!(Command::new("git").args(["commit", "-qm", "init"]).current_dir(root).status().unwrap().success());
-    }
-
-    #[test]
-    fn non_git_is_disabled() {
-        let root = tempfile::tempdir().unwrap();
-        let report = prepare(root.path(), "do a and b", root.path().join("wt").as_path()).unwrap();
-        assert_eq!(report["enabled"], false);
-    }
-
-    #[test]
-    fn caps_at_two_worktrees_and_verifier_runs() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("repo");
-        repo(&source);
-        let checkouts = root.path().join("checkouts");
-        let plan = prepare(&source, "add docs and add tests", &checkouts).unwrap();
-        assert_eq!(plan["ok"], true);
-        assert!(plan["plan"]["workers"].as_array().unwrap().len() <= 2);
-        mark_worker_status("w1", "finished").unwrap();
-        mark_worker_status("w2", "finished").unwrap();
-        let verify = verify(&source).unwrap();
-        assert!(verify["verify_status"].as_str().unwrap() == "clean" || verify["ok"] == true);
-        cleanup().unwrap();
-    }
-
-    #[test]
-    fn split_goal_never_exceeds_cap() {
-        let items = split_goal("one\ntwo\nthree\nfour").unwrap();
-        assert!(items.len() <= MAX_WORKERS);
-    }
+    fs::remove_file(plan_file(source, root)?)?;
+    Ok(json!({"ok":true,"cleaned":removed.len(),"retained_branches":removed,"plan_id":plan.id}))
 }

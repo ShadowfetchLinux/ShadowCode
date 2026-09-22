@@ -7,7 +7,7 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.venv/
+.venv
 venv/
 ui/node_modules/
 scripts/native-mcp-peer/node_modules/
@@ -32,5 +32,5 @@ artifacts/
 ui/test-results/
 ui/playwright-report/
 src/shadow_agent/_assets/
-/target/
+/target
 /src-tauri/gen/

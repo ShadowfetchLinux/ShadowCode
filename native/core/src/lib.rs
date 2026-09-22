@@ -11,6 +11,7 @@ pub mod context;
 pub mod control;
 pub mod engine;
 pub mod events;
+pub mod guardian;
 pub mod hooks;
 pub mod intelligence;
 #[cfg(unix)]
@@ -20,6 +21,7 @@ pub mod mcp;
 pub mod memory;
 pub mod model_registry;
 pub mod models;
+pub mod parallel;
 pub mod patch;
 pub mod paths;
 pub mod permissions;
@@ -34,10 +36,8 @@ pub mod service;
 #[cfg(unix)]
 pub mod sqlite;
 pub mod steering;
-pub mod symbol_index;
-pub mod parallel;
-pub mod guardian;
 pub mod store;
+pub mod symbol_index;
 pub mod system_info;
 pub mod tools;
 pub mod vision;

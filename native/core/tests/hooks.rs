@@ -746,7 +746,9 @@ async fn native_loop_fires_compaction_and_provider_error_hooks() {
         (
             if index < 2 {
                 response(
-                    &(0..360).map(|n| format!("Historical observation {n}: inspected module {n}.\n")).collect::<String>(),
+                    &(0..360)
+                        .map(|n| format!("Historical observation {n}: inspected module {n}.\n"))
+                        .collect::<String>(),
                     json!([]),
                 )
             } else {
