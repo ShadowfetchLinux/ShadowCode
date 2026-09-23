@@ -189,3 +189,41 @@ async fn rewind_does_not_duplicate_side_effects() {
     assert!(!engine.store().messages(&job.id).unwrap().is_empty());
     engine.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn rejected_pause_on_queued_task_does_not_park_it_later() {
+    // First task holds the workspace lane long enough for a second task to be
+    // queued behind it. Pausing the queued task must be rejected and must not
+    // leave a paused flag that parks the task forever once it starts running.
+    let server = support::server(|index, _body| {
+        let value = match index {
+            0 => response(
+                "hold",
+                json!([tool("h1", "exec", json!({"command":"sleep 1; echo held"}))]),
+            ),
+            _ => response("done", json!([])),
+        };
+        (value, Duration::ZERO)
+    })
+    .await;
+    let (root, engine) = setup(&server.endpoint);
+    let first = engine
+        .start(request(root.path(), "Hold the workspace"))
+        .await
+        .unwrap();
+    let mut queued_request = request(root.path(), "Second task");
+    queued_request.queue = true;
+    let second = engine.start(queued_request).await.unwrap();
+    assert_eq!(second.status, "queued");
+    let error = engine.pause_job(&second.id).unwrap_err().to_string();
+    assert!(error.contains("running task"), "{error}");
+    assert_eq!(engine.job(&second.id).unwrap().unwrap().status, "queued");
+    for id in [&first.id, &second.id] {
+        let done = tokio::time::timeout(Duration::from_secs(10), engine.wait(id))
+            .await
+            .expect("a task with a rejected pause must not hang at the pause boundary")
+            .unwrap();
+        assert_eq!(done.status, "completed", "{}", done.summary);
+    }
+    engine.shutdown().await.unwrap();
+}

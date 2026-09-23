@@ -543,19 +543,18 @@ impl Engine {
             !job.finished.load(Ordering::Acquire),
             "Task already finished"
         );
-        let hashes = {
-            // Snapshot nothing yet; await_steering refreshes from tool observations.
-            std::collections::BTreeMap::new()
-        };
-        job.steer.pause(hashes)?;
         let mut record = job
             .record
             .lock()
             .map_err(|_| anyhow!("Job lock poisoned"))?;
+        // Check the status before flagging the steer control: a rejected pause
+        // on a queued task must not leave it parked once it starts running.
         ensure!(
             matches!(record.status.as_str(), "running" | "paused"),
             "Only a running task can be paused"
         );
+        // Snapshot nothing yet; await_steering refreshes from tool observations.
+        job.steer.pause(std::collections::BTreeMap::new())?;
         record.status = "paused".into();
         self.0.store.save_job(&json!(*record))?;
         let snap = record.clone();
