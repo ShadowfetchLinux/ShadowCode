@@ -876,3 +876,40 @@ fn vendor_image_bytes_use_official_fields() {
     assert!(Vendor::Cursor.accepts_images());
     assert!(!Vendor::Antigravity.accepts_images());
 }
+
+#[test]
+fn acp_resume_ignores_replayed_history() {
+    let root = tempfile::tempdir().unwrap();
+    let mut adapter = adapter_for(Vendor::Grok, false);
+    adapter.on_start(&LaunchOptions {
+        binary: "grok".into(),
+        resume: Some("s-old".into()),
+        ..launch(root.path())
+    });
+    adapter.prompt("follow up", &[]).unwrap();
+    let chunk = |text: &str| {
+        note(
+            "session/update",
+            json!({"sessionId":"s-old","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}),
+        )
+    };
+    let (send, _) = feed(
+        &mut *adapter,
+        &[&rpc_result(1, json!({"protocolVersion":1}))],
+    );
+    assert!(send
+        .iter()
+        .any(|l| l.contains("session/load") && l.contains("s-old")));
+    // History replayed by session/load is not new output.
+    let (_, replay) = feed(&mut *adapter, &[&chunk("ALPHA")]);
+    assert!(replay.iter().all(|u| !matches!(u, Update::Text(_))));
+    let (send, loaded) = feed(&mut *adapter, &[&rpc_result(2, json!({}))]);
+    assert!(send.iter().any(|l| l.contains("session/prompt")));
+    assert!(loaded
+        .iter()
+        .any(|u| matches!(u, Update::NativeSession { id } if id == "s-old")));
+    let (_, answer) = feed(&mut *adapter, &[&chunk("BETA")]);
+    assert!(answer
+        .iter()
+        .any(|u| matches!(u, Update::Text(t) if t == "BETA")));
+}

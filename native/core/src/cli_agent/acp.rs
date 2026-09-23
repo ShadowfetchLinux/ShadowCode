@@ -107,6 +107,10 @@ impl AcpAdapter {
             json!({"sessionId":session,"prompt":prompt}),
         )])
     }
+    /// A `session/load` was sent and has not been answered yet.
+    fn replaying(&self) -> bool {
+        self.session_load_id.is_some() && self.phase != Phase::Session
+    }
     fn cwd(&self) -> String {
         self.options
             .as_ref()
@@ -561,6 +565,10 @@ impl CliAdapter for AcpAdapter {
                     self.vendor.id()
                 ))],
             }),
+            // `session/load` replays the stored conversation as updates
+            // before it answers; that history was already shown and must not
+            // be counted as new output of this turn.
+            (Some("session/update"), None) if self.replaying() => Ok(Step::default()),
             (Some("session/update"), None) => Ok(self.session_update(&message["params"]["update"])),
             (Some(_), None) => Ok(Step::default()),
             (None, Some(id)) => match id.as_u64() {
