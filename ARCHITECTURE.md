@@ -1,106 +1,184 @@
-# ShadowCode architecture
-
-Native 0.20 is a Rust engine with a Tauri desktop, a private Unix-socket CLI,
-and the existing React visual design. The 0.19 Python harness remains the last
-supported release until the [native gates](docs/NATIVE_MIGRATION.md) are proved.
+# ShadowCode architecture (0.28)
 
 ```text
-CLI / TUI / Tauri desktop / MCP
-                |
-          Native Engine
-                |
-  Context / Plan / Tools / Permissions / Verify
-                |
-         Model interface
-                |
- Ollama / OpenAI-compatible / local / mock
+React window (ui/)                 shadowcode CLI / TUI / MCP clients
+      │ Tauri IPC  invoke("api")              │ private Unix socket
+      └──────────────┬────────────────────────┘
+                     ▼
+          Service (native/core/src/service.rs)   request router: /api/…
+                     ▼
+          Engine (engine.rs)   jobs, queue, approvals, events, trust gate
+                     ▼
+          Runtime facade (runtime.rs)   Vendor(vendor) | Local
+            ┌────────┴──────────────────────────┐
+            ▼                                   ▼
+ Vendor adapters (cli_agent/*)        Native agent loop (engine + tools/)
+ codex app-server · claude -p ·       ShadowCode tools, permissions,
+ cursor-agent acp · agy --print= ·    checkpoints, web tools
+ grok agent stdio                               │
+ (vendor runs its own loop)                     ▼
+                                      local_engine.rs → local_runtime.rs
+                                      managed llama-server (127.0.0.1)
 ```
 
-## Native runtime (0.20)
+One executable (`shadowcode`, crate `shadowcode-desktop` in `src-tauri/`) runs the desktop window and
+the CLI. The engine lives in the `shadowcode-core` crate (`native/core`) and
+runs in-process with the window. There is no HTTP server between them.
 
-`native/core` owns understand → plan → inspect/act → observe → verify. The
-verifier can request a fix cycle. Tool calls and observed results produce
-structured events; final status reflects verification, cancellation, and
-restart interruption. Plans are emitted after automatic progress and explicit
-model updates.
+## Layers
 
-`store.rs` uses SQLite for sessions, tasks, events, models, projects, pins,
-jobs, goals, notes, and background processes. Schema changes are additive
-(`user_version` 24). Events have monotonically increasing IDs and an index on
-`(session_id, id)`. Restart recovery marks unfinished jobs interrupted and
-writes a durable `agent.completed` event so history and export see the stop.
+- **Desktop** (`src-tauri/src/main.rs`): hosts the React build (`ui/dist`,
+  embedded) in the system WebKit webview and exposes one IPC command, `api`,
+  which forwards `{method, path, body}` to the `Service`. The UI contract is
+  [docs/API_CONTRACT_0.28.md](docs/API_CONTRACT_0.28.md). A window can also
+  attach to an engine already running in a headless `serve` or TUI process.
+  Closing an attached window leaves that engine's work running.
+- **Service** (`service.rs`): routes requests (`/api/picker`,
+  `/api/accounts/*`, `/api/local-models/*`, `/api/jobs`, sessions, review,
+  config). The CLI reaches the same service through `control.rs`, a Unix socket
+  in `/run/user/<uid>/shadowcode/` with peer-credential checks. It opens no TCP
+  listener. At startup it removes sockets left behind by dead engines.
+- **Engine** (`engine.rs`): owns jobs. Each workspace runs one active job plus
+  queued follow-ups. `start_with_context` is the single entry point for the
+  desktop, CLI, goals, MCP and workflows. It enforces workspace trust, the
+  offline refusal of cloud routes, read-only mode for Plan/Review, and
+  handoff consent. All of these checks run before a job row is written.
+- **Runtime facade** (`runtime.rs`): a two-variant enum, `Vendor(Vendor)` or
+  `Local`, that dispatches availability, model discovery, capabilities
+  (vision, tools, whether approvals reach ShadowCode, cloud or local), resume,
+  cancel and usage. Provider protocols stay inside the adapters.
+- **Vendor adapters** (`cli_agent/`): `codex.rs` (app-server JSON-RPC, plus an
+  `exec` fallback), `claude.rs` (stream-json), `acp.rs` (Cursor and Grok),
+  `antigravity.rs` (agy stream-json). Each adapter is a line-oriented state
+  machine. `runner.rs` owns the process, stdin/stdout, approvals, stall
+  detection and cancellation. The vendor runs the agent loop with its own tools
+  and sandbox. ShadowCode's tools are never injected into it.
+- **Native agent loop**: used for local GGUF rows and configured
+  OpenAI-compatible endpoints. It handles context accounting and compaction,
+  tool calls through `permissions.rs`, file checkpoints, verification, web
+  tools (`web.rs`) and `view_image` for vision models.
 
-`engine.rs` owns desktop/CLI/MCP jobs. A workspace admits one active agent job
-plus queued follow-ups. Cancellation sets a durable request and releases pending
-approvals; terminal status follows worker exit. A profile lock prevents a second
-manager from recovering live jobs. The desktop may attach to a persistent
-headless/TUI engine; closing an attached window leaves that work running.
-If that owner process exits and a matching engine returns on the same
-socket, an attached view reopens its lease (`view.reattached`) without
-starting jobs, retrying mutating requests, or replaying completed tools.
-The UI then fetches committed rows from the last event cursor.
+## Catalog
 
-Autonomy (0.21 branch) adds inspectable layered context accounting before each
-model request, a deterministic compaction keep-list, replay classes for crash
-recovery, progressive loop handling, and claim/observed/verified completion.
-These extend `context.rs` and `engine.rs`; they do not replace checkpoints or
-the permission checker. Named autonomy profiles never raise configured caps
-and never silently kill a task. Tool results that exceed their byte or range
-budget set `truncated` and a model-visible note. Worktree repair still
-requires the recorded real path (`guess_paths: false`).
+`cli_agent/catalog.rs` holds one `VendorCatalog` per engine. It probes each
+vendor with official interfaces only:
 
-Filesystem tools resolve paths with directory capabilities. Shell classification
-is a policy check, not kernel isolation. See [SECURITY.md](SECURITY.md).
+| Vendor | Probe |
+| --- | --- |
+| Codex | app-server `account/read`, `account/rateLimits/read` and `model/list` (`codex_probe.rs`) |
+| Cursor, Grok | ACP `initialize`, `authenticate` and `session/new` (`acp_probe.rs`); no prompt is sent |
+| Claude | `claude auth status` and the model aliases in `claude --help` |
+| Antigravity | `agy models` |
 
-## Session continuity
+- **Caching.** Results are cached with a 5-minute freshness window and backoff
+  on failure. *Offline* mode starts no probe.
+- **Picker rows.** `picker_rows` builds one row per discovered model. The local
+  catalog (`local_engine.rs`) adds GGUF rows, and `/api/picker` returns both.
+  Row IDs are stable routing IDs: `cli:<vendor>[:<model>]` or
+  `local:gguf:<hash of the canonical path>`. Display names are never used for
+  routing.
 
-Activating a session changes the selected workspace, checks that its folder
-exists, and returns a bounded recent page plus `history_page` cursors on the
-native desktop. Follow-up tasks hydrate a complete tool-call/result tape when
-one exists; interrupted calls are never blindly replayed. Old tool calls are
-not re-executed. Project notes are a separate context source.
+## Usage persistence
 
-The desktop hydrates the saved page and asks for the current/latest job. Native
-event delivery is durable-fetch plus a bounded wakeup feed. Duplicate event IDs
-are ignored. A connection error keeps the task running and retries from the
-last cursor. `job.done` is synthesized from persisted job status after the
-durable completion event.
+- **Snapshots.** `cli_agent/usage.rs` models what a provider reports: limit
+  windows, quota pool, plan, credits when stated, `limit_reached`, and the
+  refresh time. Anything not reported is left as unknown. Codex rate limits
+  come from probes and from `account/rateLimits/updated` pushes during a turn.
+  Each push emits `usage.updated`.
+- **Storage.** Raw official payloads go into the `usage_snapshots` table,
+  keyed by vendor, account and pool. After a restart they appear as
+  *Last checked …* until the next probe. A snapshot older than 30 minutes is
+  marked stale. Disconnect deletes the vendor's rows.
+- **Database.** SQLite `user_version` is 25 (`store.rs`). Opening an older
+  database first copies it to `shadow-agent.pre-native-<id>.sqlite` (mode 600)
+  with the SQLite backup API. Migrations then run forward in order inside one
+  transaction. A database from a newer version is refused.
+- **Per-conversation state.** Execution targets and vendor session IDs are
+  `session_meta` rows (`execution_target`, `native_session:<vendor>`). The
+  per-project default is a `native_meta` row (`execution_target:<workspace>`).
+
+## Local runtime lifecycle
+
+1. **Resolve.** `local_engine::runtime_candidates` looks for `llama-server`
+   in this order: the configured `local_engine.llama_binary`, then the runtime
+   bundled next to the executable if it is newer than the managed copy
+   (compared by the `built=` line in `COMMIT`), then `~/.local/lib/shadowcode`,
+   then the bundle, then `SHADOWCODE_LLAMA_SERVER`. It never uses `llama-cli`
+   or a bare `PATH` lookup.
+2. **Verify.** The runtime counts as ready only after `llama-server --version`
+   succeeds. Devices come from `--list-devices`, cached per binary path, size
+   and mtime, plus `/proc/meminfo`.
+3. **Inspect.** `gguf.rs` reads the header for architecture, trained context,
+   chat template and per-layer KV geometry. `local_engine::plan_context` picks
+   the largest context that fits the GPU, otherwise RAM.
+4. **Load.** `local_runtime.rs` starts one server with `--host 127.0.0.1`, a
+   free port, `--no-webui --jinja --ctx-size N --parallel 1`, `--mmproj` if a
+   projector is paired, and `-ngl 999` if the plan fits the GPU. It passes a
+   fresh 32-byte key as `LLAMA_API_KEY` in a cleared environment. The server
+   runs in its own process group with `PR_SET_PDEATHSIG`. Its stderr drains
+   into a 16 KB ring. Loading can be cancelled and waits up to 90 s for
+   `/health`. If the server exits early on the GPU, it is retried once with
+   `--device none -ngl 0`.
+5. **Lease.** A task holds a lease on the loaded model. While any lease is
+   held, loading another model or unloading is refused.
+6. **Stop.** Unloading, swapping or shutting down sends SIGTERM to the process
+   group, then SIGKILL after 5 s.
+
+`ollama_store.rs` reads Ollama manifests and blob paths. It never writes to
+the store.
+
+## Process supervision
+
+- **Vendor CLIs** are spawned in the workspace in their own process group with
+  `PR_SET_PDEATHSIG(SIGKILL)` and `kill_on_drop`. Provider API-key variables
+  are removed from their environment. Cancelling sends SIGTERM to the group,
+  then SIGKILL. A run with no output line for `stall_timeout_sec` (default
+  900) fails.
+- **Login and logout** commands (`cli_agent/auth.rs`) run as supervised
+  children: one login per vendor, cancellable, stopped after 10 minutes.
+- **Probes** use short timeouts. Codex probes and doctor commands run with a
+  cleared, allow-listed environment.
+- **Restart recovery.** A profile lock (`native.lock`) prevents two engines
+  from owning one profile. On restart, unfinished jobs are marked
+  `interrupted`. Shell commands and file edits are never replayed.
+
+## Event model
+
+Every job writes durable events to SQLite with monotonically increasing IDs.
+A bounded broadcast channel (1024 entries) only wakes up listeners. The UI
+reads committed rows from its last cursor, so a missed wakeup or a reload
+never duplicates or loses output.
+
+| Event group | Events |
+| --- | --- |
+| Tools and approvals | `tool.started` / `tool.completed` (redacted in storage; web tools add `sources`), `approval.requested` / `approval.resolved`, `command.completed` |
+| Routing and handoff | `routing.selected` (with `inference: cloud\|local`), `vendor.session`, `agent.handoff`, `model.switched` |
+| Usage and limits | `usage.updated`, `limit.reached` |
+| Results | `checkpoint.updated`, `checkpoint.restored`, `files.changed`, `verification.summary`, `web.source` |
+| Accounts (not tied to a session) | `account.login`, `account.login.done` |
+
+Job statuses end in `completed`, `failed`, `cancelled`, `interrupted` or
+`limit_reached`.
 
 ## Frontend
 
-- `App.tsx`: application state, project activation, composer, shortcuts, panels.
-- `hooks/useConversation.ts`: stream lifecycle, reconnects, paged history.
-- `lib/transcript.ts`: pure event reducer and replay.
-- `lib/jobEvents.ts`: native catch-up and adjacent stream compaction.
-- `components/Markdown.tsx`: safe Markdown; no raw HTML, remote images, or
-  non-http(s) link schemes from model output.
-- `components/Dialog.tsx`: modal focus containment and restoration.
-- `components/Drawer.tsx`: files, review, terminal, goals, skills, health,
-  background processes.
-- `index.css` / `workspace.css`: shared controls, layout, and themes.
-
-Task selection, pins, sidebar visibility, and unsent drafts live in local
-browser storage. Durable agent work and history live in SQLite. Scroll following
-stops when the user reads older content.
-
-## 0.19 Python harness
-
-The supported release still uses `agent/loop.py`, FastAPI on loopback, and the
-same React client over HTTP/SSE. `runtime.py` owns desktop/MCP jobs; `jobs.py`
-is a separate legacy CLI background-job store. See the 0.19 user guide and
-[SECURITY.md](SECURITY.md) for that API's host/origin rules.
+- **Picker and settings.** `ui/src/components/UnifiedPicker.tsx` is filled only
+  by `GET /api/picker`. The settings pages are in `components/settings/`:
+  Accounts, Local models, Permissions & network, Appearance and Advanced.
+- **Consent and progress.** `ConsentDialog.tsx` answers the `needs_consent`
+  reply. `ActivityTimeline.tsx` and `TaskSummary.tsx` are built from recorded
+  events.
+- **Transport.** `ui/src/lib/transport.ts` has a single transport, Tauri IPC.
+  A fake engine is honoured only in builds made with
+  `VITE_SHADOW_TEST_TRANSPORT=1`, which the Playwright suite uses.
+  `e2e/check-bundle.mjs` checks that the production bundle doesn't contain it.
+- **Markdown.** `components/Markdown.tsx` renders model output without raw
+  HTML, remote images or non-http(s) links.
 
 ## Distribution
 
-Native packages embed the compiled interface and a Rust executable. They contain
-no Python interpreter or browser launcher. The 0.19 AppImage still bundles
-Python. Neither installer migrates or deletes user configuration. Verify
-downloads against `SHA256SUMS`.
-
-## Verification
-
-Native unit/integration tests cover migration, recovery, path confinement,
-approvals, provider streams, MCP, worktrees, and process cleanup. Vitest covers
-the reducer, job stream, and Markdown safety. Playwright and the native WebKit
-window suite exercise workflow, reload/reconnect, and accessibility. Recorded
-outcomes live in [docs/NATIVE_VERIFICATION.md](docs/NATIVE_VERIFICATION.md).
+The AppImage and the deb both contain the executable with the embedded UI and
+the managed llama.cpp runtime in `usr/lib/shadowcode`. The runtime uses
+relative `$ORIGIN` links and `NOTICES/`. `scripts/check-native-package.mjs`
+verifies both packages. `scripts/install-appimage.sh` installs the AppImage's
+runtime into `~/.local/lib/shadowcode`. See [docs/RELEASING.md](docs/RELEASING.md).

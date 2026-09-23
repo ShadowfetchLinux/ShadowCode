@@ -1,6 +1,8 @@
 # Background processes in the native desktop
 
-Open **Background processes** in the sidebar, or the **Background** drawer tab.
+> **Advanced.** In 0.28 this is reached through Settings › Advanced › Background. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
+Open **Settings › Advanced › Background**.
 Give the process a name, enter its command, and choose **Start process**. This is
 also available through `/background start <name> <command>`; `/background list`
 and `/background stop <id>` inspect and stop a process. It is
@@ -90,5 +92,5 @@ The [native CLI](NATIVE_CLI.md) exposes `background start`, `list`, `logs`, and
 `stop`; starting requires an open desktop or persistent `shadowcode serve`
 owner. Both share the same manager used by model tools.
 
-See [verification](NATIVE_VERIFICATION.md) and the remaining
-[release gates](NATIVE_MIGRATION.md).
+See [verification](archive/NATIVE_VERIFICATION.md) and the remaining
+[release gates](archive/NATIVE_MIGRATION.md).

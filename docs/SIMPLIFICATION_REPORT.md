@@ -1,5 +1,7 @@
 # 0.27 simplification report
 
+> **Historical (0.27).** Superseded by the 0.28 [implementation checklist](IMPLEMENTATION_CHECKLIST.md) and [release notes](RELEASE_NOTES.md).
+
 ShadowCode is a local desktop coding agent: one window, one picker, real
 backends. This supersedes the remote agent-management direction. 0.26.0 shipped
 the picker. 0.27.0 makes local inference real without an Ollama or LM Studio

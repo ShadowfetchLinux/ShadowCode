@@ -1,5 +1,7 @@
 # Native commands and project skills
 
+> **Advanced.** In 0.28 this is reached through Settings › Advanced › Skills and the `/` command menu. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
 The native desktop runs slash commands through the Rust command service. Type
 `/` in the composer to see available commands. Command results appear in the
 conversation and survive reload; model tasks stream through the normal task,
@@ -124,5 +126,5 @@ replacement with stale-content protection.
 toggles the latest tool card. `/quit` and `/exit` close the native application
 through managed cleanup.
 
-See [native verification](NATIVE_VERIFICATION.md) and the remaining
-[release gates](NATIVE_MIGRATION.md).
+See [native verification](archive/NATIVE_VERIFICATION.md) and the remaining
+[release gates](archive/NATIVE_MIGRATION.md).

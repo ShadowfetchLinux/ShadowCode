@@ -1,123 +1,189 @@
 # ShadowCode user guide
 
-This guide covers the supported 0.27 native release. The desktop, CLI, terminal
-interface, and integrations use the same Python-free Rust engine. See the
-[native desktop](NATIVE_DESKTOP.md), [native CLI](NATIVE_CLI.md), and
-[release gates](NATIVE_MIGRATION.md) guides for platform and integration details.
+This guide covers ShadowCode 0.28 and follows the usual workflow: open a
+project, pick a model, describe the task, watch the agent work, then review
+what changed. Installation and a feature overview are in the
+[README](../README.md).
 
-## Start a project
+## Open a project
 
-Open ShadowCode, choose a project directory, and pick one target from the
-composer dropdown. Subscriptions (Codex, Claude Code, Cursor, Antigravity) use
-the official CLI login. Local GGUF files you already have can be added in
-Settings → Local models. ShadowCode loads them with its bundled llama.cpp
-runtime; it does not start Ollama or LM Studio. Remaining usage appears only when a provider reports
-it; otherwise the row says Usage unavailable. Mock is a deterministic offline
-demo; it can demonstrate a hello-world workflow without model credits.
+Use **Open project** (`Ctrl+P`) and choose a folder. The first time, ShadowCode
+asks you to trust the folder: project instructions, skills, hooks and plugins
+can influence or run work. Tasks do not start in an untrusted project, whether
+they come from the desktop, the CLI, goals or MCP.
 
-The left sidebar groups tasks by project. **New task** starts a fresh conversation
-in the current project. The project button or `Ctrl+P` opens another folder. New
-folders show a trust prompt because project instructions and hooks can influence
-or execute work. To keep inspecting without edits, choose read-only permissions.
+On first launch, onboarding asks for the project and a permission mode.
+*Ask before actions* is the default. You can change it later in
+**Settings › Permissions & network**.
 
-## Describe, inspect, review
+The sidebar groups conversations by project. **New task** (`Ctrl+N`) starts a
+new conversation in the current project.
 
-Write a task and press Enter. The composer clears after submission; Shift+Enter
-adds a line. Tools and permissions sit in a compact control; they are not a
-separate security boundary. Choose the permission level in Settings.
+## Pick a model
 
-The transcript shows agent explanations and compact operations. Expand an
-operation to inspect its output. File-changing operations offer review and
-checkpoint rewind. The plan above the composer reflects observed actions and
-verification; skipped steps were not needed for that task. A successful harness
-verdict does not establish correctness beyond the checks actually performed.
+Open the picker (`Ctrl+M`, or the model button in the composer). It has two
+groups:
 
-A task is marked **verified** only from recorded command evidence: the last
-test, build, lint or type-check command in the task succeeded and nothing failed
-after it. Model prose such as "all tests pass" never counts; a completion that
-claims success without evidence is labelled unverified. Tasks worded as a bug
-fix, regression, crash or failure ask the model for a failing test first; the
-earlier red run does not block the final green run from counting.
+- **Subscriptions**: Codex, Claude Code, Cursor, Antigravity and Grok, run
+  through the vendor's official CLI. See [subscriptions](SUBSCRIPTIONS.md).
+- **On this computer**: GGUF models run by the bundled llama.cpp. See
+  [local models](LOCAL_MODELS.md).
 
-Secrets stay out of model context. Files named `.env`, `.env.*`, `secrets.env`,
-credential JSON and private keys are refused when the model asks to read them
-(`.env.example`-style templates are readable). Tokens, keys and other
-high-entropy strings in any tool output are replaced with `[redacted secret]`
-before the model sees them. This is pattern-based and narrow; it is not a
-guarantee that every secret is caught.
+Each row shows Local or Cloud, its availability, a *Vision* or *Chat only*
+badge where it applies, and its usage line. Search filters rows. Vendors with
+many models show their default, the selected row and recent rows first; the
+rest are behind a *more* entry. Press the right arrow key or the info icon to
+open a row's details: the reason it isn't ready, usage windows and reset times,
+and a link to the vendor's own usage page.
 
-**Pause task** requests a pause at the next safe boundary. A command already
-running finishes first. Add a steering instruction, then **Resume task** to
-continue without replaying completed commands. **Rewind files** requires the
-worker to reach that pause boundary, or the task to finish, and refuses to run
-while another task or background process owns the workspace. Rewind covers
-checkpointed file-tool edits; it does not undo shell commands or Git history.
-Goal scheduling has its own separate Pause control.
+A row that isn't ready still opens something useful: *Sign in* opens
+**Settings › Accounts**, *Setup required* opens the right settings page, and
+*Unavailable* explains why. Send stays disabled until a ready row is selected.
 
-Review opens the Git panel. Select a file, compare its unstaged or staged changes,
-then stage a hunk or a whole new file. If a file changed since the preview, refresh
-it before staging. Discard asks for confirmation. Commit uses the staged index.
-Binary and large files are identified when a full text preview is unavailable.
+ShadowCode stores the choice for the conversation and uses it as the project's
+default for new conversations.
 
-The Files panel reads files within the active project. The Terminal panel runs
-one command with a 60-second limit; it is not an interactive PTY. Agent tasks and
-manual writes do not compete in the same workspace. Use Background processes for
-services that should keep running.
+## Describe the task
 
-## Continue and organize
+Type in the composer and press `Enter`. `Shift+Enter` adds a line.
 
-Task search covers titles, workspace paths, and task prompts. Pin buttons keep
-frequent tasks at the top. Manage tasks in the command palette provides rename,
-branch, Markdown export, and deletion. Branches inherit the parent transcript;
-the filesystem is shared, not a separate Git worktree.
+- **Attachments.** Attach text files or up to four images per message. Images
+  are accepted only when the selected row is marked Vision. Attachments are
+  copied into `<project>/.shadow/attachments/`.
+- **Web.** The **Web** chip appears only when a local model is selected, since
+  vendor CLIs bring their own web tools. Turning it on lets the agent use
+  `web_fetch` and `web_search` for the task. In *Web tools off* and *Offline*
+  modes, a pill replaces the chip.
+- **Permission mode.** The mode control in the composer shows the current mode
+  and how the selected vendor applies it.
+- **Slash commands.** Type `/` to browse them. `/plan` and `/review` start
+  read-only tasks. `/model` opens the picker.
 
-Reloading restores the selected task, its transcript, and its unsent text draft.
-An active task reconnects without duplicating output. Text attachments and images
-are copied into `.shadow/attachments/` (images up to the workspace file limit).
-Codex, Claude Code, and Cursor receive those image bytes on their official
-interfaces. Antigravity rejects images. Local GGUF vision requires a present
-mmproj companion file. Attachment selections are not retained through reloads. Drafts, pins, and sidebar state are browser-local;
-use Export when you need a portable conversation artifact.
+If a task is already running, pressing `Enter` queues the message as a
+follow-up.
 
-If the API restarts during a task, its job record becomes **interrupted**. Open
-that task and choose Continue to compose a recovery request. Inspect the recorded
-changes first. Closing the browser does not stop the API; terminating the server
-does stop its workers. Stop requests can wait for an in-flight model request or
-tool timeout before the worker exits.
+## Watch it work
 
-## Models, settings, and goals
+The activity timeline under the answer is built from recorded events: reading,
+searching, editing, running commands, waiting for approval, web sources and
+verification. Expand an item to see its output. Vendor tool names (for example
+Codex command executions, or Claude's `Bash` and `Edit`) are grouped the same
+way as ShadowCode's own tools.
 
-The model selector groups **Local model (ShadowCode agent)** HTTP models and
-**Claude / Codex / Grok (vendor agent)** official CLIs. Vendor login stays with
-`claude auth login`, `codex login`, or `grok login`; ShadowCode never reads those
-credentials. Pause/Steer interrupts the vendor process and sends a follow-up.
-**Rewind does not apply** to vendor-agent tasks. Details:
-[vendor CLI backends](NATIVE_CLI_BACKENDS.md).
+### Approvals
 
-The model selector accepts detected or configured models and a custom model ID.
-Settings covers provider connection, permissions, appearance, notifications,
-hooks, MCP, and plugins. API keys remain separate from YAML. Browser notifications
-need browser permission; Linux desktop notifications use the system notifier.
+When the agent wants to do something that needs permission, an approval card
+shows what it is, for example `Edit src/main.rs`, `Apply a patch to …`, or a
+shell command. Choose **Allow** or **Deny**. Keyboard shortcuts never approve
+anything.
 
-Goals create and track milestone tasks. Goals and ordinary tasks use the same
-harness. If a milestone fails, review its evidence and resume after correcting the
-problem. Background processes are separate from goal tasks.
+- **Local models.** ShadowCode enforces the permission mode for every tool
+  call.
+- **Codex, Claude Code, Cursor, Grok.** These vendors send their own approval
+  requests, which ShadowCode shows. Each vendor decides which of its actions
+  need approval. In Plan/Review tasks, ShadowCode denies vendor requests
+  automatically and records a warning.
+- **Antigravity.** It never asks ShadowCode. It applies its own settings
+  (`~/.gemini/antigravity-cli/settings.json`) and reports refused actions. A
+  warning at task start reminds you.
+
+An unanswered vendor approval is denied after 10 minutes
+(`cli_agents.approval_timeout_sec`).
+
+### Stop, pause and steer
+
+- **Stop** (`Ctrl+.`) cancels the task. For a vendor CLI, ShadowCode ends the
+  vendor's whole process group. A local model stops at the next cancellation
+  point.
+- **Pause** waits for a safe boundary (a running command finishes first).
+  Add a steering note, then **Resume** to continue without replaying finished
+  commands. With a vendor CLI, pausing interrupts the vendor's turn and the note
+  is sent as a follow-up.
+
+## Review the result
+
+When the task ends, a summary lists the changed files with line counts and any
+test or build commands with their results. A task counts as verified only from
+recorded command results. An answer that claims success without a recorded
+check is marked as unverified.
+
+- **Review changes** opens the Changes drawer (`Ctrl+Shift+B`). Pick a file,
+  compare unstaged and staged hunks, stage a hunk or a whole new file, discard a
+  hunk (after confirming), and commit with a message. If a file changed since
+  you previewed it, refresh before staging.
+- **Rewind** undoes every file change the task made with ShadowCode's own
+  tools. Stop the task first. Rewind doesn't undo shell commands or Git
+  history. It isn't offered for vendor CLI tasks, because the vendor writes
+  files with its own tools. Use the Changes drawer or Git to undo those. After
+  a rewind, the next turn is told that those edits are no longer on disk.
+
+## Switch models mid-conversation
+
+You can pick another row at any time. If a task is running, it keeps its model
+and the new choice applies from the next turn.
+
+- **Same vendor, different model.** The vendor's session resumes with the new
+  model, and a *model switched* note appears. No handoff is needed.
+- **Different provider.** The new provider hasn't seen the earlier turns, so
+  ShadowCode passes it a handoff block: your requests, the final answers and
+  the changed files, up to 12,000 characters, marked as earlier context and not
+  as instructions. Vendor CLIs receive it before your message. Local models
+  read the same turns from the conversation history.
+- **Consent.** Before content goes to a cloud provider, a dialog shows what
+  would be sent. This happens when the previous turn ran on this computer, when
+  the conversation moves to another provider, or when you first attach images
+  to a cloud row in this conversation. Nothing is sent or recorded until you
+  choose **Send**. **Cancel** leaves the conversation unchanged.
+
+When you return to a vendor you used earlier in the conversation, ShadowCode
+resumes that vendor's own session: Codex `thread/resume`, Claude `--resume`,
+Cursor and Grok ACP `session/load`, Antigravity `--conversation`.
+
+## When a plan limit is reached
+
+If a vendor reports that your plan limit is reached, the task stops with the
+status *Plan limit reached*. A banner offers **Choose model**, and that vendor's
+affected rows show as unavailable until the limit resets. ShadowCode doesn't
+retry, buy credits or turn on overages.
+
+## Offline and web-off
+
+In **Settings › Permissions & network**:
+
+- **Web tools off**: local models get no web tools. Subscriptions still work.
+- **Offline**: only rows under *On this computer* run. Cloud rows show as
+  unavailable. ShadowCode starts no vendor process for sign-in status, models
+  or usage, and a cloud job is refused with
+  "Offline mode: choose a model that runs on this computer". Shell commands
+  that reach the network (for example `curl`, `npm` or `pip`) are denied.
+
+## Continue, organize and recover
+
+- **Reloading** the window keeps the selected conversation, the transcript and
+  your unsent draft. A running task reconnects without repeating output.
+- **Older messages** pages back through long conversations. **Fork from here**
+  starts a new conversation at a response.
+- **Interrupted tasks.** If ShadowCode exits during a task, the task is marked
+  *interrupted*. **Continue task** writes a recovery request for you. Shell
+  commands and file edits are never replayed automatically.
+- **Command palette** (`Ctrl+K`): rename, branch, export (`Ctrl+Shift+E`) and
+  delete conversations.
 
 ## Troubleshooting
 
-- **Blank/stale source UI:** run `shadow doctor --fix`, or rebuild with
-  `npm --prefix ui ci && npm --prefix ui run build` from the checkout.
-- **AppImage will not mount:** use `--appimage-extract-and-run`; FUSE is optional.
-- **No model response:** inspect Workspace health and Test connection in Settings.
-  Confirm the model server is listening and the model ID matches that server.
-- **Reconnecting:** the task may still be running. Keep the app open; it retries
-  and polls status. If the API was stopped, launch it again and inspect recovery.
-- **Port already used after an upgrade:** stop the old ShadowCode API process
-  after its tasks finish, then reopen the app. Do not run two APIs against one
-  XDG profile. By default the address is `http://127.0.0.1:7430`.
-- **Missing project:** restore the folder or open its new location as a project.
-- **Need stronger isolation:** run the project in a container or separate account;
-  shell commands use your Linux user's privileges.
+- **A subscription row says Sign in.** Use **Settings › Accounts › Connect**,
+  or run the vendor's login command in a terminal and choose **Refresh**.
+  Antigravity sign-in happens only inside `agy`.
+- **A local row says Setup required.** The llama.cpp runtime is missing. Run
+  `scripts/install-appimage.sh` again, or build it with
+  `scripts/build-llama.cpp.sh`.
+- **A local model loaded on the CPU.** The row shows *CPU fallback (GPU load
+  failed)*. Check that `libvulkan1` and a Vulkan driver are installed, and read
+  the error on **Settings › Local models**.
+- **The AppImage won't mount.** Run it with `--appimage-extract-and-run`. FUSE
+  is optional.
+- **You need stronger isolation.** Use a container or a separate Linux account.
+  Shell commands run with your user's privileges.
 
-The compatible XDG directories remain named `shadow-agent`. Back up both
-`~/.config/shadow-agent` and `~/.local/state/shadow-agent` before moving machines.
+Settings and history live in `~/.config/shadow-agent` and
+`~/.local/state/shadow-agent`. Back up both before moving to another machine.

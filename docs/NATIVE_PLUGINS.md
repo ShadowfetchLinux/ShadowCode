@@ -1,4 +1,6 @@
-# Native project plugins — 0.21
+# Native project plugins
+
+> **Advanced.** In 0.28 this is reached through Settings › Advanced › Plugins. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 A native plugin installs a reviewed collection of skills, slash commands,
 lifecycle hooks and MCP definitions into one project. The desktop and CLI use
@@ -8,7 +10,7 @@ project's own tools are separate dependencies.
 
 ## Install and use
 
-Open **Settings → Plugins**, review a built-in bundle or import a local JSON
+Open **Settings › Advanced › Plugins**, review a built-in bundle or import a local JSON
 bundle, expand its files, then install it in the displayed project. The project
 must be trusted and writable, with no running or queued task or manual mutation
 holding its workspace reservation. Project and content hashes guard stale actions.

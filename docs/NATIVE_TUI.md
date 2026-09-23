@@ -1,9 +1,10 @@
-# Native terminal interface — 0.21
+# Native terminal interface
+
+> **Reference.** In 0.28 this covers `shadowcode tui`. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 `shadowcode tui` opens a fullscreen terminal workspace in the same Rust executable
 as the desktop and command line. It requires a real, cursor-addressable terminal;
-it does not start GTK, WebKit, Python, Node, or a browser. Model inference still
-runs in Ollama or your configured compatible provider.
+it does not start GTK, WebKit, Python, Node, or a browser. Tasks use the same targets as the desktop picker: a vendor CLI (`cli:*`), a GGUF model on the bundled llama.cpp runtime (`local:gguf:*`), or a configured compatible endpoint.
 
 ```sh
 shadowcode --workspace /path/to/project tui
@@ -80,5 +81,5 @@ and AppImage builds.
 
 This is a development interface. Broader picker/navigation, failure and
 long-session stress, terminal visual review and final packaged verification remain
-part of the [native release gates](NATIVE_MIGRATION.md). The full native release is
+part of the [native release gates](archive/NATIVE_MIGRATION.md). The full native release is
 not declared complete by this interface's initial checks.

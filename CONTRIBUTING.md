@@ -1,47 +1,76 @@
 # Contributing to ShadowCode
 
-Native 0.20 work lives on `native-0.20`. Follow the
-[Rust/Tauri development guide](docs/NATIVE_DESKTOP.md),
-[native CLI guide](docs/NATIVE_CLI.md), and
-[migration acceptance gates](docs/NATIVE_MIGRATION.md). Native behavior tests live
-in `native/core/tests`; executable CLI and actual-window tests are in `scripts/`.
-The Python workflow below remains for the supported 0.19 release and legacy
-transport compatibility.
+ShadowCode is a Rust engine (`native/core`), a Tauri desktop shell
+(`src-tauri`) and a React interface (`ui/`) embedded in one executable. Read
+[ARCHITECTURE.md](ARCHITECTURE.md) and the UI contract in
+[docs/API_CONTRACT_0.28.md](docs/API_CONTRACT_0.28.md) before changing a route
+or an event.
 
-Use Python 3.12+ and Node.js 20.19+ or 22.12+.
+## Setup
+
+You need Rust 1.95, Node.js 22.12 or newer, and the system packages listed in
+the [README](README.md#build-from-source). Local-model work also needs the
+managed llama.cpp runtime (`scripts/build-llama.cpp.sh`).
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
 npm --prefix ui ci
 npm --prefix ui run build
-.venv/bin/python -m pytest
-npm --prefix ui test
-cd ui
-npx playwright install chromium
-npm run test:e2e
+cargo build -p shadowcode-desktop --locked
+./target/debug/shadowcode --profile /tmp/shadowcode-dev --workspace /path/to/project
 ```
 
-For frontend development, run the API with `shadow ui --no-browser`, then
-`npm --prefix ui run dev`. Vite proxies `/api` to the local API. Use its proxy;
-the API intentionally rejects cross-origin requests.
+Always use `--profile` during development, so your real settings and history
+stay untouched.
 
-Keep harness logic provider-independent. Add behavioral regression tests when
-changing runtime behavior. UI interactions belong in `ui/e2e`, event transformations
-in Vitest, and backend invariants in pytest. Avoid tests that inspect spelling or
-formatting in source files. Run type checking and build the UI before testing the
-bundle or creating a release.
+## Checks
 
-Tests must use throwaway workspaces and XDG directories. Do not commit API keys,
-`secrets.env`, databases, browser profiles, or machine-specific home paths. The
-browser test server creates its own data and never loads the user's secrets.
-Optional provider integration checks may be skipped when their dependencies are
-unavailable; report those separately from deterministic coverage.
+```bash
+cargo +1.95.0 fmt --all --check
+cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
+cargo +1.95.0 build -p shadowcode-desktop --locked
+cargo +1.95.0 test --workspace --locked
+npm --prefix ui run typecheck
+npm --prefix ui test
+(cd ui && npx playwright install chromium && npm run test:e2e)
+npm --prefix ui run format
+```
 
-Format frontend changes with `npm --prefix ui run format`. Use clear Python 3.12
-code and explicit exception handling around external processes. Preserve saved
-user data and compatibility with the `shadow-agent` XDG directories.
+Where tests go:
 
-For bugs, include OS, release version, relevant redacted `shadow doctor` output,
-and reproduction steps. See [SECURITY.md](SECURITY.md) for private vulnerability
-reports and [docs/RELEASING.md](docs/RELEASING.md) for builds and publication.
+- **Engine behaviour:** `native/core/tests`. Vendor protocols are tested with
+  scripted frames and fake CLIs (`tests/vendor_support`), and the local engine
+  with a fake `llama-server`. Tests must not need a real account, a GPU or a
+  network.
+- **Event reducers and components:** Vitest.
+- **Window flows:** Playwright (`ui/e2e`) against the fake engine in
+  `ui/e2e/fakeBackend.ts`.
+- **Packaging and the installer:** `scripts/` (`test-llama-runtime.mjs`,
+  `test-install-appimage.sh`).
+
+Live checks against real vendor CLIs or a GPU are useful, but report them
+separately from the deterministic suite. Mark tests that need them `#[ignore]`.
+
+## Rules
+
+- **Facts come from the vendor.** Show only what a vendor reports through its
+  documented interface. Never invent usage, models or capabilities, and never
+  read vendor credential files.
+- **Protocols stay in adapters.** Keep provider protocols inside
+  `native/core/src/cli_agent/`, and let the rest of the app use the runtime
+  facade (`runtime.rs`).
+- **Use throwaway data in tests.** Tests use temporary workspaces and profiles.
+  Never commit API keys, `secrets.env`, databases or machine-specific home
+  paths.
+- **Keep the `shadow-agent` directories.** Don't break the XDG profile
+  directories or existing configs: add migrations instead.
+
+## Reporting
+
+For bugs, include:
+
+- your OS and the ShadowCode version,
+- the relevant, redacted output of `shadowcode doctor`,
+- the steps to reproduce the problem.
+
+Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
+Releases follow [docs/RELEASING.md](docs/RELEASING.md).

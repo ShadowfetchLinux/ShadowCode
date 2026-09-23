@@ -1,229 +1,302 @@
 # ShadowCode
 
-![version](https://img.shields.io/badge/version-0.27.0-386c51) ![Rust](https://img.shields.io/badge/runtime-Rust%201.95-orange) ![license](https://img.shields.io/badge/license-MIT-green)
+ShadowCode is a Linux desktop coding agent. Open a project, pick a model,
+describe the change, watch the agent work, then review the diff.
 
-**Your ideas. Your models. Your machine.**
-
-ShadowCode is a Linux coding-agent workspace inspired by the focused workflow of
-Codex. Bring a local model or an OpenAI-compatible provider. The harness owns
-context, tools, permissions, checkpoints, plans, and verification.
+The model can come from a subscription you already have (Codex, Claude Code,
+Cursor, Antigravity or Grok, driven through each vendor's own command-line
+tool) or from a GGUF file on your computer, run by a llama.cpp runtime that
+ships with the app. You don't need Ollama, LM Studio or any other model server.
 
 ![ShadowCode workspace](docs/images/workspace-light.png)
 
-**Native 0.27 release:** one unified model picker (Codex, Claude Code, Cursor,
-Antigravity, and local models). Local GGUF rows run through a managed llama.cpp
-runtime installed with the app. They do not start Ollama or LM Studio. The `main` branch builds a Rust/Tauri desktop window
-with the interface embedded in the executable. It needs no Python runtime or
-browser launcher. See the [native desktop guide](docs/NATIVE_DESKTOP.md)
-and the [goals](docs/NATIVE_GOALS.md) and [model routing](docs/NATIVE_ROUTING.md)
-workflows, [managed background processes and model tools](docs/NATIVE_BACKGROUND.md), and
-[native slash commands and project skills](docs/NATIVE_WORKFLOWS.md),
-[reviewed project plugins](docs/NATIVE_PLUGINS.md),
-[reviewed lifecycle commands](docs/NATIVE_HOOKS.md),
-[project inspection and diagnostics](docs/NATIVE_INSPECTION.md),
-[project and task notes](docs/NATIVE_MEMORY.md),
-[native SQLite inspection](docs/NATIVE_SQLITE.md),
-[queued follow-ups](docs/NATIVE_QUEUE.md),
-[approved MCP stdio and HTTP tools](docs/NATIVE_MCP.md), a
-[native MCP stdio and authenticated HTTP server](docs/NATIVE_MCP.md#connect-another-coding-tool-to-shadowcode)
-with Codex/Claude Code/Cursor registration output, and a
-[vendor Claude / Codex / Grok CLI backends](docs/NATIVE_CLI_BACKENDS.md),
-[native CLI](docs/NATIVE_CLI.md) and [terminal interface](docs/NATIVE_TUI.md)
-that share the active desktop engine or run headlessly with their own profile.
-The [native desktop can also attach](docs/NATIVE_DESKTOP.md#attaching-to-a-running-engine)
-to a running headless/TUI engine and leave its work running when the window closes.
-Release AppImage and Debian
-packages include [dependency inventories and notices](licenses/native/README.md).
-Integrations and release checks are tracked under the [release gates](docs/NATIVE_MIGRATION.md).
+- **One picker.** The composer lists **Subscriptions** and **On this computer**
+  in one menu. Each row shows whether it is ready, whether it runs locally or in
+  the cloud, and the usage figures the vendor reports.
+- **Usage figures come from the vendor.** If a vendor exposes no usage, the row
+  says *Usage unavailable* and gives the reason. ShadowCode never makes up a
+  figure.
+- **Local models run on your hardware.** A bundled, pinned llama.cpp runs on
+  Vulkan GPUs or the CPU. Models already in an Ollama store can be imported by
+  reference without copying.
+- **You approve actions.** Choose *Ask before actions* or *Allow project edits*.
+  Every file change can be reviewed and staged in Git, and edits made by
+  ShadowCode's own tools can be rewound.
 
-## Native AppImage
+Release history is in [CHANGELOG.md](CHANGELOG.md). What's new in this release:
+[0.28.0 release notes](docs/RELEASE_NOTES.md).
 
-Download the `v0.27.0` **x86_64 AppImage**
-and its `SHA256SUMS` file from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest).
-The native application embeds its interface; Python, Node.js and a browser
-launcher are not runtime dependencies. The release targets **Ubuntu 24.04 or
-newer / glibc 2.39+**. Git and a model provider such as Ollama remain external.
+## Install
+
+Releases target x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).
+Download from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest):
+
+- `ShadowCode_0.28.0_amd64.AppImage`
+- `ShadowCode_0.28.0_amd64.deb`
+- `SHA256SUMS`
+
+### AppImage (recommended)
+
+Put the AppImage and `SHA256SUMS` in the same folder, then run the installer
+from a checkout of this repository:
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-chmod +x ShadowCode_0.27.0_amd64.AppImage
-./ShadowCode_0.27.0_amd64.AppImage --appimage-extract-and-run
+git clone https://github.com/Shadowfetchapps/ShadowCode.git
+./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.28.0_amd64.AppImage
 ```
 
-Extraction mode works without FUSE. To install into `~/Applications`, add a
-stable `shadow` and `shadowcode` commands, and replace the desktop launcher:
+[`scripts/install-appimage.sh`](scripts/install-appimage.sh):
+
+- refuses the file unless it matches its `SHA256SUMS` entry. Pass
+  `--unverified` only if you knowingly want to skip the check.
+- starts the new AppImage (`--version`) before replacing anything.
+- extracts the bundled llama.cpp runtime (`usr/lib/shadowcode`) and checks it:
+  no absolute or dangling symlinks, `COMMIT`, `architectures.txt` and `NOTICES`
+  present, and `llama-server --version` reports the pinned commit.
+- swaps the runtime into `~/.local/lib/shadowcode` with a rename. The old runtime
+  is kept as `~/.local/lib/shadowcode.previous` until the install succeeds and is
+  put back if a later step fails.
+- installs the AppImage as `~/Applications/ShadowCode.AppImage`, the `shadow`
+  and `shadowcode` launchers in `~/.local/bin`, and the desktop entry.
+- leaves settings, history and project data alone. It removes older ShadowCode
+  AppImages only after a successful install.
+
+To run the AppImage without installing it:
+`./ShadowCode_0.28.0_amd64.AppImage --appimage-extract-and-run`. FUSE is not
+required.
+
+### Debian package
 
 ```bash
-git clone https://github.com/Shadowfetchapps/ShadowCode.git
-cd ShadowCode
-./scripts/install-appimage.sh /path/to/ShadowCode_0.27.0_amd64.AppImage
+sha256sum --ignore-missing -c SHA256SUMS
+sudo apt install ./ShadowCode_0.28.0_amd64.deb
 ```
 
-Keep `SHA256SUMS` beside the download and the installer verifies its matching
-entry automatically. It replaces older ShadowCode AppImages only after the new
-executable starts, preserves settings, keys, memory and task history, and refuses
-a changed download before it can alter the installed application.
+The deb installs `shadowcode` and the same llama.cpp runtime in
+`/usr/lib/shadowcode`. It depends on `git`, `libgomp1` and `libssl3`, and
+recommends `libvulkan1`, which is needed for GPU inference.
 
-## Native 0.25 highlights
+## First run
 
-- **Flagship UX Upgrade ("Supreme"):** Redesigned onboarding empty-state with 8
-  instant, actionable starter cards that set prompt and task mode in one click.
-- **Accessible Mode Tabs:** Icon-driven tablist replacing the ambiguous dropdown
-  selector, complete with hover descriptions for Build, Plan, Review, and Test.
-- **Streamlined Chrome:** Minimalist header with dedicated icon actions, and a
-  visual context capacity meter in the status line that alerts before token exhaustion.
-- **Enhanced Typography & Polish:** Optimized font rendering with typographic
-  ligatures, smooth hover transitions, and glow-ring focus feedback.
+1. Choose a project folder. The first time, you are asked to trust it, because
+   project instructions, hooks and plugins can influence or run work.
+2. Choose a permission mode. *Ask before actions* is the default for new
+   installs.
+3. Open the picker with `Ctrl+M` or the model button in the composer. Rows that
+   aren't ready yet point you to **Settings › Accounts** (sign in) or
+   **Settings › Local models** (add a GGUF).
 
-## Native 0.24 highlights
+## The picker
 
-- **Vendor CLI agents.** Run Claude, Codex, or Grok by spawning the official
-  CLI. ShadowCode never reads those OAuth tokens. See
-  [vendor CLI backends](docs/NATIVE_CLI_BACKENDS.md).
+![Model picker](docs/images/picker.png)
 
-## Native 0.23 highlights
+Every row is a concrete target with a stable ID, for example
+`cli:cursor:auto` or `local:gguf:<hash>`. Selecting it applies to the current
+conversation, and ShadowCode remembers the choice per conversation. Rows
+show:
 
-- **A focused workspace.** Persistent projects and tasks, search, pinned tasks,
-  a refined light/dark interface, and responsive layouts. Files, review, terminal,
-  goals, and health stay beside the conversation.
-- **A better conversation.** Markdown with code-copy controls, live tool cards,
-  observable task plans, saved prompt drafts, and scroll position that respects
-  reading older output. Keyboard-driven navigation and accessible dialogs.
-- **Reliable continuation.** Reload reconnects to a running task. Stable event
-  cursors prevent duplicate history and the old 800-event stream stall. Restarts
-  mark unfinished jobs interrupted and expose a Continue action.
-- **Context that follows the task.** Resuming switches the backend workspace;
-  follow-ups and branches carry bounded prior conversation. Renamed tasks keep
-  their names. Cancellation remains pending until the worker stops.
-- **Review with evidence.** Untracked file previews, separate staged/unstaged
-  views, literal filenames, and protection against stale hunk application.
-- **A standalone native app.** Rust engine, embedded interface, AppImage and Debian
-  packages, checksums, dependency notices, private local IPC, and native CLI/TUI.
-- **Local coding workflows.** Durable queues, goals, model routing, approvals,
-  worktrees, background processes, MCP, project skills and hooks all share one
-  local task engine.
-- **Grounded host inspection.** Local models can answer OS and connected-display
-  questions with the read-only `system_info` tool. It reports kernel display
-  outputs from the machine running ShadowCode, never screen contents, and marks
-  incomplete detection as unknown instead of guessing zero.
+- **Local** or **Cloud**.
+- **Availability**: *Ready*, *Sign in*, *Setup required* or *Unavailable*. A
+  row that isn't ready stays visible and tells you why.
+- **Vision** if the model and the runtime both accept images.
+- **Chat only** if a local model's chat template has no tool support, so it
+  can answer questions but can't read or edit files.
+- **Usage**: see below.
 
-See the [0.22 qualification report](docs/SHADOWCODE_022_QUALIFICATION_REPORT.md),
-[CHANGELOG.md](CHANGELOG.md) for the release history, and
-[the user guide](docs/USER_GUIDE.md) for workflows and recovery.
+Send stays disabled until a ready row is selected. If you switch to a
+different provider during a conversation, ShadowCode asks before sending local
+content to the cloud. See [the user guide](docs/USER_GUIDE.md#switch-models-mid-conversation).
 
-## Native development build
+## Accounts and usage
 
-Requires Rust 1.95, Node 22.12+ or 24+, and the packages listed in the [native desktop
-guide](docs/NATIVE_DESKTOP.md#build-and-run).
+![Accounts](docs/images/accounts.png)
+
+**Settings › Accounts** checks each vendor CLI with its own documented status
+command or protocol handshake. ShadowCode never opens credential files.
+**Connect** runs the vendor's official login command and relays the URL or
+device code it prints. **Disconnect** runs the vendor's logout command, after a
+confirmation, because that signs the CLI out everywhere on this computer. It
+then forgets ShadowCode's cached status, stored usage and resumable session IDs
+for that vendor.
+
+| Vendor | Runtime ShadowCode starts | Connect runs | Models come from | Image input | Approvals reach ShadowCode | Usage shown |
+| --- | --- | --- | --- | --- | --- | --- |
+| Codex | `codex app-server` (JSON-RPC) | `codex login` | app-server `model/list` | Yes (`localImage`), per model | Yes: command and file-change requests. Codex runs in its own sandbox (`workspace-write`, or `read-only` for Plan/Review) | Rate-limit windows per quota pool (for example 5-hour and weekly), reset times, plan, and credits only when reported |
+| Claude Code | `claude -p --output-format stream-json --input-format stream-json --permission-prompts host` | `claude auth login` | *Default* plus the aliases listed in `claude --help` | Yes (image blocks) | Yes, through `--permission-prompts host`. Claude's own settings can pre-approve tools without asking | *Usage unavailable*: Claude Code exposes no plan usage to other apps |
+| Cursor | `cursor-agent acp` (Agent Client Protocol) | `cursor-agent login` | ACP session models, with exact IDs | When ACP `initialize` advertises image support | Yes, through ACP permission requests | *Usage unavailable*: Cursor reports its plan tier, not the remaining allowance |
+| Antigravity | `agy --output-format stream-json --input-format stream-json --print=` | Not available from ShadowCode: run `agy` once to sign in | `agy models` | No (text-only input) | **No**: Antigravity applies its own permission settings in headless mode | *Usage unavailable*: usage appears only in `agy`'s interactive `/usage` panel |
+| Grok | `grok agent stdio` (ACP) | `grok login` | ACP session models (falls back to `grok models`) | No: ACP reports `image: false` | Yes, through ACP. Grok has no read-only mode, so Plan/Review is not enforced by Grok | *Usage unavailable*: Grok reports per-session tokens only |
+
+- **API keys are never used.** Vendor CLIs start with provider API-key
+  variables such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` removed from their
+  environment, so a subscription turn is never quietly billed per token. If a
+  CLI itself is signed in with an API key, its rows say
+  *API key login · billed per token* and show no plan usage.
+- **Usage is saved.** The last usage snapshot is stored locally and shown as
+  *Last checked …* after a restart, until the next check.
+- **Plan limits stop the task.** If a vendor reports its plan limit, the task
+  stops with *Plan limit reached* and you pick another model. ShadowCode never
+  buys credits, redeems resets or turns on overages.
+
+Setup details: [subscriptions](docs/SUBSCRIPTIONS.md).
+
+## Local models
+
+![Local models](docs/images/local-models.png)
+
+**Settings › Local models** lists GGUF files you add, either a single file or a
+folder. It shows the runtime, the detected hardware and the loaded model.
+ShadowCode never downloads weights. Removing a row never deletes the file.
+
+- **Everything is read from the file.** ShadowCode reads the GGUF header for
+  architecture, trained context, chat template and tensors, never the file name.
+  A model whose architecture the bundled llama.cpp doesn't support is listed as
+  incompatible, with the reason.
+- **Import from Ollama.** Models in an existing Ollama store can be imported
+  by reference: ShadowCode registers the store's blob paths, including any
+  vision projector. It never copies the blobs, never writes to the store and
+  doesn't need the Ollama daemon. The store is found through `OLLAMA_MODELS`,
+  the Ollama systemd user unit, or `~/.ollama/models`.
+- **GPU or CPU.** The runtime has a Vulkan module and CPU variants for every
+  x86-64 level. When the memory estimate fits in VRAM, all layers go to the GPU.
+  When it doesn't, llama.cpp offloads what fits. If the GPU start fails, ShadowCode
+  retries once on the CPU and the row says *CPU fallback*. Only one model is
+  loaded at a time. The model can't be swapped or unloaded while a task is
+  using it.
+- **Memory estimate.** Context starts at the lower of the trained context and
+  16,384 tokens (`local_engine.context_size`). It is halved until the estimate
+  fits in VRAM (1 GiB kept free) or RAM (2 GiB kept free), but not below 4,096
+  tokens. The number shown is the context the server actually runs with.
+- **Vision.** Only a model with a paired vision projector (mmproj) is marked
+  Vision. A projector is paired by file name (`<model>.mmproj.gguf`,
+  `<model>-mmproj.gguf`, `mmproj-<model>.gguf`) or when a folder holds exactly
+  one model and one projector, and it must match the model's embedding width.
+  After loading, the flag comes from what the server reports.
+  Vision models also get a `view_image` tool.
+- **Chat only.** If the chat template has no tool calling, no tools are sent to
+  the model.
+
+The runtime runs `llama-server` on `127.0.0.1` with a new random key for each
+launch, passed through its environment. The server's web UI is disabled.
+Details: [local models](docs/LOCAL_MODELS.md).
+
+## Web and network
+
+Local models can use `web_fetch` and `web_search` when you turn on **Web** in
+the composer for that task. Vendor CLIs use their own web tools. Web access
+refuses loopback, private, link-local and metadata addresses, CGNAT, multicast
+and non-standard ports. It re-checks every redirect and caps time and size.
+`web_search` uses DuckDuckGo's HTML page. If that page blocks the request, the
+tool says no results were retrieved and never makes any up.
+
+**Settings › Permissions & network** has three network modes:
+
+| Mode | Effect |
+| --- | --- |
+| Online | Everything allowed by other settings |
+| Web tools off | Local models can't fetch pages. Subscriptions still work |
+| Offline | Only models on this computer run. Cloud rows are unavailable, and no vendor process is started for status, models or usage |
+
+## Permissions
+
+| Mode | ShadowCode's own tools (local models) |
+| --- | --- |
+| Ask before actions | File edits and shell commands wait for your approval |
+| Allow project edits | File edits inside the project run without asking. Shell commands, deletes and Git history changes still ask |
+
+These rules apply to ShadowCode's own tools. Privileged commands (`sudo`, `su`,
+`pkexec`, `doas`, `run0`) are blocked unless you allow them, and then they
+still ask. Destructive Git commands ask. Edits outside the project are refused.
+Plan and Review tasks are read-only.
+
+Vendor CLIs enforce their own sandbox. ShadowCode shows the approval requests
+they send and denies them automatically in read-only tasks. The table above
+shows which vendors send requests at all.
+
+Shell commands run as your Linux user. **ShadowCode is not an operating-system
+sandbox.** See [SECURITY.md](SECURITY.md).
+
+## Data locations
+
+| What | Where |
+| --- | --- |
+| Settings | `~/.config/shadow-agent/config.yaml` ([example](config.example.yaml)) |
+| Secrets for HTTP providers | `~/.config/shadow-agent/secrets.env` (mode 600) |
+| Conversations, jobs, events, goals, usage snapshots | `~/.local/state/shadow-agent/shadow-agent.db` (SQLite, schema version 25; backed up as `shadow-agent.pre-native-<id>.sqlite` before a migration) |
+| Webview storage | `~/.local/share/shadow-agent/webview` |
+| llama.cpp runtime (AppImage install) | `~/.local/lib/shadowcode` |
+| Project notes, skills, attachments | `<project>/.shadow/` |
+
+The directories are still named `shadow-agent` for compatibility. `--profile
+DIR` keeps a separate set, for example for development.
+
+## Build from source
+
+Requirements: Rust 1.95, Node.js 22.12 or newer, and on Ubuntu 24.04:
 
 ```bash
-git clone https://github.com/Shadowfetchapps/ShadowCode.git
-cd ShadowCode
+sudo apt-get install build-essential pkg-config libgtk-3-dev \
+  libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+```
+
+```bash
 npm --prefix ui ci
 npm --prefix ui run build
 cargo build -p shadowcode-desktop --locked
 ./target/debug/shadowcode --profile /tmp/shadowcode-dev --workspace /path/to/project
 ```
 
-`--profile` keeps development data separate from the installed application. See
-the [native migration guide](docs/NATIVE_MIGRATION.md) for validation and release
-requirements.
+Local models also need the managed llama.cpp runtime.
+[`scripts/build-llama.cpp.sh`](scripts/build-llama.cpp.sh) builds the commit
+pinned in [`tools/llama.cpp.pin`](tools/llama.cpp.pin) without root. It writes
+`packaging/llama.cpp/bin` and, unless you pass `--no-user-install`, installs to
+`~/.local/lib/shadowcode`.
 
-## Local models and a focused workflow
+- **Toolchain:** `git`, a C/C++ compiler and `cmake`. For cmake, the script
+  uses `SHADOWCODE_CMAKE`, then `.venv/bin/cmake` in this checkout, then
+  `cmake` on `PATH`. `ninja` is used if present.
+- **Vulkan module:** needs the `libvulkan-dev` headers and a `glslc` shader
+  compiler. `tools/glslc-flatpak.sh` looks for `SHADOWCODE_GLSLC`, then
+  `glslc` on `PATH` (Ubuntu package `glslc`), then the compiler inside a
+  user-installed `org.freedesktop.Sdk` flatpak runtime. SPIRV-Headers is
+  fetched automatically at the pinned commit. If glslc or the Vulkan headers
+  are missing, the script builds a CPU-only runtime and prints a warning.
+  `--cpu-only` or `SHADOWCODE_LLAMA_VULKAN=0` asks for that explicitly.
+- **Licenses:** the license texts of everything compiled in are copied into the
+  runtime's `NOTICES/`. `--notices-only` refreshes them without recompiling.
 
-Connect Ollama, LM Studio, llama.cpp, vLLM, or a compatible hosted endpoint.
-Tool use and answer quality depend on the selected model. ShadowCode provides
-workspace tools, explicit approvals, saved history, and verification evidence.
-A model is useful for coding only when it reliably calls those tools.
+Release packaging is described in [docs/RELEASING.md](docs/RELEASING.md).
 
-Settings → Model exposes the context window and Ollama model residency. Start
-with 16,384 tokens on a local model and increase it only within the model's
-supported window and your available memory. Model weights and inference engines
-remain external; see [inference settings](docs/NATIVE_INFERENCE.md).
-
-During a task, pause and steer the next model turn, or queue a follow-up.
-**Fork from here** creates a separate conversation at a response while retaining
-available completed tool context. See [history](docs/NATIVE_HISTORY.md).
-
-Settings → Advanced prepares up to two workspaces, opens them for explicit
-tasks, checks their combined merge result, and removes clean checkouts while
-retaining branches. It does not launch workers automatically. Optional Guardian
-diagnostics are off by default. See [parallel workspaces](docs/NATIVE_PARALLEL.md)
-and [Guardian](docs/NATIVE_GUARDIAN.md).
-
-## Workflows
-
-- **Build:** describe a change, watch inspection and tool execution, review the
-  resulting files, and inspect verification output.
-- **Review:** open Review in the top bar. Stage a hunk or new file, inspect the
-  staged diff, then commit with a message. Discarding a hunk asks first.
-- **Continue:** select a task in the sidebar. Drafts and history return; running
-  work reconnects. Branch, rename, export, or delete through Manage tasks in the
-  command palette.
-- **Goals:** create a milestone checklist and run/resume its tasks. Automatic
-  completion reflects the harness verifier's checks, not a proof of correctness.
-- **Inspect:** browse files or run a bounded command in the terminal panel.
-  Long-running services belong in Background processes.
-
-## Keyboard
-
-`Ctrl+K` command palette · `Ctrl+B` sidebar · `Ctrl+N` new task · `Ctrl+P` open
-project · `Ctrl+,` settings · `Ctrl+L` composer · `Ctrl+.` stop ·
-`Ctrl+Shift+E` export · `?` help. `Enter` sends; `Shift+Enter` inserts a line.
-Approval cards require their explicit Allow or Deny buttons.
-
-## CLI and integrations
+## Tests
 
 ```bash
-shadowcode tui                     # native terminal UI
-shadowcode run "Explain this workspace"
-shadowcode run --json "Review this workspace"
-shadowcode ui                      # native desktop window
-shadowcode sessions                # task history
-shadowcode export --format md
-shadowcode goal "Improve test coverage" --run
-shadowcode goals
-shadowcode doctor
-shadowcode mcp serve               # MCP over stdio
-shadowcode mcp serve --http 127.0.0.1:7431
-shadowcode mcp register            # client configuration snippets
-```
-
-AppImage users install the next release with `install-appimage.sh`; it does not
-rewrite the running image. The standalone executable opens the desktop with no
-arguments; use `tui` explicitly for the terminal interface.
-
-Slash commands include `/help`, `/model`, `/plan`, `/diff`, `/review`, `/test`,
-`/git`, `/goal`, `/goals`, `/memory`, `/skills`, `/sessions`, `/new`, `/branch`,
-`/doctor`, and `/settings`. Type `/` to browse the current command catalog.
-
-## Data and permissions
-
-Configuration: `~/.config/shadow-agent/config.yaml`
-Secrets: `~/.config/shadow-agent/secrets.env` (mode 600)
-Sessions, desktop jobs, and events: `~/.local/state/shadow-agent/shadow-agent.db`
-Goals: `~/.local/state/shadow-agent/goals.db`
-Project instructions and memory: `<project>/.shadow/`
-
-Existing `shadow-agent` paths and desktop IDs are retained for compatibility.
-See [config.example.yaml](config.example.yaml), [ARCHITECTURE.md](ARCHITECTURE.md),
-and [SECURITY.md](SECURITY.md). Filesystem tools constrain paths to the workspace;
-shell commands run as your user and are **not an operating-system sandbox**.
-
-## Development and verification
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-npm --prefix ui ci
-npm --prefix ui run build
-.venv/bin/python -m pytest
+cargo +1.95.0 fmt --all --check
+cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
+cargo +1.95.0 build -p shadowcode-desktop --locked   # process tests launch this binary
+cargo +1.95.0 test --workspace --locked
+npm --prefix ui run typecheck
 npm --prefix ui test
-cd ui && npx playwright install chromium && npm run test:e2e
+(cd ui && npx playwright install chromium && npm run test:e2e)
+node --test scripts/test-llama-runtime.mjs
+bash scripts/test-install-appimage.sh
 ```
 
-Tests use temporary workspaces and XDG directories. Browser tests exercise the
-real API with the offline provider, including reconnects, review, and accessibility.
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [release instructions](docs/RELEASING.md).
+The Rust tests use fake vendor CLIs and a fake `llama-server`, so they need no
+account or GPU. The Playwright suite runs against `vite preview` of a test
+build with a fake engine. `e2e/check-bundle.mjs` checks that the fake engine is
+not in the production bundle. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## More
+
+- [User guide](docs/USER_GUIDE.md) · [Architecture](ARCHITECTURE.md) ·
+  [Security](SECURITY.md) · [Subscriptions](docs/SUBSCRIPTIONS.md) ·
+  [Local models](docs/LOCAL_MODELS.md)
+- Advanced features (skills, goals, background processes, MCP, plugins, hooks,
+  worktrees, Guardian) are under **Settings › Advanced**. The same executable
+  also has a CLI (`shadowcode run`, `shadowcode tui`, `shadowcode mcp serve`):
+  [native CLI](docs/NATIVE_CLI.md), [terminal UI](docs/NATIVE_TUI.md),
+  [MCP](docs/NATIVE_MCP.md).
+- Package notices: [licenses/native](licenses/native/README.md).
 
 [MIT](LICENSE) · Copyright 2026 Shadowfetch

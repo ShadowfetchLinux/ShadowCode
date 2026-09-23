@@ -1,12 +1,15 @@
-# Native desktop — 0.23
+# Native desktop
+
+> **Reference.** In 0.28 this covers the desktop build and packaging. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 The `main` branch builds one Rust desktop executable with the React
 interface embedded. Tauri hosts it in the system WebKit webview. The interface
 calls the Rust engine through IPC; desktop operation needs no HTTP listener,
 Python interpreter, Node runtime, or browser launcher.
 
-This is the supported native release. The [release gates](NATIVE_MIGRATION.md)
-record the acceptance checks behind the published packages.
+The archived [release gates](archive/NATIVE_MIGRATION.md) record the
+acceptance checks of earlier packages; current release steps are in
+[RELEASING.md](RELEASING.md).
 
 ## Attaching to a running engine
 
@@ -75,9 +78,9 @@ account. To relocate storage through a symlink, link the XDG base or explicit
 profile parent instead. An unsafe `native.lock` (symlink, extra hard link,
 foreign owner or special file) causes a startup error without replacing it.
 
-Choose an installed local model or a compatible endpoint in onboarding. The
-offline preview lets you inspect the workspace but cannot execute coding tasks.
-Model inference remains in Ollama or the selected provider; it is not bundled.
+Pick a subscription or a local GGUF model in the composer picker. Local
+models need the managed llama.cpp runtime (`scripts/build-llama.cpp.sh` for a
+development checkout; packages bundle it). See [local models](LOCAL_MODELS.md).
 
 The [native CLI](NATIVE_CLI.md) uses this same executable. Commands such as
 `run`, `sessions`, and `health` run without a display and share an open desktop's
@@ -112,11 +115,11 @@ they continue across coding tasks until stopped or the owning application closes
 Plan and Review tasks can inspect them without process control.
 
 Project [lifecycle commands](NATIVE_HOOKS.md) can be reviewed and enabled in
-Settings → Hooks or through the same native CLI. Their command gates and
+Settings › Advanced › Hooks or through the same native CLI. Their command gates and
 completion checks run inside the native task lifecycle without Python callbacks.
 
 [Native MCP stdio and HTTP servers](NATIVE_MCP.md) can be registered and enabled in
-Settings → MCP. The agent discovers their tools lazily and requests approval for
+Settings › Advanced › MCP. The agent discovers their tools lazily and requests approval for
 each exact call. HTTP bearer secrets resolve only on connection, and remote
 hosts require network access. Connections close before the task finishes.
 `shadowcode mcp serve` also exposes the selected project to another client over
@@ -140,8 +143,8 @@ From the repository root, build both package formats with:
 ```sh
 node scripts/build-native.mjs
 node scripts/check-native-package.mjs \
-  target/release/bundle/appimage/ShadowCode_0.27.0_amd64.AppImage \
-  target/release/bundle/deb/ShadowCode_0.27.0_amd64.deb
+  target/release/bundle/appimage/ShadowCode_VERSION_amd64.AppImage \
+  target/release/bundle/deb/ShadowCode_VERSION_amd64.deb
 node scripts/test-native-runtime.mjs
 node --test scripts/test-native-source-fetch.mjs
 node scripts/test-native-runtime-sources.mjs
@@ -248,7 +251,7 @@ To run this same workflow against the actual AppImage, set
 `SHADOW_NATIVE_ARTIFACTS` to a separate output directory. Its test profile and
 workspace remain disposable, so it does not migrate the installed app's data.
 
-See [verification evidence](NATIVE_VERIFICATION.md) for engine stress tests and
+See [verification evidence](archive/NATIVE_VERIFICATION.md) for engine stress tests and
 separate real-model coding probes. The scripted window test establishes UI and
 engine integration; the real-model probes establish provider/tool behavior.
 

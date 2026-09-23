@@ -1,6 +1,8 @@
-# Native MCP migration — development
+# Native MCP migration
 
-MCP remains an open [native release gate](NATIVE_MIGRATION.md). The Rust stdio and Streamable HTTP
+> **Advanced.** In 0.28 this is reached through Settings › Advanced › MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
+MCP remains an open [native release gate](archive/NATIVE_MIGRATION.md). The Rust stdio and Streamable HTTP
 clients now connect to native Settings, CLI registration, project activation,
 and individually approved agent tool calls. Native stdio and authenticated loopback
 HTTP servers expose tasks, goals, reviews, memory, SQLite inspection and checkpoints
@@ -218,13 +220,13 @@ This development server uses the fixed project and asynchronous owned jobs;
 map saving is explicit, and diagnostics do not perform automatic repairs.
 The protocol is exercised with the official Rust SDK, the independent TypeScript
 SDKs 1.30.0 and 2.0.0, and real executable probes. See the
-[recorded verification](NATIVE_VERIFICATION.md) for the tested scope. Named-app
+[recorded verification](archive/NATIVE_VERIFICATION.md) for the tested scope. Named-app
 registration syntax is checked against their documentation; it is not a claim
 that every release of those host applications has been exercised.
 
 ## Enable external tools
 
-In **Settings → MCP**, register a server with its name and a JSON array containing
+In **Settings › Advanced › MCP**, register a server with its name and a JSON array containing
 the executable and literal arguments, or choose **Streamable HTTP** and enter
 the server endpoint. Review and enable it for the current trusted project.
 Registration and catalog refresh do not execute commands or contact servers.
@@ -468,8 +470,8 @@ handlers, unread submission replies, malformed frames and cross-project attempts
 Independent TypeScript SDK 1.x and 2.x probes now repeat discovery, exact
 approvals and native test execution over both transports. Actual GPT-OSS/HTTP
 and Qwen/stdio coding tasks also pass edits, independent verification and
-checkpoint restoration; see the [verification record](NATIVE_VERIFICATION.md).
+checkpoint restoration; see the [verification record](archive/NATIVE_VERIFICATION.md).
 This coverage does not establish compatibility with every external host release.
-The broader [native application gates](NATIVE_MIGRATION.md) remain in progress.
+The broader [native application gates](archive/NATIVE_MIGRATION.md) remain in progress.
 ShadowCode does not bundle runtimes for third-party servers: install whatever
 an explicitly selected external command requires separately.

@@ -1,9 +1,11 @@
-# Native lifecycle hooks — 0.21
+# Native lifecycle hooks
+
+> **Advanced.** In 0.28 this is reached through Settings › Advanced › Hooks. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 Native hooks run explicitly enabled project commands at fixed points in an
 agent task. They use the Rust process runner and need no Python interpreter or
-callback loader. This guide covers the supported native release; the
-[release gates](NATIVE_MIGRATION.md) record its verification.
+callback loader. The archived
+[release gates](archive/NATIVE_MIGRATION.md) record its earlier verification.
 
 [Project plugins](NATIVE_PLUGINS.md) can supply native hook definitions.
 Installation leaves them disabled; review their exact commands here before
@@ -22,7 +24,7 @@ command: cargo test --locked
 timeout_sec: 60
 ```
 
-Open **Settings → Hooks**, select **Refresh hooks**, inspect the command, and
+Open **Settings › Advanced › Hooks**, select **Refresh hooks**, inspect the command, and
 choose **Enable check**. Project trust is required. Discovery only reads data;
 opening a repository or listing its hooks does not execute them.
 
