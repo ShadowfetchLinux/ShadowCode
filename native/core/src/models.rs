@@ -47,6 +47,44 @@ pub struct ModelClient {
     client: reqwest::Client,
     pub config: ModelConfig,
     key: Option<String>,
+    extra_body: Option<Value>,
+}
+/// Rewrite JSON-schema `"type": ["string", "null"]` lists as `anyOf`. Some
+/// GGUF chat templates (Gemma 4 under llama.cpp's Jinja engine) fail with
+/// "filter-mapping not implemented" on type lists; `anyOf` is equivalent.
+pub fn type_lists_to_any_of(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Array(types)) = map.get("type").cloned() {
+                map.remove("type");
+                map.insert(
+                    "anyOf".into(),
+                    Value::Array(types.into_iter().map(|t| json!({"type": t})).collect()),
+                );
+            }
+            for child in map.values_mut() {
+                type_lists_to_any_of(child);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(type_lists_to_any_of),
+        _ => {}
+    }
+}
+
+/// Loopback endpoints (local runtimes) must never go through an HTTP proxy.
+pub fn is_loopback_endpoint(endpoint: &str) -> bool {
+    reqwest::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| {
+            url.host_str().map(|host| {
+                let host = host.trim_start_matches('[').trim_end_matches(']');
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            })
+        })
+        .unwrap_or(false)
 }
 impl ModelClient {
     pub fn new(config: ModelConfig, paths: &AppPaths) -> Result<Self> {
@@ -56,15 +94,40 @@ impl ModelClient {
         };
         validation.validate()?;
         let key = secret(paths, &config.api_key_env)?;
+        let endpoint = if config.endpoint.is_empty() {
+            preset(&config.provider)["endpoint"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned()
+        } else {
+            config.endpoint.clone()
+        };
+        let mut builder = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(600))
+            .redirect(reqwest::redirect::Policy::none());
+        if is_loopback_endpoint(&endpoint) {
+            builder = builder.no_proxy();
+        }
         Ok(Self {
-            client: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(600))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
+            client: builder.build()?,
             config,
             key,
+            extra_body: None,
         })
+    }
+    /// Per-launch bearer key held in memory (managed local runtime).
+    pub fn with_bearer(mut self, key: Option<String>) -> Self {
+        if key.is_some() {
+            self.key = key;
+        }
+        self
+    }
+    /// Extra top-level request fields for compatible servers (for example
+    /// `chat_template_kwargs` on llama.cpp).
+    pub fn with_extra_body(mut self, extra: Option<Value>) -> Self {
+        self.extra_body = extra.filter(Value::is_object);
+        self
     }
     pub fn endpoint(&self) -> String {
         let endpoint = if self.config.endpoint.is_empty() {
@@ -149,8 +212,26 @@ impl ModelClient {
         } else {
             let mut body = json!({"model":self.config.name,"messages":messages,"stream":true,"stream_options":{"include_usage":true},"max_tokens":max_tokens});
             if !tools.is_empty() {
-                body["tools"] = json!(tools);
+                body["tools"] = if self.config.provider == "llamacpp" {
+                    json!(tools
+                        .iter()
+                        .map(|t| {
+                            let mut t = t.clone();
+                            type_lists_to_any_of(&mut t);
+                            t
+                        })
+                        .collect::<Vec<_>>())
+                } else {
+                    json!(tools)
+                };
                 body["tool_choice"] = json!("auto");
+            }
+            if let (Some(Value::Object(extra)), Some(object)) =
+                (&self.extra_body, body.as_object_mut())
+            {
+                for (key, value) in extra {
+                    object.entry(key.clone()).or_insert_with(|| value.clone());
+                }
             }
             body
         }
@@ -197,8 +278,25 @@ impl ModelClient {
         let status = response.status();
         if !status.is_success() {
             let code = status.as_u16();
+            // Local runtimes explain rejections (for example a prompt larger
+            // than the context window); show a bounded excerpt.
+            let detail = if is_loopback_endpoint(&url) {
+                let bytes = tokio::time::timeout(Duration::from_secs(5), response.bytes())
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_default();
+                let text = String::from_utf8_lossy(&bytes[..bytes.len().min(600)]).into_owned();
+                if text.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", text.trim())
+                }
+            } else {
+                String::new()
+            };
             bail!(
-                "Model provider returned HTTP {code}{}",
+                "Model provider returned HTTP {code}{}{detail}",
                 match code {
                     401 | 403 => "; check the API key",
                     404 => "; check the endpoint and model name",
@@ -660,4 +758,26 @@ pub async fn detect() -> Vec<Value> {
             }
         }
     })).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_detection_and_llama_schema_rewrite() {
+        assert!(is_loopback_endpoint("http://127.0.0.1:8080/v1"));
+        assert!(is_loopback_endpoint("http://localhost:1234/v1"));
+        assert!(is_loopback_endpoint("http://[::1]:9/v1"));
+        assert!(!is_loopback_endpoint("https://api.openai.com/v1"));
+        assert!(!is_loopback_endpoint("http://192.168.1.2:11434"));
+        let mut schema = json!({"type":"object","properties":{"params":{"type":"array","items":{"type":["string","null"]}},"type":{"type":"string"}}});
+        type_lists_to_any_of(&mut schema);
+        assert_eq!(
+            schema["properties"]["params"]["items"],
+            json!({"anyOf":[{"type":"string"},{"type":"null"}]})
+        );
+        assert_eq!(schema["properties"]["type"], json!({"type":"string"}));
+        assert_eq!(schema["type"], "object");
+    }
 }

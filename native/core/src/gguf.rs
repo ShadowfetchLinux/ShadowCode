@@ -23,6 +23,9 @@ const MAX_KV: u64 = 4096;
 const MAX_TENSORS: u64 = 65536;
 /// Strings longer than this are kept only as a prefix; chat templates fit.
 const KEEP_STRING_BYTES: usize = 64 * 1024;
+/// Integer arrays up to this length are kept (per-layer hyperparameters);
+/// longer ones (token types, merges) are skipped.
+const MAX_KEPT_ARRAY: u64 = 4096;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Scalar {
@@ -33,6 +36,8 @@ pub enum Scalar {
     Str(String),
     /// Array element count only; contents are skipped.
     Array(u64),
+    /// Small integer or boolean array (per-layer values), kept.
+    IntArray(Vec<i64>),
 }
 
 impl Scalar {
@@ -85,6 +90,14 @@ impl GgufHeader {
         let arch = self.architecture()?;
         self.u64(&format!("{arch}.{suffix}"))
     }
+    /// `{arch}.{suffix}` when stored as a per-layer integer array.
+    pub fn arch_array(&self, suffix: &str) -> Option<&[i64]> {
+        let arch = self.architecture()?;
+        match self.metadata.get(&format!("{arch}.{suffix}"))? {
+            Scalar::IntArray(values) => Some(values),
+            _ => None,
+        }
+    }
     pub fn has_tensor(&self, name: &str) -> bool {
         self.tensor_names.iter().any(|t| t == name)
     }
@@ -105,6 +118,32 @@ impl GgufHeader {
     pub fn template_supports_tools(&self) -> bool {
         self.chat_template()
             .is_some_and(|t| t.contains("tools") || t.contains("tool_call"))
+    }
+    /// The chat template understands an `enable_thinking` switch (Qwen3 style).
+    pub fn template_has_thinking_switch(&self) -> bool {
+        self.chat_template()
+            .is_some_and(|t| t.contains("enable_thinking"))
+    }
+    /// Tokenizer-only files ship the vocabulary without any weights.
+    pub fn is_vocab_only(&self) -> bool {
+        self.n_tensors == 0 || self.bool("general.vocab_only") == Some(true)
+    }
+    /// Encoder-only or pooled embedding models cannot chat.
+    pub fn is_embedding_model(&self) -> bool {
+        const ENCODERS: &[&str] = &[
+            "bert",
+            "nomic-bert",
+            "nomic-bert-moe",
+            "jina-bert-v2",
+            "jina-bert-v3",
+            "neo-bert",
+            "modern-bert",
+            "eurobert",
+            "t5encoder",
+            "gemma-embedding",
+        ];
+        self.architecture().is_some_and(|a| ENCODERS.contains(&a))
+            || self.arch_u64("pooling_type").is_some_and(|v| v > 0)
     }
 }
 
@@ -182,8 +221,23 @@ impl<R: Read> Reader<R> {
             9 => {
                 let elem = self.u32()?;
                 let count = self.u64()?;
-                self.skip_array(elem, count)?;
-                Scalar::Array(count)
+                // Small integer/bool arrays are per-layer hyperparameters
+                // (for example head_count_kv or sliding_window_pattern).
+                if matches!(elem, 0..=5 | 7 | 10 | 11) && count <= MAX_KEPT_ARRAY {
+                    let mut values = Vec::with_capacity(count as usize);
+                    for _ in 0..count {
+                        values.push(match self.scalar(elem)? {
+                            Scalar::U64(v) => v as i64,
+                            Scalar::I64(v) => v,
+                            Scalar::Bool(v) => v as i64,
+                            _ => 0,
+                        });
+                    }
+                    Scalar::IntArray(values)
+                } else {
+                    self.skip_array(elem, count)?;
+                    Scalar::Array(count)
+                }
             }
             10 => Scalar::U64(self.u64()?),
             11 => Scalar::I64(self.u64()? as i64),
@@ -303,6 +357,7 @@ pub fn estimate_memory(
         .arch_u64("attention.head_count_kv")
         .filter(|v| *v > 0)
         .unwrap_or(heads);
+    let kv_heads_per_layer = header.arch_array("attention.head_count_kv");
     let head_dim = header
         .arch_u64("attention.key_length")
         .filter(|v| *v > 0)
@@ -311,12 +366,46 @@ pub fn estimate_memory(
         .arch_u64("attention.value_length")
         .filter(|v| *v > 0)
         .unwrap_or(head_dim);
-    // f16 K and V per layer per token.
-    let per_token = layers
-        .saturating_mul(kv_heads)
-        .saturating_mul(head_dim.saturating_add(value_dim))
-        .saturating_mul(2);
-    let kv_cache_bytes = per_token.saturating_mul(context_tokens);
+    // Sliding-window layers (when the file says which ones) only cache the
+    // window plus one batch, with their own head sizes.
+    let window = header
+        .arch_u64("attention.sliding_window")
+        .filter(|v| *v > 0);
+    let swa_pattern = header.arch_array("attention.sliding_window_pattern");
+    let swa_dims = header
+        .arch_u64("attention.key_length_swa")
+        .filter(|v| *v > 0)
+        .unwrap_or(head_dim)
+        .saturating_add(
+            header
+                .arch_u64("attention.value_length_swa")
+                .filter(|v| *v > 0)
+                .unwrap_or(value_dim),
+        );
+    // f16 K and V per layer.
+    let mut kv_cache_bytes: u64 = 0;
+    for layer in 0..layers.min(4096) {
+        let heads_here = kv_heads_per_layer
+            .and_then(|a| a.get(layer as usize))
+            .map(|v| (*v).max(0) as u64)
+            .unwrap_or(kv_heads);
+        let swa = match (window, swa_pattern) {
+            (Some(_), Some(pattern)) => pattern.get(layer as usize).is_some_and(|v| *v != 0),
+            _ => false,
+        };
+        let (tokens, dims) = if swa {
+            let window = window.unwrap_or(context_tokens);
+            (context_tokens.min(window.saturating_add(512)), swa_dims)
+        } else {
+            (context_tokens, head_dim.saturating_add(value_dim))
+        };
+        kv_cache_bytes = kv_cache_bytes.saturating_add(
+            heads_here
+                .saturating_mul(dims)
+                .saturating_mul(2)
+                .saturating_mul(tokens),
+        );
+    }
     // Activations and scratch buffers scale with the batch and embedding size.
     let compute_bytes = embedding
         .saturating_mul(2048)
@@ -345,9 +434,10 @@ pub fn estimate_memory(
     }
 }
 
-#[cfg(test)]
-pub(crate) mod test_support {
-    //! Writes small synthetic GGUF files for tests.
+/// Synthetic GGUF writer for unit and integration tests. Nothing in the
+/// catalog, runtime, or readiness code calls it.
+#[doc(hidden)]
+pub mod test_support {
     use std::io::Write;
 
     pub enum V<'a> {
@@ -356,6 +446,8 @@ pub(crate) mod test_support {
         Str(&'a str),
         Bool(bool),
         StrArray(&'a [&'a str]),
+        U32Array(&'a [u32]),
+        BoolArray(&'a [bool]),
     }
 
     fn put_string(out: &mut Vec<u8>, s: &str) {
@@ -364,6 +456,16 @@ pub(crate) mod test_support {
     }
 
     pub fn write_gguf(path: &std::path::Path, kv: &[(&str, V<'_>)], tensors: &[&str]) {
+        write_gguf_padded(path, kv, tensors, 4096)
+    }
+
+    /// [`write_gguf`] with `padding` bytes of pretend weights after the header.
+    pub fn write_gguf_padded(
+        path: &std::path::Path,
+        kv: &[(&str, V<'_>)],
+        tensors: &[&str],
+        padding: usize,
+    ) {
         let mut out = Vec::new();
         out.extend_from_slice(b"GGUF");
         out.extend_from_slice(&3u32.to_le_bytes());
@@ -396,6 +498,22 @@ pub(crate) mod test_support {
                         put_string(&mut out, item);
                     }
                 }
+                V::U32Array(items) => {
+                    out.extend_from_slice(&9u32.to_le_bytes());
+                    out.extend_from_slice(&4u32.to_le_bytes());
+                    out.extend_from_slice(&(items.len() as u64).to_le_bytes());
+                    for item in *items {
+                        out.extend_from_slice(&item.to_le_bytes());
+                    }
+                }
+                V::BoolArray(items) => {
+                    out.extend_from_slice(&9u32.to_le_bytes());
+                    out.extend_from_slice(&7u32.to_le_bytes());
+                    out.extend_from_slice(&(items.len() as u64).to_le_bytes());
+                    for item in *items {
+                        out.push(*item as u8);
+                    }
+                }
             }
         }
         for name in tensors {
@@ -407,7 +525,7 @@ pub(crate) mod test_support {
             out.extend_from_slice(&0u64.to_le_bytes());
         }
         // Pretend weights so the file has a size.
-        out.extend_from_slice(&[0u8; 4096]);
+        out.resize(out.len() + padding, 0);
         std::fs::File::create(path)
             .unwrap()
             .write_all(&out)
@@ -461,6 +579,42 @@ mod tests {
         // 40 layers * 8 kv heads * (128+128) * 2 bytes * 8192 tokens.
         assert_eq!(estimate.kv_cache_bytes, 40 * 8 * 256 * 2 * 8192);
         assert!(estimate.total_bytes > 9_000_000_000);
+    }
+
+    #[test]
+    fn per_layer_kv_heads_and_sliding_window_layers_shrink_the_kv_estimate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.gguf");
+        // Four layers: three sliding-window layers, one global layer.
+        write_gguf(
+            &path,
+            &[
+                ("general.architecture", V::Str("gemma4")),
+                ("gemma4.block_count", V::U32(4)),
+                ("gemma4.embedding_length", V::U32(1024)),
+                ("gemma4.attention.head_count", V::U32(16)),
+                ("gemma4.attention.head_count_kv", V::U32Array(&[8, 8, 8, 2])),
+                ("gemma4.attention.key_length", V::U32(512)),
+                ("gemma4.attention.value_length", V::U32(512)),
+                ("gemma4.attention.key_length_swa", V::U32(256)),
+                ("gemma4.attention.value_length_swa", V::U32(256)),
+                ("gemma4.attention.sliding_window", V::U32(1024)),
+                (
+                    "gemma4.attention.sliding_window_pattern",
+                    V::BoolArray(&[true, true, true, false]),
+                ),
+            ],
+            &["token_embd.weight"],
+        );
+        let header = read_header(&path).unwrap();
+        assert_eq!(
+            header.arch_array("attention.head_count_kv"),
+            Some(&[8i64, 8, 8, 2][..])
+        );
+        let estimate = estimate_memory(&header, 0, 0, 16384);
+        let swa = 3 * 8 * 512 * 2 * (1024 + 512);
+        let global = 2 * 1024 * 2 * 16384;
+        assert_eq!(estimate.kv_cache_bytes, swa + global);
     }
 
     #[test]

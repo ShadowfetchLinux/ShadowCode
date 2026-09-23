@@ -123,10 +123,21 @@ A model row whose usage pool reports the plan limit is `availability:
   runtime:  { state: "ready"|"setup_required"|"unavailable", path, origin: "bundled"|"managed"|"other",
               version, backend, commit, detail },
   models: GgufEntry[],
-  loaded:  { id, name, port, since, context_tokens, backend }|null,
+  loaded:  { id, name, port, since, context_tokens, backend,
+             cpu_fallback: boolean, fallback_reason: string|null,
+             vision: boolean, in_use: number }|null,
   ollama_store: { path, available: boolean, models: [{ tag, path, projector, bytes, compatible, reason, already_added }] }
 }
 ```
+
+`runtime.state` is `ready` only after `<llama-server> --version` succeeded
+(cached per binary path + size + mtime); `hardware` comes from the same
+binary's `--list-devices` plus `/proc/meminfo` (no `nvidia-smi`).
+Resolution order: `local_engine.llama_binary` (explicit), the bundled runtime
+next to the executable when the managed dir is missing or older (COMMIT
+`built=`), `~/.local/lib/shadowcode`, the bundle, `SHADOWCODE_LLAMA_SERVER`.
+Never `llama-cli`, never a bare PATH lookup. `loaded` is `null` when read
+through a route without the engine (e.g. `/api/accounts`).
 
 `GgufEntry`:
 
@@ -138,15 +149,48 @@ A model row whose usage pool reports the plan limit is `availability:
   vision: boolean, mmproj: string|null, tools: boolean, tools_reason: string,
   memory: { weights_bytes, kv_cache_bytes, compute_bytes, projector_bytes, overhead_bytes, total_bytes, context_tokens },
   fits: "gpu"|"cpu"|"no", availability: "ready"|"setup_required"|"unavailable",
-  last_error: string|null
+  last_error: string|null,
+  thinking_switch: boolean   // template has an enable_thinking switch (sent as false)
 }
 ```
 
-- `POST /api/local-models/add {path}` (file or folder) → `{ ok, local_engine }`
-- `POST /api/local-models/remove {path}` → `{ ok, deleted_weights: false }`
-- `POST /api/local-models/import-ollama {tag}` → adds the blob paths (never copies) → `{ ok, local_engine }`
-- `POST /api/local-models/load {id}` → `{ ok, loaded }` (starts llama-server; cancellable; one at a time)
-- `POST /api/local-models/unload` → `{ ok }`
+`context_tokens` is the one context number: the server's `--ctx-size` and the
+engine's `context_limit` for that row (min(trained, `local_engine.context_size`
+default 16384), halved until the memory estimate fits VRAM, else RAM; never
+below 4096 unless the model is smaller). `tools` comes from the chat template
+(`false` ⇒ "Chat only": no tool schemas are sent). `vision` is a paired
+projector; after load it is what the server reports in `/props`
+`modalities.vision`. Projector, vocabulary-only and embedding GGUFs are not
+listed as models.
+
+- `POST /api/local-models/add {path}` (file or folder) → `{ ok, local_engine }`;
+  a projector/vocab/embedding file is refused with the reason.
+- `POST /api/local-models/remove {id}` or `{path}` → `{ ok, deleted_weights: false, detail, local_engine }`;
+  a file found through a folder is added to `local_engine.excluded`.
+- `POST /api/local-models/import-ollama {tag, root?}` → adds the blob paths (never copies,
+  never writes the store; `root` defaults to `OLLAMA_MODELS`, the systemd user unit's
+  `Environment=OLLAMA_MODELS`, then `~/.ollama/models`) → `{ ok, local_engine }`.
+  Incompatible tags are refused with the reason (e.g. `unsupported architecture gptoss`).
+- `POST /api/local-models/load {id}` → `{ ok, loaded }` (starts llama-server; one at a time;
+  refused with "Another task is using …" while a task holds the loaded model)
+- `POST /api/local-models/unload` → `{ ok, unloaded: boolean }` (also aborts a load in
+  progress; refused while a task holds the model)
+- `POST /api/models/test {id: "local:gguf:…"}` loads and tests a local row.
+- `POST /api/jobs` with a `local:gguf:` model (or default) and `images` on a row without
+  vision is refused before a job is created.
+
+Local picker rows carry `local: GgufEntry` and `availability_label`
+`Ready | Setup required | Unavailable`; a loaded row's `reason` starts with
+`Loaded ·` (and says `CPU fallback (GPU load failed)` when the GPU start failed).
+
+The managed server binds 127.0.0.1 on a free port with `--no-webui --jinja
+--parallel 1`, `--mmproj` when paired, `-ngl 999` when the plan fits the GPU
+(one retry with `--device none -ngl 0`), and a fresh 32-byte hex key per
+launch passed as `LLAMA_API_KEY` in its environment (never in argv, never
+persisted). Clients use it as a bearer token and never go through a proxy.
+
+Config (`config.yaml`, no main-UI control): `local_engine: { directories, files,
+imports: [{path, mmproj, name, source}], excluded, llama_binary, context_size }`.
 
 ## Sessions and jobs
 

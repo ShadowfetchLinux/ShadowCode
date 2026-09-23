@@ -118,19 +118,34 @@ pub fn resolve(store: &Store, id: &str, default: &ModelConfig) -> Result<ModelCo
         validate(&model)?;
         return Ok(model);
     }
-    if id.starts_with("local:gguf:") || id.starts_with("llamacpp:") {
+    if id.starts_with("local:gguf:") {
+        // Resolved by stable id only. The context limit is the window the
+        // server will be started with, so engine and server agree.
+        let entry = crate::local_engine::known(id).with_context(|| {
+            format!("Local model {id} is not in this computer's catalog. Open the model picker or Settings › Local models to refresh it.")
+        })?;
+        ensure!(
+            entry.availability != "unavailable",
+            "{} cannot run on this computer: {}",
+            entry.name,
+            entry.reason
+        );
         let model = ModelConfig {
             default: id.into(),
-            name: id.rsplit(':').next().unwrap_or(id).into(),
+            name: entry.name,
             provider: "llamacpp".into(),
             endpoint: String::new(),
             api_key_env: "UNUSED".into(),
             keep_alive: "30m".into(),
-            context_limit: 8192,
+            context_limit: entry.context_tokens.max(1024) as usize,
         };
         validate(&model)?;
         return Ok(model);
     }
+    ensure!(
+        !id.starts_with("llamacpp:"),
+        "'{id}' is an old local model name. Pick the model again in the composer."
+    );
     if crate::cli_agent::is_cli_provider(&default.provider)
         && (id == default.default || id == default.name)
     {

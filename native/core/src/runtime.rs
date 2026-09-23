@@ -76,7 +76,10 @@ impl Runtime {
                 (status.availability, status.detail)
             }
             Self::Local if config.model.provider == "llamacpp" => {
-                let catalog = crate::local_engine::catalog(&config.local_engine);
+                let catalog = crate::local_engine::catalog_with(
+                    &config.local_engine,
+                    Some(engine.local_runtime()),
+                );
                 let runtime = if catalog["runtime"].is_object() {
                     &catalog["runtime"]
                 } else {
@@ -108,7 +111,10 @@ impl Runtime {
                 .filter(|row| row.provider == vendor.provider())
                 .map(|row| row.to_json())
                 .collect(),
-            Self::Local => crate::local_engine::catalog(&config.local_engine)["models"]
+            Self::Local => crate::local_engine::catalog_with(
+                &config.local_engine,
+                Some(engine.local_runtime()),
+            )["models"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default(),
@@ -142,7 +148,10 @@ impl Runtime {
                 }
             }
             Self::Local => {
-                let catalog = crate::local_engine::catalog(&config.local_engine);
+                let catalog = crate::local_engine::catalog_with(
+                    &config.local_engine,
+                    Some(engine.local_runtime()),
+                );
                 let entry = catalog["models"]
                     .as_array()
                     .into_iter()
