@@ -1,6 +1,6 @@
 # ShadowCode user guide
 
-This guide covers the supported 0.24 native release. The desktop, CLI, terminal
+This guide covers the supported 0.25 native release. The desktop, CLI, terminal
 interface, and integrations use the same Python-free Rust engine. See the
 [native desktop](NATIVE_DESKTOP.md), [native CLI](NATIVE_CLI.md), and
 [release gates](NATIVE_MIGRATION.md) guides for platform and integration details.

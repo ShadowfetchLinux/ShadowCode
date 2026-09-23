@@ -1,13 +1,13 @@
 # Native release procedure
 
-This procedure publishes the Rust/Tauri 0.24 application. The tag workflow is
+This procedure publishes the Rust/Tauri 0.25 application. The tag workflow is
 the release authority: it does not build, upload, or mention the legacy Python
 wheel, source distribution, portable archive, or browser launcher.
 
 ## Prepare the release
 
 1. Update the shared version in `Cargo.toml` and `src-tauri/tauri.conf.json`.
-   They must match the tag exactly, for example `v0.24.0`.
+   They must match the tag exactly, for example `v0.25.0`.
 2. Update `CHANGELOG.md`, `docs/RELEASE_NOTES.md`, README download commands and
    native migration/verification records with only evidence that is current for
    the tagged commit.

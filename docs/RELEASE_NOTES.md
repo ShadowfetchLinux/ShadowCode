@@ -1,3 +1,24 @@
+ShadowCode 0.25.0 ("Supreme") delivers a major flagship UX upgrade designed
+to simplify the onboarding flow and elevate workspace feel.
+
+- **WelcomeBanner & Quickstarts:** 8 instant starter cards for building, bug fixing,
+  codebase explanation, test authoring, change reviews, refactoring plans, security
+  audits, and performance optimization. One click populates the composer and sets
+  the optimal mode.
+- **ModeTabs:** Accessible icon-tabs with hover descriptions replacing the plain
+  dropdown mode selector.
+- **Header & Status Bar Polish:** Minimalist icon controls, and a compact 48 px
+  visual context meter that indicates usage at a glance and turns warning-red
+  above 80%.
+- **Design & Typography:** Subpixel font smoothing, typographic ligatures, focus
+  glow rings, and seamless dark mode support.
+
+Downloads: `ShadowCode_0.25.0_amd64.AppImage`, `ShadowCode_0.25.0_amd64.deb`,
+the AppImage runtime source archive, and `SHA256SUMS`. Binaries target x86_64,
+Ubuntu 24.04+ / glibc 2.39+.
+
+---
+
 ShadowCode 0.24.0 adds vendor CLI agent backends. You can run Claude, Codex, or
 Grok subscriptions by spawning the official CLI. ShadowCode never reads or
 stores those OAuth tokens.
