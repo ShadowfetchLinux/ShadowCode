@@ -46,6 +46,9 @@ struct LaunchContext<'a> {
     permission_limit: Option<PermissionLevel>,
     owner: Option<&'a JobOwner>,
     command: Option<CommandRequest>,
+    /// The user agreed to hand this conversation (or its attachments) to a
+    /// cloud route for this turn.
+    handoff_consent: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -101,6 +104,8 @@ struct Running {
     finished: AtomicBool,
     done: Notify,
     steer: steering::SteerControl,
+    /// Provider change / model switch decided when the turn was queued.
+    turn_plan: crate::cli_agent::handoff::TurnPlan,
 }
 #[derive(Default)]
 struct QueueState {
@@ -160,6 +165,11 @@ impl Engine {
         store.recover_background()?;
         let background = Arc::new(BackgroundManager::new(store.clone(), profile_lock.clone()));
         let (sender, _) = broadcast::channel(1024);
+        // Loads persisted usage so "Last checked …" is known before a refresh.
+        let vendors = Arc::new(crate::cli_agent::catalog::VendorCatalog::with_store(
+            store.clone(),
+            sender.clone(),
+        ));
         Ok(Self(Arc::new(Inner {
             paths,
             store,
@@ -172,7 +182,7 @@ impl Engine {
             closing: AtomicBool::new(false),
             background,
             local_llama: tokio::sync::Mutex::new(None),
-            vendors: Arc::new(crate::cli_agent::catalog::VendorCatalog::new()),
+            vendors,
             _profile_lock: profile_lock,
         })))
     }
@@ -356,6 +366,39 @@ impl Engine {
         )
         .await
     }
+    /// Start a turn the user explicitly consented to hand to a cloud route
+    /// when that is needed (see `cli_agent::handoff`). Without consent such a
+    /// turn fails with `handoff::ConsentRequired` before any row is written.
+    pub async fn start_consented(
+        &self,
+        request: StartRequest,
+        purpose: &str,
+        limit: Option<PermissionLevel>,
+        handoff_consent: bool,
+    ) -> Result<Job> {
+        self.start_consented_owned(request, purpose, limit, None, handoff_consent)
+            .await
+    }
+    pub(crate) async fn start_consented_owned(
+        &self,
+        request: StartRequest,
+        purpose: &str,
+        limit: Option<PermissionLevel>,
+        owner: Option<&JobOwner>,
+        handoff_consent: bool,
+    ) -> Result<Job> {
+        self.start_with_context(
+            request,
+            LaunchContext {
+                purpose,
+                permission_limit: limit,
+                owner,
+                handoff_consent,
+                ..Default::default()
+            },
+        )
+        .await
+    }
     async fn start_with_context(
         &self,
         request: StartRequest,
@@ -409,6 +452,36 @@ impl Engine {
         }
         config.validate()?;
         ensure!(context.command.is_some()||config.model.provider!="mock","Choose a local or compatible model before starting a coding task. The offline preview does not execute tasks.");
+        // Provider change / consent, decided before any job or task row exists.
+        let turn_plan = match (&request.session_id, context.command.is_some()) {
+            (_, true) => crate::cli_agent::handoff::TurnPlan::default(),
+            (session, false) => {
+                let jobs = match session {
+                    Some(sid) => self.0.store.session_jobs(sid, 200)?,
+                    None => Vec::new(),
+                };
+                let tasks: Vec<String> = jobs
+                    .iter()
+                    .filter_map(|j| j["task_id"].as_str().map(str::to_owned))
+                    .collect();
+                let images_consented = match session {
+                    Some(sid) => self
+                        .0
+                        .store
+                        .session_meta(sid, crate::cli_agent::handoff::CLOUD_IMAGES_META)?
+                        .is_some(),
+                    None => false,
+                };
+                crate::cli_agent::handoff::plan(
+                    &jobs,
+                    &self.0.store.changed_files(&tasks)?,
+                    &crate::cli_agent::handoff::TurnRoute::of_model(&config.model),
+                    request.images.len(),
+                    images_consented,
+                    context.handoff_consent,
+                )?
+            }
+        };
         let mut queues = self
             .0
             .queues
@@ -499,6 +572,14 @@ impl Engine {
             }
             return Err(error);
         }
+        if turn_plan.first_cloud_images {
+            // Consent was given for this conversation's attachments.
+            self.0.store.set_session_meta(
+                &job.session_id,
+                crate::cli_agent::handoff::CLOUD_IMAGES_META,
+                &crate::now().to_string(),
+            )?;
+        }
         let running = Arc::new(Running {
             record: Mutex::new(job.clone()),
             config,
@@ -509,6 +590,7 @@ impl Engine {
             finished: AtomicBool::new(false),
             done: Notify::new(),
             steer: steering::SteerControl::default(),
+            turn_plan,
         });
         queues.jobs.insert(job.id.clone(), running.clone());
         queues
@@ -867,10 +949,19 @@ impl Engine {
         }
         let cancelled = running.cancel.is_cancelled();
         let success = outcome.is_ok() && !cancelled;
+        // A plan limit stops the job without retry; the user picks another
+        // model for the next turn.
+        let limit = outcome
+            .as_ref()
+            .err()
+            .and_then(|e| e.downcast_ref::<crate::cli_agent::runner::LimitReached>())
+            .map(|limit| json!({"vendor":limit.vendor.id(),"detail":limit.detail,"usage":limit.usage}));
         job.status = if cancelled {
             "cancelled"
         } else if success {
             "completed"
+        } else if limit.is_some() {
+            "limit_reached"
         } else {
             "failed"
         }
@@ -907,6 +998,9 @@ impl Engine {
         job.result = Some(
             json!({"success":success,"cancelled":cancelled,"summary":job.summary,"plan":plan,"usage":job.usage,"usage_is_estimated":job.usage_is_estimated,"verification":verification}),
         );
+        if let Some(limit) = limit {
+            job.result.as_mut().unwrap()["limit_reached"] = limit;
+        }
         if job.mode == "command" {
             if let Some(event) = self
                 .0
@@ -952,8 +1046,29 @@ impl Engine {
             task_id: job.task_id.clone(),
             sender: self.0.sender.clone(),
         };
-        if crate::cli_agent::is_cli_provider(&running.config.model.provider) {
+        if let Some(handoff) = &running.turn_plan.handoff {
+            // Vendor CLIs get the block before the task; the native loop gets
+            // the same turns through the conversation's message tape.
+            let mut payload = handoff.to_json();
+            payload["job_id"] = json!(job.id);
+            payload["delivery"] = json!(match crate::runtime::Runtime::for_model(
+                &running.config.model
+            ) {
+                crate::runtime::Runtime::Vendor(_) => "prompt_prefix",
+                crate::runtime::Runtime::Local => "message_tape",
+            });
+            events.emit("agent.handoff", payload)?;
+        }
+        if let crate::runtime::Runtime::Vendor(_) =
+            crate::runtime::Runtime::for_model(&running.config.model)
+        {
             return self.run_cli_agent(running, job, events).await;
+        }
+        if let Some((from, to)) = &running.turn_plan.model_switch {
+            events.emit(
+                "model.switched",
+                json!({"provider":running.config.model.provider,"from":from,"to":to,"resumed":false}),
+            )?;
         }
         let tools = ToolExecutor::new(
             running.workspace.clone(),
@@ -1020,6 +1135,12 @@ impl Engine {
                 json!(decision),
             )?;
         }
+        if !vendor.asks_approval() {
+            events.emit(
+                "agent.warning",
+                json!({"text":format!("{} applies its own permission settings and does not ask ShadowCode before running commands or editing files; ShadowCode cannot approve or deny its actions.", vendor.product_label()),"vendor":vendor.id()}),
+            )?;
+        }
         let image_refs = crate::vision::refs_from_paths(&running.workspace, &job.images)?;
         crate::vision::ensure_vision_or_bail(
             &running.config.model.provider,
@@ -1027,10 +1148,24 @@ impl Engine {
             image_refs.len(),
         )?;
         let images = crate::vision::cli_images(&running.workspace, &image_refs)?;
-        let prompt = job.task.clone();
+        // A provider change hands over the unseen turns explicitly, labelled
+        // as prior conversation; same-provider turns resume the native session.
+        let prompt = match &running.turn_plan.handoff {
+            Some(handoff) => handoff.prefix(&job.task),
+            None => job.task.clone(),
+        };
         let binary = cli.binary(vendor).to_owned();
         let native_key = format!("native_session:{}", vendor.id());
         let resume = self.0.store.session_meta(&job.session_id, &native_key)?;
+        if let Some((from, to)) = &running.turn_plan.model_switch {
+            // The vendor's own mechanism switches the model on the resumed
+            // session (Codex thread/resume model, Cursor session/set_model,
+            // Claude --model with --resume, agy --model with --conversation).
+            events.emit(
+                "model.switched",
+                json!({"provider":vendor.provider(),"from":from,"to":to,"resumed":resume.is_some()}),
+            )?;
+        }
         let options = crate::cli_agent::LaunchOptions {
             binary,
             workspace: running.workspace.path.clone(),
@@ -1052,8 +1187,26 @@ impl Engine {
             approvals: &self.0.approvals,
             cancel: running.cancel.clone(),
             steer: &running.steer,
+            approvals_required: running.config.permissions.approve_shell,
+            catalog: Some(self.0.vendors.clone()),
         })
-        .await?;
+        .await;
+        // Usage may have moved: refresh after every vendor turn, bounded by
+        // the catalog's refresh window unless the turn hit the plan limit.
+        #[cfg(unix)]
+        {
+            let limited = outcome.as_ref().err().is_some_and(|e| {
+                e.downcast_ref::<crate::cli_agent::runner::LimitReached>()
+                    .is_some()
+            });
+            let catalog = self.0.vendors.clone();
+            let config = cli.clone();
+            tokio::spawn(async move {
+                catalog.refresh(vendor, &config, limited).await;
+            });
+        }
+        #[cfg(unix)]
+        let outcome = outcome?;
         #[cfg(not(unix))]
         let outcome: crate::cli_agent::runner::RunOutcome = {
             let _ = (options, prompt, events);
@@ -1071,9 +1224,24 @@ impl Engine {
                 .lock()
                 .map_err(|_| anyhow!("Job lock poisoned"))?;
             record.usage.add(&usage);
+            // No token counts from the protocol: say so instead of a zero.
+            record.usage_is_estimated = !outcome.usage_reported;
             record.steps = record.steps.saturating_add(1);
             self.0.store.save_job(&json!(*record))?;
         }
+        // Keep the conversation's message tape complete, so a later turn on
+        // the native loop sees this vendor turn as plain prior conversation.
+        let mut tape = self
+            .0
+            .store
+            .latest_session_messages(&job.session_id, &job.id)?;
+        tape.retain(|m| m["role"] != "system");
+        tape.push(json!({"role":"user","content":job.task}));
+        tape.push(json!({
+            "role":"assistant",
+            "content":format!("[{} answered]\n{}", vendor.product_label(), crate::tools::truncate(&text, 8000)),
+        }));
+        self.0.store.save_messages(&job.id, &tape)?;
         events.emit(
             "verification.summary",
             json!({

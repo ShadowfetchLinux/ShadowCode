@@ -213,6 +213,14 @@ impl CodexAppServerAdapter {
                 self.turn_active = false;
                 let status = params["turn"]["status"].as_str().unwrap_or("completed");
                 match status {
+                    "failed" if usage_limit_error(&params["turn"]["error"]) => {
+                        Step::update(Update::LimitReached(
+                            params["turn"]["error"]["message"]
+                                .as_str()
+                                .map(redact)
+                                .unwrap_or_else(|| "Codex usage limit exceeded".into()),
+                        ))
+                    }
                     "failed" => Step::update(Update::TurnFailed(
                         params["turn"]["error"]["message"]
                             .as_str()
@@ -230,14 +238,42 @@ impl CodexAppServerAdapter {
                 }
             }
             "thread/tokenUsage/updated" => {
-                let total = &params["tokenUsage"]["total"];
-                match (
-                    total["inputTokens"].as_u64(),
-                    total["outputTokens"].as_u64(),
-                ) {
+                // `total` is cumulative for the thread; `last` is the latest
+                // model call. Summing `last` per notification counts every
+                // call once and never re-adds earlier turns.
+                let last = &params["tokenUsage"]["last"];
+                match (last["inputTokens"].as_u64(), last["outputTokens"].as_u64()) {
                     (Some(input), Some(output)) => Step::update(Update::Usage { input, output }),
                     _ => Step::default(),
                 }
+            }
+            "account/rateLimits/updated" => {
+                let snapshot = params["rateLimits"].clone();
+                if !snapshot.is_object() {
+                    return Step::default();
+                }
+                let mut step = Step::default();
+                if let Some(kind) = snapshot["rateLimitReachedType"].as_str() {
+                    step.updates.push(Update::RateLimits(snapshot.clone()));
+                    step.updates.push(Update::LimitReached(format!(
+                        "Codex reported {}",
+                        redact(kind).replace('_', " ")
+                    )));
+                } else {
+                    step.updates.push(Update::RateLimits(snapshot));
+                }
+                step
+            }
+            "error"
+                if usage_limit_error(&params["error"])
+                    && params["willRetry"].as_bool() != Some(true) =>
+            {
+                Step::update(Update::LimitReached(
+                    params["error"]["message"]
+                        .as_str()
+                        .map(redact)
+                        .unwrap_or_else(|| "Codex usage limit exceeded".into()),
+                ))
             }
             "error" => {
                 let message = params["error"]["message"]
@@ -453,6 +489,13 @@ impl CodexAppServerAdapter {
         }
     }
 }
+/// Codex `TurnError.codexErrorInfo` is `"usageLimitExceeded"` (or an object
+/// keyed by it) when the plan allowance is used up.
+fn usage_limit_error(error: &Value) -> bool {
+    let info = &error["codexErrorInfo"];
+    info.as_str() == Some("usageLimitExceeded") || info.get("usageLimitExceeded").is_some()
+}
+
 fn item_started(item: &Value) -> Step {
     let id = item["id"].as_str().unwrap_or("").to_owned();
     match item["type"].as_str().unwrap_or("") {

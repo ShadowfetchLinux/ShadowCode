@@ -13,7 +13,7 @@ use crate::{
     models::Usage,
     steering::SteerControl,
 };
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde_json::json;
 use std::{
     path::{Path, PathBuf},
@@ -94,51 +94,87 @@ pub struct Request<'a> {
     pub approvals: &'a ApprovalHub,
     pub cancel: CancellationToken,
     pub steer: &'a SteerControl,
+    /// The user's permission mode asks before shell commands / edits. The
+    /// approval-less `codex exec` fallback is refused while this is set.
+    pub approvals_required: bool,
+    /// Receives plan usage pushed during the turn (Codex rate-limit updates).
+    pub catalog: Option<std::sync::Arc<super::catalog::VendorCatalog>>,
 }
 
 /// What a finished vendor run produced.
 #[derive(Clone, Debug, Default)]
 pub struct RunOutcome {
     pub text: String,
+    /// Per-turn token counts the vendor reported (never plan usage).
     pub usage: Usage,
+    /// False when the protocol reported no token counts at all.
+    pub usage_reported: bool,
     /// Vendor session id to resume on the next turn of this conversation.
     pub native_session: Option<String>,
 }
 
-/// Run the vendor CLI until the turn finishes, fails, or is cancelled.
-pub async fn run(request: Request<'_>) -> Result<RunOutcome> {
-    let mut fallback = request.vendor == Vendor::Codex
-        && !codex_app_server_available(&request.options.binary).await;
-    let mut last_error = None;
-    for _ in 0..2 {
-        match run_once(request.vendor, fallback, &request).await {
-            Ok(result) => return Ok(result),
-            Err(error)
-                if request.vendor == Vendor::Codex
-                    && !fallback
-                    && request.images.is_empty()
-                    && looks_like_missing_app_server(&error) =>
-            {
-                last_error = Some(error);
-                fallback = true;
-            }
-            Err(error) => return Err(error),
-        }
+/// The vendor account hit its plan limit. The job stops with status
+/// `limit_reached`; ShadowCode never retries, buys credits, or redeems a
+/// reset on the user's behalf.
+#[derive(Debug, Clone)]
+pub struct LimitReached {
+    pub vendor: Vendor,
+    pub detail: String,
+    pub usage: super::usage::UsageSnapshot,
+}
+impl std::fmt::Display for LimitReached {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} plan limit reached: {}. Choose another model to continue; ShadowCode does not retry or buy more usage.",
+            self.vendor.product_label(),
+            self.detail
+        )
     }
-    Err(last_error.unwrap_or_else(|| anyhow!("Codex app-server and exec fallback both failed")))
+}
+impl std::error::Error for LimitReached {}
+
+/// Run the vendor CLI until the turn finishes, fails, or is cancelled.
+///
+/// Codex only: when `codex app-server` is missing, or fails before a turn
+/// was sent (spawn failure, rejected `initialize`, exit during the
+/// handshake), the one-shot `codex exec --json` path may run instead. It has
+/// no approval channel, so it is refused while the user's permission mode
+/// asks before actions. Nothing is ever re-run once a turn started.
+pub async fn run(request: Request<'_>) -> Result<RunOutcome> {
+    ensure_ready(request.vendor, &request)?;
+    if request.vendor == Vendor::Codex && !codex_app_server_available(&request.options.binary).await
+    {
+        return run_exec_fallback(&request, "this Codex CLI has no `app-server` command").await;
+    }
+    let mut reached_ready = false;
+    match run_once(request.vendor, false, &request, &mut reached_ready).await {
+        Err(error)
+            if request.vendor == Vendor::Codex
+                && !reached_ready
+                && request.images.is_empty()
+                && error.downcast_ref::<LimitReached>().is_none()
+                && !request.cancel.is_cancelled() =>
+        {
+            run_exec_fallback(&request, &format!("{error:#}")).await
+        }
+        other => other,
+    }
 }
 
-fn looks_like_missing_app_server(error: &anyhow::Error) -> bool {
-    let text = format!("{error:#}").to_ascii_lowercase();
-    [
-        "unknown",
-        "unrecognized",
-        "not found",
-        "no such",
-        "invalid command",
-    ]
-    .iter()
-    .any(|needle| text.contains(needle))
+async fn run_exec_fallback(request: &Request<'_>, reason: &str) -> Result<RunOutcome> {
+    let reason = clip(&redact(reason), 400);
+    if request.approvals_required {
+        bail!(
+            "Codex app-server could not start a session ({reason}). The `codex exec` fallback has no approval channel, so ShadowCode will not run it while \"Ask before actions\" is on. Update the Codex CLI, or change the permission mode for this project."
+        );
+    }
+    request.events.emit(
+        "agent.warning",
+        json!({"text":format!("Codex app-server could not start a session ({reason}); using `codex exec`, which runs the whole turn without approval prompts.")}),
+    )?;
+    let mut reached_ready = false;
+    run_once(Vendor::Codex, true, request, &mut reached_ready).await
 }
 
 /// `codex app-server` is used when help mentions it; otherwise exec fallback.
@@ -179,6 +215,7 @@ async fn run_once(
     vendor: Vendor,
     codex_exec_fallback: bool,
     request: &Request<'_>,
+    reached_ready: &mut bool,
 ) -> Result<RunOutcome> {
     ensure_ready(vendor, request)?;
     let mut adapter = adapter_for(vendor, codex_exec_fallback);
@@ -186,7 +223,7 @@ async fn run_once(
     let mut child = spawn_vendor(&program, &args, &request.options.workspace)?;
     let pid = child.id().context("Vendor CLI has no process ID")?;
     let mut group = ProcessGroup(pid);
-    let mut stdin = child.stdin.take().context("Vendor CLI stdin missing")?;
+    let mut stdin = Some(child.stdin.take().context("Vendor CLI stdin missing")?);
     let stdout = child.stdout.take().context("Vendor CLI stdout missing")?;
     let stderr = child.stderr.take().context("Vendor CLI stderr missing")?;
     let mut reader = BufReader::new(stdout);
@@ -194,8 +231,13 @@ async fn run_once(
     let mut outgoing = adapter.on_start(&request.options);
     outgoing.extend(adapter.prompt(&request.prompt, &request.images)?);
     send_lines(&mut stdin, &outgoing).await?;
+    if adapter.one_shot() {
+        // One-shot CLIs (`codex exec -`) read the prompt until EOF.
+        stdin = None;
+    }
     let mut collected = String::new();
     let mut usage = Usage::default();
+    let mut usage_reported = false;
     let mut native_session: Option<String> = None;
     let mut malformed = 0usize;
     let mut last_line = Instant::now();
@@ -257,6 +299,7 @@ async fn run_once(
                 }
                 let step = adapter.on_line(&line)?;
                 send_lines(&mut stdin, &step.send).await?;
+                *reached_ready |= adapter.ready();
                 let mut saw_protocol = false;
                 for update in step.updates {
                     match update {
@@ -286,6 +329,7 @@ async fn run_once(
                                 other,
                                 &mut collected,
                                 &mut usage,
+                                &mut usage_reported,
                                 &mut native_session,
                                 &mut message_id,
                                 &mut pending_text,
@@ -355,6 +399,7 @@ async fn run_once(
     Ok(RunOutcome {
         text: collected,
         usage,
+        usage_reported,
         native_session,
     })
 }
@@ -391,8 +436,10 @@ fn spawn_vendor(program: &str, args: &[String], workspace: &Path) -> Result<Chil
         .env("NO_COLOR", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("PAGER", "cat");
-    // Inherit the user environment so the official CLI can use its own login.
-    // Do not wrap in bubblewrap and do not inject ShadowCode tools or secrets.
+    // Inherit the user environment so the official CLI can use its own login,
+    // minus provider API keys: a subscription row must never be billed per
+    // token. No bubblewrap, no ShadowCode tools or secrets.
+    super::scrub_api_keys(&mut command);
     #[cfg(unix)]
     command.process_group(0);
     #[cfg(target_os = "linux")]
@@ -414,7 +461,13 @@ fn ensure_workspace(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn send_lines(stdin: &mut ChildStdin, lines: &[String]) -> Result<()> {
+async fn send_lines(stdin: &mut Option<ChildStdin>, lines: &[String]) -> Result<()> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let Some(stdin) = stdin.as_mut() else {
+        bail!("The vendor CLI input is closed");
+    };
     for line in lines {
         stdin.write_all(line.as_bytes()).await?;
         stdin.write_all(b"\n").await?;
@@ -478,12 +531,13 @@ async fn apply_update(
     update: Update,
     collected: &mut String,
     usage: &mut Usage,
+    usage_reported: &mut bool,
     native_session: &mut Option<String>,
     message_id: &mut String,
     pending_text: &mut String,
     finished: &mut bool,
     final_text: &mut Option<String>,
-    stdin: &mut ChildStdin,
+    stdin: &mut Option<ChildStdin>,
     adapter: &mut Box<dyn CliAdapter>,
 ) -> Result<()> {
     match update {
@@ -527,6 +581,25 @@ async fn apply_update(
         }
         Update::Approval(prompt) => {
             flush_text(request, message_id, pending_text)?;
+            if request.options.read_only
+                && matches!(
+                    prompt.kind.as_str(),
+                    "command" | "file_change" | "permissions"
+                )
+            {
+                // Plan/Review tasks are read-only in ShadowCode even when the
+                // vendor asks: deny without prompting and say so.
+                request.events.emit(
+                    "agent.warning",
+                    json!({"text":format!(
+                        "Denied automatically: this task is read-only, so {}'s request was declined ({}).",
+                        vendor.product_label(),
+                        clip(&prompt.command, 300)
+                    ),"vendor":vendor.id(),"kind":prompt.kind}),
+                )?;
+                send_lines(stdin, &adapter.approve(&prompt.request_id, false)?).await?;
+                return Ok(());
+            }
             let approved = request_approval(request, prompt.clone()).await?;
             send_lines(stdin, &adapter.approve(&prompt.request_id, approved)?).await?;
         }
@@ -537,6 +610,7 @@ async fn apply_update(
             input,
             output: completion,
         } => {
+            *usage_reported = true;
             usage.prompt_tokens = usage.prompt_tokens.saturating_add(input);
             usage.completion_tokens = usage.completion_tokens.saturating_add(completion);
             usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
@@ -560,7 +634,31 @@ async fn apply_update(
         }
         Update::TurnFailed(error) => {
             flush_text(request, message_id, pending_text)?;
+            if super::is_limit_error(&error) {
+                return Err(limit_reached(request, vendor, error, stdin, adapter).await);
+            }
             bail!("{error}");
+        }
+        Update::LimitReached(detail) => {
+            flush_text(request, message_id, pending_text)?;
+            return Err(limit_reached(request, vendor, detail, stdin, adapter).await);
+        }
+        Update::RateLimits(snapshot) => {
+            let usage = match &request.catalog {
+                Some(catalog) => {
+                    catalog
+                        .apply_rate_limits(vendor, &snapshot, &request.options.model)
+                        .await
+                }
+                None => super::usage::UsageSnapshot::from_codex(
+                    &json!({"rateLimits": snapshot}),
+                    Some(&request.options.model),
+                    crate::now(),
+                ),
+            };
+            request
+                .events
+                .emit("usage.updated", json!({"vendor":vendor.id(),"usage":usage}))?;
         }
         Update::NativeSession { id } => {
             if native_session.as_deref() != Some(id.as_str()) {
@@ -573,6 +671,38 @@ async fn apply_update(
         }
     }
     Ok(())
+}
+
+/// Stop the turn at a plan limit: interrupt the vendor, record
+/// `limit.reached`, and return the typed error that ends the job.
+async fn limit_reached(
+    request: &Request<'_>,
+    vendor: Vendor,
+    detail: String,
+    stdin: &mut Option<ChildStdin>,
+    adapter: &mut Box<dyn CliAdapter>,
+) -> anyhow::Error {
+    send_lines(stdin, &adapter.interrupt()).await.ok();
+    let detail = clip(&redact(&detail), 600);
+    let usage = match &request.catalog {
+        Some(catalog) => {
+            catalog
+                .limit_usage(vendor, &request.options.model, &detail)
+                .await
+        }
+        None => super::usage::UsageSnapshot::limit_reached(&vendor.provider(), &detail),
+    };
+    if let Err(error) = request.events.emit(
+        "limit.reached",
+        json!({"vendor":vendor.id(),"usage":usage,"detail":detail,"job_id":request.job_id}),
+    ) {
+        return error;
+    }
+    anyhow::Error::new(LimitReached {
+        vendor,
+        detail,
+        usage,
+    })
 }
 
 async fn request_approval(request: &Request<'_>, prompt: ApprovalPrompt) -> Result<bool> {

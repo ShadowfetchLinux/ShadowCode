@@ -167,6 +167,23 @@ async fn claude_login_state_in(
     path_env: Option<&OsStr>,
     home: Option<&Path>,
 ) -> LoginState {
+    claude_auth_status_in(binary, path_env, home).await.0
+}
+
+/// `claude auth status --json`: login state plus `authMethod`
+/// (`claude.ai` for a subscription login; anything else is billed per token).
+pub async fn claude_auth_status(
+    binary: &Path,
+    path_env: Option<&OsStr>,
+) -> (LoginState, Option<String>) {
+    claude_auth_status_in(binary, path_env, None).await
+}
+
+async fn claude_auth_status_in(
+    binary: &Path,
+    path_env: Option<&OsStr>,
+    home: Option<&Path>,
+) -> (LoginState, Option<String>) {
     match run_short_in(binary, &["auth", "status", "--json"], path_env, home).await {
         Some((_, text)) => {
             // The CLI pretty-prints the JSON over several lines.
@@ -174,13 +191,18 @@ async fn claude_login_state_in(
                 text.lines()
                     .find_map(|line| serde_json::from_str(line.trim()).ok())
             });
-            match parsed.and_then(|v| v["loggedIn"].as_bool()) {
+            let method = parsed
+                .as_ref()
+                .and_then(|v| v["authMethod"].as_str())
+                .map(str::to_owned);
+            let state = match parsed.and_then(|v| v["loggedIn"].as_bool()) {
                 Some(true) => LoginState::LoggedIn,
                 Some(false) => LoginState::NotLoggedIn,
                 None => LoginState::Unknown,
-            }
+            };
+            (state, method)
         }
-        None => LoginState::Unknown,
+        None => (LoginState::Unknown, None),
     }
 }
 

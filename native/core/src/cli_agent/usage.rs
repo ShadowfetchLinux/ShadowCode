@@ -92,6 +92,40 @@ impl UsageSnapshot {
         }
         snap
     }
+    /// The CLI is signed in with an API key: every turn is billed per token
+    /// by the provider. No plan allowance exists to show.
+    pub fn api_key_login(provider: &str) -> Self {
+        let mut snap = Self::base(
+            STATE_UNAVAILABLE,
+            "API key login · billed per token".into(),
+            provider,
+        );
+        snap.detail.push(
+            "This CLI is signed in with an API key, not a subscription; the provider bills each request.".into(),
+        );
+        snap
+    }
+    /// The runtime reported a plan limit but no numbers (or none are known).
+    pub fn limit_reached(provider: &str, detail: &str) -> Self {
+        let mut snap = Self::base(STATE_LIMIT_REACHED, "Plan limit reached".into(), provider);
+        snap.limit_reached = true;
+        if !detail.trim().is_empty() {
+            snap.detail.push(detail.trim().to_owned());
+        }
+        snap
+    }
+    /// Mark a snapshot as having hit the plan limit, keeping any numbers.
+    pub fn with_limit_reached(mut self, detail: &str) -> Self {
+        self.state = STATE_LIMIT_REACHED.into();
+        self.limit_reached = true;
+        if !self.label.starts_with("Plan limit reached") {
+            self.label = "Plan limit reached".into();
+        }
+        if !detail.trim().is_empty() {
+            self.detail.insert(0, detail.trim().to_owned());
+        }
+        self
+    }
     pub fn local() -> Self {
         Self::base(
             STATE_LOCAL,

@@ -9,20 +9,26 @@
 //! catalog never marks a vendor Ready because a binary or credential file
 //! exists, and never invents usage.
 use super::{
-    acp_probe, codex_probe, doctor,
+    acp_probe, auth, codex_probe, doctor,
     picker::{self, Availability, PickerTarget},
     resolve_binary,
     usage::UsageSnapshot,
     CliAgentsConfig, Vendor,
 };
+use crate::store::{Store, UsageRow};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
+
+/// Persisted usage rows keep the whole official payload under this pool key;
+/// per-model pools are derived from it when rows are built.
+pub const PERSISTED_POOL: &str = "*";
 
 pub const MIN_REFRESH_SECS: f64 = 5.0 * 60.0;
 const MAX_BACKOFF_SECS: f64 = 60.0 * 60.0;
@@ -68,6 +74,9 @@ pub struct VendorStatus {
     /// snapshots; None when the provider exposes nothing.
     #[serde(skip)]
     pub usage_raw: Option<Value>,
+    /// When `usage_raw` was fetched (a probe or a push during a turn).
+    #[serde(skip)]
+    pub usage_at: f64,
     /// Why usage is unavailable, when it is.
     pub usage_note: Option<String>,
     #[serde(skip)]
@@ -94,10 +103,54 @@ impl VendorStatus {
             fetched_at: now,
             error: None,
             usage_raw: None,
+            usage_at: 0.0,
             usage_note: None,
             failures: 0,
             next_allowed: now,
         }
+    }
+    /// Nothing probed yet in this process; only persisted usage is known.
+    fn unchecked(vendor: Vendor, persisted: Option<&UsageRow>) -> Self {
+        let mut status = Self::setup_required(vendor, vendor.binary(), 0.0);
+        status.availability = Availability::Unavailable;
+        status.detail = "Not checked yet".into();
+        status.fetched_at = 0.0;
+        if let Some(row) = persisted {
+            status.usage_raw = Some(row.payload.clone());
+            status.usage_at = row.fetched_at;
+            if !row.account.is_empty() {
+                status.account = Some(AccountInfo {
+                    email: Some(row.account.clone()),
+                    plan: None,
+                    auth_mode: None,
+                });
+            }
+        }
+        status
+    }
+    /// The CLI is signed in with an API key (Codex `apiKey`, Claude auth
+    /// method other than claude.ai): turns are billed per token.
+    pub fn api_key_login(&self) -> bool {
+        let Some(mode) = self.account.as_ref().and_then(|a| a.auth_mode.as_deref()) else {
+            return false;
+        };
+        match self.vendor {
+            Vendor::Codex => mode == "apiKey",
+            Vendor::Claude => mode != "claude.ai",
+            _ => false,
+        }
+    }
+    /// Account identity used to key persisted usage (never a display name).
+    pub fn account_key(&self) -> String {
+        self.account
+            .as_ref()
+            .and_then(|a| a.email.clone())
+            .or_else(|| {
+                self.usage_raw
+                    .as_ref()
+                    .and_then(|raw| raw["accountId"].as_str().map(str::to_owned))
+            })
+            .unwrap_or_default()
     }
     fn disabled(vendor: Vendor, now: f64) -> Self {
         let mut status = Self::setup_required(vendor, vendor.binary(), now);
@@ -109,6 +162,9 @@ impl VendorStatus {
     /// Usage for one model row of this vendor.
     pub fn usage_for(&self, model: &str, now: f64) -> UsageSnapshot {
         let provider = self.vendor.provider();
+        if self.api_key_login() {
+            return UsageSnapshot::api_key_login(&provider);
+        }
         let snap = match (&self.usage_raw, self.vendor) {
             (Some(raw), Vendor::Codex) => {
                 let model = if model.is_empty() || model == "default" || model == "auto" {
@@ -119,14 +175,15 @@ impl VendorStatus {
                 } else {
                     Some(model)
                 };
-                UsageSnapshot::from_codex(raw, model, self.fetched_at)
+                UsageSnapshot::from_codex(raw, model, self.usage_at)
             }
             _ => UsageSnapshot::unavailable_because(
                 &provider,
                 self.usage_note.as_deref().unwrap_or(""),
             ),
         };
-        if snap.is_stale(now) {
+        // Never probed in this process (persisted only), or old: say when.
+        if snap.last_refresh.is_some() && (self.fetched_at == 0.0 || snap.is_stale(now)) {
             snap.mark_stale(now)
         } else {
             snap
@@ -170,6 +227,8 @@ impl VendorStatus {
             "login_command": self.vendor.login_command(),
             "logout_command": self.vendor.logout_command(),
             "shared_cli_note": self.vendor.shared_cli_note(),
+            "billing": if self.api_key_login() { "api_key" } else { "subscription" },
+            "usage": self.usage_for("default", crate::now()),
         })
     }
 }
@@ -177,23 +236,173 @@ impl VendorStatus {
 #[derive(Default)]
 pub struct VendorCatalog {
     entries: Mutex<HashMap<Vendor, VendorStatus>>,
+    /// Last persisted usage per vendor (loaded at startup).
+    persisted: Mutex<HashMap<Vendor, UsageRow>>,
+    store: Option<Arc<Store>>,
+    events: Option<broadcast::Sender<Value>>,
+    logins: auth::Logins,
 }
 
 impl VendorCatalog {
+    /// In-memory only (tests, probes).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Forget everything known about a vendor (after connect/disconnect).
+    /// Catalog backed by the profile database: persisted usage snapshots are
+    /// loaded now, so "Last checked …" is known before the first refresh.
+    pub fn with_store(store: Arc<Store>, events: broadcast::Sender<Value>) -> Self {
+        let mut persisted = HashMap::new();
+        for row in store.usage_snapshots().unwrap_or_default() {
+            if let Some(vendor) = Vendor::parse(&row.vendor) {
+                // Rows are newest first; keep the newest per vendor.
+                persisted.entry(vendor).or_insert(row);
+            }
+        }
+        Self {
+            persisted: Mutex::new(persisted),
+            store: Some(store),
+            events: Some(events),
+            ..Default::default()
+        }
+    }
+
+    pub fn logins(&self) -> &auth::Logins {
+        &self.logins
+    }
+
+    /// Broadcast a non-session event (`account.login`, `usage.updated`).
+    /// The broadcast is a wakeup; login lines are also kept in `logins()`.
+    pub fn broadcast(&self, kind: &str, payload: Value) {
+        if let Some(events) = &self.events {
+            let _ = events.send(json!({
+                "type": kind,
+                "ts": crate::now(),
+                "session_id": null,
+                "task_id": null,
+                "payload": payload,
+            }));
+        }
+    }
+
+    /// Forget the cached status of a vendor so the next refresh re-probes
+    /// (after a sign-in). Persisted usage is kept.
     pub async fn clear(&self, vendor: Vendor) {
         self.entries.lock().await.remove(&vendor);
+    }
+    pub async fn forget_status(&self, vendor: Vendor) {
+        self.clear(vendor).await;
+    }
+
+    /// Forget everything tied to the vendor login (disconnect): cached
+    /// status, persisted usage, and native session ids of conversations.
+    pub async fn forget(&self, vendor: Vendor) -> anyhow::Result<()> {
+        self.entries.lock().await.remove(&vendor);
+        self.persisted.lock().await.remove(&vendor);
+        if let Some(store) = &self.store {
+            store.delete_usage_snapshots(vendor.id())?;
+            store.clear_session_meta_prefix(&format!("native_session:{}", vendor.id()))?;
+        }
+        Ok(())
+    }
+
+    /// Merge a rate-limit snapshot pushed during a Codex turn
+    /// (`account/rateLimits/updated`) and return the row usage for `model`.
+    pub async fn apply_rate_limits(
+        &self,
+        vendor: Vendor,
+        snapshot: &Value,
+        model: &str,
+    ) -> UsageSnapshot {
+        let now = crate::now();
+        let mut entries = self.entries.lock().await;
+        let Some(entry) = entries.get_mut(&vendor) else {
+            return UsageSnapshot::from_codex(&json!({"rateLimits": snapshot}), Some(model), now);
+        };
+        let raw = entry.usage_raw.get_or_insert_with(|| json!({}));
+        let limit_id = snapshot["limitId"].as_str().unwrap_or("codex").to_owned();
+        let default_id = raw["rateLimits"]["limitId"]
+            .as_str()
+            .unwrap_or("codex")
+            .to_owned();
+        if limit_id == default_id {
+            raw["rateLimits"] = snapshot.clone();
+        }
+        if !raw["rateLimitsByLimitId"].is_object() {
+            raw["rateLimitsByLimitId"] = json!({});
+        }
+        raw["rateLimitsByLimitId"][limit_id.as_str()] = snapshot.clone();
+        let payload = raw.clone();
+        entry.usage_at = now;
+        let usage = entry.usage_for(model, now);
+        let row = UsageRow {
+            vendor: vendor.id().into(),
+            account: entry.account_key(),
+            pool: PERSISTED_POOL.into(),
+            fetched_at: now,
+            payload,
+        };
+        drop(entries);
+        self.persist(vendor, row).await;
+        usage
+    }
+
+    /// Usage to report with `limit.reached`: the cached numbers when known.
+    pub async fn limit_usage(&self, vendor: Vendor, model: &str, detail: &str) -> UsageSnapshot {
+        match self.entries.lock().await.get(&vendor) {
+            Some(entry) if entry.usage_raw.is_some() => entry
+                .usage_for(model, crate::now())
+                .with_limit_reached(detail),
+            _ => UsageSnapshot::limit_reached(&vendor.provider(), detail),
+        }
+    }
+
+    async fn persist(&self, vendor: Vendor, row: UsageRow) {
+        let mut persisted = self.persisted.lock().await;
+        if let Some(store) = &self.store {
+            // A different account on the same CLI: its old numbers are not
+            // this account's usage.
+            if persisted
+                .get(&vendor)
+                .is_some_and(|old| old.account != row.account)
+            {
+                let _ = store.delete_usage_snapshots(vendor.id());
+            }
+            let _ = store.upsert_usage_snapshot(&row);
+        }
+        persisted.insert(vendor, row);
+    }
+
+    async fn drop_persisted(&self, vendor: Vendor) {
+        self.persisted.lock().await.remove(&vendor);
+        if let Some(store) = &self.store {
+            let _ = store.delete_usage_snapshots(vendor.id());
+        }
+    }
+
+    /// Accounts JSON from what is already known, without probing: cached
+    /// status, or persisted usage marked "Last checked …".
+    pub async fn status_cached_json(&self) -> Value {
+        let entries = self.entries.lock().await;
+        let persisted = self.persisted.lock().await;
+        let mut map = serde_json::Map::new();
+        for vendor in Vendor::ALL {
+            let status = entries
+                .get(&vendor)
+                .cloned()
+                .unwrap_or_else(|| VendorStatus::unchecked(vendor, persisted.get(&vendor)));
+            map.insert(vendor.id().to_owned(), status.to_doctor_json());
+        }
+        Value::Object(map)
     }
 
     pub async fn cached(&self, vendor: Vendor) -> Option<VendorStatus> {
         self.entries.lock().await.get(&vendor).cloned()
     }
 
-    /// Refresh one vendor unless a recent probe exists (or backoff applies).
+    /// Refresh one vendor unless a recent probe exists. `force` skips the
+    /// freshness window but never the failure backoff (connect/disconnect
+    /// clear the entry first, so they always probe).
     pub async fn refresh(
         &self,
         vendor: Vendor,
@@ -201,30 +410,51 @@ impl VendorCatalog {
         force: bool,
     ) -> VendorStatus {
         let now = crate::now();
-        if let Some(existing) = self.entries.lock().await.get(&vendor) {
+        let previous = self.entries.lock().await.get(&vendor).cloned();
+        if let Some(existing) = &previous {
             let fresh = now - existing.fetched_at < MIN_REFRESH_SECS;
             let backing_off = existing.next_allowed > now;
-            if !force && (fresh || backing_off) {
+            if backing_off || (!force && fresh) {
                 return existing.clone();
             }
         }
-        let previous = self.entries.lock().await.get(&vendor).cloned();
         let mut status = probe_vendor(vendor, config, now).await;
+        if status.usage_raw.is_some() {
+            status.usage_at = now;
+        }
         if status.error.is_some() {
             let failures = previous.as_ref().map(|p| p.failures + 1).unwrap_or(1);
             status.failures = failures;
             status.next_allowed =
                 now + (30.0 * 2f64.powi(failures.min(7) as i32)).min(MAX_BACKOFF_SECS);
             // Keep the last known usage/models so stale data stays visible.
-            if let Some(previous) = previous {
-                if status.usage_raw.is_none() {
-                    status.usage_raw = previous.usage_raw;
-                    status.fetched_at = previous.fetched_at.min(now);
+            if status.usage_raw.is_none() {
+                if let Some(previous) = previous.as_ref().filter(|p| p.usage_raw.is_some()) {
+                    status.usage_raw = previous.usage_raw.clone();
+                    status.usage_at = previous.usage_at;
+                } else if let Some(row) = self.persisted.lock().await.get(&vendor) {
+                    status.usage_raw = Some(row.payload.clone());
+                    status.usage_at = row.fetched_at;
                 }
+            }
+            if let Some(previous) = previous {
                 if status.models.is_empty() {
                     status.models = previous.models;
                 }
             }
+        } else if let Some(raw) = status.usage_raw.clone() {
+            let row = UsageRow {
+                vendor: vendor.id().into(),
+                account: status.account_key(),
+                pool: PERSISTED_POOL.into(),
+                fetched_at: now,
+                payload: raw,
+            };
+            self.persist(vendor, row).await;
+        } else if matches!(status.availability, Availability::SignIn) || status.api_key_login() {
+            // Signed out (or switched to an API key): stored plan numbers no
+            // longer describe this login.
+            self.drop_persisted(vendor).await;
         }
         self.entries.lock().await.insert(vendor, status.clone());
         status
@@ -258,19 +488,30 @@ impl VendorCatalog {
                 continue;
             }
             let ready = status.availability == Availability::Ready;
+            let api_key = status.api_key_login();
             if ready && !status.models.is_empty() {
                 for model in &status.models {
                     let usage = status.usage_for(&model.id, now);
+                    // A pool at its plan limit cannot take a turn; the row
+                    // stays visible with the reason.
+                    let (availability, reason) = if usage.limit_reached {
+                        (Availability::Unavailable, usage.label.clone())
+                    } else {
+                        (Availability::Ready, status.detail.clone())
+                    };
                     let mut row = picker::vendor_target(
                         vendor,
                         &model.id,
                         &model.label,
-                        Availability::Ready,
-                        &status.detail,
+                        availability,
+                        &reason,
                         usage,
                         status.accepts_images && model.vision,
                     );
                     row.is_default = model.is_default;
+                    if api_key {
+                        row.subtitle = picker::API_KEY_SUBTITLE.into();
+                    }
                     rows.push(row);
                 }
             } else {
@@ -279,7 +520,7 @@ impl VendorCatalog {
                 } else {
                     UsageSnapshot::unavailable_because(&vendor.provider(), &status.detail)
                 };
-                rows.push(picker::vendor_target(
+                let mut row = picker::vendor_target(
                     vendor,
                     "default",
                     "Default",
@@ -287,7 +528,11 @@ impl VendorCatalog {
                     &status.detail,
                     usage,
                     status.accepts_images,
-                ));
+                );
+                if api_key {
+                    row.subtitle = picker::API_KEY_SUBTITLE.into();
+                }
+                rows.push(row);
             }
         }
         rows
@@ -320,6 +565,7 @@ async fn probe_vendor(vendor: Vendor, config: &CliAgentsConfig, now: f64) -> Ven
         fetched_at: now,
         error: None,
         usage_raw: None,
+        usage_at: 0.0,
         usage_note: None,
         failures: 0,
         next_allowed: now,
@@ -337,6 +583,9 @@ async fn probe_vendor(vendor: Vendor, config: &CliAgentsConfig, now: f64) -> Ven
 fn ready_detail(status: &VendorStatus) -> String {
     let version = status.version.as_deref().unwrap_or("version unknown");
     let mut parts = vec![format!("Ready · {version}")];
+    if status.api_key_login() {
+        parts.push("API key login · billed per token".into());
+    }
     if let Some(account) = &status.account {
         if let Some(plan) = &account.plan {
             parts.push(format!("plan {plan}"));
@@ -421,9 +670,21 @@ async fn probe_claude(binary: &Path, status: &mut VendorStatus) {
     status.usage_note = Some(
         "Claude Code does not expose plan usage to other apps; open claude.ai to see it".into(),
     );
-    match doctor::claude_login_state(binary, None).await {
+    let (state, auth_method) = doctor::claude_auth_status(binary, None).await;
+    match state {
         doctor::LoginState::LoggedIn => {
             status.availability = Availability::Ready;
+            status.account = Some(AccountInfo {
+                email: None,
+                plan: None,
+                auth_mode: auth_method,
+            });
+            if status.api_key_login() {
+                status.usage_note = Some(
+                    "Signed in with an API key: usage is billed per token, not a plan allowance"
+                        .into(),
+                );
+            }
             status.models = claude_models(binary).await;
             status.detail = ready_detail(status);
         }

@@ -86,9 +86,144 @@ CREATE TABLE IF NOT EXISTS task_notes (
 );
 "#;
 
+/// Current schema version. Older databases are backed up, then migrated
+/// forward one step at a time inside one transaction.
+pub const SCHEMA_VERSION: i64 = 25;
+
+/// Version 25: persisted subscription usage snapshots, so the Accounts page
+/// and picker can show "Last checked …" before the first refresh. Execution
+/// targets and vendor session ids live in `session_meta` / `native_meta`.
+const MIGRATION_25: &str = r#"
+CREATE TABLE IF NOT EXISTS usage_snapshots (
+ vendor TEXT NOT NULL, account TEXT NOT NULL, pool TEXT NOT NULL,
+ fetched_at REAL NOT NULL, payload TEXT NOT NULL,
+ PRIMARY KEY(vendor,account,pool)
+);
+CREATE INDEX IF NOT EXISTS sessions_updated ON sessions(updated_at);
+"#;
+
 pub struct Store {
     pub path: PathBuf,
     connection: Mutex<Connection>,
+}
+
+/// One persisted provider usage payload (raw official data, e.g. the Codex
+/// `account/rateLimits/read` result) with the time it was fetched.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UsageRow {
+    pub vendor: String,
+    pub account: String,
+    pub pool: String,
+    pub fetched_at: f64,
+    pub payload: Value,
+}
+
+impl Store {
+    pub fn upsert_usage_snapshot(&self, row: &UsageRow) -> Result<()> {
+        self.lock()?.execute(
+            "INSERT INTO usage_snapshots(vendor,account,pool,fetched_at,payload) VALUES(?,?,?,?,?) ON CONFLICT(vendor,account,pool) DO UPDATE SET fetched_at=excluded.fetched_at,payload=excluded.payload",
+            params![row.vendor, row.account, row.pool, row.fetched_at, row.payload.to_string()],
+        )?;
+        Ok(())
+    }
+    pub fn usage_snapshots(&self) -> Result<Vec<UsageRow>> {
+        let db = self.lock()?;
+        let mut statement = db.prepare(
+            "SELECT vendor,account,pool,fetched_at,payload FROM usage_snapshots ORDER BY fetched_at DESC",
+        )?;
+        let rows = statement
+            .query_map([], |r| {
+                Ok(UsageRow {
+                    vendor: r.get(0)?,
+                    account: r.get(1)?,
+                    pool: r.get(2)?,
+                    fetched_at: r.get(3)?,
+                    payload: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or(Value::Null),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+    /// Forget usage for a vendor (disconnect, account switch).
+    pub fn delete_usage_snapshots(&self, vendor: &str) -> Result<usize> {
+        Ok(self
+            .lock()?
+            .execute("DELETE FROM usage_snapshots WHERE vendor=?", [vendor])?)
+    }
+    pub fn native_meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .lock()?
+            .query_row("SELECT value FROM native_meta WHERE key=?", [key], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?)
+    }
+    pub fn set_native_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.lock()?.execute(
+            "INSERT INTO native_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+    /// `session_meta` rows whose key starts with `prefix`, as (key, value).
+    pub fn session_meta_prefixed(
+        &self,
+        session_id: &str,
+        prefix: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let db = self.lock()?;
+        let pattern = format!("{}%", prefix.replace('%', "\\%"));
+        let mut statement = db.prepare(
+            "SELECT key,value FROM session_meta WHERE session_id=? AND key LIKE ? ESCAPE '\\' ORDER BY key",
+        )?;
+        let rows = statement
+            .query_map(params![session_id, pattern], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+    /// Job records of one conversation, oldest first (at most `limit`, the
+    /// most recent ones).
+    pub fn session_jobs(&self, session_id: &str, limit: usize) -> Result<Vec<Value>> {
+        let mut rows: Vec<Value> = self
+            .query(
+                "SELECT payload FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? ORDER BY rowid DESC LIMIT ?",
+                params![session_id, limit.clamp(1, 1000)],
+            )?
+            .into_iter()
+            .map(|row| row["payload"].clone())
+            .collect();
+        rows.reverse();
+        Ok(rows)
+    }
+    /// Workspace paths a set of tasks changed, from vendor `files.changed`
+    /// events and native file-change records.
+    pub fn changed_files(&self, task_ids: &[String]) -> Result<Vec<String>> {
+        let mut paths = Vec::new();
+        for task in task_ids {
+            for row in self.query(
+                "SELECT payload FROM events WHERE task_id=? AND type='files.changed'",
+                [task],
+            )? {
+                let payload: Value = match &row["payload"] {
+                    Value::String(text) => serde_json::from_str(text).unwrap_or(Value::Null),
+                    other => other.clone(),
+                };
+                for path in payload["paths"].as_array().into_iter().flatten() {
+                    if let Some(path) = path.as_str() {
+                        paths.push(path.to_owned());
+                    }
+                }
+            }
+            for row in self.query("SELECT path FROM file_changes WHERE task_id=?", [task])? {
+                if let Some(path) = row["path"].as_str() {
+                    paths.push(path.to_owned());
+                }
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        paths.retain(|p| seen.insert(p.clone()));
+        Ok(paths)
+    }
 }
 
 impl Store {
@@ -140,10 +275,10 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", true)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= 24,
+            version <= SCHEMA_VERSION,
             "This database was created by a newer ShadowCode version"
         );
-        if version < 24 {
+        if version < SCHEMA_VERSION {
             if existed {
                 let backup_path = path.with_extension(format!("pre-native-{}.sqlite", id()));
                 let mut backup = Connection::open(&backup_path)?;
@@ -159,30 +294,14 @@ impl Store {
                 }
             }
             let tx = connection.transaction()?;
-            tx.execute_batch(SCHEMA)?;
-            for (table, column, kind) in [
-                ("sessions", "title", "TEXT"),
-                ("sessions", "usage_json", "TEXT"),
-                ("sessions", "parent_id", "TEXT"),
-                ("sessions", "branched_at", "REAL"),
-                ("tasks", "usage_json", "TEXT"),
-                ("file_changes", "observed_hash", "TEXT"),
-                ("milestones", "mode", "TEXT NOT NULL DEFAULT 'code'"),
-                (
-                    "milestones",
-                    "require_verification",
-                    "INTEGER NOT NULL DEFAULT 0",
-                ),
-            ] {
-                let columns: Vec<String> = tx
-                    .prepare(&format!("PRAGMA table_info({table})"))?
-                    .query_map([], |r| r.get(1))?
-                    .collect::<rusqlite::Result<_>>()?;
-                if !columns.iter().any(|c| c == column) {
-                    tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
-                }
+            if version < 24 {
+                migrate_to_24(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 24)?;
+            // Ordered forward steps; each is idempotent.
+            if version < 25 {
+                tx.execute_batch(MIGRATION_25)?;
+            }
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -195,7 +314,38 @@ impl Store {
         store.import_legacy_background()?;
         Ok(store)
     }
+}
 
+/// The flat pre-0.28 schema (user_version 24): every table plus the columns
+/// older databases lacked.
+fn migrate_to_24(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    tx.execute_batch(SCHEMA)?;
+    for (table, column, kind) in [
+        ("sessions", "title", "TEXT"),
+        ("sessions", "usage_json", "TEXT"),
+        ("sessions", "parent_id", "TEXT"),
+        ("sessions", "branched_at", "REAL"),
+        ("tasks", "usage_json", "TEXT"),
+        ("file_changes", "observed_hash", "TEXT"),
+        ("milestones", "mode", "TEXT NOT NULL DEFAULT 'code'"),
+        (
+            "milestones",
+            "require_verification",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        let columns: Vec<String> = tx
+            .prepare(&format!("PRAGMA table_info({table})"))?
+            .query_map([], |r| r.get(1))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !columns.iter().any(|c| c == column) {
+            tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
+        }
+    }
+    Ok(())
+}
+
+impl Store {
     fn import_legacy_goals(&self) -> Result<()> {
         let legacy = self.path.with_file_name("goals.db");
         if legacy == self.path || !legacy.is_file() {

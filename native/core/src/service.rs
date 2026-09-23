@@ -881,8 +881,15 @@ impl Service {
             }
             ("GET", "/api/accounts") => {
                 let cfg = self.config()?;
+                let vendors = self.engine.vendors();
                 return Ok(json!({
-                    "vendors": self.engine.vendors().status_json(&cfg.cli_agents, q("refresh") == "1").await,
+                    // `cached=1`: what is known without probing (persisted
+                    // usage shows "Last checked …" before the first refresh).
+                    "vendors": if q("cached") == "1" {
+                        vendors.status_cached_json().await
+                    } else {
+                        vendors.status_json(&cfg.cli_agents, q("refresh") == "1").await
+                    },
                     "config": cfg.cli_agents,
                     "local_engine": crate::local_engine::catalog(&cfg.local_engine),
                 }));
@@ -1143,10 +1150,30 @@ impl Service {
                     "reviewer" | "review" => "review",
                     _ => "code",
                 };
-                let model = if text("model").is_empty() {
-                    None
-                } else {
-                    Some(self.resolve_model(text("model"), &cfg.model)?)
+                let session_id = body["session_id"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        if workspace == selection.workspace {
+                            selection.session.clone()
+                        } else {
+                            None
+                        }
+                    });
+                // The exact picker id: from the request, else the one this
+                // conversation remembers, else the workspace default.
+                let target_id = match text("model") {
+                    "" => match &session_id {
+                        Some(sid) => store.session_meta(sid, "execution_target")?,
+                        None => None,
+                    }
+                    .or(store.native_meta(&format!("execution_target:{}", workspace.display()))?),
+                    id => Some(id.to_owned()),
+                };
+                let model = match &target_id {
+                    Some(id) => Some(self.resolve_model(id, &cfg.model)?),
+                    None => None,
                 };
                 let images: Vec<String> = body["images"]
                     .as_array()
@@ -1154,23 +1181,13 @@ impl Service {
                     .flatten()
                     .filter_map(|v| v.as_str().map(str::to_owned))
                     .collect();
-                let job = self
+                let started = self
                     .engine
-                    .start_limited_owned(
+                    .start_consented_owned(
                         StartRequest {
                             workspace: workspace.clone(),
                             task: text("task").into(),
-                            session_id: body["session_id"]
-                                .as_str()
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_owned)
-                                .or_else(|| {
-                                    if workspace == selection.workspace {
-                                        selection.session.clone()
-                                    } else {
-                                        None
-                                    }
-                                }),
+                            session_id,
                             model,
                             mode: mode.into(),
                             queue: body["queue"].as_bool().unwrap_or(false),
@@ -1182,8 +1199,35 @@ impl Service {
                             .map(|v| serde_json::from_value(v.clone()))
                             .transpose()?,
                         self.job_owner.as_ref(),
+                        body["handoff_consent"].as_bool().unwrap_or(false),
                     )
-                    .await?;
+                    .await;
+                let job = match started {
+                    Ok(job) => job,
+                    Err(error) => {
+                        if let Some(consent) =
+                            error.downcast_ref::<crate::cli_agent::handoff::ConsentRequired>()
+                        {
+                            // 409: nothing was written; the UI asks and
+                            // resends with handoff_consent: true.
+                            return Ok(json!({
+                                "ok": false,
+                                "status": 409,
+                                "error": consent.to_string(),
+                                "needs_consent": true,
+                                "handoff": consent.handoff,
+                            }));
+                        }
+                        return Err(error);
+                    }
+                };
+                if let Some(id) = target_id.filter(|_| !text("model").is_empty()) {
+                    store.set_session_meta(&job.session_id, "execution_target", &id)?;
+                    store.set_native_meta(
+                        &format!("execution_target:{}", job.workspace.display()),
+                        &id,
+                    )?;
+                }
                 self.select_if(
                     &job.workspace,
                     Some(job.session_id.clone()),
@@ -1442,6 +1486,40 @@ impl Service {
                 _ => {}
             }
         }
+        if parts.get(1) == Some(&"accounts") && parts.len() == 4 {
+            let vendor = crate::cli_agent::Vendor::parse(parts[2])
+                .with_context(|| format!("Unknown account {}", parts[2]))?;
+            let cfg = self.config()?;
+            let catalog = self.engine.vendors();
+            match (request.method.as_str(), parts[3]) {
+                ("POST", "connect") => {
+                    return crate::cli_agent::auth::connect(&catalog, vendor, &cfg.cli_agents).await
+                }
+                ("GET", "login") => return Ok(catalog.logins().status(vendor)),
+                ("POST", "cancel-login") => {
+                    return Ok(json!({"ok": catalog.logins().cancel(vendor)}))
+                }
+                ("POST", "disconnect") => {
+                    // Logout signs the CLI out everywhere for this user; the
+                    // UI shows shared_cli_note and sends confirm: true.
+                    if body["confirm"].as_bool() != Some(true) {
+                        return Ok(json!({
+                            "ok": false,
+                            "needs_confirm": true,
+                            "ran": [],
+                            "note": vendor.shared_cli_note(),
+                        }));
+                    }
+                    return crate::cli_agent::auth::disconnect(&catalog, vendor, &cfg.cli_agents)
+                        .await;
+                }
+                ("POST", "refresh") => {
+                    let status = catalog.refresh(vendor, &cfg.cli_agents, true).await;
+                    return Ok(status.to_doctor_json());
+                }
+                _ => {}
+            }
+        }
         if parts.get(1) == Some(&"sessions") && parts.len() >= 3 {
             let sid = parts[2];
             let session = store.session(sid)?.context("Session not found")?;
@@ -1456,6 +1534,34 @@ impl Service {
                 ("PATCH", None) => {
                     store.rename_session(sid, text("title"))?;
                     return Ok(json!({"ok":true}));
+                }
+                ("POST", Some("target")) => {
+                    // Remembered per conversation; a running job keeps the
+                    // target it started with, so this applies to the next turn.
+                    let target = text("target_id").trim();
+                    ensure!(
+                        !target.is_empty() && target.len() <= 1024,
+                        "target_id must be a picker id"
+                    );
+                    let workspace = PathBuf::from(
+                        session["workspace"]
+                            .as_str()
+                            .context("Session missing workspace")?,
+                    );
+                    let cfg = Config::load(self.engine.paths(), Some(&workspace))?;
+                    let model = self.resolve_model(target, &cfg.model)?;
+                    store.set_session_meta(sid, "execution_target", target)?;
+                    store.set_native_meta(
+                        &format!("execution_target:{}", workspace.display()),
+                        target,
+                    )?;
+                    let running = store.current_job(sid, false)?.is_some();
+                    return Ok(json!({
+                        "ok": true,
+                        "execution_target": target,
+                        "provider": model.provider,
+                        "applies_to": if running { "next_turn" } else { "this_turn" },
+                    }));
                 }
                 ("DELETE", None) => {
                     self.engine.delete_session(sid)?;
@@ -1827,6 +1933,13 @@ impl Service {
             session["events"] = json!(store.recent_events_through(id, cursor, 10000)?);
         }
         session["event_cursor"] = json!(cursor);
+        session["execution_target"] = json!(store.session_meta(id, "execution_target")?);
+        let native: serde_json::Map<String, Value> = store
+            .session_meta_prefixed(id, "native_session:")?
+            .into_iter()
+            .map(|(key, value)| (key["native_session:".len()..].to_owned(), json!(value)))
+            .collect();
+        session["native_sessions"] = Value::Object(native);
         Ok(session)
     }
     fn export(&self, id: &str, format: &str) -> Result<Value> {

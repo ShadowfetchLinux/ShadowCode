@@ -25,12 +25,14 @@ use std::path::Path;
 pub mod acp;
 pub mod acp_probe;
 pub mod antigravity;
+pub mod auth;
 pub mod catalog;
 pub mod claude;
 pub mod codex;
 pub mod codex_probe;
 pub mod discovery;
 pub mod doctor;
+pub mod handoff;
 pub mod picker;
 #[cfg(unix)]
 pub mod runner;
@@ -250,6 +252,11 @@ pub enum Update {
     /// once known so follow-ups can resume it. Kept separate from the
     /// ShadowCode session id.
     NativeSession { id: String },
+    /// A plan usage snapshot pushed by the runtime during a turn (Codex
+    /// `account/rateLimits/updated`). Never mixed with token accounting.
+    RateLimits(Value),
+    /// The account hit its plan limit; the job stops and is not retried.
+    LimitReached(String),
 }
 
 /// Result of feeding one line into an adapter.
@@ -426,7 +433,9 @@ impl CliAgentsConfig {
 }
 
 /// Model configuration for a vendor CLI. Empty endpoint, unused key name.
-/// ShadowCode never reads a vendor credential for this target.
+/// ShadowCode never reads a vendor credential for this target. `default`
+/// carries the exact picker id (`cli:cursor:gpt-5.5[...]`) so routing
+/// decisions and job records keep what the user actually chose.
 pub fn vendor_model(vendor: Vendor, model_name: Option<&str>) -> crate::config::ModelConfig {
     let name = model_name
         .map(str::trim)
@@ -434,7 +443,7 @@ pub fn vendor_model(vendor: Vendor, model_name: Option<&str>) -> crate::config::
         .unwrap_or("default")
         .to_owned();
     crate::config::ModelConfig {
-        default: vendor.provider(),
+        default: picker::target_id(vendor, &name),
         provider: vendor.provider(),
         endpoint: String::new(),
         api_key_env: "UNUSED".into(),
@@ -444,30 +453,64 @@ pub fn vendor_model(vendor: Vendor, model_name: Option<&str>) -> crate::config::
     }
 }
 
-/// Resolve `cli:codex`, `cli:cursor:auto`, product labels, or vendor ids.
+/// Resolve a stable vendor routing id: `cli:<vendor>` or
+/// `cli:<vendor>:<exact model id>`. Nothing else is accepted: bare `grok` is
+/// the xAI API preset (billed per token), never the Grok CLI, and display
+/// labels are not routing ids.
 pub fn resolve_vendor(id: &str) -> Option<crate::config::ModelConfig> {
-    let trimmed = id.trim();
-    if let Some(vendor) = Vendor::from_provider(trimmed) {
-        return Some(vendor_model(vendor, None));
+    let rest = id.trim().strip_prefix(PROVIDER_PREFIX)?;
+    let (vendor, model) = match rest.split_once(':') {
+        Some((vendor, model)) => (vendor, Some(model)),
+        None => (rest, None),
+    };
+    let vendor = Vendor::parse(vendor)?;
+    if model.is_some_and(|m| m.trim().is_empty() || m.len() > 512 || m.contains(['\n', '\0'])) {
+        return None;
     }
-    if let Some((prefix, model)) = trimmed.rsplit_once(':') {
-        if prefix.starts_with(PROVIDER_PREFIX) {
-            if let Some(vendor) = Vendor::from_provider(prefix) {
-                return Some(vendor_model(vendor, Some(model)));
-            }
-        }
+    Some(vendor_model(vendor, model))
+}
+
+/// Provider credentials that would silently turn a subscription turn into a
+/// pay-per-token API call. They are removed from every vendor CLI child.
+pub const API_KEY_VARIABLES: [&str; 9] = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CURSOR_API_KEY",
+    "XAI_API_KEY",
+    "GROK_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+];
+
+/// Remove provider API-key variables from a vendor CLI command so the
+/// official CLI uses its own subscription login.
+pub fn scrub_api_keys(command: &mut tokio::process::Command) {
+    for name in API_KEY_VARIABLES {
+        command.env_remove(name);
     }
-    for vendor in Vendor::ALL {
-        if trimmed == vendor.id()
-            || trimmed == vendor.product_label()
-            || trimmed == vendor.label()
-            || trimmed.eq_ignore_ascii_case(vendor.label())
-            || trimmed.eq_ignore_ascii_case(vendor.product_label())
-        {
-            return Some(vendor_model(vendor, None));
-        }
-    }
-    None
+}
+
+/// Documented plan-limit wording from the vendor runtimes (Codex
+/// `usageLimitExceeded`, Claude "usage limit reached", Cursor/Grok quota
+/// errors). Used only to stop a job with `limit_reached`; never to retry.
+pub fn is_limit_error(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "usagelimitexceeded",
+        "usage limit",
+        "usage_limit",
+        "rate limit reached",
+        "rate_limit_reached",
+        "plan limit",
+        "quota exceeded",
+        "exceeded your quota",
+        "out of credits",
+        "credits depleted",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 /// Picker rows for enabled vendor backends.
