@@ -38,3 +38,4 @@ src/shadow_agent/_assets/
 /packaging/llama.cpp/bin/
 /tools/spirv-headers/
 /tools/spirv-headers-prefix/
+/.claude/
