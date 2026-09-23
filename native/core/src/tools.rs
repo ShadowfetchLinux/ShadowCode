@@ -550,8 +550,13 @@ impl ToolExecutor {
         };
         // Never replay a command after a process failure: it may have changed files.
         let result = process::run(primary, self.cancel.clone(), None).await;
+        let mut sandbox_note = sandbox_note;
         if let Some(path) = scratch_path {
-            crate::sandbox::discard_scratch(&path)?;
+            // The command already ran; a cleanup failure must not discard its
+            // recorded output and exit status.
+            if let Err(error) = crate::sandbox::discard_scratch(&path) {
+                sandbox_note["scratch_cleanup_error"] = json!(format!("{error:#}"));
+            }
         }
         let result = result?;
         let mut value = serde_json::to_value(result)?;

@@ -20,6 +20,11 @@
 - Steering strip: one Steer action pauses at the next boundary and records the
   instruction; the toast states the task stays paused until Resume. Removed an
   unused prop.
+- A failed scratch-directory cleanup after a sandboxed shell command is
+  reported in the tool result instead of discarding the command's output.
+- The AppImage installer records `X-ShadowCode-GitSha` in the desktop entry
+  (from `SHADOWCODE_GIT_SHA` or the checkout it runs from) and no longer
+  duplicates the line on reinstall.
 - User guide documents the verification gate and secret redaction; parallel
   workspace docs describe missing-checkout recovery. Version bumped across
   crates, desktop, UI, Python package, desktop entry and docs.

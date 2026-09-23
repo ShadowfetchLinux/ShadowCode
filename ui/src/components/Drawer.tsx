@@ -467,7 +467,10 @@ function ChangesTab({
       setReview(result);
       setHunks(result.hunks);
     } catch {
+      // Clear both views; a stale staged list next to an empty unstaged list
+      // would misrepresent the file.
       setHunks([]);
+      setReview(null);
     }
   }, []);
 
@@ -484,7 +487,7 @@ function ChangesTab({
   async function act(h: DiffHunk, action: "accept" | "reject") {
     try {
       await api.hunkAction(selected, h, action);
-      toast(action === "accept" ? "Hunk staged" : "Hunk reverted", "ok");
+      toast(action === "accept" ? "Hunk staged" : "Hunk discarded", "ok");
       await loadHunks(selected);
       await load();
     } catch (err) {
@@ -615,7 +618,10 @@ function ChangesTab({
                             className="mini"
                             onClick={() => {
                               const body = h.lines
-                                .map((line) => `${line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}${line.text}`)
+                                .map(
+                                  (line) =>
+                                    `${line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}${line.text}`,
+                                )
                                 .join("");
                               onAskAgent(
                                 `Review this hunk in ${selected}:\n${h.header}\n${body}\nAdjust or explain as needed.`,
