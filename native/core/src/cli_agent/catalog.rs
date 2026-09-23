@@ -241,6 +241,9 @@ pub struct VendorCatalog {
     store: Option<Arc<Store>>,
     events: Option<broadcast::Sender<Value>>,
     logins: auth::Logins,
+    /// Offline mode: no vendor process is started for status, models or
+    /// usage; rows keep what is already known and read "Offline".
+    offline: std::sync::atomic::AtomicBool,
 }
 
 impl VendorCatalog {
@@ -265,6 +268,15 @@ impl VendorCatalog {
             events: Some(events),
             ..Default::default()
         }
+    }
+
+    /// Follow the configured network mode (set whenever config is read).
+    pub fn set_offline(&self, offline: bool) {
+        self.offline
+            .store(offline, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn is_offline(&self) -> bool {
+        self.offline.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn logins(&self) -> &auth::Logins {
@@ -411,6 +423,21 @@ impl VendorCatalog {
     ) -> VendorStatus {
         let now = crate::now();
         let previous = self.entries.lock().await.get(&vendor).cloned();
+        if self.is_offline() {
+            // No helper network activity offline: report what is known.
+            let mut status = match previous {
+                Some(status) => status,
+                None => {
+                    let persisted = self.persisted.lock().await;
+                    VendorStatus::unchecked(vendor, persisted.get(&vendor))
+                }
+            };
+            status.availability = Availability::Unavailable;
+            status.detail =
+                "Offline mode: cloud models need the network. Switch network mode to Online in Settings."
+                    .into();
+            return status;
+        }
         if let Some(existing) = &previous {
             let fresh = now - existing.fetched_at < MIN_REFRESH_SECS;
             let backing_off = existing.next_allowed > now;

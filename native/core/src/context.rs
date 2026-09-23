@@ -47,6 +47,7 @@ pub fn capability_guidance(config: &crate::config::Config, schemas: &[Value]) ->
     } else {
         note.push_str(" Shell execution is unavailable in this task; explain that specific limit if relevant.");
     }
+    note.push_str(crate::web::capability_note(config));
     note
 }
 

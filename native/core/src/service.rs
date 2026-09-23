@@ -123,7 +123,9 @@ impl Service {
             .clone())
     }
     fn config(&self) -> Result<Config> {
-        Config::load(self.engine.paths(), Some(&self.workspace()?))
+        let config = Config::load(self.engine.paths(), Some(&self.workspace()?))?;
+        self.engine.vendors().set_offline(config.offline());
+        Ok(config)
     }
     fn snapshot_selection(&self) -> Result<Selection> {
         Ok(self
@@ -815,6 +817,14 @@ impl Service {
                             text("permission_level")
                         }))?;
                     cfg.permissions.network = body["network"].as_bool().unwrap_or(false);
+                    // New installs start restricted: every file edit and
+                    // command asks unless the user picked "Allow project edits".
+                    cfg.permissions.mode = if text("permission_mode") == "allow_edits" {
+                        crate::config::PermissionMode::AllowEdits
+                    } else {
+                        crate::config::PermissionMode::Ask
+                    };
+                    cfg.permissions.approve_shell = true;
                     cfg.ui["theme"] = json!(if text("theme").is_empty() {
                         "light"
                     } else {

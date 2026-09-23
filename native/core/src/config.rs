@@ -91,6 +91,8 @@ fn default_keep_alive() -> String {
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
     Ask,
+    /// Code default keeps pre-0.28 configs working; first-run onboarding
+    /// writes `ask` so new installs start restricted.
     #[default]
     AllowEdits,
 }
