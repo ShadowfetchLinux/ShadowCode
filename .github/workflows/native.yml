@@ -1,17 +1,18 @@
 name: Native desktop
 on:
   push:
-    branches: [main, native-0.20]
+    branches: [main]
   pull_request:
-    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'packaging/native-app-run.sh', 'scripts/install-appimage.sh', 'scripts/test-install-appimage.sh', 'scripts/*native*.mjs', 'scripts/native-packaging-env.sh', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml', '.github/workflows/release.yml']
+    paths: ['native/**', 'src-tauri/**', 'ui/**', 'licenses/native/**', 'packaging/native-runtime/**', 'packaging/native-app-run.sh', 'packaging/llama.cpp/**', 'packaging/shadow-agent.desktop', 'tools/llama.cpp.pin', 'tools/glslc-flatpak.sh', 'scripts/build-llama.cpp.sh', 'scripts/*llama*.mjs', 'scripts/install-appimage.sh', 'scripts/test-install-appimage.sh', 'scripts/*native*.mjs', 'scripts/native-packaging-env.sh', 'scripts/native-mcp-peer/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/native.yml', '.github/workflows/release.yml']
 permissions:
   contents: read
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       RUSTUP_TOOLCHAIN: '1.95.0'
+      SHADOWCODE_BUILD_JOBS: '4'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -19,8 +20,12 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: ui/package-lock.json
+      - name: Package version
+        run: echo "VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_ENV"
       - name: Native window dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf webkit2gtk-driver xvfb
+      - name: Managed llama.cpp build dependencies
+        run: sudo apt-get install -y cmake ninja-build libssl-dev libvulkan-dev glslc spirv-headers
       - run: npm --prefix ui ci && npm --prefix ui run build && npm --prefix ui test
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
@@ -74,49 +79,63 @@ jobs:
         run: node --test scripts/test-native-source-fetch.mjs
       - name: Prove packaging PATH ignores host node hijacks
         run: node --test scripts/test-native-packaging-env.mjs
+      - name: Restore the managed llama.cpp build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            tools/llama.cpp
+            tools/spirv-headers
+            tools/spirv-headers-prefix
+          key: llama-cpp-${{ runner.os }}-${{ hashFiles('tools/llama.cpp.pin', 'scripts/build-llama.cpp.sh') }}
+      - name: Build the managed llama.cpp runtime (Vulkan + all CPU variants)
+        run: bash scripts/build-llama.cpp.sh --no-user-install
+      - name: Check the managed runtime packaging steps
+        run: node --test scripts/test-llama-runtime.mjs
       - name: Build native development packages with dependency notices
         run: node scripts/build-native.mjs
       - name: Inspect both packages
-        run: node scripts/check-native-package.mjs target/release/bundle/appimage/ShadowCode_0.23.0_amd64.AppImage target/release/bundle/deb/ShadowCode_0.23.0_amd64.deb
+        run: node scripts/check-native-package.mjs "target/release/bundle/appimage/ShadowCode_${VERSION}_amd64.AppImage" "target/release/bundle/deb/ShadowCode_${VERSION}_amd64.deb"
       - name: Rebuild the shipped runtime sources without network access
         run: node scripts/test-native-runtime-sources.mjs
       - name: Exercise concurrent AppImage extraction and shutdown
         run: node scripts/test-native-runtime.mjs
+      - name: Verify installer runtime swap and checksum refusal
+        run: bash scripts/test-install-appimage.sh
       - name: Exercise the packaged CLI without a display
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.23.0_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_${{ env.VERSION }}_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_CLI_ARTIFACTS: artifacts/native-package/cli
         run: node scripts/test-native-cli.mjs
       - name: Exercise the packaged native terminal
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.23.0_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_${{ env.VERSION }}_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_TUI_ARTIFACTS: artifacts/native-package/tui
         run: node scripts/test-native-tui.mjs
       - name: Exercise the packaged native window
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.23.0_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_${{ env.VERSION }}_amd64.AppImage
           SHADOW_DESKTOP_ARGS: '["--appimage-extract-and-run","ui"]'
           SHADOW_NATIVE_DEFAULT_PROFILE: '1'
           SHADOW_NATIVE_ARTIFACTS: artifacts/native-package/window
         run: xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- node scripts/test-native-desktop.mjs
       - name: Exercise the packaged native MCP server
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.23.0_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_${{ env.VERSION }}_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_MCP_ARTIFACTS: artifacts/native-package/mcp-server
         run: node scripts/test-native-mcp-server.mjs
       - name: Exercise the packaged native MCP HTTP server
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.23.0_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_${{ env.VERSION }}_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_MCP_ARTIFACTS: artifacts/native-package/mcp-server-http
           SHADOW_MCP_TRANSPORT: http
         run: node scripts/test-native-mcp-server.mjs
       - name: Verify packaged MCP interoperability with official TypeScript clients
         env:
-          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_0.23.0_amd64.AppImage
+          SHADOW_DESKTOP_BINARY: ${{ github.workspace }}/target/release/bundle/appimage/ShadowCode_${{ env.VERSION }}_amd64.AppImage
           SHADOW_CLI_ARGS: '["--appimage-extract-and-run"]'
           SHADOW_MCP_PEER_ARTIFACTS: artifacts/native-package/mcp-peer
         run: node scripts/test-native-mcp-peer.mjs

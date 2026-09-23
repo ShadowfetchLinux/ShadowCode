@@ -13,6 +13,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { RUNTIME_LOCATION } from "./llama-runtime.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const run = promisify(execFile);
@@ -61,7 +62,7 @@ async function upstreamNotices() {
   return { vendor, files: manifest.files };
 }
 
-export async function applicationNotices(destination) {
+export async function applicationNotices(destination, managedRuntime = null) {
   const upstream = await upstreamNotices();
   const compiler = (await run("rustc", ["--version", "--verbose"], options))
     .stdout;
@@ -219,6 +220,30 @@ export async function applicationNotices(destination) {
     version,
     notices: standardLibrary,
   });
+  // The managed llama.cpp runtime shipped as usr/lib/shadowcode in both
+  // packages; readManagedRuntime already matched its NOTICES to these pins.
+  for (const component of managedRuntime?.components || []) {
+    const notices = [];
+    for (const file of component.notices)
+      notices.push({
+        ...(await copyNotice(
+          path.join(upstream.vendor, file.file),
+          destination,
+          `upstream/${file.file}`,
+        )),
+        origin: file.url,
+      });
+    packages.push({
+      ecosystem: "managed-runtime",
+      name: component.name,
+      version: component.version,
+      license: component.license,
+      source: component.source,
+      location: RUNTIME_LOCATION,
+      backend: managedRuntime.backend,
+      notices,
+    });
+  }
   const projectLicense = await copyNotice(
     path.join(root, "LICENSE"),
     destination,
@@ -227,7 +252,7 @@ export async function applicationNotices(destination) {
   const manifest = {
     schema: 1,
     scope:
-      "Resolved Cargo graph for the build target (including build/test dependencies), production npm dependency graph, and Rust standard library. This deliberately includes dependencies eliminated by the linker or JavaScript bundler.",
+      "Resolved Cargo graph for the build target (including build/test dependencies), production npm dependency graph, Rust standard library, and the managed llama.cpp runtime in usr/lib/shadowcode. This deliberately includes dependencies eliminated by the linker or JavaScript bundler.",
     target,
     projectLicense,
     packages,
@@ -238,7 +263,7 @@ export async function applicationNotices(destination) {
   );
   await writeFile(
     path.join(destination, "README.txt"),
-    "ShadowCode dependency notices\n\napplication.json lists application dependency versions, source locations, and notice hashes.\nThe original license and copyright texts are retained in the referenced files.\nAppImage system libraries and helpers have a separate system.json inventory.\nThe application uses dynamic system libraries in Debian packages.\nCorresponding-source release artifacts are tracked separately from this notice inventory.\n",
+    "ShadowCode dependency notices\n\napplication.json lists application dependency versions, source locations, and notice hashes.\nThe original license and copyright texts are retained in the referenced files.\nAppImage system libraries and helpers have a separate system.json inventory.\nThe application uses dynamic system libraries in Debian packages.\nThe managed llama.cpp runtime in /usr/lib/shadowcode is listed in application.json (ecosystem managed-runtime); its license texts are also in /usr/lib/shadowcode/NOTICES.\nCorresponding-source release artifacts are tracked separately from this notice inventory.\n",
   );
   console.log(
     `Collected notices for ${packages.length} application dependencies (${target})`,
@@ -295,7 +320,12 @@ export async function appdirNotices(appdir) {
   }
   const packages = new Map();
   const generated = [];
+  const managedRuntime = [];
   for (const file of await walk(appdir)) {
+    if (file.startsWith(`${RUNTIME_LOCATION}/`)) {
+      managedRuntime.push(file);
+      continue;
+    }
     if (
       !file.startsWith("usr/") ||
       file.startsWith("usr/share/doc/") ||
@@ -361,11 +391,28 @@ export async function appdirNotices(appdir) {
       origin: file.url,
     });
   }
+  if (managedRuntime.length) {
+    // Not from the host package database: attributed to the pinned llama.cpp
+    // build in application.json, which must already be in this directory.
+    const application = await json(path.join(destination, "application.json"));
+    assert.ok(
+      application.packages.some(
+        (pkg) =>
+          pkg.ecosystem === "managed-runtime" && pkg.name === "llama.cpp",
+      ),
+      `${RUNTIME_LOCATION} is bundled but application.json does not attribute llama.cpp`,
+    );
+  }
   const manifest = {
     schema: 1,
     packages: [...packages.values()].sort((a, b) =>
       a.name.localeCompare(b.name),
     ),
+    managedRuntime: {
+      location: RUNTIME_LOCATION,
+      attributedIn: "application.json",
+      files: managedRuntime,
+    },
     generatedCaches: generated,
     commonLicenses: common,
     helpers,

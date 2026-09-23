@@ -15,6 +15,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import {
+  RUNTIME_LOCATION,
+  parseFields,
+  verifyRuntimeDirectory,
+} from "./llama-runtime.mjs";
 const run = promisify(execFile);
 const [appimagePath, debPath] = process.argv
   .slice(2)
@@ -30,6 +35,14 @@ await mkdir(artifacts, { recursive: true });
 await rm(path.join(artifacts, "package.json"), { force: true });
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-package-"));
 const options = { timeout: 120000, maxBuffer: 16000000 };
+const runWith = (binary, args, extra = {}) =>
+  run(binary, args, { ...options, ...extra });
+const pin = parseFields(
+  await readFile(
+    fileURLToPath(new URL("../tools/llama.cpp.pin", import.meta.url)),
+    "utf8",
+  ),
+);
 const digest = async (file) =>
   createHash("sha256")
     .update(await readFile(file))
@@ -56,6 +69,18 @@ async function verifyNotices(directory, includeSystem) {
       `Missing ${ecosystem} notices`,
     );
   }
+  const llama = application.packages.find(
+    (pkg) => pkg.ecosystem === "managed-runtime" && pkg.name === "llama.cpp",
+  );
+  assert.equal(
+    llama?.version,
+    pin.commit,
+    "The notices must attribute the bundled runtime to the pinned llama.cpp",
+  );
+  assert.ok(
+    llama.notices.some((notice) => notice.file.endsWith("/llama.cpp-LICENSE")),
+    "The llama.cpp MIT notice must be shipped",
+  );
   const files = [application.projectLicense];
   for (const pkg of application.packages) {
     assert.ok(
@@ -127,6 +152,14 @@ try {
     "The package must use the launcher that preserves caller paths and external language runtimes",
   );
   const appimageNotices = await verifyNotices(appdir, true);
+  // The runtime as a user machine loads it: relative links only, the pinned
+  // commit, bundled libraries resolved inside the directory, LD_LIBRARY_PATH
+  // unset.
+  const appimageRuntime = await verifyRuntimeDirectory(
+    path.join(appdir, RUNTIME_LOCATION),
+    pin,
+    { run: runWith },
+  );
   const runtimeBase = path.join(
     appdir,
     "usr/share/doc/shadowcode/notices/runtime",
@@ -226,6 +259,21 @@ try {
   const deb = path.join(scratch, "deb");
   await run("dpkg-deb", ["--extract", debPath, deb], options);
   const debNotices = await verifyNotices(deb, false);
+  const debRuntime = await verifyRuntimeDirectory(
+    path.join(deb, RUNTIME_LOCATION),
+    pin,
+    { run: runWith },
+  );
+  const debDependencies = (
+    await run("dpkg-deb", ["--field", debPath, "Depends"], options)
+  ).stdout.trim();
+  for (const dependency of ["libgomp1", "libssl3"])
+    assert.ok(
+      debDependencies
+        .split(/,\s*/)
+        .some((entry) => entry.split(" ")[0] === dependency),
+      `The deb must depend on ${dependency} for the llama.cpp runtime`,
+    );
   assert.deepEqual(
     (await inspectTree(deb)).filter((file) =>
       /^(?:python[\d.]*|libpython.*|.*\.py[co]?)$/i.test(path.basename(file)),
@@ -287,6 +335,7 @@ try {
       "matching compiled code and versions in AppImage and Debian packages",
       "versioned dependency inventories and SHA-256 verification of every notice",
       "patched AppImage runtime machine code, notices, and matching source archive",
+      "managed llama.cpp in usr/lib/shadowcode of both packages: pinned commit, relative symlinks, bundled libraries resolved inside the directory, llama-server --version with LD_LIBRARY_PATH unset, llama.cpp MIT notice",
     ],
     packages: await Promise.all(
       [appimagePath, debPath, sourcesPath].map(async (file) => ({
@@ -295,9 +344,8 @@ try {
         sha256: await digest(file),
       })),
     ),
-    debDependencies: (
-      await run("dpkg-deb", ["--field", debPath, "Depends"], options)
-    ).stdout.trim(),
+    debDependencies,
+    managedRuntime: { appimage: appimageRuntime, deb: debRuntime },
     maintainer: (
       await run("dpkg-deb", ["--field", debPath, "Maintainer"], options)
     ).stdout.trim(),

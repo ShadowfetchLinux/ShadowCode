@@ -9,11 +9,25 @@
 #   * Vulkan needs a `glslc` shader compiler. `tools/glslc-flatpak.sh` finds one
 #     on PATH or inside a user-installed org.freedesktop.Sdk flatpak runtime.
 #     Set SHADOWCODE_LLAMA_VULKAN=0 to build a CPU-only runtime.
-#   * SPIRV-Headers (header-only, Khronos) is cloned from its official
-#     repository into tools/ when the system does not provide it.
+#   * SPIRV-Headers (header-only, Khronos) is fetched from its official
+#     repository at the commit pinned in tools/llama.cpp.pin
+#     (spirv_headers_commit=) and installed into tools/spirv-headers-prefix.
+#   * cmake: SHADOWCODE_CMAKE, .venv/bin/cmake in this checkout, or cmake on
+#     PATH (install your distribution's cmake, or pip install cmake into any
+#     venv).
+#   * The upstream license texts of everything compiled into the runtime are
+#     copied into NOTICES/ next to the binaries: llama.cpp and ggml, the
+#     vendored cpp-httplib, nlohmann/json, stb_image, miniaudio and
+#     subprocess.h, and SPIRV-Headers when the Vulkan module is built.
 #
-# Outputs: packaging/llama.cpp/bin (bundled into the AppImage) and, unless
-# --no-user-install is given, ~/.local/lib/shadowcode (used by an installed app).
+# Outputs: packaging/llama.cpp/bin (bundled into the AppImage and the deb) and,
+# unless --no-user-install is given, ~/.local/lib/shadowcode.
+#
+#   --no-user-install  only write packaging/llama.cpp/bin
+#   --cpu-only         do not build the Vulkan module
+#   --notices-only     do not compile: refresh NOTICES/ and COMMIT of an existing
+#                      packaging/llama.cpp/bin that was built from the pinned
+#                      commit (refuses when the built commit differs)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${SHADOWCODE_LLAMA_SRC:-$ROOT/tools/llama.cpp}"
@@ -27,25 +41,29 @@ SPIRV_SRC="$ROOT/tools/spirv-headers"
 SPIRV_PREFIX="$ROOT/tools/spirv-headers-prefix"
 WANT_VULKAN="${SHADOWCODE_LLAMA_VULKAN:-1}"
 USER_INSTALL=1
+NOTICES_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --no-user-install) USER_INSTALL=0 ;;
     --cpu-only) WANT_VULKAN=0 ;;
+    --notices-only) NOTICES_ONLY=1; USER_INSTALL=0 ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
-PINNED="${SHADOWCODE_LLAMA_COMMIT:-}"
-if [[ -z "$PINNED" && -f "$PIN" ]]; then
-  PINNED="$(awk -F= '/^commit=/{print $2; exit}' "$PIN")"
-fi
+# key=value lookup in a COMMIT/pin file.
+field() { [[ -f "$1" ]] && awk -F= -v key="$2" '$1 == key { print substr($0, length(key) + 2); exit }' "$1"; }
+PINNED="${SHADOWCODE_LLAMA_COMMIT:-$(field "$PIN" commit || true)}"
+SPIRV_PINNED="${SHADOWCODE_SPIRV_HEADERS_COMMIT:-$(field "$PIN" spirv_headers_commit || true)}"
+SPIRV_COMMIT=""
+SPIRV_NOTICE=""
 CMAKE="${SHADOWCODE_CMAKE:-}"
 if [[ -z "$CMAKE" ]]; then
   if [[ -x "$ROOT/.venv/bin/cmake" ]]; then
     CMAKE="$ROOT/.venv/bin/cmake"
   elif command -v cmake >/dev/null 2>&1; then
     CMAKE="$(command -v cmake)"
-  else
-    echo "cmake is required. Install it into the repo venv: .venv/bin/pip install cmake" >&2
+  elif [[ "$NOTICES_ONLY" == "0" ]]; then
+    echo "cmake is required: install your distribution's cmake, or pip install cmake into any venv and set SHADOWCODE_CMAKE." >&2
     exit 1
   fi
 fi
@@ -71,6 +89,100 @@ else
 fi
 COMMIT="$(git -C "$SRC" rev-parse HEAD)"
 
+# SPIRV-Headers at the pinned commit (the default branch only while no pin
+# exists yet; the commit used is then recorded in the pin).
+fetch_spirv_headers() {
+  if [[ ! -d "$SPIRV_SRC/.git" ]]; then
+    git init -q "$SPIRV_SRC"
+    git -C "$SPIRV_SRC" remote add origin "$SPIRV_URL"
+  fi
+  git -C "$SPIRV_SRC" remote set-url origin "$SPIRV_URL"
+  if [[ -n "$SPIRV_PINNED" ]]; then
+    if ! git -C "$SPIRV_SRC" cat-file -e "$SPIRV_PINNED^{commit}" 2>/dev/null; then
+      git -C "$SPIRV_SRC" fetch --depth 1 origin "$SPIRV_PINNED"
+    fi
+    git -C "$SPIRV_SRC" checkout -q --detach "$SPIRV_PINNED"
+  else
+    git -C "$SPIRV_SRC" fetch --depth 1 origin HEAD
+    git -C "$SPIRV_SRC" checkout -q --detach FETCH_HEAD
+  fi
+  SPIRV_COMMIT="$(git -C "$SPIRV_SRC" rev-parse HEAD)"
+  if [[ -n "$SPIRV_PINNED" && "$SPIRV_COMMIT" != "$SPIRV_PINNED" ]]; then
+    echo "SPIRV-Headers checkout $SPIRV_COMMIT does not match the pin $SPIRV_PINNED" >&2
+    exit 1
+  fi
+  SPIRV_NOTICE="$SPIRV_SRC/LICENSE"
+}
+install_spirv_headers() {
+  if [[ "$(cat "$SPIRV_PREFIX/COMMIT" 2>/dev/null)" == "$SPIRV_COMMIT" \
+        && -f "$SPIRV_PREFIX/include/spirv/unified1/spirv.hpp" ]]; then
+    return
+  fi
+  rm -rf "$SPIRV_SRC/build" "$SPIRV_PREFIX"
+  "$CMAKE" -S "$SPIRV_SRC" -B "$SPIRV_SRC/build" \
+    -DCMAKE_INSTALL_PREFIX="$SPIRV_PREFIX" \
+    -DSPIRV_HEADERS_ENABLE_TESTS=OFF -DSPIRV_HEADERS_ENABLE_INSTALL=ON >/dev/null
+  "$CMAKE" --build "$SPIRV_SRC/build" --target install >/dev/null
+  printf '%s\n' "$SPIRV_COMMIT" > "$SPIRV_PREFIX/COMMIT"
+}
+
+# Upstream license texts for the code compiled into the runtime. The header-only
+# libraries carry their license at the end (stb_image, miniaudio) or the start
+# (subprocess.h) of the header; that section is copied verbatim.
+write_notices() {
+  local out="$1/NOTICES"
+  rm -rf "$out"
+  mkdir -p "$out"
+  cp "$SRC/LICENSE" "$out/llama.cpp-LICENSE"
+  cp "$SRC/licenses/LICENSE-jsonhpp" "$out/nlohmann-json-LICENSE"
+  cp "$SRC/vendor/cpp-httplib/LICENSE" "$out/cpp-httplib-LICENSE"
+  sed -n '/This software is available under 2 licenses/,$p' "$SRC/vendor/stb/stb_image.h" > "$out/stb_image-LICENSE"
+  sed -n '/This software is available as a choice of the following licenses/,$p' "$SRC/vendor/miniaudio/miniaudio.h" > "$out/miniaudio-LICENSE"
+  sed -n '1,/For more information, please refer to/p' "$SRC/vendor/sheredom/subprocess.h" > "$out/subprocess.h-LICENSE"
+  if [[ "$BACKEND" == *vulkan* ]]; then
+    cp "$SPIRV_NOTICE" "$out/SPIRV-Headers-LICENSE"
+  fi
+  local file
+  for file in "$out"/*; do
+    [[ -s "$file" ]] || { echo "Empty runtime notice: $file" >&2; exit 1; }
+  done
+}
+
+write_commit() {
+  {
+    printf 'url=%s\n' "$URL"
+    printf 'commit=%s\n' "$COMMIT"
+    if [[ -n "$SPIRV_COMMIT" ]]; then
+      printf 'spirv_headers_commit=%s\n' "$SPIRV_COMMIT"
+    elif [[ -n "$SPIRV_PINNED" && "$1" == "$PIN" ]]; then
+      # A CPU-only build keeps the SPIRV-Headers pin for the next Vulkan build.
+      printf 'spirv_headers_commit=%s\n' "$SPIRV_PINNED"
+    fi
+    printf 'backend=%s\n' "$BACKEND"
+    printf 'built=%s\n' "$BUILT"
+  } > "$1"
+}
+
+if [[ "$NOTICES_ONLY" == "1" ]]; then
+  EXISTING="$OUT_REPO/bin/COMMIT"
+  [[ -x "$OUT_REPO/bin/llama-server" && -f "$EXISTING" ]] || { echo "No built runtime in $OUT_REPO/bin" >&2; exit 1; }
+  if [[ "$(field "$EXISTING" commit)" != "$COMMIT" ]]; then
+    echo "The runtime in $OUT_REPO/bin was built from $(field "$EXISTING" commit), not the pinned $COMMIT; rebuild it." >&2
+    exit 1
+  fi
+  BACKEND="$(field "$EXISTING" backend)"
+  BUILT="$(field "$EXISTING" built)"
+  if [[ "$BACKEND" == *vulkan* ]]; then
+    fetch_spirv_headers
+  fi
+  write_notices "$OUT_REPO/bin"
+  write_commit "$OUT_REPO/bin/COMMIT"
+  cp "$OUT_REPO/bin/COMMIT" "$OUT_REPO/COMMIT"
+  write_commit "$PIN"
+  printf 'Refreshed notices of managed llama.cpp %s (%s) in %s\n' "$COMMIT" "$BACKEND" "$OUT_REPO/bin"
+  exit 0
+fi
+
 VULKAN_FLAGS=(-DGGML_VULKAN=OFF)
 BACKEND="cpu"
 if [[ "$WANT_VULKAN" == "1" ]]; then
@@ -87,22 +199,9 @@ if [[ "$WANT_VULKAN" == "1" ]]; then
   fi
 fi
 if [[ "$WANT_VULKAN" == "1" ]]; then
-  SPIRV_INCLUDE=""
-  if [[ -f /usr/include/spirv/unified1/spirv.hpp ]]; then
-    SPIRV_INCLUDE=/usr/include
-  else
-    if [[ ! -f "$SPIRV_PREFIX/include/spirv/unified1/spirv.hpp" ]]; then
-      if [[ ! -d "$SPIRV_SRC/.git" ]]; then
-        git clone --depth 1 "$SPIRV_URL" "$SPIRV_SRC"
-      fi
-      "$CMAKE" -S "$SPIRV_SRC" -B "$SPIRV_SRC/build" \
-        -DCMAKE_INSTALL_PREFIX="$SPIRV_PREFIX" \
-        -DSPIRV_HEADERS_ENABLE_TESTS=OFF -DSPIRV_HEADERS_ENABLE_INSTALL=ON >/dev/null
-      "$CMAKE" --build "$SPIRV_SRC/build" --target install >/dev/null
-      git -C "$SPIRV_SRC" rev-parse HEAD > "$SPIRV_PREFIX/COMMIT"
-    fi
-    SPIRV_INCLUDE="$SPIRV_PREFIX/include"
-  fi
+  fetch_spirv_headers
+  install_spirv_headers
+  SPIRV_INCLUDE="$SPIRV_PREFIX/include"
   # The pinned ggml-vulkan CMake only runs find_package(SPIRV-Headers); the
   # header must also be on the compiler include path.
   VULKAN_FLAGS=(
@@ -133,6 +232,7 @@ fi
 "$CMAKE" --build "$BUILD_DIR" --parallel "$JOBS"
 BIN_DIR="$BUILD_DIR/bin"
 [[ -x "$BIN_DIR/llama-server" && -x "$BIN_DIR/llama-cli" ]] || { echo "llama.cpp build did not produce llama-cli/llama-server" >&2; exit 1; }
+BUILT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 install_runtime() {
   local dest="$1"
@@ -143,6 +243,7 @@ install_runtime() {
   # Core libraries, the two tool implementations, and every loadable backend
   # module (libggml-cpu-*.so, libggml-vulkan.so). Other tool libraries from
   # the build tree (bench, quantize, perplexity, ...) are not shipped.
+  # cp -a keeps the SONAME symlinks relative.
   find "$BIN_DIR" -maxdepth 1 \( -name 'libllama.so*' -o -name 'libllama-common.so*' \
     -o -name 'libllama-server-impl.so' -o -name 'libllama-cli-impl.so' \
     -o -name 'libggml*.so*' -o -name 'libmtmd*.so*' \) -exec cp -a {} "$dest.new/" \;
@@ -160,12 +261,8 @@ install_runtime() {
       patchelf --set-rpath '$ORIGIN' "$lib"
     done
   fi
-  {
-    printf 'url=%s\n' "$URL"
-    printf 'commit=%s\n' "$COMMIT"
-    printf 'backend=%s\n' "$BACKEND"
-    printf 'built=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  } > "$dest.new/COMMIT"
+  write_notices "$dest.new"
+  write_commit "$dest.new/COMMIT"
   # Replace atomically so a running app never sees a half-copied runtime.
   if [[ -d "$dest" ]]; then
     rm -rf "$dest.old"
@@ -176,7 +273,7 @@ install_runtime() {
 }
 install_runtime "$OUT_REPO/bin"
 cp "$OUT_REPO/bin/COMMIT" "$OUT_REPO/COMMIT"
-cp "$OUT_REPO/bin/COMMIT" "$PIN"
+write_commit "$PIN"
 if [[ "$USER_INSTALL" == "1" ]]; then
   install_runtime "$OUT_USER"
 fi
