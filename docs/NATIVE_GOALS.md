@@ -1,10 +1,12 @@
 # Goals in the native desktop
 
+> **Advanced.** In 0.28 this is reached through Settings › Advanced › Goals. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
 The native 0.21 release stores goals, milestones, their task IDs, and
 run state in the same SQLite database as conversation history. Goals imported
 from 0.19 retain their original checklist and completion state.
 
-Open **Goals** in the workspace drawer, describe the desired outcome, then use
+Open **Settings › Advanced › Goals**, describe the desired outcome, then use
 **Plan** to save it or **Plan & run** to begin. New goals start with three visible
 milestones: inspect the project and define acceptance checks, implement the
 change, and run the checks. The inspection milestone uses read-only Plan mode.
@@ -62,5 +64,5 @@ Command verification requires `code` mode. The desktop creates the default
 checklist. Run, pause, abandon, delete, and manual milestone changes use the
 shared application service, so future CLI clients use the same lifecycle.
 
-See [verification evidence](NATIVE_VERIFICATION.md) for tests and
-[migration gates](NATIVE_MIGRATION.md) for the remaining release requirements.
+See [verification evidence](archive/NATIVE_VERIFICATION.md) for tests and
+[migration gates](archive/NATIVE_MIGRATION.md) for the remaining release requirements.

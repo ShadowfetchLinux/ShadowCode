@@ -1,4 +1,6 @@
-# Queued follow-ups — native 0.21
+# Queued follow-ups
+
+> **Reference.** In 0.28 this covers the composer (press Enter while a task runs). For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 Keep working on the next instruction while ShadowCode runs a task. In the native
 desktop, enter a message and press Enter or **Queue follow-up**. The running
@@ -48,8 +50,8 @@ messages too if they are no longer wanted.
 - This desktop queue uses the native engine. The native CLI also supports queued
   submissions; see [NATIVE_CLI.md](NATIVE_CLI.md).
 
-See [NATIVE_VERIFICATION.md](NATIVE_VERIFICATION.md) for the engine and real-window
-checks and [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md) for the release gates.
+See [the 0.2x verification record](archive/NATIVE_VERIFICATION.md) for the engine and real-window
+checks and [the 0.2x release gates](archive/NATIVE_MIGRATION.md).
 
 ## Polling and long prompts
 

@@ -2,167 +2,198 @@
 
 ## Supported versions and reporting
 
-The latest stable release and `main` are supported. Please use a
-[private security advisory](https://github.com/ShadowfetchLinux/ShadowCode/security/advisories/new)
-for vulnerabilities. Include affected versions, impact, and reproduction steps
-without live credentials. There is no bug bounty program.
+The latest release and `main` are supported. Report vulnerabilities through a
+[private security advisory](https://github.com/Shadowfetchapps/ShadowCode/security/advisories/new).
+Include the affected versions, the impact and steps to reproduce, and leave out
+live credentials. There is no bug bounty program.
+
+## What ShadowCode is not
+
+**ShadowCode is not an operating-system sandbox.** Shell commands run as your
+Linux user, with that user's files and network. If `bwrap` (bubblewrap) is
+available, ShadowCode's own `exec` tool can wrap a command in a limited profile:
+the project is writable, home and system directories are read-only, and the
+network is off unless allowed. If bubblewrap is missing or user namespaces are
+blocked, commands run unwrapped and Doctor reports it. Command classification
+(privileged, network, destructive Git) is a lexical policy check. It is not
+containment.
+
+Vendor CLIs (Codex, Claude Code, Cursor, Antigravity, Grok) run as your user
+with their own tools and sandboxes. ShadowCode doesn't wrap them in bubblewrap,
+and its network and `sudo` rules don't apply to them. Use a container or a
+separate account when you need stronger isolation.
+
+## Vendor credentials
+
+- **ShadowCode never reads vendor credentials.** Sign-in state comes from each
+  vendor's documented status command or protocol: Codex app-server
+  `account/read`, `claude auth status`, the ACP handshake for Cursor and Grok,
+  `agy models`. ShadowCode never opens `~/.codex/auth.json`, Claude's
+  credential files, the Grok or Cursor login files, or Antigravity's keyring
+  entry.
+- **Connect and Disconnect** run the vendor's own login and logout commands
+  as supervised child processes. The vendor opens the browser or prints a URL
+  or device code. ShadowCode only relays the printed lines after redaction, and
+  never shows a URL that carries a code or token parameter as a link.
+  Antigravity sign-in and sign-out happen only inside `agy`.
+- **No API keys reach vendor CLIs.** Every vendor CLI that runs a task, and
+  every login and logout, starts without `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `OPENAI_API_KEY`, `CODEX_API_KEY`, `CURSOR_API_KEY`, `XAI_API_KEY`,
+  `GROK_API_KEY`, `GEMINI_API_KEY` and `GOOGLE_API_KEY`, so a subscription turn
+  can't turn into a per-token API call. A CLI that is itself signed in with an
+  API key is labelled *API key login · billed per token*.
+- **Claude Code's terms.** Anthropic doesn't allow third-party clients to use
+  Pro/Max OAuth tokens directly. ShadowCode only drives the official `claude`
+  binary under your own login, which is tolerated but not guaranteed.
+  `cli_agents.claude_enabled: false` turns the adapter off.
+
+## Local model runtime
+
+- **One server, one model.** The managed `llama-server` serves one model at a
+  time and binds `127.0.0.1` on a free port.
+- **Per-launch key.** Each launch gets a new random 32-byte key through the
+  `LLAMA_API_KEY` environment variable. The key never appears in argv, is never
+  written to disk, and ShadowCode's clients send it as a bearer token.
+- **Isolated process.** The server's web UI is off (`--no-webui`). Its
+  environment is cleared except for an allow-list. It runs in its own process
+  group and dies with ShadowCode (`PR_SET_PDEATHSIG`). Clients connect directly
+  and never through a proxy.
+- **Weights are never modified.** ShadowCode never downloads weights and never
+  deletes them when a row is removed. Ollama imports reference the store's
+  blobs read-only.
+- **Vetted runtime.** The runtime is resolved from fixed locations only (see
+  [ARCHITECTURE.md](ARCHITECTURE.md#local-runtime-lifecycle)), never from a bare
+  `PATH` lookup. The installer refuses a bundled runtime that has absolute or
+  dangling symlinks, missing notices, or a `llama-server` that doesn't report
+  its pinned commit.
+
+## Web tools
+
+`web_fetch` and `web_search` exist only for ShadowCode's own agent loop (local
+models). They are offered only when you turn on Web for the task and the
+network mode is *Online*.
+
+- **Addresses.** Only http and https URLs without embedded credentials, on
+  ports 80 and 443. DNS is resolved once, and every address is checked. The
+  connection is pinned to the checked addresses, so a second DNS answer can't
+  redirect it.
+- **Blocked ranges.** Loopback, private, CGNAT (100.64/10), link-local
+  (including cloud metadata 169.254.169.254), unspecified, multicast,
+  broadcast, reserved and documentation ranges are refused, including IPv4
+  addresses embedded in IPv6 forms. Exact `host:port` entries in
+  `network.allow_local_dev` may reach loopback or private dev servers.
+  Link-local and metadata addresses stay blocked even then.
+- **Redirects.** At most 5, followed by hand and re-checked each time. A
+  redirect from https to http is refused.
+- **Limits.** The client ignores proxies. Connect timeout 5 s, total 20 s,
+  body cap 2 MB, and only allow-listed text content types.
+- **Page content is data.** Every result is framed as data from the URL, not
+  instructions. Search results that can't be retrieved are reported as
+  `blocked`, never invented.
+
+## Permissions
+
+| Mode | ShadowCode's own tools |
+| --- | --- |
+| Ask before actions | File edits and shell commands ask |
+| Allow project edits | File edits inside the project run. Shell commands, deletes, Git staging and history changes, and background processes ask |
+
+Both modes also follow these rules:
+
+- Edits outside the project, including through symlinks, fail before any
+  approval is asked.
+- `sudo`, `su`, `pkexec`, `doas` and `run0` are denied unless `allow_root` is
+  set, and then they still ask.
+- Destructive Git commands in the shell ask. `git_reset` and `git_clean` need
+  the elevated level.
+- Network commands in the shell are denied unless network is enabled, and
+  always denied offline.
+- Plan and Review tasks are read-only.
+
+What each vendor runtime enforces (from `permissions.rs`, shown in
+**Settings › Permissions & network**):
+
+| Vendor | Enforcement |
+| --- | --- |
+| Codex | Codex's own sandbox: `workspace-write`, or `read-only` for Plan/Review, with `approvalPolicy: on-request`. Codex decides which actions ask. The `codex exec` fallback has no approval channel. It is used only if app-server fails before a turn starts, and only when shell commands are set not to ask (`permissions.approve_shell: false`). With the defaults of both modes, it never runs |
+| Claude Code | Permission prompts come to ShadowCode (`--permission-prompts host`). Plan/Review uses `--permission-mode plan`. Claude's own settings can pre-approve tools that ShadowCode never sees |
+| Cursor | ACP permission requests come to ShadowCode. Plan/Review uses Cursor's plan mode when offered |
+| Grok | ACP permission requests come to ShadowCode. Grok has no read-only mode, so Plan/Review is not enforced by Grok |
+| Antigravity | Never asks ShadowCode. It applies its own settings (`~/.gemini/antigravity-cli/settings.json`) and soft-denies actions it may not run. Plan/Review uses `--mode plan` |
+
+In read-only tasks, ShadowCode denies vendor approval requests automatically.
+Unanswered vendor requests are denied after `approval_timeout_sec` (600 s by
+default).
+
+## Trust gate and consent
+
+- **Trust.** Every task entry point (desktop, CLI, goals, MCP, workflows) goes
+  through one engine check, and tasks are refused in a project you haven't
+  trusted. Project instructions, skills, hooks, plugins and MCP definitions are
+  executable or influential content: trust a project only if you trust that
+  content.
+- **Consent before cloud.** Nothing leaves the computer silently when a
+  conversation moves to a cloud route. The turn needs your consent in three
+  cases: the previous turn ran locally, the conversation moves to another
+  provider (a bounded handoff of at most 12,000 characters), or images go to a
+  cloud route for the first time in the conversation. Without consent, no job
+  row is written and nothing is sent.
+- **Offline mode.** Jobs on cloud routes are refused, and no vendor process is
+  started for status, models or usage.
+
+## Stored data and redaction
+
+- **Before model context.** Common secret patterns (private keys, GitHub,
+  Slack and AWS tokens, `sk-…` keys, JWTs, bearer tokens, `api_key=…`) and
+  high-entropy tokens are replaced with `[redacted secret]` in file contents
+  and tool output. Requests to read `.env`, `.env.*`, `secrets.env`, credential
+  JSON or private keys are refused.
+- **Stored events.** `tool.started`, `tool.completed`, `approval.requested`
+  and `command.completed` payloads are written to SQLite in redacted form.
+  Vendor CLI output is redacted before it is shown or stored.
+- **Limits.** Redaction matches patterns only. It is not a guarantee.
+- **The history database is sensitive.** `shadow-agent.db` holds prompts,
+  answers and source excerpts. It is created with mode 600, and migration
+  backups get the same mode.
+- **Keys for HTTP providers** belong in `~/.config/shadow-agent/secrets.env`
+  (mode 600) or in environment variables named in the config. Never put them in
+  `config.yaml`.
 
 ## Local trust boundary
 
-Native 0.20 development uses embedded Tauri IPC for the desktop and a private
-Unix socket for CLI clients. The socket directory must be owned by the OS user
-and private; both peers check user credentials, protocol and profile identity.
-Requests use bounded frames and independent project/session selection. It opens
-no TCP listener. See [native CLI lifecycle and trust](docs/NATIVE_CLI.md).
-These boundaries trust processes running as the same user. The full
-[native release gates](docs/NATIVE_MIGRATION.md) remain in progress.
+- **No network listener.** The desktop talks to the engine over Tauri IPC in
+  the same process. The CLI uses a Unix socket in a private per-user directory
+  (`/run/user/<uid>/shadowcode/`). Both peers check the user ID, protocol and
+  profile, frames are bounded, and there is no TCP listener. Sockets left by
+  dead engines are removed at startup. Processes running as the same user are
+  trusted.
+- **Private directories.** Profile config, data and state directories are
+  created with mode 700 and must be owned by the current user. The profile lock
+  is a private regular file. Symlinks, extra hard links and foreign owners are
+  rejected.
+- **Webview restrictions.** The webview only navigates to the app's own
+  origin. Markdown from models renders without raw HTML or remote images. Only
+  `http`/`https` links without embedded credentials stay clickable.
+- **Optional MCP HTTP server.** `shadowcode mcp serve --http` binds loopback
+  only, needs a bearer credential and rejects browser origins. See
+  [docs/NATIVE_MCP.md](docs/NATIVE_MCP.md).
+- **Plugins and hooks.** [Plugins](docs/NATIVE_PLUGINS.md) install without
+  running anything. [Hooks](docs/NATIVE_HOOKS.md) need explicit activation
+  pinned to the exact definition. Enabled commands run as your user.
 
-Native profile config, data, and state directories are created with mode 700;
-existing application directories are restricted to that mode without deleting
-their contents or changing permissions on an existing parent directory. Each
-must be owned by the current account and must not itself be a symlink. A
-relocated XDG base or `--profile` parent may be a symlink. The native profile lock
-is a private regular file with mode 600; symlinks, additional hard links, foreign
-owners and special files are rejected before acquiring it.
+## Recovery
 
-Native configuration and secret writes serialize the full read–modify–write
-operation across threads in the owning engine; another native manager cannot
-open the same locked profile. This prevents unrelated concurrent changes from
-being overwritten. Reads require regular files and consume at most 1 MB plus a
-limit-check byte. Writes reject oversized results before replacing saved data.
-This coordination does not lock out an external text editor or another program
-running as the same account.
-
-[Native project plugins](docs/NATIVE_PLUGINS.md) install validated declarative
-bundles into namespaced project files. Installation does not execute scripts,
-install dependencies or activate hooks/MCP. Executable integrations require
-separate content-bound approval. Private install journals determine which
-unchanged files may be removed; edited files and legacy bundles are preserved.
-Plugin text can influence a selected task and is subject to the same project
-trust and tool permissions as other workflow instructions.
-
-[Native lifecycle hooks](docs/NATIVE_HOOKS.md) require explicit activation for a
-trusted workspace and exact definition hash. Discovery never imports repository
-code. The approval pins the command definition, not the scripts or dependencies
-it invokes. Enabled commands run as the user, inherit their environment, and can
-have effects outside the project; lexical root/network checks are not a sandbox.
-Changed manifests fail closed. Read-only tasks keep hooks inactive. Running and
-queued tasks keep their configuration snapshot; cancellation stops active hook
-processes. Hook shell edits are outside file-tool checkpoints. Python callbacks
-remain inactive until converted and reviewed.
-
-The supported 0.19 desktop API defaults to `127.0.0.1:7430`. It validates loopback Host values,
-rejects cross-origin and cross-site browser requests, and sends framing, MIME,
-referrer, and content-security headers. Do not expose it to a network, reverse
-proxy it to the public internet, or run it under a shared untrusted account.
-Local processes running as your user are trusted and can call the API.
-
-The legacy 0.19 MCP HTTP transport has its own optional bearer token, stored
-in `~/.config/shadow-agent/mcp-token`. The [native MCP HTTP gateway](docs/NATIVE_MCP.md)
-is explicitly started, binds only to loopback and requires a bearer credential
-reference. It validates Host, rejects browser Origins and bounds requests and
-connections. Stdio MCP inherits the launching client's trust. Both native
-transports pin a project and own their submitted jobs; browser API protections
-do not replace MCP authentication.
-
-## Files and command execution
-
-Filesystem tools resolve paths within the chosen workspace. Direct API writes
-honor read-only mode; desktop workspace mutations are blocked while an agent
-job is active there. Dangerous operations use the harness permission policy and
-approval flow.
-
-**The terminal is not an OS sandbox.** Commands execute as your Linux user with
-that user's filesystem and network capabilities. When `bwrap` (bubblewrap) is
-installed, `exec` may wrap the command in a limited profile: workspace bind,
-read-only home/system roots, and network off unless permissions allow network.
-If bubblewrap is missing or user namespaces are blocked (common on some Pop!_OS
-setups), ShadowCode falls back to the unsandboxed shell and Doctor reports that
-clearly — it does not pretend isolation. Command classification remains a
-heuristic control, not a containment guarantee. Workspace hooks, project
-instructions, MCP servers, and installed plugins are executable or influential
-project content. Trust a project only if you trust that content. Use a container
-or a separate account when stronger isolation is required.
-
-Review applies only current unstaged hunks. A changed diff causes a conflict,
-rather than applying a stale client patch. File restores can overwrite later
-edits; review the checkpoint and retain independent version-control backups.
-
-[Native SQLite inspection](docs/NATIVE_SQLITE.md) opens existing project
-databases read-only and authorizes only queries returning rows. SQL writes,
-ATTACH, configuration PRAGMAs and extension loading are denied; a small explicit
-allowlist supports read-only schema PRAGMAs. SQLite may maintain its WAL
-coordination sidecars. Directory capabilities confine database/sidecar paths;
-query work, concurrent readers and output are bounded. Cancellation interrupts
-SQLite and releases its connection; an OS filesystem stall may delay return.
-
-## Local GGUF inference
-
-ShadowCode can spawn a managed `llama-server` on 127.0.0.1 with one user-owned
-GGUF at a time. It does not start Ollama or LM Studio and does not download
-weights. Removing a catalog row deletes only the pointer, never the file. The
-managed binary lives under `~/.local/lib/shadowcode/` after install.
-
-## Vendor subscription CLIs
-
-Codex, Claude Code, Cursor, and Antigravity run as official local CLIs.
-ShadowCode does not scrape cookies, extract OAuth tokens, or treat a Gemini API
-key as Antigravity subscription access. Disconnecting ShadowCode does not always
-log out a shared native CLI — use that vendor's own logout when you want the
-CLI session gone. Image attachments are forwarded only on official vendor fields
-(Codex `localImage`, Claude image source blocks, Cursor ACP `image`). Antigravity
-rejects images.
-
-## Secrets and transcript content
-
-Keys belong in `~/.config/shadow-agent/secrets.env` with mode 600 (recommended on this
-machine; libsecret/secret-service was not required for day-to-day use and is not
-wired as a hard dependency), or environment
-variables named in config. Never commit keys, tokens, sessions, or personal
-workspace data. The installer does not source the secrets file as shell code.
-
-Before file contents or tool output enter model context, ShadowCode scans for
-common secret patterns and high-entropy tokens and replaces matches with
-`[redacted secret]`. Raw `.env` / `secrets.env` / credential JSON contents are
-refused rather than sent to the model. This is deliberate redaction for model
-context, not TPM or keyring migration, and does not rewrite shell commands.
-
-Local databases and drafts can contain prompts, tool output, and source code.
-Protect the user account and filesystem accordingly. The configured model
-provider receives the task context sent by the harness. Cloud providers may
-therefore receive project content; local providers keep inference on the machine.
-
-Vendor CLI backends (Claude, Codex, Grok) spawn the official CLI after the user
-logs in with that vendor. ShadowCode holds no vendor credentials and never
-reads `~/.codex/auth.json`, `~/.grok/auth.json`, or Claude credential files.
-Anthropic forbids third-party clients from using Pro/Max OAuth tokens directly
-(enforced 2026); driving the official `claude` binary with the user's own login
-is currently tolerated but not guaranteed. See
-[vendor CLI backends](docs/NATIVE_CLI_BACKENDS.md).
-
-The UI renders Markdown without executing raw HTML. It does not automatically
-load remote images embedded in model responses. Only fragment links and
-absolute `http`/`https` URLs without embedded credentials stay clickable;
-`javascript:`, `data:`, `file:`, and relative hrefs render as text. Allowed
-external links open with `noopener noreferrer`.
-
-Crash recovery does not auto-replay shell, Git history changes, or file
-mutations. Those classes require confirmation or human review. Incomplete
-tool groups are closed with a class-specific unknown-result record; shell
-is never treated as safe to replay. Engine-process reattach reconnects the
-desktop view only: it does not start jobs or retry mutating commands.
-Worktree repair requires the recorded real directory and does not guess a
-relocated checkout. Model prose is not treated as verified correctness.
-Doctor metrics stay on the local machine; there is no product telemetry.
+- **No replay.** Crash recovery never replays shell commands, Git history
+  changes or file edits. Interrupted jobs are marked `interrupted`.
+- **Review applies only current hunks.** If the diff changed, you get a
+  conflict instead of a stale patch.
+- **Rewind covers only ShadowCode's own file tools.** It doesn't undo shell
+  effects or vendor CLI edits.
 
 ## Releases
 
-Verify release assets against `SHA256SUMS`. Checksums detect mismatched or damaged
-downloads; they are not independent signatures. The 0.19 AppImage bundles Python and
-its dependencies, so security updates require installing a new build. Source
-installations use a project virtual environment. Neither installer deletes keys,
-configuration, or saved task history.
-
-Native development packages contain Rust application code, embedded UI assets,
-and native libraries; their dependency inventories and notices are checked during
-packaging. They have not yet replaced the supported release download.
+Check downloads against `SHA256SUMS`. Checksums catch damaged or mismatched
+files; they are not signatures. The installer refuses an AppImage without a
+matching entry unless you pass `--unverified`. Package notices and the bundled
+llama.cpp licence texts are checked during packaging
+([licenses/native](licenses/native/README.md)). ShadowCode sends no telemetry.

@@ -1,5 +1,7 @@
 # Native desktop conversation history
 
+> **Reference.** In 0.28 this covers the conversation view. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
 The native desktop opens a recent page of a saved conversation. Use **Older
 messages** above the transcript to read earlier pages, **Newer messages** to
 retrace your steps, or **Latest messages** to return to the current task. Loading

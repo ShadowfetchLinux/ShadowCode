@@ -1,14 +1,14 @@
 # Models and routing in the native desktop
 
-The native 0.21 build can choose a registered model for each task
-mode. Open **Health → Router**, choose the **Plan**, **Build**, **Review**, and
-**Test** models, then enable routing. Each field saves immediately. Leave a field
-on **Default** to follow the application model configured in Settings.
+> **Advanced.** In 0.28 this is reached through `config.yaml` (`routing`); there is no desktop control in 0.28. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
-The composer shows **Automatic by task mode** while routing is enabled. Choosing
-a specific model in the composer overrides the route for that task. The model
-note above the response records the actual model, provider, and purpose, and
-survives reload. The context meter uses that task's model context limit.
+Routing can choose a registered model for each task purpose when a task
+starts without an explicit model (CLI `run` without `--model`, goal
+milestones). Set `routing.enabled`, `planner`, `coder`, `reviewer` and `tester`
+in `config.yaml` (`shadowcode config routing.enabled true`). The 0.28 desktop
+has no router control: the composer picker always sends an explicit target,
+which overrides routing. The model note above the response records the actual
+model, provider and purpose.
 
 The engine normally reserves a quarter of that window for a response (up to
 8,192 tokens). If essential input leaves less room after history compaction,
@@ -62,5 +62,5 @@ The legacy `architecture`, `small_edits`, `vision`, and `local` routing keys are
 retained for configuration/API compatibility. They do not add new tool or image
 input capabilities. The desktop exposes the four task modes above.
 
-See [native verification](NATIVE_VERIFICATION.md) for the tests and
-[migration gates](NATIVE_MIGRATION.md) for remaining release work.
+See [native verification](archive/NATIVE_VERIFICATION.md) for the tests and
+[migration gates](archive/NATIVE_MIGRATION.md) for remaining release work.

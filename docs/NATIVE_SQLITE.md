@@ -1,4 +1,6 @@
-# Native SQLite inspection — 0.21
+# Native SQLite inspection
+
+> **Advanced.** In 0.28 this is reached through model tools, the CLI and MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 The native engine lists tables and queries existing SQLite files inside the
 selected project. It replaces the Python built-in reader with bundled SQLite;
@@ -87,7 +89,7 @@ The implementation follows SQLite's [WAL documentation](https://www.sqlite.org/w
 [VFS contract](https://www.sqlite.org/c3ref/vfs.html), and
 [untrusted-SQL guidance](https://www.sqlite.org/security.html).
 
-The [verification record](NATIVE_VERIFICATION.md#real-local-models) includes real
+The [verification record](archive/NATIVE_VERIFICATION.md#real-local-models) includes real
 gpt-oss and Qwen runs that discover a disposable database's schema, execute the
 correct aggregate query and report its result without changing database bytes.
 Successful SQLite reads also count toward required task inspection.

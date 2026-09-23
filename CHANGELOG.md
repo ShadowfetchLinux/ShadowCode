@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.28.0: One picker, real backends
+
+- **One composer picker, filled from `GET /api/picker`.** It has
+  **Subscriptions** (Codex, Claude Code, Cursor, Antigravity, Grok) and
+  **On this computer** (GGUF) groups. Routing uses stable IDs (`cli:<vendor>[:<model>]`,
+  `local:gguf:<hash>`). Rows show Local or Cloud, availability, Vision and
+  Chat only badges, and usage. The selection is stored per conversation.
+- **Vendor runtimes use official interfaces.** Codex runs through
+  `codex app-server`. Claude Code runs through `claude -p` stream-json with
+  host permission prompts. Cursor runs through `cursor-agent acp`. Antigravity
+  runs through `agy --print=` stream-json (rewritten to the documented event
+  protocol). Grok runs through `grok agent stdio`. Sign-in, models and image
+  support come from each vendor's documented status commands or protocol
+  handshakes, never from credential files. The non-existent `codex models`
+  path and the fake "Codex · Auto" row are gone.
+- **Accounts page.** Connect runs the official login command and relays its
+  URL or device code. Disconnect runs the official logout after a
+  confirmation, then clears cached status, stored usage and vendor sessions.
+  Antigravity sign-in and sign-out stay inside `agy`.
+- **Usage shows only reported figures.** Codex shows rate-limit windows per quota
+  pool, with plan, reset times and credits when reported, including updates
+  pushed during a turn. Claude Code, Cursor, Antigravity and Grok show
+  *Usage unavailable* with the reason. Usage snapshots are stored in SQLite
+  (schema 25, backed up before migration). API-key logins are labelled
+  *API key login · billed per token*.
+- **Plan limits stop the job.** When a vendor reports its plan limit, the job
+  stops with the new status `limit_reached`. ShadowCode doesn't retry.
+- **Provider API keys are removed from vendor CLIs.** `OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY` and similar variables are removed from every vendor task,
+  login and logout.
+- **Native sessions resume per conversation** (`thread/resume`, `--resume`,
+  `session/load`, `--conversation`).
+- **Switching providers needs consent.** Switching provider mid-conversation
+  sends a bounded handoff (at most 12,000 characters). Before local content or
+  first images go to a cloud route, a consent dialog asks first.
+- **The local engine reads GGUF metadata.** It gets the architecture, context,
+  chat template and projector from the file. Compatibility comes from the
+  runtime's `architectures.txt`. The memory plan sizes the context to VRAM or
+  RAM and accounts for per-layer KV heads and sliding windows.
+- **Bundled llama.cpp runtime.** A pinned llama.cpp (Vulkan module plus every
+  x86-64 CPU variant) ships in both the AppImage and the deb, with its license
+  notices. One model is loaded at a time. The server gets a per-launch key and
+  has no web UI. If the GPU start fails, it retries once on the CPU. A task's
+  lease prevents swapping the model mid-task. Load and Unload are in
+  Settings › Local models.
+- **Ollama import by reference.** Models from an existing Ollama store are
+  imported without copying and without the daemon.
+- **Local vision.** Vision on local models comes from the paired projector, and
+  vision models get a `view_image` tool.
+- **Web tools for local models.** `web_fetch` and `web_search` (DuckDuckGo
+  HTML, sent as POST) block private networks. They pin DNS, re-check
+  redirects, and limit time and size. Sources appear in the activity timeline.
+- **Network modes** online, web off and offline. Offline starts no vendor
+  process and refuses cloud jobs.
+- **Permission modes.** The user-facing modes are *Ask before actions* and
+  *Allow project edits*, and older configs are migrated. New installs start in
+  Ask mode. Each vendor's enforcement is explained in Settings. Read-only tasks
+  deny vendor approval requests automatically.
+- **Safety.** Stored tool and approval events are redacted. The trust gate
+  covers every entry point, goals included. Control sockets left by dead
+  engines are removed at startup.
+- **Interface.** A quiet welcome with three suggestions. The activity timeline
+  and the task summary are built from recorded events. Settings are split into
+  Accounts, Local models, Permissions & network, Appearance and Advanced.
+  Skills, goals, background processes, health, MCP, plugins, hooks, worktrees
+  and Guardian moved under Advanced. Dead controls were removed (mode tabs,
+  vendor chip, old model chooser, thinking card, custom model dialog).
+- **Installer.** `scripts/install-appimage.sh` takes the llama.cpp runtime from
+  the AppImage, checks it, and swaps it into `~/.local/lib/shadowcode`
+  atomically, with rollback. `SHA256SUMS` is required unless `--unverified` is
+  given.
+- **CI.** CI builds the managed llama.cpp before packaging and verifies the
+  runtime in both packages. The release checks `ui/package.json` and the
+  desktop entry against the tag.
+- **Removed.** The legacy 0.19 Python harness is gone, along with its pytest
+  suite, packaging and `serve-test-ui.py`. The Playwright suite now runs against
+  `vite preview` with a fake engine. Historical release ledgers moved to
+  `docs/archive/`.
+
 ## 0.27.0 — Managed local inference
 
 - Local GGUF rows load through a ShadowCode-managed llama.cpp runtime
@@ -386,7 +465,7 @@ packages from this tag; existing 0.20.0 AppImage/Debian filenames are stale.
 
 This development branch is not yet the replacement release. Remaining
 integrations, broader stress checks, packaging, and installation are tracked in
-[the migration gates](docs/NATIVE_MIGRATION.md).
+[the migration gates](docs/archive/NATIVE_MIGRATION.md).
 
 ## 0.19.0 — 2026-09-19
 
@@ -427,4 +506,4 @@ integrations, broader stress checks, packaging, and installation are tracked in
 
 Introduced the minimal drawer-based desktop, Goal Mode, per-task rewind, session
 management, model picker, notifications, and source-checkout updater. Release
-history is available on [GitHub](https://github.com/ShadowfetchLinux/ShadowCode/releases).
+history is available on [GitHub](https://github.com/Shadowfetchapps/ShadowCode/releases).

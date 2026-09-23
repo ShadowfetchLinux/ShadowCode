@@ -1,26 +1,60 @@
-# Copy to ~/.config/shadow-agent/config.yaml (or let `shadow config` create it).
+# Copy to ~/.config/shadow-agent/config.yaml, or let ShadowCode create it on
+# first run. Read or set single keys with `shadowcode config KEY [VALUE]`.
 # Never put API keys in this file. Name the environment variable instead.
+# The desktop picker chooses the model for each conversation. This block is
+# the fallback for the CLI and for HTTP endpoints (native agent loop).
 
 model:
   default: mock
   provider: mock
-  # Examples:
+  # Compatible HTTP endpoints (used through `shadowcode models` / `run --model`):
   #   grok:     provider openai_compatible, endpoint https://api.x.ai/v1, api_key_env XAI_API_KEY
   #   openai:   provider openai_compatible, endpoint https://api.openai.com/v1, api_key_env OPENAI_API_KEY
   #   ollama:   provider ollama, endpoint http://127.0.0.1:11434/v1
-  #   llamacpp: provider llamacpp, endpoint http://127.0.0.1:8080/v1
+  #   llamacpp: provider llamacpp, endpoint http://127.0.0.1:8080/v1 (an external server;
+  #             GGUF rows under local_engine use the bundled runtime instead)
   #   vllm:     provider vllm, endpoint http://127.0.0.1:8000/v1
+  # Subscriptions are picker ids such as cli:codex or cli:cursor:auto.
   endpoint: ""
   api_key_env: OPENAI_API_KEY
   name: mock-coder
   context_limit: 16384
-  keep_alive: "30m"  # Ollama only: duration, "0" to unload, "-1" indefinite
+  keep_alive: "30m"  # Ollama endpoints only: duration, "0" to unload, "-1" indefinite
 
 permissions:
-  level: workspace          # read_only | workspace | elevated
+  # mode: ask            # ask ("Ask before actions") | allow_edits ("Allow project edits").
+  #                      # Onboarding writes ask; a config without a mode is migrated from level.
+  level: workspace          # advanced: read_only | workspace | elevated
   require_approval_for_dangerous: true
-  network: false
-  allow_root: false
+  network: false            # let shell commands that reach the network run (after approval)
+  allow_root: false         # sudo/su/pkexec/doas/run0 still ask when true
+
+# network:
+#   mode: online           # online | web_off (no web tools) | offline (local models only,
+#                          # no vendor status/usage checks, cloud jobs refused)
+#   allow_local_dev: []    # exact host:port entries web tools may reach, e.g. localhost:3000
+
+# Subscriptions (vendor CLIs). Settings › Advanced › Vendor tools edits these.
+# cli_agents:
+#   enabled: true
+#   claude_enabled: true
+#   codex_binary: codex
+#   claude_binary: claude
+#   cursor_binary: cursor-agent
+#   antigravity_binary: agy
+#   grok_binary: grok
+#   approval_timeout_sec: 600   # unanswered vendor approvals are denied
+#   stall_timeout_sec: 900      # no output for this long stops the vendor process
+
+# Local GGUF models. Settings › Local models edits the lists; weights are never
+# copied or deleted.
+# local_engine:
+#   directories: []
+#   files: []
+#   imports: []            # Ollama store models registered by reference
+#   excluded: []
+#   llama_binary: ""       # explicit llama-server; default is the bundled/managed runtime
+#   context_size: 0        # upper bound for the server context; 0 = 16384
 
 git:
   auto_commit: false
@@ -30,11 +64,11 @@ logging:
   level: info
 
 ui:
-  host: 127.0.0.1
-  port: 7430
-  theme: light            # light | dark (desktop appearance)
+  host: 127.0.0.1         # unused by the native app (kept for older configs)
+  port: 7430              # unused by the native app (kept for older configs)
+  theme: light            # system | light | dark (desktop appearance)
   ability: none           # legacy capability preference; does not grant OS permissions
-  notify: true            # desktop notify-send when a long task finishes
+  notify: true            # desktop notification when a long task finishes
   notify_after_sec: 4.0   # only notify for jobs longer than this
 
 agent:
@@ -48,9 +82,11 @@ onboarding:
   completed: false
   workspace: ""
 
-# Folders the UI may open without asking again. Managed by the trust dialog.
+# Folders tasks may run in. Managed by the trust dialog.
 trusted_workspaces: []
 
+# Advanced: per-purpose models for tasks started without an explicit model
+# (CLI, goals). The desktop always sends the picker's choice.
 routing:
   enabled: false
   planner: mock

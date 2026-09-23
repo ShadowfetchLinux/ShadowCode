@@ -1,6 +1,8 @@
 # Parallel workspaces
 
-Settings → Advanced prepares up to two Git worktrees for separate work items.
+> **Advanced.** In 0.28 this is reached through Settings › Advanced › Worktrees. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
+Settings › Advanced prepares up to two Git worktrees for separate work items.
 Each starts from committed HEAD. Uncommitted lead edits stay in the source
 checkout. Open each workspace to start a task explicitly; preparation does not
 launch model workers or choose models.

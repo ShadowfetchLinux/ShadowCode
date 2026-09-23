@@ -1,99 +1,143 @@
-# Native release procedure
+# Release procedure
 
-This procedure publishes the Rust/Tauri 0.27 application. The tag workflow is
-the release authority: it does not build, upload, or mention the legacy Python
-wheel, source distribution, portable archive, or browser launcher.
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes the
+release. It builds, tests, packages and uploads the AppImage, the deb, the
+AppImage runtime source archive and `SHA256SUMS`, with
+`docs/RELEASE_NOTES.md` as the release text.
 
-## Prepare the release
+## 1. Version files
 
-1. Update the shared version in `Cargo.toml` and `src-tauri/tauri.conf.json`.
-   They must match the tag exactly, for example `v0.27.0`.
-2. Update `CHANGELOG.md`, `docs/RELEASE_NOTES.md`, README download commands and
-   native migration/verification records with only evidence that is current for
-   the tagged commit.
-3. Run the focused local checks:
+All four must carry the same version, and the tag must be `v<version>`.
+`release.yml` checks each of them:
 
-   ```sh
-   npm --prefix ui ci
-   npm --prefix ui run build
-   npm --prefix ui test
-   npm --prefix ui run test:e2e
-   cargo +1.95.0 fmt --all --check
-   cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
-   cargo +1.95.0 build -p shadowcode-desktop --locked
-   cargo +1.95.0 test --workspace --locked
-   node scripts/test-native-cli.mjs
-   node scripts/test-native-stress.mjs
-   node scripts/test-native-tui.mjs
-   ```
+| File | Field |
+| --- | --- |
+| `Cargo.toml` | `[workspace.package] version` |
+| `src-tauri/tauri.conf.json` | `version` |
+| `ui/package.json` | `version` |
+| `packaging/shadow-agent.desktop` | `X-ShadowCode-Version=` |
 
-4. Verify the package path before tagging. On the pinned Ubuntu 24.04 build
-   environment, run:
+Update `CHANGELOG.md` and `docs/RELEASE_NOTES.md`. The notes file becomes the
+GitHub release text as it is, so it should describe this release only.
 
-   ```sh
-   node --test scripts/test-native-packaging-env.mjs
-   node scripts/build-native.mjs
-   node scripts/check-native-package.mjs \
-     target/release/bundle/appimage/ShadowCode_VERSION_amd64.AppImage \
-     target/release/bundle/deb/ShadowCode_VERSION_amd64.deb
-   node scripts/test-native-runtime-sources.mjs
-   node scripts/test-native-runtime.mjs
-   bash scripts/test-install-appimage.sh
-   ```
+## 2. Managed llama.cpp runtime
 
-   `build-native.mjs` sanitizes PATH internally (see [desktop packaging](NATIVE_DESKTOP.md)).
-   Do not require a hand-edited PATH to hide `/usr/local/bin` or Hermes.
+The runtime is built from `tools/llama.cpp.pin` (`commit=` and
+`spirv_headers_commit=`). On Ubuntu 24.04:
 
-   Package inspection verifies the absence of Python/Node sidecars, package
-   notices and their digests. The installer test uses a disposable home to prove
-   a checked AppImage replaces an old application, preserves profile data, and
-   refuses a checksum mismatch before changing the installed target.
+```sh
+sudo apt-get install cmake ninja-build libssl-dev libvulkan-dev glslc spirv-headers
+bash scripts/build-llama.cpp.sh --no-user-install
+node --test scripts/test-llama-runtime.mjs
+```
 
-   Build the desktop executable before running the Rust suite: process-death
-   and reconnection tests launch that real executable. `cargo test` alone builds
-   test harnesses, which do not provide `target/debug/shadowcode` on a clean host.
+- **glslc.** Without it or the Vulkan headers, the script falls back to a
+  CPU-only runtime with only a warning. Before packaging, check that
+  `packaging/llama.cpp/bin/COMMIT` says `backend=vulkan+cpu`. The script looks
+  for glslc in `SHADOWCODE_GLSLC`, then on `PATH`, then in a user-installed
+  `org.freedesktop.Sdk` flatpak (`tools/glslc-flatpak.sh`).
+- **cmake.** Found in `SHADOWCODE_CMAKE`, then `.venv/bin/cmake`, then on
+  `PATH`.
+- **Notices.** The script copies the license texts of llama.cpp/ggml,
+  cpp-httplib, nlohmann/json, stb_image, miniaudio, subprocess.h and
+  SPIRV-Headers into `NOTICES/`. The same texts are pinned with SHA-256 digests
+  in [licenses/native](../licenses/native/README.md) (`llama.cpp-<short>/`,
+  `SPIRV-Headers-<short>/`).
+- **Moving the pin.** Update `tools/llama.cpp.pin` and those notice
+  directories together. Run `--notices-only` to refresh `NOTICES/` and `COMMIT`
+  of an existing build without recompiling. Packaging refuses a runtime whose
+  commit or notices don't match the pin.
 
-5. Push the reviewed commit, create and push the matching annotated tag:
+## 3. Local checks
 
-   ```sh
-   git tag -a vVERSION -m "ShadowCode VERSION"
-   git push origin vVERSION
-   ```
+```sh
+npm --prefix ui ci
+npm --prefix ui run typecheck
+npm --prefix ui test
+npm --prefix ui run build
+(cd ui && npm run test:e2e)
+cargo +1.95.0 fmt --all --check
+cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
+cargo +1.95.0 build -p shadowcode-desktop --locked
+cargo +1.95.0 test --workspace --locked
+node scripts/test-native-cli.mjs
+node scripts/test-native-stress.mjs
+node scripts/test-native-tui.mjs
+```
 
-## GitHub release gate
+Build the desktop executable before running the Rust suite: the process tests
+launch `target/debug/shadowcode`.
 
-`.github/workflows/release.yml` runs on the tag. It validates the native version,
-builds the embedded UI, runs Rust format/clippy/tests, then exercises the native
-CLI, sustained stress suite, terminal, MCP transports and real WebKit window.
-It builds both packages, checks the AppImage and Debian contents, rebuilds the
-bundled runtime sources without network access, verifies extraction behavior, and
-runs the packaged CLI, TUI, MCP and window checks. It creates `SHA256SUMS` only
-after those checks and uploads:
+## 4. Packages
 
-- `ShadowCode_VERSION_amd64.AppImage`
-- `ShadowCode_VERSION_amd64.deb`
-- `ShadowCode_VERSION_appimage-runtime-sources.tar.gz`
-- `SHA256SUMS`
+On the pinned Ubuntu 24.04 build environment, with Docker, or Podman plus
+`SHADOW_CONTAINER_ENGINE=podman`, for the pinned AppImage runtime build:
 
-Do not install or announce a tag while this job is incomplete or failed. Inspect
-the exact uploaded checksums and release notes after success.
+```sh
+node --test scripts/test-native-packaging-env.mjs
+node scripts/build-native.mjs
+node scripts/check-native-package.mjs \
+  target/release/bundle/appimage/ShadowCode_VERSION_amd64.AppImage \
+  target/release/bundle/deb/ShadowCode_VERSION_amd64.deb
+node scripts/test-native-runtime-sources.mjs
+node scripts/test-native-runtime.mjs
+bash scripts/test-install-appimage.sh
+```
 
-## Install verification
+- **`build-native.mjs`** checks `packaging/llama.cpp/bin` (pin, SPIRV-Headers
+  commit, `architectures.txt`, notices) before it builds. It copies the runtime
+  into the AppDir with its relative links kept, and repacks the deb with
+  `/usr/lib/shadowcode`. It sets its own clean `PATH`.
+- **`check-native-package.mjs`** checks both packages:
+  - no absolute, escaping or dangling links;
+  - `COMMIT` matches the pin;
+  - every `NEEDED` library is bundled or an allowed system library;
+  - `llama-server --version` prints the pinned commit and `--list-devices` runs
+    with `LD_LIBRARY_PATH` unset;
+  - notice digests match, and there are no Python or Node sidecars;
+  - the deb depends on `libgomp1` and `libssl3`.
+- **`test-install-appimage.sh`** uses fake AppImages in a temporary `HOME`. It
+  covers checksum refusal, broken runtimes, `--unverified`, rollback after the
+  runtime swap and a changed download. If `packaging/llama.cpp/bin` exists, it
+  also runs the real `llama-server`.
 
-Download the AppImage and `SHA256SUMS` into the same directory, then verify and
-install it:
+## 5. Tag
+
+```sh
+git tag -a vVERSION -m "ShadowCode VERSION"
+git push origin vVERSION
+```
+
+`release.yml` then:
+
+1. Checks the tag against the version files.
+2. Builds and tests the UI.
+3. Runs Rust fmt, clippy and tests.
+4. Exercises the CLI, stress suite, TUI, both MCP transports and the real
+   WebKit window.
+5. Builds the llama.cpp runtime, then both packages, and inspects them.
+6. Rebuilds the AppImage runtime sources without network access.
+7. Runs the packaged CLI, TUI, window and MCP checks.
+8. Writes `SHA256SUMS` and runs the installer test.
+9. Creates the release from `docs/RELEASE_NOTES.md` and uploads:
+   - `ShadowCode_VERSION_amd64.AppImage`
+   - `ShadowCode_VERSION_amd64.deb`
+   - `ShadowCode_VERSION_appimage-runtime-sources.tar.gz`
+   - `SHA256SUMS`
+
+Don't announce a tag until this job succeeds. Afterwards, compare the uploaded
+checksums and the release text with what you expect.
+
+## 6. Install check
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 ./scripts/install-appimage.sh /path/to/ShadowCode_VERSION_amd64.AppImage
 ```
 
-The installer performs a second matching-entry check when `SHA256SUMS` is beside
-the AppImage. It starts the new executable for its version before replacing the
-stable Applications link, then removes old versioned ShadowCode AppImages. It
-does not delete XDG profile data. Finish active work in the previous application
-before the final replacement, then reopen ShadowCode and verify the expected
-sessions, settings and model connection.
+Then open ShadowCode from the desktop entry and check:
 
-The native release remains a user-level process runner rather than an operating
-system sandbox. Review requested tool approvals and the task's recorded evidence.
+- Settings, conversations and accounts are still there.
+- **Settings › Local models › Runtime** shows the pinned commit and the
+  `vulkan+cpu` backend.
+- A local model loads.

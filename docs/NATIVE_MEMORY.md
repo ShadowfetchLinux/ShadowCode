@@ -1,5 +1,7 @@
 # Native project and task notes
 
+> **Advanced.** In 0.28 this is reached through the `/memory` command, the CLI and MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
 The native 0.21 build keeps project notes in
 `.shadow/memory/project.md` and task notes in the profile's SQLite history.
 These are explicit notes, distinct from model reasoning and recorded verification
@@ -77,5 +79,5 @@ instead of discarded. Unattributed legacy folders such as `tasks/mcp` are
 preserved; the native server does not guess which project or task owns them.
 
 Notes are included in conversation exports and database backups. Manual note
-edits are not file-tool checkpoints. The wider [native release gates](NATIVE_MIGRATION.md)
+edits are not file-tool checkpoints. The wider [native release gates](archive/NATIVE_MIGRATION.md)
 still apply.

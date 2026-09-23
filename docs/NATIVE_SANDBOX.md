@@ -1,5 +1,7 @@
 # Optional shell isolation
 
+> **Reference.** In 0.28 this covers ShadowCode's own `exec` tool. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
 Before an approved shell command runs, ShadowCode probes bubblewrap when it is
 installed. The profile makes system directories and `/home` read-only, then
 binds the selected project read-write. Network namespaces are isolated unless

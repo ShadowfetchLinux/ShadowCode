@@ -1,7 +1,9 @@
 # Guardian diagnostics
 
+> **Advanced.** In 0.28 this is reached through Settings › Advanced › Guardian. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+
 Guardian is off by default. Enable it and save an interval of 60–86,400 seconds
-in Settings → Advanced. Run diagnostics manually there; scheduled checks run
+in Settings › Advanced. Run diagnostics manually there; scheduled checks run
 while `shadowcode serve` is running. The desktop alone does not start a scheduler.
 
 Checks inspect local isolation support and identify a suggested test command.
