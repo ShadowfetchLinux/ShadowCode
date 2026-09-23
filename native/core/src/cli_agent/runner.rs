@@ -223,7 +223,7 @@ async fn run_once(
     let mut child = spawn_vendor(&program, &args, &request.options.workspace)?;
     let pid = child.id().context("Vendor CLI has no process ID")?;
     let mut group = ProcessGroup(pid);
-    let mut stdin = child.stdin.take().context("Vendor CLI stdin missing")?;
+    let mut stdin = Some(child.stdin.take().context("Vendor CLI stdin missing")?);
     let stdout = child.stdout.take().context("Vendor CLI stdout missing")?;
     let stderr = child.stderr.take().context("Vendor CLI stderr missing")?;
     let mut reader = BufReader::new(stdout);
@@ -231,6 +231,10 @@ async fn run_once(
     let mut outgoing = adapter.on_start(&request.options);
     outgoing.extend(adapter.prompt(&request.prompt, &request.images)?);
     send_lines(&mut stdin, &outgoing).await?;
+    if adapter.one_shot() {
+        // One-shot CLIs (`codex exec -`) read the prompt until EOF.
+        stdin = None;
+    }
     let mut collected = String::new();
     let mut usage = Usage::default();
     let mut usage_reported = false;
@@ -457,7 +461,13 @@ fn ensure_workspace(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn send_lines(stdin: &mut ChildStdin, lines: &[String]) -> Result<()> {
+async fn send_lines(stdin: &mut Option<ChildStdin>, lines: &[String]) -> Result<()> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let Some(stdin) = stdin.as_mut() else {
+        bail!("The vendor CLI input is closed");
+    };
     for line in lines {
         stdin.write_all(line.as_bytes()).await?;
         stdin.write_all(b"\n").await?;
@@ -527,7 +537,7 @@ async fn apply_update(
     pending_text: &mut String,
     finished: &mut bool,
     final_text: &mut Option<String>,
-    stdin: &mut ChildStdin,
+    stdin: &mut Option<ChildStdin>,
     adapter: &mut Box<dyn CliAdapter>,
 ) -> Result<()> {
     match update {
@@ -669,7 +679,7 @@ async fn limit_reached(
     request: &Request<'_>,
     vendor: Vendor,
     detail: String,
-    stdin: &mut ChildStdin,
+    stdin: &mut Option<ChildStdin>,
     adapter: &mut Box<dyn CliAdapter>,
 ) -> anyhow::Error {
     send_lines(stdin, &adapter.interrupt()).await.ok();

@@ -179,6 +179,16 @@ pub async fn connect(
     vendor: Vendor,
     config: &CliAgentsConfig,
 ) -> Result<Value> {
+    connect_with_timeout(catalog, vendor, config, LOGIN_TIMEOUT).await
+}
+
+/// `connect` with an explicit time limit for the login child.
+pub async fn connect_with_timeout(
+    catalog: &Arc<VendorCatalog>,
+    vendor: Vendor,
+    config: &CliAgentsConfig,
+    timeout: Duration,
+) -> Result<Value> {
     if vendor.login_command().is_empty() {
         return Ok(json!({
             "ok": false,
@@ -242,7 +252,7 @@ pub async fn connect(
             });
         }
         drop(sender);
-        let deadline = tokio::time::sleep(LOGIN_TIMEOUT);
+        let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
         let relay = |line: String| {
             let raw = line.trim();
@@ -277,7 +287,7 @@ pub async fn connect(
                 }
                 _ = &mut deadline => {
                     let _ = child.kill().await;
-                    break (false, format!("Sign-in timed out after {} minutes", LOGIN_TIMEOUT.as_secs() / 60));
+                    break (false, format!("Sign-in timed out after {} seconds", timeout.as_secs()));
                 }
             }
         };
