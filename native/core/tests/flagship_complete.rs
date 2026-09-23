@@ -128,6 +128,32 @@ fn sandbox_scratch_and_home_readonly_args() {
     sandbox::discard_scratch(&scratch.path).unwrap();
     let cow = sandbox::probe_workspace_cow();
     assert_eq!(cow["kernel_proof"], false);
+}
+
+#[test]
+fn sandbox_fallback_is_honest_without_bubblewrap() {
+    // PATH is process-global and tests in this binary share one process: run
+    // the mutation in an isolated child so a concurrent test never observes an
+    // empty PATH while resolving a subprocess (e.g. git in parallel::prepare).
+    if std::env::var_os("SHADOWCODE_SANDBOX_FALLBACK_CHILD").is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sandbox_fallback_is_honest_without_bubblewrap",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("SHADOWCODE_SANDBOX_FALLBACK_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     // Fallback: Doctor reports unavailable when bubblewrap cannot be found.
     let previous = std::env::var_os("PATH");
     std::env::set_var("PATH", "");

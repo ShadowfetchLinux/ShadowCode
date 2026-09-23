@@ -280,6 +280,28 @@ mod tests {
 
     #[test]
     fn missing_bubblewrap_reports_honest_fallback() {
+        // PATH is process-global and tests share one process: run the mutation
+        // in an isolated child so a concurrent test never observes an empty
+        // PATH while resolving a subprocess (e.g. git).
+        if std::env::var_os("SHADOWCODE_SANDBOX_FALLBACK_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sandbox::tests::missing_bubblewrap_reports_honest_fallback",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("SHADOWCODE_SANDBOX_FALLBACK_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let previous = std::env::var_os("PATH");
         // Empty PATH: bwrap cannot be resolved even if installed on the host.
         std::env::set_var("PATH", "");
