@@ -99,6 +99,27 @@ export function Settings({
   const [guardianInterval, setGuardianInterval] = useState(
     Number(guardianCfg.interval_sec ?? 3600),
   );
+  const cliCfg = (cfg.cli_agents || {}) as Record<
+    string,
+    string | number | boolean
+  >;
+  const [cliEnabled, setCliEnabled] = useState(cliCfg.enabled !== false);
+  const [cliClaude, setCliClaude] = useState(cliCfg.claude_enabled !== false);
+  const [cliCodexBin, setCliCodexBin] = useState(
+    String(cliCfg.codex_binary || "codex"),
+  );
+  const [cliGrokBin, setCliGrokBin] = useState(
+    String(cliCfg.grok_binary || "grok"),
+  );
+  const [cliClaudeBin, setCliClaudeBin] = useState(
+    String(cliCfg.claude_binary || "claude"),
+  );
+  const [cliApprovalSec, setCliApprovalSec] = useState(
+    Number(cliCfg.approval_timeout_sec ?? 600),
+  );
+  const [cliStallSec, setCliStallSec] = useState(
+    Number(cliCfg.stall_timeout_sec ?? 900),
+  );
   const [notify, setNotify] = useState(ui.notify !== false);
   const [notifyAfter, setNotifyAfter] = useState(
     Number(ui.notify_after_sec ?? 4),
@@ -258,6 +279,15 @@ export function Settings({
             enabled: guardianEnabled,
             interval_sec: guardianInterval,
             allow_prepare_patch: Boolean(guardianCfg.allow_prepare_patch),
+          },
+          cli_agents: {
+            enabled: cliEnabled,
+            claude_enabled: cliClaude,
+            codex_binary: cliCodexBin,
+            grok_binary: cliGrokBin,
+            claude_binary: cliClaudeBin,
+            approval_timeout_sec: cliApprovalSec,
+            stall_timeout_sec: cliStallSec,
           },
         },
         apiKey,
@@ -876,6 +906,80 @@ export function Settings({
                 Shell isolation uses bubblewrap when available. Approved
                 commands can write to the live project.
               </p>
+            </section>
+            <section className="settings-section advanced-card">
+              <h3>Vendor CLI agents</h3>
+              <p className="hint">
+                Drive Claude, Codex, or Grok by spawning the official CLI. Login
+                stays with <code>claude auth login</code>, <code>codex login</code>,
+                or <code>grok login</code>. ShadowCode never reads or stores
+                those credentials. Anthropic forbids third-party clients from
+                using Pro/Max OAuth tokens directly (enforced 2026); driving the
+                official <code>claude</code> binary with your own login is
+                currently tolerated but not guaranteed.
+              </p>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={cliEnabled}
+                  onChange={(e) => setCliEnabled(e.target.checked)}
+                />{" "}
+                Enable vendor CLI backends
+              </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={cliClaude}
+                  onChange={(e) => setCliClaude(e.target.checked)}
+                />{" "}
+                Enable Claude adapter
+              </label>
+              <div className="field">
+                <label htmlFor="cli-codex-bin">Codex binary</label>
+                <input
+                  id="cli-codex-bin"
+                  value={cliCodexBin}
+                  onChange={(e) => setCliCodexBin(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="cli-grok-bin">Grok binary</label>
+                <input
+                  id="cli-grok-bin"
+                  value={cliGrokBin}
+                  onChange={(e) => setCliGrokBin(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="cli-claude-bin">Claude binary</label>
+                <input
+                  id="cli-claude-bin"
+                  value={cliClaudeBin}
+                  onChange={(e) => setCliClaudeBin(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="cli-approval">Approval timeout (seconds)</label>
+                <input
+                  id="cli-approval"
+                  type="number"
+                  min={10}
+                  max={86400}
+                  value={cliApprovalSec}
+                  onChange={(e) => setCliApprovalSec(Number(e.target.value))}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="cli-stall">Stall timeout (seconds)</label>
+                <input
+                  id="cli-stall"
+                  type="number"
+                  min={30}
+                  max={86400}
+                  value={cliStallSec}
+                  onChange={(e) => setCliStallSec(Number(e.target.value))}
+                />
+              </div>
             </section>
           </div>
         )}

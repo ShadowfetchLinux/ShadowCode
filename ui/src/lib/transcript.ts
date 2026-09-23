@@ -117,6 +117,30 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
             : `Context ${String(p.used_estimated_tokens || 0)}/${String(p.limit || 0)} estimated tokens`;
     items = [...items, { kind: "note", taskId, text: detail }];
   }
+  if (event.type === "agent.warning") {
+    items = [
+      ...items,
+      {
+        kind: "note",
+        taskId,
+        warning: true,
+        text: String(p.text || p.detail || "Vendor agent warning"),
+      },
+    ];
+  }
+  if (event.type === "files.changed") {
+    const paths = Array.isArray(p.paths) ? p.paths.map(String) : [];
+    items = [
+      ...items,
+      {
+        kind: "note",
+        taskId,
+        text: paths.length
+          ? `Vendor agent changed ${paths.join(", ")}`
+          : "Vendor agent reported file changes",
+      },
+    ];
+  }
   if (event.type === "workflow.selected") {
     items = [
       ...items,

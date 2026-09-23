@@ -15,6 +15,7 @@ export function TaskSteerBar({
   const [editPath, setEditPath] = useState("");
   const [busy, setBusy] = useState(false);
   const paused = job.status === "paused";
+  const vendorAgent = Boolean(job.routing?.provider?.startsWith("cli:"));
 
   async function run(label: string, action: () => Promise<unknown>) {
     setBusy(true);
@@ -35,7 +36,11 @@ export function TaskSteerBar({
           type="button"
           className="mini"
           disabled={busy || job.status === "cancelling"}
-          title="Pause at the next safe boundary; a running command finishes first"
+          title={
+            vendorAgent
+              ? "Interrupt the vendor CLI and wait for a follow-up after Resume"
+              : "Pause at the next safe boundary; a running command finishes first"
+          }
           onClick={() =>
             void run("Pause requested", () => api.pauseJob(job.id))
           }
@@ -72,8 +77,12 @@ export function TaskSteerBar({
       <button
         type="button"
         className="mini"
-        disabled={busy || !paused}
-        title="Restore checkpointed files after the current operation has reached the pause boundary"
+        disabled={busy || !paused || vendorAgent}
+        title={
+          vendorAgent
+            ? "Rewind does not apply to Claude / Codex / Grok vendor-agent tasks"
+            : "Restore checkpointed files after the current operation has reached the pause boundary"
+        }
         onClick={() => void run("Rewound files", () => api.rewindJob(job.id))}
       >
         <RotateCcw size={12} />

@@ -124,11 +124,17 @@ def test_single_drawer_consolidates_inspect_panels() -> None:
 
 
 def test_model_picker_groups_all_providers_and_has_custom_entry() -> None:
-    src = _src(APP_TSX)
-    assert "<optgroup" in src
-    assert '"__custom__"' in src
-    assert "Custom model…" in src
-    assert "CustomModelDialog" in src
+    chooser = _src(UI_SRC / "components" / "ModelChooser.tsx")
+    copy = _src(UI_SRC / "lib" / "cliAgents.ts")
+    app = _src(APP_TSX)
+    assert "<optgroup" in chooser
+    assert 'LOCAL_GROUP = "Local model (ShadowCode agent)"' in copy
+    assert 'VENDOR_GROUP = "Claude / Codex / Grok (vendor agent)"' in copy
+    assert "LOCAL_GROUP" in chooser and "VENDOR_GROUP" in chooser
+    assert '"__custom__"' in chooser
+    assert "Custom model…" in chooser
+    assert "CustomModelDialog" in app
+    assert "<ModelChooser" in app
 
 
 

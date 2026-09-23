@@ -11,6 +11,8 @@ export type ModelInfo = {
     capabilities?: Record<string, boolean>;
     detail?: string;
     detected?: boolean;
+    vendor_agent?: boolean;
+    label?: string;
   };
 };
 
@@ -425,7 +427,33 @@ export const api = {
       api_key_env,
     }),
   models: (refresh = false) =>
-    get<{ models: ModelInfo[] }>(`/api/models${refresh ? "?refresh=1" : ""}`),
+    get<{
+      models: ModelInfo[];
+      cli_agents?: Record<
+        string,
+        {
+          state?: string;
+          status?: string;
+          detail?: string;
+          version?: string | null;
+          fix?: string;
+        }
+      >;
+    }>(`/api/models${refresh ? "?refresh=1" : ""}`),
+  cliAgents: () =>
+    get<{
+      vendors: Record<
+        string,
+        {
+          state?: string;
+          status?: string;
+          detail?: string;
+          version?: string | null;
+          fix?: string;
+        }
+      >;
+      config: Record<string, unknown>;
+    }>("/api/cli-agents"),
   detectProviders: (refresh = false) =>
     get<{ providers: DetectedProvider[] }>(
       `/api/providers/detect${refresh ? "?refresh=1" : ""}`,

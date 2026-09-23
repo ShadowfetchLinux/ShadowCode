@@ -64,8 +64,16 @@ import {
 import { Settings } from "./components/Settings";
 import { QueuedTasks } from "./components/QueuedTasks";
 import { TaskSteerBar } from "./components/TaskSteerBar";
+import { ModelChooser } from "./components/ModelChooser";
+import { VendorAgentChip } from "./components/VendorAgentChip";
 import { useConversation } from "./hooks/useConversation";
 import { modelLabel } from "./lib/models";
+import {
+  isVendorProvider,
+  LOCAL_GROUP,
+  VENDOR_GROUP,
+  type VendorStatusMap,
+} from "./lib/cliAgents";
 import { conversationJob } from "./lib/jobs";
 import {
   isProjectTrustError,
@@ -104,6 +112,7 @@ export default function App() {
   const [needsOnboard, setNeedsOnboard] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [cliAgents, setCliAgents] = useState<VendorStatusMap | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -272,6 +281,7 @@ export default function App() {
     setCfg(config);
     setStatus(state);
     setModels(modelData.models);
+    setCliAgents(modelData.cli_agents || null);
     setProviders(providerData.providers);
   }
 
@@ -1416,7 +1426,14 @@ export default function App() {
                   >
                     <Cpu size={14} />
                     <span>{model || "Choose Open-Weight Model"}</span>
-                    <span className="badge-tag">Local</span>
+                    <span className="badge-tag">
+                      {isVendorProvider(
+                        selectedModel?.provider ||
+                          String(status?.model?.provider || ""),
+                      )
+                        ? VENDOR_GROUP
+                        : LOCAL_GROUP}
+                    </span>
                   </button>
 
                   <button
@@ -1823,37 +1840,28 @@ export default function App() {
                   e.target.value = "";
                 }}
               />
-              <select
-                className="model-select"
-                aria-label="Model for this task"
+              <ModelChooser
+                models={models}
                 value={modelChoice}
-                onChange={(e) => {
-                  if (e.target.value === "__custom__")
-                    setOverlay("custom-model");
-                  else setModelChoice(e.target.value);
-                }}
-              >
-                <option value="">
-                  {status?.routing?.enabled
+                automaticLabel={
+                  status?.routing?.enabled
                     ? "Automatic by task mode"
                     : status?.model.name ||
                       status?.model.default ||
-                      "Choose model"}
-                </option>
-                {[...new Set(models.map((m) => m.provider))].map((p) => (
-                  <optgroup key={p} label={p}>
-                    {models
-                      .filter((m) => m.provider === p)
-                      .map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {modelLabel(m, models)}
-                          {m.detected ? " · local" : ""}
-                        </option>
-                      ))}
-                  </optgroup>
-                ))}
-                <option value="__custom__">Custom model…</option>
-              </select>
+                      "Choose model"
+                }
+                onChange={(id) => {
+                  if (id === "__custom__") setOverlay("custom-model");
+                  else setModelChoice(id);
+                }}
+              />
+              <VendorAgentChip
+                status={cliAgents}
+                selected={
+                  selectedModel?.provider ||
+                  String(status?.model?.provider || "")
+                }
+              />
               <span className="control-divider" />
               <select
                 className="mode-select"

@@ -26,6 +26,32 @@ const job: Job = {
   status: "running",
 };
 
+it("hides rewind for vendor CLI agent tasks", () => {
+  const toast = vi.fn();
+  render(
+    <TaskSteerBar
+      job={{
+        ...job,
+        status: "paused",
+        routing: {
+          purpose: "coder",
+          source: "explicit",
+          requested: "cli:codex",
+          model_id: "cli:codex",
+          model_name: "Codex (vendor agent)",
+          provider: "cli:codex",
+          context_limit: 200000,
+        },
+      }}
+      onToast={toast}
+    />,
+  );
+  expect(
+    (screen.getByRole("button", { name: "Rewind files" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+});
+
 it("distinguishes task pause from goal pause and prevents rewind while running", async () => {
   const toast = vi.fn();
   render(<TaskSteerBar job={job} onToast={toast} />);

@@ -900,6 +900,32 @@ kbd {
   align-items: center;
   gap: 5px;
 }
+.vendor-agent-chip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: min(360px, 42vw);
+}
+.vendor-chip {
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.vendor-chip-ok {
+  color: var(--ok, #2f6f4e);
+  border-color: color-mix(in srgb, var(--ok, #2f6f4e) 40%, var(--border));
+}
+.vendor-chip-warn {
+  color: var(--warn, #8a5a12);
+}
+.vendor-chip.selected {
+  font-weight: 600;
+  color: var(--text);
+}
 .composer select.model-select,
 .composer select.mode-select {
   background: transparent;
