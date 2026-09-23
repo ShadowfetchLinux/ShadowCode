@@ -23,7 +23,7 @@ fn setup(endpoint: &str) -> (tempfile::TempDir, Engine) {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("project")).unwrap();
     let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
-    Config::patch(&paths,json!({"model":{"provider":"local","endpoint":endpoint,"name":"fixture","context_limit":16384},"permissions":{"approve_shell":false},"agent":{"max_steps":12}})).unwrap();
+    Config::patch(&paths,json!({"model":{"provider":"local","endpoint":endpoint,"name":"fixture","context_limit":16384},"trusted_workspaces":[root.path().join("project")],"permissions":{"approve_shell":false},"agent":{"max_steps":12}})).unwrap();
     (root, Engine::open(paths).unwrap())
 }
 fn request(root: &Path, task: &str) -> StartRequest {
@@ -35,6 +35,7 @@ fn request(root: &Path, task: &str) -> StartRequest {
         mode: "code".into(),
         queue: false,
         images: Vec::new(),
+        web: false,
     }
 }
 

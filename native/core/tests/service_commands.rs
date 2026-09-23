@@ -125,7 +125,10 @@ async fn manual_mutations_require_trust_and_respect_read_only_mode() {
         json!({"permissions":{"level":"read_only"}}),
     )
     .unwrap();
-    for (method, path, body) in &operations {
+    for (method, path, body) in operations
+        .iter()
+        .filter(|(_, path, _)| *path != "/api/workspace/attach")
+    {
         assert!(call(&service, method, path, body.clone())
             .await
             .unwrap_err()
@@ -133,6 +136,47 @@ async fn manual_mutations_require_trust_and_respect_read_only_mode() {
             .contains("read-only"));
     }
     assert!(!workspace.join("unexpected").exists());
+    // Attaching is user input, not a project change: read-only projects accept
+    // it, still under .shadow/attachments with the usual limits.
+    let attached = call(
+        &service,
+        "POST",
+        "/api/workspace/attach",
+        json!({"filename":"note.txt","text":"Attached"}),
+    )
+    .await
+    .unwrap();
+    let stored = attached["path"].as_str().unwrap();
+    assert!(stored.starts_with(".shadow/attachments/") && stored.ends_with("-note.txt"));
+    assert_eq!(
+        fs::read_to_string(workspace.join(stored)).unwrap(),
+        "Attached"
+    );
+    let png = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .encode([0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
+    };
+    let image = call(
+        &service,
+        "POST",
+        "/api/workspace/attach-image",
+        json!({"filename":"shot.png","data_base64":png}),
+    )
+    .await
+    .unwrap();
+    assert!(image["path"]
+        .as_str()
+        .unwrap()
+        .starts_with(".shadow/attachments/"));
+    assert!(call(
+        &service,
+        "POST",
+        "/api/workspace/attach-image",
+        json!({"filename":"shot.png","data_base64":"bm90IGFuIGltYWdl"}),
+    )
+    .await
+    .is_err());
     let file = call(
         &service,
         "GET",
@@ -417,6 +461,7 @@ async fn workspace_reservation_excludes_tasks_and_is_released_on_drop() {
         mode: "code".into(),
         queue: true,
         images: Vec::new(),
+        web: false,
     };
     assert!(service
         .engine

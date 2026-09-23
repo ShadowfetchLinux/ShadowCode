@@ -45,6 +45,7 @@ pub mod symbol_index;
 pub mod system_info;
 pub mod tools;
 pub mod vision;
+pub mod web;
 pub mod workflows;
 pub mod workspace;
 pub mod worktrees;

@@ -51,6 +51,7 @@ async fn main() -> Result<()> {
                     mode: "code".into(),
                     queue: false,
                     images: vec![],
+                    web: false,
                 })
                 .await?;
             let done =

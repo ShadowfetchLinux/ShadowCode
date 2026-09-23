@@ -83,27 +83,126 @@ fn default_keep_alive() -> String {
     "30m".into()
 }
 
+/// The two user-facing permission modes.
+/// `ask`: file edits and shell commands ask first.
+/// `allow_edits`: file edits inside the project are allowed; shell, network
+/// and destructive actions still ask (or are denied).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    Ask,
+    #[default]
+    AllowEdits,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PermissionsConfig {
+    /// User-facing mode. `level` stays as the advanced setting (read_only is
+    /// still used by Plan/Review and can be chosen per project).
+    pub mode: PermissionMode,
     pub level: PermissionLevel,
     pub require_approval_for_dangerous: bool,
+    /// Network-reaching shell commands (curl, npm, ...). Web tools are
+    /// governed by `network.mode` and the per-task web flag instead.
     pub network: bool,
     pub allow_root: bool,
     pub profile: String,
     /// Native shell tools require explicit approval unless their exact command
-    /// is approved for this task. File tools remain usable in workspace mode.
+    /// is approved for this task. `ask` mode always asks for shell.
     pub approve_shell: bool,
+    /// Runtime only: web tools are allowed for this task (task web flag and
+    /// network mode online). Never persisted.
+    #[serde(skip)]
+    pub web: bool,
+    /// Runtime only: `network.mode` is offline. Never persisted.
+    #[serde(skip)]
+    pub offline: bool,
 }
 impl Default for PermissionsConfig {
     fn default() -> Self {
         Self {
+            mode: PermissionMode::default(),
             level: PermissionLevel::Workspace,
             require_approval_for_dangerous: true,
             network: false,
             allow_root: false,
             profile: String::new(),
             approve_shell: true,
+            web: false,
+            offline: false,
+        }
+    }
+}
+impl PermissionsConfig {
+    /// File edits (write/edit/patch/mkdir/move) ask before running.
+    pub fn approve_edits(&self) -> bool {
+        self.mode == PermissionMode::Ask
+    }
+    /// Shell commands ask before running.
+    pub fn shell_asks(&self) -> bool {
+        self.approve_shell || self.mode == PermissionMode::Ask
+    }
+    /// Network-reaching shell commands may run (after approval).
+    pub fn shell_network(&self) -> bool {
+        self.network && !self.offline
+    }
+}
+
+/// `online`: everything allowed by other settings. `web_off`: web tools are
+/// never offered. `offline`: additionally no account/usage refresh or other
+/// helper network activity, and cloud routes are unavailable.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    #[default]
+    Online,
+    WebOff,
+    Offline,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkConfig {
+    pub mode: NetworkMode,
+    /// Exact `host:port` entries (for example `localhost:3000`) that web tools
+    /// may reach although they are local or use another port.
+    pub allow_local_dev: Vec<String>,
+}
+impl NetworkConfig {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.allow_local_dev.len() <= 32,
+            "At most 32 local dev servers can be allowed"
+        );
+        for entry in &self.allow_local_dev {
+            crate::web::normalize_allow_entry(entry)
+                .with_context(|| format!("Invalid network.allow_local_dev entry '{entry}'"))?;
+        }
+        Ok(())
+    }
+}
+
+/// Old configs had no `permissions.mode`. Map them without widening what they
+/// allowed: workspace -> allow_edits (edits were allowed, shell asked);
+/// read_only stays read_only; elevated -> allow_edits with shell asking (the
+/// level stays elevated, so destructive Git still asks rather than being
+/// denied), unless the user had explicitly turned off both approve_shell and
+/// require_approval_for_dangerous, in which case their behaviour is kept.
+pub fn migrate_permissions(raw: &mut Value) {
+    let Some(permissions) = raw.get_mut("permissions").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if permissions.contains_key("mode") {
+        return;
+    }
+    let elevated = permissions.get("level").and_then(Value::as_str) == Some("elevated");
+    permissions.insert("mode".into(), json!("allow_edits"));
+    if elevated {
+        let explicit_off = permissions.get("approve_shell") == Some(&json!(false))
+            && permissions.get("require_approval_for_dangerous") == Some(&json!(false));
+        if !explicit_off {
+            permissions.insert("approve_shell".into(), json!(true));
         }
     }
 }
@@ -159,6 +258,8 @@ pub struct Config {
     pub cli_agents: crate::cli_agent::CliAgentsConfig,
     #[serde(default)]
     pub local_engine: crate::local_engine::LocalEngineConfig,
+    #[serde(default)]
+    pub network: NetworkConfig,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -168,7 +269,7 @@ impl Default for Config {
             model: ModelConfig::default(),
             permissions: PermissionsConfig::default(),
             agent: AgentConfig::default(),
-            ui: json!({"theme":"light","notify":true,"notify_after_sec":4,"ability":"none","host":"127.0.0.1","port":7430}),
+            ui: json!({"theme":"light","notify":true,"notify_after_sec":4,"ability":"none"}),
             onboarding: json!({"completed":false,"workspace":""}),
             routing: json!({"enabled":false,"planner":"","coder":"","reviewer":"","tester":""}),
             mcp: json!({"servers":[]}),
@@ -179,6 +280,7 @@ impl Default for Config {
             guardian: json!({"enabled":false,"interval_sec":3600,"allow_prepare_patch":false}),
             cli_agents: crate::cli_agent::CliAgentsConfig::default(),
             local_engine: crate::local_engine::LocalEngineConfig::default(),
+            network: NetworkConfig::default(),
             extra: BTreeMap::new(),
         }
     }
@@ -188,11 +290,14 @@ impl Config {
     pub fn load(paths: &AppPaths, workspace: Option<&Path>) -> Result<Self> {
         let mut base = serde_json::to_value(Self::default())?;
         if paths.config_file().exists() {
-            merge(&mut base, read_yaml(&paths.config_file())?);
+            let mut user = read_yaml(&paths.config_file())?;
+            migrate_permissions(&mut user);
+            merge(&mut base, user);
         }
         let mut config: Self =
             serde_json::from_value(base.clone()).context("Invalid user configuration")?;
         config.validate()?;
+        config.apply_runtime(false);
         if let Some(workspace) = workspace {
             let canonical = workspace.canonicalize()?;
             let overlay = canonical.join(".shadow/config/config.yaml");
@@ -216,9 +321,24 @@ impl Config {
                 }
                 config = serde_json::from_value(base)?;
                 config.validate()?;
+                config.apply_runtime(false);
             }
         }
         Ok(config)
+    }
+    /// True when the app must not make helper network requests (account and
+    /// usage refresh, model discovery) and cloud routes are unavailable.
+    pub fn offline(&self) -> bool {
+        self.network.mode == NetworkMode::Offline
+    }
+    /// Web tools can be offered: the task asked for web and the mode is online.
+    pub fn web_tools_allowed(&self, task_web: bool) -> bool {
+        task_web && self.network.mode == NetworkMode::Online
+    }
+    /// Derive the runtime-only permission fields for one task.
+    pub fn apply_runtime(&mut self, task_web: bool) {
+        self.permissions.offline = self.offline();
+        self.permissions.web = self.web_tools_allowed(task_web);
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.ui.is_object(), "UI configuration must be an object");
@@ -306,6 +426,7 @@ impl Config {
         crate::routing::validate(&self.routing)?;
         self.cli_agents.validate()?;
         self.local_engine.validate()?;
+        self.network.validate()?;
         self.hooks.validate()?;
         ensure!(
             serde_yaml_ng::to_string(self)?.len() <= MAX_CONFIG_BYTES,
@@ -510,4 +631,31 @@ pub fn set_secret(paths: &AppPaths, name: &str, value: &str) -> Result<()> {
         "Secret file would exceed 1 MB"
     );
     atomic_write(&paths.secrets_file(), out.as_bytes(), true)
+}
+
+/// True when the model route runs on this computer (managed llama.cpp, or an
+/// HTTP endpoint on loopback). Vendor CLIs and remote endpoints are cloud
+/// routes and are refused in offline mode.
+pub fn runs_on_this_computer(model: &ModelConfig) -> bool {
+    if model.provider == "llamacpp" {
+        return true;
+    }
+    if crate::cli_agent::is_cli_provider(&model.provider) || model.provider == "mock" {
+        return false;
+    }
+    if model.endpoint.trim().is_empty() {
+        return matches!(model.provider.as_str(), "ollama" | "local" | "vllm");
+    }
+    let Ok(url) = reqwest::Url::parse(&model.endpoint) else {
+        return false;
+    };
+    match url.host_str() {
+        Some("localhost") => true,
+        Some(host) => host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    }
 }

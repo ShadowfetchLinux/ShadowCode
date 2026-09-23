@@ -208,6 +208,7 @@ async fn task_memory_continues_branches_and_exports_without_source_coupling() {
             mode: "plan".into(),
             queue: false,
             images: Vec::new(),
+            web: false,
         })
         .await
         .unwrap();

@@ -39,6 +39,7 @@ fn request(service: &Service, mode: &str) -> StartRequest {
         mode: mode.into(),
         queue: true,
         images: Vec::new(),
+        web: false,
     }
 }
 async fn wait(service: &Service, id: &str) -> Job {

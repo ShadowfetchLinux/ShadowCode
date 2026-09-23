@@ -638,6 +638,7 @@ impl Service {
             mode: mode.into(),
             queue: body["queue"].as_bool().unwrap_or(false),
             images: Vec::new(),
+            web: false,
         };
         let job = if let Some(definition) = definition {
             self.engine

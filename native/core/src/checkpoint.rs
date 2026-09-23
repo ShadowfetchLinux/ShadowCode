@@ -106,3 +106,41 @@ pub fn restore(store: &Store, workspace: &Workspace, task: &str) -> Result<Vec<S
     }
     Ok(restored)
 }
+
+/// After a finished task's files were restored, make the session's message
+/// tape say so, so the next turn does not believe the undone edits are still
+/// on disk. System messages are not carried between turns, so the note is
+/// appended to the last assistant message (or added as one), which keeps
+/// user/assistant alternation intact for strict chat templates.
+pub fn note_restore_in_tape(store: &Store, session_id: &str, paths: &[String]) -> Result<()> {
+    let rows = store.query(
+        "SELECT id FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND EXISTS(SELECT 1 FROM job_messages WHERE job_id=desktop_jobs.id) ORDER BY rowid DESC LIMIT 1",
+        params![session_id],
+    )?;
+    let Some(job_id) = rows.first().and_then(|r| r["id"].as_str()) else {
+        return Ok(());
+    };
+    let mut messages = store.messages(job_id)?;
+    let note = restore_note(paths);
+    match messages.last_mut() {
+        Some(last)
+            if last["role"] == "assistant"
+                && last
+                    .get("tool_calls")
+                    .is_none_or(|calls| calls.as_array().is_none_or(Vec::is_empty)) =>
+        {
+            let content = last["content"].as_str().unwrap_or("").to_owned();
+            last["content"] = json!(format!("{content}\n\n{note}").trim().to_owned());
+        }
+        _ => messages.push(json!({"role":"assistant","content":note})),
+    }
+    store.save_messages(job_id, &messages)
+}
+
+pub fn restore_note(paths: &[String]) -> String {
+    format!(
+        "[Process note from ShadowCode, not a user request: the file checkpoint was restored afterwards for {} path(s): {}. Those edits are no longer on disk; re-read the files before editing.]",
+        paths.len(),
+        paths.join(", ")
+    )
+}
