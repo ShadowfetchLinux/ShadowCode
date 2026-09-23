@@ -31,6 +31,9 @@ test "$(cat "$XDG_DATA_HOME/shadow-agent/profile.txt")" = 'keep this profile dat
 "$HOME/.local/bin/shadow" --version | grep -Fx 'ShadowCode 0.21.0'
 test "$(readlink "$HOME/.local/bin/shadowcode")" = shadow
 "$HOME/.local/bin/shadowcode" --version | grep -Fx 'ShadowCode 0.21.0'
+if [[ -x "$ROOT/packaging/llama.cpp/bin/llama-server" ]]; then
+  test -x "$HOME/.local/lib/shadowcode/llama-server"
+fi
 DESKTOP="$XDG_DATA_HOME/applications/shadow-agent.desktop"
 grep -Fxq 'X-ShadowCode-Version=0.21.0' "$DESKTOP"
 # The source commit is recorded once, from the checkout or an explicit override.

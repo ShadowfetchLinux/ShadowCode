@@ -28,7 +28,7 @@ from shadow_agent.api.server import create_app
 from shadow_agent.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL = "0.26.0"
+CANONICAL = "0.27.0"
 
 
 @pytest.fixture

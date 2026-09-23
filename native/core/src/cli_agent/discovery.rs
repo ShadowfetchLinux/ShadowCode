@@ -193,7 +193,7 @@ pub async fn picker_targets(config: &CliAgentsConfig) -> Result<Value> {
                     .and_then(|v| v["detail"].as_str())
                     .unwrap_or("Ready"),
                 usage.clone(),
-                false,
+                vendor.accepts_images(),
             ));
         }
     }

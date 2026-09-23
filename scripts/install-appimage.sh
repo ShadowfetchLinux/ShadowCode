@@ -36,7 +36,8 @@ APPS="$HOME/Applications"
 BIN="$HOME/.local/bin"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
 DEST="$APPS/ShadowCode-${VERSION}-x86_64.AppImage"
-mkdir -p "$APPS" "$BIN" "$DATA/applications" "$DATA/icons/hicolor/scalable/apps"
+LIB="$HOME/.local/lib/shadowcode"
+mkdir -p "$APPS" "$BIN" "$LIB" "$DATA/applications" "$DATA/icons/hicolor/scalable/apps"
 if [[ "$SOURCE" != "$DEST" ]]; then
   install -m 755 "$SOURCE" "$DEST.pending"
   mv -f "$DEST.pending" "$DEST"
@@ -54,6 +55,14 @@ mv -f "$BIN/.shadow-install" "$BIN/shadow"
 ln -sfn shadow "$BIN/.shadowcode-install"
 mv -Tf "$BIN/.shadowcode-install" "$BIN/shadowcode"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LLAMA_BIN="$ROOT/packaging/llama.cpp/bin"
+if [[ -x "$LLAMA_BIN/llama-server" ]]; then
+  mkdir -p "$LIB"
+  cp -a "$LLAMA_BIN"/. "$LIB/"
+  chmod 755 "$LIB/llama-server" "$LIB/llama-cli" 2>/dev/null || true
+  [[ -f "$ROOT/packaging/llama.cpp/COMMIT" ]] && cp "$ROOT/packaging/llama.cpp/COMMIT" "$LIB/COMMIT"
+  printf 'Installed managed llama.cpp to %s\n' "$LIB"
+fi
 cp "$ROOT/assets/icons/shadow-agent.svg" "$DATA/icons/hicolor/scalable/apps/shadow-agent.svg"
 sed "s|^Exec=.*|Exec=\"${BIN}/shadow\" ui|; s|^TryExec=.*|TryExec=${BIN}/shadow|; s|^X-ShadowCode-Version=.*|X-ShadowCode-Version=${VERSION}|; /^X-ShadowCode-GitSha=/d" "$ROOT/packaging/shadow-agent.desktop" > "$DATA/applications/shadow-agent.desktop.pending"
 # Record the source commit when known: SHADOWCODE_GIT_SHA wins, then the

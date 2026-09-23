@@ -145,6 +145,7 @@ struct Inner {
     slots: Semaphore,
     closing: AtomicBool,
     background: Arc<BackgroundManager>,
+    local_llama: tokio::sync::Mutex<Option<crate::local_runtime::LoadedServer>>,
     _profile_lock: Arc<crate::paths::ProfileLock>,
 }
 #[derive(Clone)]
@@ -169,6 +170,7 @@ impl Engine {
             slots: Semaphore::new(4),
             closing: AtomicBool::new(false),
             background,
+            local_llama: tokio::sync::Mutex::new(None),
             _profile_lock: profile_lock,
         })))
     }
@@ -186,6 +188,25 @@ impl Engine {
     }
     pub fn background(&self) -> &Arc<BackgroundManager> {
         &self.0.background
+    }
+    pub async fn prepare_model_client(&self, config: &Config, model: &ModelConfig) -> Result<ModelConfig> {
+        if model.provider != "llamacpp" {
+            return Ok(model.clone());
+        }
+        let entry = crate::local_engine::entry_for_id(&config.local_engine, &model.default)
+            .or_else(|| crate::local_engine::entry_for_id(&config.local_engine, &model.name))
+            .context("That local GGUF is not in the catalog. Add the file in Settings → Local models. Removing a catalog row never deletes the weights.")?;
+        let binary = crate::local_engine::resolve_llama_binary(&config.local_engine.llama_binary)
+            .context("Managed llama.cpp is not installed. Run scripts/build-llama.cpp.sh. ShadowCode does not start Ollama or LM Studio.")?;
+        let endpoint = {
+            let mut slot = self.0.local_llama.lock().await;
+            crate::local_runtime::ensure_loaded(&mut slot, &binary, Path::new(&entry.path)).await?
+        };
+        let mut next = model.clone();
+        next.endpoint = endpoint;
+        next.name = entry.name;
+        next.api_key_env = "UNUSED".into();
+        Ok(next)
     }
     pub fn delete_session(&self, id: &str) -> Result<bool> {
         let goals = self
@@ -768,6 +789,7 @@ impl Engine {
         })
         .await
         .context("Tasks are still shutting down; keep the app open until cleanup finishes")??;
+        crate::local_runtime::stop(&mut *self.0.local_llama.lock().await).await;
         Ok(())
     }
     async fn drain(&self, workspace: PathBuf) {
@@ -920,9 +942,6 @@ impl Engine {
             task_id: job.task_id.clone(),
             sender: self.0.sender.clone(),
         };
-        if running.config.model.provider == "llamacpp" {
-            bail!("llama.cpp is not ready. Add an official llama-cli or llama-server in Settings → Local models, then pick a GGUF you already have. ShadowCode does not auto-download weights.");
-        }
         if crate::cli_agent::is_cli_provider(&running.config.model.provider) {
             return self.run_cli_agent(running, job, events).await;
         }
@@ -991,11 +1010,13 @@ impl Engine {
                 json!(decision),
             )?;
         }
+        let image_refs = crate::vision::refs_from_paths(&running.workspace, &job.images)?;
         crate::vision::ensure_vision_or_bail(
             &running.config.model.provider,
             &running.config.model.name,
-            job.images.len(),
+            image_refs.len(),
         )?;
+        let images = crate::vision::cli_images(&running.workspace, &image_refs)?;
         let prompt = job.task.clone();
         let binary = cli.binary(vendor).to_owned();
         let options = crate::cli_agent::LaunchOptions {
@@ -1011,6 +1032,7 @@ impl Engine {
             options,
             config: cli,
             prompt,
+            images,
             session_id: job.session_id.clone(),
             task_id: job.task_id.clone(),
             job_id: job.id.clone(),
@@ -1101,7 +1123,11 @@ impl Engine {
         events: TaskEvents,
         tools: &ToolExecutor,
     ) -> Result<(String, Value)> {
-        let model = ModelClient::new(running.config.model.clone(), &self.0.paths)?;
+        let model = ModelClient::new(
+            self.prepare_model_client(&running.config, &running.config.model)
+                .await?,
+            &self.0.paths,
+        )?;
         let mut schemas: Vec<_> = tools
             .schemas()
             .into_iter()

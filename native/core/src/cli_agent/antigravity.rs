@@ -6,7 +6,10 @@
 //! reads one NDJSON user message per stdin line and emits NDJSON events.
 //! ShadowCode never treats the `antigravity` Electron app as this CLI, never
 //! reads Google cookies, and never maps a Gemini API key to this adapter.
-use super::{clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, Step, Update, Vendor};
+use super::{
+    clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, PromptImage, Step,
+    Update, Vendor,
+};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -179,7 +182,10 @@ impl CliAdapter for AntigravityAdapter {
     fn ready(&self) -> bool {
         self.started
     }
-    fn prompt(&mut self, text: &str) -> Result<Vec<String>> {
+    fn prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
+        if !images.is_empty() {
+            bail!("Antigravity stream-json does not document image content blocks; images are not forwarded");
+        }
         if self.started {
             self.turn_active = true;
             Ok(vec![Self::user_message(text)])

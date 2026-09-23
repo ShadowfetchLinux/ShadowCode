@@ -18,6 +18,7 @@ pub mod intelligence;
 #[cfg(unix)]
 pub mod lifecycle;
 pub mod local_engine;
+pub mod local_runtime;
 #[cfg(unix)]
 pub mod mcp;
 pub mod memory;

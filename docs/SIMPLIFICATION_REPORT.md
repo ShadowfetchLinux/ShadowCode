@@ -1,7 +1,9 @@
-# 0.26 simplification report
+# 0.27 simplification report
 
-ShadowCode is a local desktop coding agent again: one window, one picker, real
-backends. This supersedes the remote agent-management direction.
+ShadowCode is a local desktop coding agent: one window, one picker, real
+backends. This supersedes the remote agent-management direction. 0.26.0 shipped
+the picker. 0.27.0 makes local inference real without an Ollama or LM Studio
+daemon.
 
 ## What changed
 
@@ -11,8 +13,12 @@ backends. This supersedes the remote agent-management direction.
   `--print --output-format stream-json`. Codex and Claude Code adapters are
   unchanged in protocol. Grok ACP remains but is not featured.
 - Usage never invents percents. Unknown is "Usage unavailable".
-- Local GGUF catalog (user-selected files/folders only). llama.cpp is optional.
-  Ollama stays compatibility-only and is not treated as GGUF.
+- Local GGUF catalog (user-selected files/folders only). Removing a catalog row
+  does not delete the file. Ollama stays compatibility-only and is not treated
+  as GGUF.
+- A pinned llama.cpp is compiled from source and installed to
+  `~/.local/lib/shadowcode/llama-server`. The engine resolves that managed
+  binary before PATH.
 - Home is a quiet welcome with four prompt chips. Activity is one timeline.
   Settings starts with Accounts and Local models.
 
@@ -20,33 +26,52 @@ backends. This supersedes the remote agent-management direction.
 
 | Adapter | Runtime | Discovery | Usage | Notes |
 | --- | --- | --- | --- | --- |
-| Codex | `codex` 0.155.0-alpha.16 | Doctor + optional `codex models` | Unavailable unless official JSON reports remaining | app-server unchanged |
-| Claude Code | `claude` 2.1.278 | Doctor (`auth status`) | Unavailable | official stream-json; disable flag remains |
-| Cursor | `cursor-agent` 2026.09.15-d2fe57e | `--list-models` when Ready | `about` shows plan tier only — not rendered as a percent | `cursor-agent status` for login |
-| Antigravity | `agy` 1.2.8 | `agy models` when Ready | No `usage` command on 1.2.8 | GUI `antigravity` is not the CLI |
-| Grok | kept | not featured | — | existing ACP adapter |
+| Codex | `codex` 0.155.0-alpha.16 | Doctor + optional `codex models` | Unavailable unless official JSON reports remaining | app-server image input is `localImage` |
+| Claude Code | `claude` 2.1.278 | Doctor (`auth status`) | Unavailable | official stream-json image source blocks |
+| Cursor | `cursor-agent` 2026.09.15-d2fe57e | `--list-models` when Ready | `about` shows plan tier only — not rendered as a percent | ACP `image` content blocks |
+| Antigravity | `agy` 1.2.8 | `agy models` when Ready | No `usage` command on 1.2.8 | images still rejected |
+| Grok | kept | not featured | — | existing ACP adapter, same image blocks as Cursor |
 
 ## Local models
 
 - GGUF magic is required. Removing a catalog row does not delete the file.
 - This machine has Ollama tags `qwen3:14b`, `gpt-oss:20b`,
   `huihui_ai/gemma-4-abliterated:12b`. Those blobs are not auto-imported as GGUF.
-- No `llama-cli` / `llama-server` on PATH. Local GGUF rows stay Setup required
-  until the user points at an official binary. Not proven against a live GGUF
-  load on this box.
-- Hardware probe can read CPU/RAM and `nvidia-smi` when present.
+- Vocab-only and embedding GGUFs found under `~/.unsloth` and LM Studio were
+  not added to the catalog. They are not chat weights.
+- Managed llama.cpp is a CPU build (no nvcc; Vulkan lacks glslc/shaderc).
+  Upstream commit `18f9f7bef960b76b693d8dcbb33cbbd6148c1631`
+  (`version: 0.4.1-dev`, reported as `18f9f7bef`). Pin: `tools/llama.cpp.pin`.
+  Install path: `~/.local/lib/shadowcode/llama-server` with `$ORIGIN` rpath.
+- One model is loaded at a time on 127.0.0.1. Local vision is true only when an
+  mmproj companion file is present next to the GGUF.
 
 ## Tests and packaging
 
-See the release commit message and CI logs. Required local commands:
-`cargo build -p shadowcode-desktop --locked`,
-`cargo test -p shadowcode-core --tests --locked`,
-UI vitest + tsc on Node 22.22.3, `pytest tests/` if the venv exists,
-`scripts/test-install-appimage.sh`.
+Quoted local runs on this machine (not claimed without running):
+
+- `cargo build -p shadowcode-desktop --locked --offline`: finished `dev` profile
+  for `shadowcode-desktop v0.27.0`.
+- `cargo test -p shadowcode-core --tests --locked --offline`: 372 passed, 0
+  failed across the crate's integration test binaries.
+- `cargo test -p shadowcode-core --lib local_engine --locked --offline`: 2
+  passed (catalog remove does not delete weights; managed binary wins over PATH).
+- UI on nvm Node v22.22.3 (not `/usr/bin/node`): vitest `18` files / `59`
+  tests passed; `npx tsc --noEmit` exit 0.
+- `.venv/bin/pytest tests/ -q --tb=no`: 316 passed, 0 failed.
+- `scripts/test-install-appimage.sh`: passed after the installer copies the
+  managed llama-server when `packaging/llama.cpp/bin` is present.
+
+AppImage build and install happen after this commit. Binaries under
+`packaging/llama.cpp/bin/` and the llama.cpp source clone are not in git.
 
 ## Genuine limits
 
 - No hosted ShadowCode account or cloud orchestration.
-- Vendor image bytes are not forwarded yet; those routes reject attachments.
-- Antigravity quota API is not in CLI 1.2.8.
-- llama.cpp inference is catalog + setup, not a proven in-process engine.
+- Antigravity quota API is not in CLI 1.2.8. Antigravity images stay rejected.
+- No compatible chat GGUF was present on this machine, so a live load/generation
+  smoke against user weights was not run. The managed binaries were proven with
+  `--version`, and a unit test proves the engine resolves the bundled path
+  rather than PATH-only.
+- GPU llama.cpp was not built: CUDA toolkit is absent and Vulkan shader tools
+  are missing. CPU inference is what ships.

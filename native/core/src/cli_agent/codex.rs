@@ -8,7 +8,10 @@
 //! Fallback: `codex exec --json` — one-shot JSONL events (`thread.started`,
 //! `item.started`, `item.completed`, `turn.completed`, `error`) with no
 //! approval channel; only used when app-server is unavailable.
-use super::{clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, Step, Update, Vendor};
+use super::{
+    clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, PromptImage, Step,
+    Update, Vendor,
+};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
@@ -58,7 +61,7 @@ pub struct CodexAppServerAdapter {
     interrupt_id: Option<u64>,
     thread_id: Option<String>,
     turn_id: Option<String>,
-    pending_prompt: Option<String>,
+    pending_prompt: Option<(String, Vec<PromptImage>)>,
     pending_approvals: std::collections::HashMap<String, String>,
     streamed_message_ids: std::collections::HashSet<String>,
     options: Option<LaunchOptions>,
@@ -69,14 +72,21 @@ impl CodexAppServerAdapter {
         self.next_id += 1;
         self.next_id
     }
-    fn start_turn(&mut self, text: &str) -> Result<Vec<String>> {
+    fn start_turn(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
         let Some(thread) = self.thread_id.clone() else {
             bail!("Codex thread is not ready")
         };
         let id = self.id();
         self.turn_start_id = Some(id);
         self.turn_active = true;
-        let mut params = json!({"threadId":thread,"input":[{"type":"text","text":text}]});
+        let mut input = vec![json!({"type":"text","text":text})];
+        for image in images {
+            input.push(json!({
+                "type":"localImage",
+                "path": image.absolute_path,
+            }));
+        }
+        let mut params = json!({"threadId":thread,"input":input});
         if let Some(options) = &self.options {
             params["cwd"] = json!(options.workspace);
         }
@@ -123,8 +133,8 @@ impl CodexAppServerAdapter {
             self.thread_id = Some(thread.to_owned());
             self.phase = Phase::ThreadStarted;
             let mut step = Step::default();
-            if let Some(prompt) = self.pending_prompt.take() {
-                step.send.extend(self.start_turn(&prompt)?);
+            if let Some((prompt, images)) = self.pending_prompt.take() {
+                step.send.extend(self.start_turn(&prompt, &images)?);
             }
             return Ok(step);
         }
@@ -444,11 +454,11 @@ impl CliAdapter for CodexAppServerAdapter {
     fn ready(&self) -> bool {
         self.phase == Phase::ThreadStarted
     }
-    fn prompt(&mut self, text: &str) -> Result<Vec<String>> {
+    fn prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
         if self.ready() {
-            self.start_turn(text)
+            self.start_turn(text, images)
         } else {
-            self.pending_prompt = Some(text.to_owned());
+            self.pending_prompt = Some((text.to_owned(), images.to_vec()));
             Ok(Vec::new())
         }
     }
@@ -573,7 +583,10 @@ impl CliAdapter for CodexExecAdapter {
     fn ready(&self) -> bool {
         self.started
     }
-    fn prompt(&mut self, text: &str) -> Result<Vec<String>> {
+    fn prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
+        if !images.is_empty() {
+            bail!("codex exec cannot accept image bytes; use the official app-server image input");
+        }
         if self.started {
             Ok(vec![text.to_owned()])
         } else {

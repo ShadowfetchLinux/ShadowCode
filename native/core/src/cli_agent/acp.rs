@@ -9,7 +9,10 @@
 //! `{"outcome":{"outcome":"selected","optionId":…}}`. ShadowCode declares no
 //! `fs`/`terminal` client capabilities, so the vendor agent performs its own
 //! file and shell work with its own sandbox.
-use super::{clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, Step, Update, Vendor};
+use super::{
+    clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, PromptImage, Step,
+    Update, Vendor,
+};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -50,7 +53,7 @@ pub struct AcpAdapter {
     session_new_id: Option<u64>,
     prompt_id: Option<u64>,
     session_id: Option<String>,
-    pending_prompt: Option<String>,
+    pending_prompt: Option<(String, Vec<PromptImage>)>,
     pending_permissions: HashMap<String, PendingPermission>,
     tool_names: HashMap<String, String>,
     options: Option<LaunchOptions>,
@@ -77,17 +80,25 @@ impl AcpAdapter {
         self.next_id += 1;
         self.next_id
     }
-    fn start_prompt(&mut self, text: &str) -> Result<Vec<String>> {
+    fn start_prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
         let Some(session) = self.session_id.clone() else {
             bail!("ACP session is not ready")
         };
         let id = self.id();
         self.prompt_id = Some(id);
         self.prompt_active = true;
+        let mut prompt = vec![json!({"type":"text","text":text})];
+        for image in images {
+            prompt.push(json!({
+                "type":"image",
+                "mimeType":image.mime,
+                "data":image.data_base64
+            }));
+        }
         Ok(vec![request(
             id,
             "session/prompt",
-            json!({"sessionId":session,"prompt":[{"type":"text","text":text}]}),
+            json!({"sessionId":session,"prompt":prompt}),
         )])
     }
     fn handle_response(&mut self, id: u64, message: &Value) -> Result<Step> {
@@ -148,8 +159,8 @@ impl AcpAdapter {
                     }
                 }
             }
-            if let Some(prompt) = self.pending_prompt.take() {
-                step.send.extend(self.start_prompt(&prompt)?);
+            if let Some((prompt, images)) = self.pending_prompt.take() {
+                step.send.extend(self.start_prompt(&prompt, &images)?);
             }
             return Ok(step);
         }
@@ -361,11 +372,11 @@ impl CliAdapter for AcpAdapter {
     fn ready(&self) -> bool {
         self.phase == Phase::Session
     }
-    fn prompt(&mut self, text: &str) -> Result<Vec<String>> {
+    fn prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
         if self.ready() {
-            self.start_prompt(text)
+            self.start_prompt(text, images)
         } else {
-            self.pending_prompt = Some(text.to_owned());
+            self.pending_prompt = Some((text.to_owned(), images.to_vec()));
             Ok(Vec::new())
         }
     }

@@ -107,6 +107,14 @@ impl Vendor {
     pub fn featured(self) -> bool {
         Self::FEATURED.contains(&self)
     }
+    /// Official interfaces that accept image bytes. Antigravity's stream-json
+    /// input is text content blocks only; we do not invent a vision payload.
+    pub fn accepts_images(self) -> bool {
+        matches!(
+            self,
+            Vendor::Codex | Vendor::Claude | Vendor::Cursor | Vendor::Grok
+        )
+    }
     pub fn supports_auto_model(self) -> bool {
         matches!(self, Vendor::Cursor | Vendor::Codex)
     }
@@ -235,6 +243,16 @@ impl Step {
     }
 }
 
+/// An image already stored in the workspace. Adapters pass these through
+/// official vendor fields (Codex `localImage`, Claude image source blocks,
+/// ACP `image` content). They are never reduced to a path list in the prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptImage {
+    pub mime: String,
+    pub absolute_path: std::path::PathBuf,
+    pub data_base64: String,
+}
+
 /// Launch options shared by every adapter.
 #[derive(Clone, Debug)]
 pub struct LaunchOptions {
@@ -258,7 +276,7 @@ pub trait CliAdapter: Send {
     fn ready(&self) -> bool;
     /// Queue a user turn. Adapters buffer it until `ready()` and flush it
     /// from `on_line`, so callers may prompt right after `on_start`.
-    fn prompt(&mut self, text: &str) -> Result<Vec<String>>;
+    fn prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>>;
     /// Translate one stdout line. Malformed lines return `Ok` with a
     /// `Warning`; only protocol-fatal conditions return `Err`.
     fn on_line(&mut self, line: &str) -> Result<Step>;

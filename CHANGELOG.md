@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.27.0 — Managed local inference
+
+- Local GGUF rows load through a ShadowCode-managed llama.cpp runtime
+  (`~/.local/lib/shadowcode/llama-server`). The engine prefers that binary over
+  PATH. It does not start Ollama or LM Studio. Removing a catalog entry still
+  never deletes weights. One GGUF is loaded at a time.
+- Codex, Claude Code, and Cursor now receive real image bytes on their official
+  interfaces (Codex `localImage`, Claude image source blocks, ACP `image`).
+  Antigravity still rejects attachments because its stream-json input does not
+  document image blocks. Local GGUF vision is enabled only when an mmproj
+  companion file is present.
+- CPU llama.cpp is compiled from a pinned upstream commit and installed with
+  the AppImage. Models are never auto-downloaded.
+
 ## 0.26.0 — Desktop coding agent
 
 - One searchable composer picker with **Subscriptions** and **On this computer**.

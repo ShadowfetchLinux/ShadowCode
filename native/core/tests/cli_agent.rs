@@ -73,7 +73,7 @@ fn codex_app_server_streams_tools_and_approves() {
     let mut adapter = adapter_for(Vendor::Codex, false);
     let start = adapter.on_start(&launch(root.path()));
     assert!(start[0].contains("initialize"));
-    adapter.prompt("hello").unwrap();
+    adapter.prompt("hello", &[]).unwrap();
     let (send, updates) = feed(
         &mut *adapter,
         &[
@@ -179,7 +179,7 @@ fn codex_exec_fallback_maps_jsonl() {
     assert_eq!(bin, "codex");
     assert!(args.contains(&"exec".into()));
     assert!(args.contains(&"--json".into()));
-    adapter.prompt("hi").unwrap();
+    adapter.prompt("hi", &[]).unwrap();
     adapter.on_start(&launch(root.path()));
     let (_, updates) = feed(
         &mut *adapter,
@@ -209,7 +209,7 @@ fn grok_acp_permission_round_trip_and_cancel() {
     assert_eq!(bin, "grok");
     assert_eq!(args, vec!["agent", "--model", "grok-4", "stdio"]);
     adapter.on_start(&launch(root.path()));
-    adapter.prompt("edit the file").unwrap();
+    adapter.prompt("edit the file", &[]).unwrap();
     let (send, _) = feed(
         &mut *adapter,
         &[
@@ -293,7 +293,7 @@ fn claude_stream_json_approval_and_interrupt() {
     assert!(args.contains(&"stream-json".into()));
     assert!(args.contains(&"--permission-prompts".into()));
     assert!(args.contains(&"plan".into()));
-    adapter.prompt("hello").unwrap();
+    adapter.prompt("hello", &[]).unwrap();
     adapter.on_start(&launch(root.path()));
     let (_, updates) = feed(
         &mut *adapter,
@@ -469,6 +469,7 @@ async fn fake_binary_spawn_approval_and_cancel() {
             },
             config: &config,
             prompt: "hello".into(),
+            images: Vec::new(),
             session_id: session_id.clone(),
             task_id: task_id.clone(),
             job_id: "j".into(),
@@ -513,6 +514,7 @@ async fn fake_binary_spawn_approval_and_cancel() {
             },
             config: &config,
             prompt: "slow".into(),
+            images: Vec::new(),
             session_id,
             task_id: "t2".into(),
             job_id: "j2".into(),
@@ -590,7 +592,7 @@ fn cursor_acp_command_and_cancel() {
     assert_eq!(bin, "cursor-agent");
     assert_eq!(args, vec!["--model", "auto", "acp"]);
     adapter.on_start(&launch(root.path()));
-    adapter.prompt("hello").unwrap();
+    adapter.prompt("hello", &[]).unwrap();
     let (send, _) = feed(
         &mut *adapter,
         &[
@@ -625,7 +627,7 @@ fn antigravity_stream_json_tools_and_cancel() {
     assert!(args.contains(&"stream-json".into()));
     assert!(args.contains(&"--mode".into()));
     assert!(args.contains(&"plan".into()));
-    adapter.prompt("edit").unwrap();
+    adapter.prompt("edit", &[]).unwrap();
     adapter.on_start(&launch(root.path()));
     let (_, updates) = feed(
         &mut *adapter,
@@ -680,4 +682,61 @@ fn picker_routes_by_stable_id_not_display_name() {
     assert_eq!(cursor.id, target_id(Vendor::Cursor, "sonnet"));
     assert_eq!(resolve_vendor(&cursor.id).unwrap().provider, "cli:cursor");
     assert_eq!(resolve_vendor(&claude.id).unwrap().provider, "cli:claude");
+}
+
+fn sample_image() -> shadowcode_core::cli_agent::PromptImage {
+    shadowcode_core::cli_agent::PromptImage {
+        mime: "image/png".into(),
+        absolute_path: Path::new("/tmp/shot.png").to_path_buf(),
+        data_base64: "aW1n".into(),
+    }
+}
+
+#[test]
+fn vendor_image_bytes_use_official_fields() {
+    let root = tempfile::tempdir().unwrap();
+    let image = sample_image();
+    let mut codex = adapter_for(Vendor::Codex, false);
+    let _ = codex.on_start(&launch(root.path()));
+    let _ = codex.prompt("look", std::slice::from_ref(&image)).unwrap();
+    let (send, _) = feed(
+        &mut *codex,
+        &[
+            &rpc_result(1, json!({"protocolVersion":2})),
+            &rpc_result(2, json!({"thread":{"id":"thr-img"}})),
+        ],
+    );
+    let turn = send.iter().find(|l| l.contains("turn/start")).unwrap();
+    assert!(turn.contains("localImage"));
+    assert!(turn.contains("/tmp/shot.png"));
+    assert!(!turn.contains("aW1n"));
+
+    let mut claude = adapter_for(Vendor::Claude, false);
+    let _ = claude.on_start(&launch(root.path()));
+    let line = claude.prompt("look", std::slice::from_ref(&image)).unwrap();
+    assert!(line[0].contains("\"type\":\"image\""));
+    assert!(line[0].contains("base64"));
+    assert!(line[0].contains("aW1n"));
+
+    let mut cursor = adapter_for(Vendor::Cursor, false);
+    let _ = cursor.on_start(&launch(root.path()));
+    let _ = cursor.prompt("look", std::slice::from_ref(&image)).unwrap();
+    let (send, _) = feed(
+        &mut *cursor,
+        &[
+            &rpc_result(1, json!({"protocolVersion":1})),
+            &rpc_result(2, json!({"sessionId":"s1"})),
+        ],
+    );
+    let prompt = send.iter().find(|l| l.contains("session/prompt")).unwrap();
+    assert!(prompt.contains("\"type\":\"image\""));
+    assert!(prompt.contains("image/png"));
+    assert!(prompt.contains("aW1n"));
+
+    let mut agy = adapter_for(Vendor::Antigravity, false);
+    assert!(agy.prompt("look", std::slice::from_ref(&image)).is_err());
+    assert!(Vendor::Codex.accepts_images());
+    assert!(Vendor::Claude.accepts_images());
+    assert!(Vendor::Cursor.accepts_images());
+    assert!(!Vendor::Antigravity.accepts_images());
 }

@@ -96,13 +96,22 @@ coordination sidecars. Directory capabilities confine database/sidecar paths;
 query work, concurrent readers and output are bounded. Cancellation interrupts
 SQLite and releases its connection; an OS filesystem stall may delay return.
 
+## Local GGUF inference
+
+ShadowCode can spawn a managed `llama-server` on 127.0.0.1 with one user-owned
+GGUF at a time. It does not start Ollama or LM Studio and does not download
+weights. Removing a catalog row deletes only the pointer, never the file. The
+managed binary lives under `~/.local/lib/shadowcode/` after install.
+
 ## Vendor subscription CLIs
 
 Codex, Claude Code, Cursor, and Antigravity run as official local CLIs.
 ShadowCode does not scrape cookies, extract OAuth tokens, or treat a Gemini API
 key as Antigravity subscription access. Disconnecting ShadowCode does not always
 log out a shared native CLI — use that vendor's own logout when you want the
-CLI session gone.
+CLI session gone. Image attachments are forwarded only on official vendor fields
+(Codex `localImage`, Claude image source blocks, Cursor ACP `image`). Antigravity
+rejects images.
 
 ## Secrets and transcript content
 

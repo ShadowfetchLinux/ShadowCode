@@ -34,3 +34,5 @@ ui/playwright-report/
 src/shadow_agent/_assets/
 /target
 /src-tauri/gen/
+/tools/llama.cpp/
+/packaging/llama.cpp/bin/

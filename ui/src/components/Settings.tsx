@@ -411,7 +411,9 @@ export function Settings({
             <p className="hint">
               Add a GGUF file or folder you already have. Removing a catalog
               entry never deletes the original weights. Models are not
-              downloaded automatically.
+              downloaded automatically. ShadowCode loads one GGUF at a time
+              through its managed llama.cpp runtime, not an Ollama or LM Studio
+              daemon.
             </p>
             <p className="hint">
               {localCatalog.llama?.detail ||

@@ -986,6 +986,7 @@ impl Service {
                     }));
                 }
                 let started = Instant::now();
+                let model = self.engine.prepare_model_client(&cfg, &model).await?;
                 let client = ModelClient::new(model.clone(), self.engine.paths())?;
                 let cancel = CancellationToken::new();
                 let result=tokio::time::timeout(Duration::from_secs(45),client.chat(&[json!({"role":"user","content":"Reply with one short sentence confirming you can respond."})],&[],cancel.clone(),|_|{})).await;

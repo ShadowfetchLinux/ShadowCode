@@ -86,6 +86,7 @@ pub struct Request<'a> {
     pub options: LaunchOptions,
     pub config: &'a CliAgentsConfig,
     pub prompt: String,
+    pub images: Vec<super::PromptImage>,
     pub session_id: String,
     pub task_id: String,
     pub job_id: String,
@@ -106,6 +107,7 @@ pub async fn run(request: Request<'_>) -> Result<(String, Usage)> {
             Err(error)
                 if request.vendor == Vendor::Codex
                     && !fallback
+                    && request.images.is_empty()
                     && looks_like_missing_app_server(&error) =>
             {
                 last_error = Some(error);
@@ -175,7 +177,7 @@ async fn run_once(
     let mut reader = BufReader::new(stdout);
     tokio::spawn(drain_stderr(stderr, request.events.clone()));
     let mut outgoing = adapter.on_start(&request.options);
-    outgoing.extend(adapter.prompt(&request.prompt)?);
+    outgoing.extend(adapter.prompt(&request.prompt, &request.images)?);
     send_lines(&mut stdin, &outgoing).await?;
     let mut collected = String::new();
     let mut usage = Usage::default();
@@ -315,7 +317,7 @@ async fn run_once(
                 finished = false;
                 interrupted_turn = false;
                 message_id = crate::id();
-                outgoing = adapter.prompt(&follow_up)?;
+                outgoing = adapter.prompt(&follow_up, &[])?;
                 send_lines(&mut stdin, &outgoing).await?;
             } else {
                 group.kill();
@@ -529,7 +531,7 @@ async fn apply_update(
             if interrupted && request.steer.is_paused() {
                 if let Some(follow_up) = wait_for_steer(request).await? {
                     *message_id = crate::id();
-                    send_lines(stdin, &adapter.prompt(&follow_up)?).await?;
+                    send_lines(stdin, &adapter.prompt(&follow_up, &[])?).await?;
                     return Ok(());
                 }
             }

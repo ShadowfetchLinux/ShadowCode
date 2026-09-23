@@ -15,7 +15,10 @@
 //! tokens directly; driving the official `claude` binary with the user's own
 //! login is currently tolerated but not guaranteed. ShadowCode never touches
 //! the credential and exposes `cli_agents.claude_enabled` to opt out.
-use super::{clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, Step, Update, Vendor};
+use super::{
+    clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, PromptImage, Step,
+    Update, Vendor,
+};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -27,7 +30,7 @@ pub struct ClaudeAdapter {
     started: bool,
     initialized: bool,
     streamed_text: bool,
-    pending_prompt: Option<String>,
+    pending_prompt: Option<(String, Vec<PromptImage>)>,
     pending_permissions: HashSet<String>,
     tool_names: HashMap<String, String>,
     tool_paths: HashMap<String, String>,
@@ -35,9 +38,19 @@ pub struct ClaudeAdapter {
     control_counter: u64,
 }
 impl ClaudeAdapter {
-    fn user_message(text: &str) -> String {
-        json!({"type":"user","message":{"role":"user","content":[{"type":"text","text":text}]}})
-            .to_string()
+    fn user_message(text: &str, images: &[PromptImage]) -> String {
+        let mut content = vec![json!({"type":"text","text":text})];
+        for image in images {
+            content.push(json!({
+                "type":"image",
+                "source":{
+                    "type":"base64",
+                    "media_type":image.mime,
+                    "data":image.data_base64
+                }
+            }));
+        }
+        json!({"type":"user","message":{"role":"user","content":content}}).to_string()
     }
     fn content_blocks(message: &Value) -> Vec<Value> {
         match &message["content"] {
@@ -214,9 +227,9 @@ impl CliAdapter for ClaudeAdapter {
         // stream-json input accepts the first user message immediately; the
         // `system/init` frame confirms the session started.
         match self.pending_prompt.take() {
-            Some(prompt) => {
+            Some((prompt, images)) => {
                 self.turn_active = true;
-                vec![Self::user_message(&prompt)]
+                vec![Self::user_message(&prompt, &images)]
             }
             None => Vec::new(),
         }
@@ -224,12 +237,12 @@ impl CliAdapter for ClaudeAdapter {
     fn ready(&self) -> bool {
         self.started
     }
-    fn prompt(&mut self, text: &str) -> Result<Vec<String>> {
+    fn prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
         if self.started {
             self.turn_active = true;
-            Ok(vec![Self::user_message(text)])
+            Ok(vec![Self::user_message(text, images)])
         } else {
-            self.pending_prompt = Some(text.to_owned());
+            self.pending_prompt = Some((text.to_owned(), images.to_vec()));
             Ok(Vec::new())
         }
     }

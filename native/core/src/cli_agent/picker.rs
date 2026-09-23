@@ -194,7 +194,7 @@ pub fn doctor_rows(config: &CliAgentsConfig, doctor: &Value) -> Vec<PickerTarget
                 availability,
                 detail,
                 UsageSnapshot::unavailable(vendor.product_label()),
-                false,
+                vendor.accepts_images(),
             ));
         }
     }

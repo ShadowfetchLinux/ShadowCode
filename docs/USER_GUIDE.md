@@ -1,6 +1,6 @@
 # ShadowCode user guide
 
-This guide covers the supported 0.26 native release. The desktop, CLI, terminal
+This guide covers the supported 0.27 native release. The desktop, CLI, terminal
 interface, and integrations use the same Python-free Rust engine. See the
 [native desktop](NATIVE_DESKTOP.md), [native CLI](NATIVE_CLI.md), and
 [release gates](NATIVE_MIGRATION.md) guides for platform and integration details.
@@ -10,7 +10,8 @@ interface, and integrations use the same Python-free Rust engine. See the
 Open ShadowCode, choose a project directory, and pick one target from the
 composer dropdown. Subscriptions (Codex, Claude Code, Cursor, Antigravity) use
 the official CLI login. Local GGUF files you already have can be added in
-Settings → Local models. Remaining usage appears only when a provider reports
+Settings → Local models. ShadowCode loads them with its bundled llama.cpp
+runtime; it does not start Ollama or LM Studio. Remaining usage appears only when a provider reports
 it; otherwise the row says Usage unavailable. Mock is a deterministic offline
 demo; it can demonstrate a hello-world workflow without model credits.
 
@@ -71,9 +72,11 @@ branch, Markdown export, and deletion. Branches inherit the parent transcript;
 the filesystem is shared, not a separate Git worktree.
 
 Reloading restores the selected task, its transcript, and its unsent text draft.
-An active task reconnects without duplicating output. Attachments are text/source
-files up to 1 MB; they are copied into `.shadow/attachments/`. Attachment selections
-are not retained through reloads. Drafts, pins, and sidebar state are browser-local;
+An active task reconnects without duplicating output. Text attachments and images
+are copied into `.shadow/attachments/` (images up to the workspace file limit).
+Codex, Claude Code, and Cursor receive those image bytes on their official
+interfaces. Antigravity rejects images. Local GGUF vision requires a present
+mmproj companion file. Attachment selections are not retained through reloads. Drafts, pins, and sidebar state are browser-local;
 use Export when you need a portable conversation artifact.
 
 If the API restarts during a task, its job record becomes **interrupted**. Open

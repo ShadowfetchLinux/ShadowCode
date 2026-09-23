@@ -4,6 +4,8 @@ import { execFile, spawn } from "node:child_process";
 import {
   chmod,
   copyFile,
+  cp,
+  mkdir,
   mkdtemp,
   readFile,
   rename,
@@ -97,6 +99,24 @@ try {
       await rm(path.join(appdir, "AppRun.wrapped"), { force: true });
       await appdirNotices(appdir);
       await runtimeNotices(appdir, nativeRuntime);
+      const llamaBin = path.join(root, "packaging/llama.cpp/bin");
+      const llamaServer = path.join(llamaBin, "llama-server");
+      if (!(await readFile(llamaServer).catch(() => null))) {
+        throw new Error(
+          "Managed llama.cpp is missing. Run scripts/build-llama.cpp.sh before packaging.",
+        );
+      }
+      const llamaDir = path.join(appdir, "usr/lib/shadowcode");
+      await mkdir(llamaDir, { recursive: true });
+      await cp(llamaBin, llamaDir, { recursive: true });
+      await chmod(path.join(llamaDir, "llama-server"), 0o755);
+      if (await readFile(path.join(llamaDir, "llama-cli")).catch(() => null)) {
+        await chmod(path.join(llamaDir, "llama-cli"), 0o755);
+      }
+      const llamaCommit = path.join(root, "packaging/llama.cpp/COMMIT");
+      if (await readFile(llamaCommit).catch(() => null)) {
+        await copyFile(llamaCommit, path.join(llamaDir, "COMMIT"));
+      }
       const repacked = path.join(scratch, path.basename(appimage));
       await command(
         path.join(root, "target/.tauri/linuxdeploy-plugin-appimage.AppImage"),

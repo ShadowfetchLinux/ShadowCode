@@ -76,10 +76,8 @@ pub fn validate_image_bytes(bytes: &[u8], filename: &str) -> Result<&'static str
 
 /// Whether this provider/model combination can accept image inputs.
 pub fn model_supports_vision(provider: &str, model: &str) -> bool {
-    // Vendor CLIs only accept images once the adapter actually forwards
-    // bytes. Path lists in the prompt are not vision support.
-    if crate::cli_agent::is_cli_provider(provider) {
-        return false;
+    if let Some(vendor) = crate::cli_agent::Vendor::from_provider(provider) {
+        return vendor.accepts_images();
     }
     let name = model.to_ascii_lowercase();
     let hint = [
@@ -116,6 +114,25 @@ pub fn model_supports_vision(provider: &str, model: &str) -> bool {
         && !["gpt-oss", "o1-mini", "codex", "davinci", "babbage"]
             .iter()
             .any(|needle| name.contains(needle))
+}
+
+pub fn cli_images(
+    workspace: &Workspace,
+    refs: &[ImageRef],
+) -> Result<Vec<crate::cli_agent::PromptImage>> {
+    refs.iter()
+        .map(|img| {
+            let absolute = workspace.path.join(&img.path);
+            let bytes = std::fs::read(&absolute)
+                .with_context(|| format!("Image attachment missing: {}", img.path))?;
+            validate_image_bytes(&bytes, &img.path)?;
+            Ok(crate::cli_agent::PromptImage {
+                mime: img.mime.clone(),
+                absolute_path: absolute,
+                data_base64: B64.encode(bytes),
+            })
+        })
+        .collect()
 }
 
 pub fn ensure_vision_or_bail(provider: &str, model: &str, image_count: usize) -> Result<()> {
@@ -361,10 +378,12 @@ mod tests {
         assert!(!model_supports_vision("ollama", "gpt-oss:20b"));
         assert!(!model_supports_vision("ollama", "qwen3:14b"));
         assert!(model_supports_vision("openai", "gpt-4o-mini"));
-        assert!(!model_supports_vision("cli:codex", "gpt-5"));
-        assert!(!model_supports_vision("cli:cursor", "auto"));
+        assert!(model_supports_vision("cli:codex", "gpt-5"));
+        assert!(model_supports_vision("cli:cursor", "auto"));
+        assert!(model_supports_vision("cli:claude", "default"));
         assert!(!model_supports_vision("cli:antigravity", "gemini-3.8-flash-high"));
-        assert!(ensure_vision_or_bail("cli:claude", "default", 1).is_err());
+        assert!(ensure_vision_or_bail("cli:claude", "default", 1).is_ok());
+        assert!(ensure_vision_or_bail("cli:antigravity", "gemini-3.8-flash-high", 1).is_err());
         assert!(ensure_vision_or_bail("cli:cursor", "auto", 0).is_ok());
     }
 

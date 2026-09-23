@@ -1,7 +1,8 @@
-//! Built-in local GGUF catalog and optional llama.cpp spawn.
+//! Built-in local GGUF catalog and managed llama.cpp resolution.
 //!
 //! Users add files or directories they already have. Removing a catalog entry
 //! never deletes weights. Ollama tags are not GGUF and are not imported here.
+//! The engine prefers the ShadowCode-managed llama-server over PATH.
 use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -12,6 +13,9 @@ use std::{
 
 const GGUF_MAGIC: &[u8; 4] = b"GGUF";
 const MAX_SCAN_FILES: usize = 256;
+pub const MANAGED_RELATIVE: &str = ".local/lib/shadowcode";
+pub const MANAGED_SERVER: &str = "llama-server";
+pub const MANAGED_CLI: &str = "llama-cli";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -76,9 +80,7 @@ pub fn inspect_gguf(path: &Path, ram_bytes: u64) -> Result<GgufEntry> {
         .and_then(|s| s.to_str())
         .unwrap_or("local-model");
     let lower = stem.to_ascii_lowercase();
-    let vision = ["llava", "vision", "vl", "moondream", "pixtral"]
-        .iter()
-        .any(|n| lower.contains(n));
+    let vision = has_mmproj(path);
     let tools = !["chat-only", "instruct-only"].iter().any(|n| lower.contains(n));
     let overhead = 512 * 1024 * 1024;
     let context_cache = 512 * 1024 * 1024;
@@ -138,6 +140,120 @@ pub fn scan(config: &LocalEngineConfig, ram_bytes: u64) -> Vec<GgufEntry> {
     out
 }
 
+pub fn entry_for_id(config: &LocalEngineConfig, id: &str) -> Option<GgufEntry> {
+    let id = id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    scan(config, 0)
+        .into_iter()
+        .find(|entry| entry.id == id || entry.path == id || entry.name == id)
+}
+
+fn has_mmproj(path: &Path) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    for name in [
+        format!("{stem}.mmproj.gguf"),
+        format!("{stem}-mmproj.gguf"),
+        format!("mmproj-{stem}.gguf"),
+        format!("{stem}.mmproj"),
+    ] {
+        if dir.join(name).is_file() {
+            return true;
+        }
+    }
+    let Ok(read) = fs::read_dir(dir) else {
+        return false;
+    };
+    read.flatten().any(|child| {
+        let name = child.file_name().to_string_lossy().to_ascii_lowercase();
+        name.contains("mmproj") && name.ends_with(".gguf")
+    })
+}
+
+pub fn managed_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(MANAGED_RELATIVE))
+}
+
+fn usable_file(path: PathBuf) -> Option<PathBuf> {
+    path.is_file().then_some(path)
+}
+
+/// Prefer the managed ShadowCode runtime over a PATH-only llama.cpp.
+///
+/// Order: configured file, `SHADOWCODE_LLAMA_SERVER`,
+/// `~/.local/lib/shadowcode/llama-server` (then llama-cli), next to the
+/// current executable, then PATH.
+pub fn resolve_llama_binary(configured: &str) -> Option<PathBuf> {
+    resolve_llama_binary_with(
+        configured,
+        std::env::var_os("SHADOWCODE_LLAMA_SERVER"),
+        managed_dir(),
+        std::env::var_os("PATH"),
+    )
+}
+
+fn resolve_from_path_env(name: &str, path_env: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let path = path_env?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+pub(crate) fn resolve_llama_binary_with(
+    configured: &str,
+    env_server: Option<impl AsRef<std::ffi::OsStr>>,
+    managed: Option<PathBuf>,
+    path_env: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let configured = configured.trim();
+    if !configured.is_empty() {
+        if let Some(path) = usable_file(PathBuf::from(configured)) {
+            return Some(path);
+        }
+    }
+    if let Some(env) = env_server {
+        if let Some(path) = usable_file(PathBuf::from(env.as_ref())) {
+            return Some(path);
+        }
+    }
+    if let Some(dir) = managed {
+        if let Some(path) = usable_file(dir.join(MANAGED_SERVER)) {
+            return Some(path);
+        }
+        if let Some(path) = usable_file(dir.join(MANAGED_CLI)) {
+            return Some(path);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if let Some(path) = usable_file(dir.join(MANAGED_SERVER)) {
+                return Some(path);
+            }
+            if let Some(path) = usable_file(dir.join("../lib/shadowcode").join(MANAGED_SERVER)) {
+                return Some(path);
+            }
+        }
+    }
+    resolve_from_path_env(MANAGED_SERVER, path_env.clone())
+        .or_else(|| resolve_from_path_env(MANAGED_CLI, path_env))
+}
+
+fn binary_origin(path: &Path) -> &'static str {
+    if let Some(dir) = managed_dir() {
+        if path.starts_with(dir) {
+            return "managed";
+        }
+    }
+    "other"
+}
+
 pub fn hardware() -> Value {
     let ram = read_meminfo();
     let (gpu, vram) = read_nvidia();
@@ -191,23 +307,25 @@ fn read_nvidia() -> (Option<String>, Option<u64>) {
 }
 
 pub fn llama_binary_status(configured: &str) -> Value {
-    let candidate = if configured.trim().is_empty() {
-        super::cli_agent::resolve_binary("llama-cli")
-            .or_else(|| super::cli_agent::resolve_binary("llama-server"))
-    } else {
-        let path = PathBuf::from(configured.trim());
-        path.is_file().then_some(path)
-    };
-    match candidate {
-        Some(path) => json!({
-            "state": "ready",
-            "path": path,
-            "detail": "llama.cpp binary is present; local GGUF rows can load after you pick a file",
-        }),
+    match resolve_llama_binary(configured) {
+        Some(path) => {
+            let origin = binary_origin(&path);
+            json!({
+                "state": "ready",
+                "path": path,
+                "origin": origin,
+                "detail": if origin == "managed" {
+                    "Managed llama.cpp is installed. Local GGUF rows load through ShadowCode, not an Ollama or LM Studio daemon."
+                } else {
+                    "llama.cpp binary is present; local GGUF rows can load after you pick a file"
+                },
+            })
+        }
         None => json!({
             "state": "setup_required",
             "path": null,
-            "detail": "No llama.cpp binary yet. Point ShadowCode at an official llama-cli or llama-server you already have. Models are never auto-downloaded.",
+            "origin": null,
+            "detail": "Managed llama.cpp is not installed yet. Build it with scripts/build-llama.cpp.sh (no sudo). Models are never auto-downloaded.",
         }),
     }
 }
@@ -251,6 +369,49 @@ mod tests {
             32_000_000_000,
         );
         assert_eq!(scanned.len(), 1);
+        assert!(!scanned[0].vision);
         assert!(dir.path().join("ok.gguf").exists());
+        let vision_path = dir.path().join("llava.gguf");
+        fs::copy(dir.path().join("ok.gguf"), &vision_path).unwrap();
+        assert!(!inspect_gguf(&vision_path, 32_000_000_000).unwrap().vision);
+        fs::write(dir.path().join("llava.mmproj.gguf"), b"GGUF").unwrap();
+        assert!(inspect_gguf(&vision_path, 32_000_000_000).unwrap().vision);
+    }
+
+    #[test]
+    fn resolves_managed_binary_instead_of_path() {
+        let home = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+        let managed = home.path().join(MANAGED_RELATIVE);
+        fs::create_dir_all(&managed).unwrap();
+        fs::write(managed.join(MANAGED_SERVER), b"managed").unwrap();
+        fs::write(path_dir.path().join(MANAGED_SERVER), b"path").unwrap();
+        let resolved = resolve_llama_binary_with(
+            "",
+            None::<&str>,
+            Some(managed.clone()),
+            Some(path_dir.path().as_os_str().to_os_string()),
+        )
+        .expect("managed binary");
+        assert_eq!(resolved, managed.join(MANAGED_SERVER));
+        assert!(resolved.starts_with(&managed));
+        let configured = path_dir.path().join("explicit");
+        fs::write(&configured, b"configured").unwrap();
+        assert_eq!(
+            resolve_llama_binary_with(
+                &configured.display().to_string(),
+                None::<&str>,
+                Some(managed.clone()),
+                Some(path_dir.path().as_os_str().to_os_string()),
+            ),
+            Some(configured)
+        );
+        let from_path = resolve_llama_binary_with(
+            "",
+            None::<&str>,
+            None,
+            Some(path_dir.path().as_os_str().to_os_string()),
+        );
+        assert_eq!(from_path, Some(path_dir.path().join(MANAGED_SERVER)));
     }
 }
