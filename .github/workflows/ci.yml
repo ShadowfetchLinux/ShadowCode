@@ -6,25 +6,41 @@ on:
 permissions:
   contents: read
 jobs:
-  verify:
+  ui:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.12'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - run: python -m venv .venv && .venv/bin/pip install -r requirements-build.txt -e '.[dev]'
-      - run: npm --prefix ui ci && npm --prefix ui run build
-      - run: .venv/bin/python -m pytest
+      - run: npm --prefix ui ci
+      - run: npm --prefix ui run typecheck
       - run: npm --prefix ui test
-      - run: cd ui && npx playwright install --with-deps chromium && npm run test:e2e
+      - run: npm --prefix ui run build
+      - name: End-to-end interface tests
+        working-directory: ui
+        run: npx playwright install --with-deps chromium && npm run test:e2e
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: browser-diagnostics
           path: ui/test-results
+  packaging-scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Managed llama.cpp packaging (pins, notices, relative links, deb repack)
+        run: node --test scripts/test-llama-runtime.mjs
+      - name: Packaging PATH ignores host node hijacks
+        run: node --test scripts/test-native-packaging-env.mjs
+      - name: Pinned-source failures and mirror recovery
+        run: node --test scripts/test-native-source-fetch.mjs
+      - name: Installer replacement, runtime swap and checksum refusal
+        run: bash scripts/test-install-appimage.sh
