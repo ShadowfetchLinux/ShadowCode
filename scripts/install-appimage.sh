@@ -55,7 +55,14 @@ ln -sfn shadow "$BIN/.shadowcode-install"
 mv -Tf "$BIN/.shadowcode-install" "$BIN/shadowcode"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cp "$ROOT/assets/icons/shadow-agent.svg" "$DATA/icons/hicolor/scalable/apps/shadow-agent.svg"
-sed "s|^Exec=.*|Exec=\"${BIN}/shadow\" ui|; s|^TryExec=.*|TryExec=${BIN}/shadow|; s|^X-ShadowCode-Version=.*|X-ShadowCode-Version=${VERSION}|" "$ROOT/packaging/shadow-agent.desktop" > "$DATA/applications/shadow-agent.desktop"
+sed "s|^Exec=.*|Exec=\"${BIN}/shadow\" ui|; s|^TryExec=.*|TryExec=${BIN}/shadow|; s|^X-ShadowCode-Version=.*|X-ShadowCode-Version=${VERSION}|; /^X-ShadowCode-GitSha=/d" "$ROOT/packaging/shadow-agent.desktop" > "$DATA/applications/shadow-agent.desktop.pending"
+# Record the source commit when known: SHADOWCODE_GIT_SHA wins, then the
+# checkout this script runs from. Omitted rather than guessed otherwise.
+GIT_SHA="${SHADOWCODE_GIT_SHA:-$(git -C "$ROOT" rev-parse --verify HEAD 2>/dev/null || true)}"
+if [[ "$GIT_SHA" =~ ^[[:xdigit:]]{40}$ ]]; then
+  printf 'X-ShadowCode-GitSha=%s\n' "$GIT_SHA" >> "$DATA/applications/shadow-agent.desktop.pending"
+fi
+mv -f "$DATA/applications/shadow-agent.desktop.pending" "$DATA/applications/shadow-agent.desktop"
 for old in "$APPS"/ShadowCode-*-x86_64.AppImage; do
   [[ "$old" == "$DEST" || ! -f "$old" ]] || rm -- "$old"
 done

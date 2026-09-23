@@ -31,6 +31,16 @@ test "$(cat "$XDG_DATA_HOME/shadow-agent/profile.txt")" = 'keep this profile dat
 "$HOME/.local/bin/shadow" --version | grep -Fx 'ShadowCode 0.21.0'
 test "$(readlink "$HOME/.local/bin/shadowcode")" = shadow
 "$HOME/.local/bin/shadowcode" --version | grep -Fx 'ShadowCode 0.21.0'
+DESKTOP="$XDG_DATA_HOME/applications/shadow-agent.desktop"
+grep -Fxq 'X-ShadowCode-Version=0.21.0' "$DESKTOP"
+# The source commit is recorded once, from the checkout or an explicit override.
+test "$(grep -c '^X-ShadowCode-GitSha=' "$DESKTOP")" -le 1
+if EXPECTED_SHA="$(git -C "$ROOT" rev-parse --verify HEAD 2>/dev/null)"; then
+  grep -Fxq "X-ShadowCode-GitSha=$EXPECTED_SHA" "$DESKTOP"
+fi
+SHADOWCODE_GIT_SHA="$(printf 'a%.0s' {1..40})" "$ROOT/scripts/install-appimage.sh" "$APPIMAGE" > /dev/null
+grep -Fxq "X-ShadowCode-GitSha=$(printf 'a%.0s' {1..40})" "$DESKTOP"
+test "$(grep -c '^X-ShadowCode-GitSha=' "$DESKTOP")" -eq 1
 printf '# modified after checksum\n' >> "$APPIMAGE"
 if "$ROOT/scripts/install-appimage.sh" "$APPIMAGE" > /dev/null 2>&1; then
   echo 'Installer accepted a changed AppImage' >&2
