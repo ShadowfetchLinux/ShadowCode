@@ -4,8 +4,6 @@ import { execFile, spawn } from "node:child_process";
 import {
   chmod,
   copyFile,
-  cp,
-  mkdir,
   mkdtemp,
   readFile,
   rename,
@@ -14,6 +12,12 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import {
+  RUNTIME_LOCATION,
+  addRuntimeToDeb,
+  copyManagedRuntime,
+  readManagedRuntime,
+} from "./llama-runtime.mjs";
 import { applicationNotices, appdirNotices } from "./native-notices.mjs";
 import { applyPackagingPath } from "./native-packaging-env.mjs";
 import { buildRuntime, runtimeNotices } from "./native-runtime.mjs";
@@ -40,9 +44,18 @@ async function command(binary, args, env = {}) {
 const run = (args) => command(process.execPath, [cli, ...args]);
 if (process.platform !== "linux" || process.arch !== "x64")
   throw new Error("This packaging workflow currently supports Linux x86_64");
+const version = JSON.parse(
+  await readFile(path.join(root, "src-tauri/tauri.conf.json"), "utf8"),
+).version;
+// Fail before the long release build when the managed runtime is missing,
+// was built from another commit, or lacks its pinned notices.
+const llama = await readManagedRuntime(root);
+console.log(
+  `Bundling managed llama.cpp ${llama.commit} (${llama.backend}) as /${RUNTIME_LOCATION}`,
+);
 const notices = path.join(root, "target/native-notices");
 const nativeRuntime = await buildRuntime();
-await applicationNotices(notices);
+await applicationNotices(notices, llama);
 const files = { "/usr/share/doc/shadowcode/notices": notices };
 const config = JSON.stringify({
   bundle: {
@@ -73,10 +86,20 @@ try {
   for (const format of ["appimage", "deb"]) {
     await copyFile(original, executable);
     await run(["bundle", "--bundles", format, "--ci", "--config", config]);
+    if (format === "deb") {
+      // The bundler's custom-files copy dereferences symlinks, so the runtime
+      // is added to the finished package with its relative SONAME links.
+      await addRuntimeToDeb(
+        path.join(
+          root,
+          `target/release/bundle/deb/ShadowCode_${version}_amd64.deb`,
+        ),
+        llama,
+        scratch,
+        { run: (binary, args) => command(binary, args) },
+      );
+    }
     if (format === "appimage") {
-      const version = JSON.parse(
-        await readFile(path.join(root, "src-tauri/tauri.conf.json"), "utf8"),
-      ).version;
       const appimage = path.join(
         root,
         `target/release/bundle/appimage/ShadowCode_${version}_amd64.AppImage`,
@@ -97,26 +120,11 @@ try {
       );
       await chmod(path.join(appdir, "AppRun"), 0o755);
       await rm(path.join(appdir, "AppRun.wrapped"), { force: true });
+      // Copy the runtime before collecting notices so the attribution pass
+      // sees exactly what ships.
+      await copyManagedRuntime(llama, path.join(appdir, RUNTIME_LOCATION));
       await appdirNotices(appdir);
       await runtimeNotices(appdir, nativeRuntime);
-      const llamaBin = path.join(root, "packaging/llama.cpp/bin");
-      const llamaServer = path.join(llamaBin, "llama-server");
-      if (!(await readFile(llamaServer).catch(() => null))) {
-        throw new Error(
-          "Managed llama.cpp is missing. Run scripts/build-llama.cpp.sh before packaging.",
-        );
-      }
-      const llamaDir = path.join(appdir, "usr/lib/shadowcode");
-      await mkdir(llamaDir, { recursive: true });
-      await cp(llamaBin, llamaDir, { recursive: true });
-      await chmod(path.join(llamaDir, "llama-server"), 0o755);
-      if (await readFile(path.join(llamaDir, "llama-cli")).catch(() => null)) {
-        await chmod(path.join(llamaDir, "llama-cli"), 0o755);
-      }
-      const llamaCommit = path.join(root, "packaging/llama.cpp/COMMIT");
-      if (await readFile(llamaCommit).catch(() => null)) {
-        await copyFile(llamaCommit, path.join(llamaDir, "COMMIT"));
-      }
       const repacked = path.join(scratch, path.basename(appimage));
       await command(
         path.join(root, "target/.tauri/linuxdeploy-plugin-appimage.AppImage"),

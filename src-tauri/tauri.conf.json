@@ -43,6 +43,11 @@
       "../assets/icons/shadow-agent-256.png",
       "../assets/icons/shadow-agent-512.png"
     ],
-    "linux": { "deb": { "depends": ["git"] } }
+    "linux": {
+      "deb": {
+        "depends": ["git", "libgomp1", "libssl3"],
+        "recommends": ["libvulkan1"]
+      }
+    }
   }
 }
