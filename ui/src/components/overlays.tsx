@@ -1,23 +1,7 @@
 import { Dialog } from "./Dialog";
 import { useEffect, useState } from "react";
-import type { Project, ProviderInfo } from "../api";
+import type { Project } from "../api";
 import { isNative, pickDirectory } from "../lib/transport";
-
-export const SHORTCUTS: [string, string][] = [
-  ["Enter", "Send task (Shift+Enter for a new line)"],
-  ["Ctrl+.", "Stop the agent"],
-  ["Ctrl+K", "Command palette"],
-  ["Ctrl+B", "Toggle the sidebar"],
-  ["Ctrl+,", "Settings"],
-  ["Ctrl+P", "Open project…"],
-  ["Ctrl+N", "New session"],
-  ["Ctrl+L", "Focus the composer"],
-  ["Ctrl+Shift+E", "Export session as Markdown"],
-  ["Enter / Space", "Activate the focused approval button"],
-  ["/", "Slash commands in the composer"],
-  ["?", "This cheat sheet"],
-  ["Esc", "Close overlay or drawer"],
-];
 
 const SHORTCUT_GROUPS: { label: string; rows: [string, string][] }[] = [
   {
@@ -34,9 +18,11 @@ const SHORTCUT_GROUPS: { label: string; rows: [string, string][] }[] = [
     rows: [
       ["Ctrl+K", "Command palette"],
       ["Ctrl+B", "Toggle sidebar"],
+      ["Ctrl+Shift+B", "Toggle the Changes drawer"],
       ["Ctrl+P", "Open project…"],
-      ["Ctrl+N", "New session"],
+      ["Ctrl+N", "New task"],
       ["Ctrl+L", "Focus composer"],
+      ["Ctrl+M", "Choose a model"],
       ["Esc", "Close overlay or drawer"],
     ],
   },
@@ -96,10 +82,7 @@ export function Help({
           </div>
         ))}
       </div>
-      <p className="hint">
-        ShadowCode {version} · the model is replaceable; the harness owns tools,
-        permissions, and verification.
-      </p>
+      <p className="hint">ShadowCode {version}</p>
       <div className="row end">
         <button type="button" className="ghost" onClick={onClose}>
           Close
@@ -280,99 +263,6 @@ export function TrustDialog({
         </button>
         <button type="button" className="primary" onClick={onConfirm}>
           Trust and open
-        </button>
-      </div>
-    </Dialog>
-  );
-}
-
-/** Free-text model for any provider — used by the composer's "Custom model…" entry. */
-export function CustomModelDialog({
-  providers,
-  onClose,
-  onSubmit,
-}: {
-  providers: ProviderInfo[];
-  onClose: () => void;
-  onSubmit: (id: string, provider: string, endpoint: string) => Promise<void>;
-}) {
-  const [id, setId] = useState("");
-  const [provider, setProvider] = useState(
-    providers.find((p) => p.running)?.id || "openai_compatible",
-  );
-  const [endpoint, setEndpoint] = useState("");
-  const [busy, setBusy] = useState(false);
-  const preset = providers.find((p) => p.id === provider);
-  return (
-    <Dialog label="Custom model" className="modal modal-sm" onClose={onClose}>
-      <h2>Use a custom model</h2>
-      <p className="hint">
-        Any model id your provider accepts. It becomes the default and shows up
-        in the picker.
-      </p>
-      <div className="field">
-        <label htmlFor="overlays-field-2">Model id</label>
-        <input
-          id="overlays-field-2"
-          autoFocus
-          value={id}
-          onChange={(e) => setId(e.target.value)}
-          placeholder="gpt-4.1 · grok-4 · llama3.2 · my-finetune"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor="overlays-field-3">Provider</label>
-        <select
-          id="overlays-field-3"
-          value={provider}
-          onChange={(e) => setProvider(e.target.value)}
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-              {p.running ? " — running" : ""}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="field">
-        <label htmlFor="overlays-field-4">
-          Endpoint{" "}
-          <span className="dim">
-            (blank = {preset?.endpoint || "provider default"})
-          </span>
-        </label>
-        <input
-          id="overlays-field-4"
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          placeholder={preset?.endpoint || "https://host/v1"}
-        />
-      </div>
-      {preset?.needs_key && (
-        <p className="hint">
-          Needs <code>{preset.api_key_env}</code> — paste the key in Settings →
-          Model.
-        </p>
-      )}
-      <div className="row end">
-        <button type="button" className="ghost" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="primary"
-          disabled={!id.trim() || busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await onSubmit(id.trim(), provider, endpoint.trim());
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {busy ? "Saving…" : "Use model"}
         </button>
       </div>
     </Dialog>

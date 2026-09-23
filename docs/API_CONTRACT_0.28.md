@@ -189,11 +189,30 @@ A model row whose usage pool reports the plan limit is `availability:
   `usage.updated {vendor, usage}` (Codex pushes during a turn),
   `limit.reached {vendor, usage, detail, job_id}` (job stops; user picks another model),
   `checkpoint.restored {task_id, paths}`,
+- `GET /api/sessions/{id}.execution_target` may already carry the workspace
+  default for a conversation that has none of its own; the UI otherwise falls
+  back to the last target chosen in that project (local cache) and never to
+  `config.model`.
+- `POST /api/onboarding` is sent without `provider`/`model` (the backend keeps
+  its model configuration): `{ workspace, permission_level: "workspace",
+  permission_mode: "ask" | "allow_edits", theme: "system" }`. The UI also
+  writes `permissions.mode` with `PUT /api/config`.
+- `/model` is handled by the window (opens the picker); it is never sent to
+  `POST /api/commands/run`.
   `web.source {url, final_url, title, status}` (also embedded in `tool.completed.sources`).
 - Read-only (Plan/Review) vendor tasks: command/file-change prompts from the
   vendor are denied automatically with an `agent.warning` ("Denied
   automatically: …"). Vendors that never ask (Antigravity, `asks_approval:
   false`) get an `agent.warning` at task start saying so.
+- Events the UI also reads (optional): `routing.selected.inference`
+  ("cloud" | "local", shown as "· Cloud" / "· This computer"),
+  `model.switched {provider, from, to, resumed}`, `approval.requested` /
+  `approval.resolved` (Waiting for approval step), `checkpoint.updated.paths`,
+  `files.changed.paths` and `verification.summary {status, commands[{command,
+  exit_code, success, timed_out}], presented_as, note, vendor_agent}` (summary
+  card). The activity timeline classifies `tool.started/completed` by tool
+  name: native names and vendor names such as `codex.command_execution`,
+  `codex.file_change`, `cursor.read`, `Bash`, `Edit`.
 
 ## Config
 

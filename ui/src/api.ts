@@ -1,39 +1,172 @@
-import { request, isNative } from "./lib/transport";
+import { request, ApiError } from "./lib/transport";
+import type { PickerTarget, UsageSnapshot } from "./lib/picker";
 
-export type ModelInfo = {
+// --- 0.28 contract: picker, accounts, local models (docs/API_CONTRACT_0.28.md)
+
+export type VendorModel = {
+  id: string;
+  label: string;
+  is_default?: boolean;
+  vision?: boolean;
+};
+
+export type VendorStatus = {
+  id: string;
+  label: string;
+  state: "ready" | "not_logged_in" | "not_installed" | "unavailable" | string;
+  status?: string;
+  availability: string;
+  availability_label: string;
+  detail?: string;
+  version?: string | null;
+  binary?: string | null;
+  fix?: string | null;
+  account?: {
+    email?: string | null;
+    plan?: string | null;
+    auth_mode?: string | null;
+  } | null;
+  models?: VendorModel[];
+  accepts_images?: boolean;
+  asks_approval?: boolean;
+  fetched_at?: number | null;
+  error?: string | null;
+  usage_note?: string | null;
+  login_command?: string[];
+  logout_command?: string[];
+  shared_cli_note?: string;
+  usage?: UsageSnapshot | null;
+};
+
+export type MemoryEstimate = {
+  weights_bytes: number;
+  kv_cache_bytes: number;
+  compute_bytes?: number;
+  projector_bytes: number;
+  overhead_bytes?: number;
+  total_bytes: number;
+  context_tokens?: number;
+};
+
+export type GgufEntry = {
   id: string;
   name: string;
-  provider: string;
-  endpoint: string;
-  context_limit?: number;
-  detected?: boolean;
-  metadata?: Record<string, unknown> & {
-    capabilities?: Record<string, boolean>;
+  path: string;
+  bytes: number;
+  source: "file" | "directory" | "ollama" | string;
+  architecture: string | null;
+  context_train: number | null;
+  context_tokens: number;
+  compatible: boolean;
+  reason: string;
+  vision: boolean;
+  mmproj: string | null;
+  tools: boolean;
+  tools_reason?: string;
+  memory?: MemoryEstimate | null;
+  fits?: "gpu" | "cpu" | "no" | string;
+  availability?: string;
+  last_error?: string | null;
+};
+
+export type OllamaModel = {
+  tag: string;
+  path: string;
+  projector: string | null;
+  bytes: number;
+  compatible: boolean;
+  reason: string;
+  already_added: boolean;
+};
+
+export type LocalCatalog = {
+  hardware?: {
+    cpu_cores?: number;
+    ram_bytes?: number;
+    gpu?: string | null;
+    vram_bytes?: number | null;
+    backend?: "vulkan" | "cpu" | "unknown" | string;
+    devices?: string[];
     detail?: string;
-    detected?: boolean;
-    vendor_agent?: boolean;
-    label?: string;
+  };
+  runtime?: {
+    state: "ready" | "setup_required" | "unavailable" | string;
+    path?: string | null;
+    origin?: string;
+    version?: string | null;
+    backend?: string | null;
+    commit?: string | null;
+    detail?: string;
+  };
+  models?: GgufEntry[];
+  loaded?: {
+    id: string;
+    name: string;
+    port?: number;
+    since?: number;
+    context_tokens?: number;
+    backend?: string;
+  } | null;
+  ollama_store?: {
+    path?: string | null;
+    available: boolean;
+    models: OllamaModel[];
   };
 };
 
-export type DetectedModel = {
-  id: string;
-  name: string;
-  size_bytes: number;
-  context_limit: number;
-  capabilities: Record<string, boolean>;
-  detail: string;
+export type PickerResponse = {
+  targets: PickerTarget[];
+  local_engine?: LocalCatalog;
+  vendors?: Record<string, VendorStatus>;
+  generated_at?: number;
 };
 
-export type DetectedProvider = {
-  provider: string;
-  label: string;
-  endpoint: string;
-  running: boolean;
-  latency_ms: number;
-  models: DetectedModel[];
-  detail: string;
+export type AccountsResponse = {
+  vendors: Record<string, VendorStatus>;
+  config?: Record<string, unknown>;
+  local_engine?: LocalCatalog;
 };
+
+export type LoginProgress = {
+  running: boolean;
+  lines: string[];
+  done: { ok: boolean; detail?: string } | null;
+};
+
+export type ConsentRequest = {
+  error?: string;
+  needs_consent: true;
+  handoff: {
+    from?: string | null;
+    to?: string | null;
+    excerpt_chars?: number;
+    images?: number;
+  };
+};
+
+export type StartJobRequest = {
+  task: string;
+  workspace?: string;
+  session_id?: string;
+  model?: string;
+  purpose?: string;
+  queue?: boolean;
+  images?: string[];
+  web?: boolean;
+  handoff_consent?: boolean;
+};
+
+function consentFrom(value: unknown): ConsentRequest | null {
+  if (
+    value &&
+    typeof value === "object" &&
+    (value as { needs_consent?: unknown }).needs_consent === true
+  ) {
+    const body = value as ConsentRequest;
+    return { ...body, handoff: body.handoff || {} };
+  }
+  return null;
+}
 
 export type Project = {
   id: string;
@@ -55,6 +188,9 @@ export type SessionDetail = Session & {
   events: EventRow[];
   event_cursor: number;
   history_page?: { first_cursor: number; has_older: boolean };
+  /** Picker id remembered for this conversation (POST /api/sessions/{id}/target). */
+  execution_target?: string | null;
+  native_sessions?: Record<string, string>;
 };
 export type HistoryPage = {
   events: EventRow[];
@@ -187,11 +323,13 @@ export type Job = {
   model?: string;
   mode?: string;
   routing?: RoutingDecision | null;
+  web?: boolean;
   result?: {
     success: boolean;
     summary: string;
     plan: { goal: string; steps: PlanStep[] };
     usage?: Record<string, number>;
+    verification?: Record<string, unknown>;
   };
 };
 export type Health = {
@@ -210,15 +348,6 @@ export type DiffHunk = {
   header: string;
   lines: { kind: string; text: string }[];
 };
-export type ModelTestResult = {
-  ok: boolean;
-  latency_ms?: number;
-  reply?: string;
-  error?: string;
-  model?: string;
-  usage?: Record<string, number>;
-  capabilities?: Record<string, unknown>;
-};
 export type ExecResult = {
   ok: boolean;
   command: string;
@@ -226,15 +355,6 @@ export type ExecResult = {
   stderr: string;
   exit_code: number;
   error?: string;
-};
-export type ProviderInfo = {
-  id: string;
-  label: string;
-  endpoint: string;
-  api_key_env: string;
-  needs_key: boolean;
-  local: boolean;
-  running: boolean;
 };
 export type Milestone = {
   id: string;
@@ -284,15 +404,7 @@ export type RoutingDecision = {
   provider: string;
   context_limit: number;
   fallback_reason?: string | null;
-};
-export type RoutingView = {
-  enabled: boolean;
-  default: string;
-  table: Record<string, string>;
-  config: Record<string, string | boolean>;
-  default_name?: string;
-  decisions?: Record<string, RoutingDecision>;
-  models?: ModelInfo[];
+  inference?: string;
 };
 export type DoctorReport = {
   ok: boolean;
@@ -331,17 +443,6 @@ export type NativeMcpCatalog = {
   workspace: string;
   trusted: boolean;
   dirs: string[];
-};
-export type McpCatalog =
-  NativeMcpCatalog | { format?: undefined; servers: McpServer[] };
-export type UpdateInfo = {
-  current: string;
-  latest: string;
-  tag: string;
-  update_available: boolean;
-  url: string;
-  source: string;
-  error: string;
 };
 
 const get = <T>(path: string) => request<T>(path);
@@ -397,17 +498,6 @@ export const api = {
     get<{
       completed: boolean;
       suggested_workspace: string;
-      providers: {
-        id: string;
-        provider: string;
-        needs_key?: boolean;
-        endpoint?: string;
-        api_key_env?: string;
-        name?: string;
-      }[];
-      detected: DetectedProvider[];
-      levels: string[];
-      defaults: { provider: string; permission_level: string; theme: string };
     }>("/api/onboarding"),
   completeOnboarding: (body: Record<string, unknown>) =>
     send<{ ok: boolean; workspace: string; session_id: string }>(
@@ -426,75 +516,86 @@ export const api = {
       api_key,
       api_key_env,
     }),
-  models: (refresh = false) =>
-    get<{
-      models: ModelInfo[];
-      picker?: Record<string, unknown>[];
-      local_engine?: Record<string, unknown>;
-      cli_agents?: Record<
-        string,
-        {
-          state?: string;
-          status?: string;
-          detail?: string;
-          version?: string | null;
-          fix?: string;
-        }
-      >;
-    }>(`/api/models${refresh ? "?refresh=1" : ""}`),
-  picker: () => get<{ targets: Record<string, unknown>[] }>("/api/picker"),
-  accounts: () => get<Record<string, unknown>>("/api/accounts"),
+  /** The composer's only source of rows (vendor + local). */
+  picker: (refresh = false) =>
+    get<PickerResponse>(`/api/picker${refresh ? "?refresh=1" : ""}`),
+  accounts: (refresh = false) =>
+    get<AccountsResponse>(`/api/accounts${refresh ? "?refresh=1" : ""}`),
+  connectAccount: (vendor: string) =>
+    send<{
+      ok: boolean;
+      state: "started" | "unsupported" | "already_running" | string;
+      note?: string;
+      hint?: string;
+      lines?: string[];
+    }>(`/api/accounts/${encodeURIComponent(vendor)}/connect`, "POST", {}),
+  /** Contract extension: buffered login output for a running Connect. */
+  loginProgress: async (vendor: string): Promise<LoginProgress> => {
+    const raw = await get<{
+      running: boolean;
+      lines?: (string | { line?: string })[];
+      done: { ok: boolean; detail?: string } | null;
+    }>(`/api/accounts/${encodeURIComponent(vendor)}/login`);
+    // The engine sends {vendor, line, url} records; the page shows text lines.
+    return {
+      running: raw.running,
+      done: raw.done,
+      lines: (raw.lines || []).map((entry) =>
+        typeof entry === "string" ? entry : String(entry.line ?? ""),
+      ),
+    };
+  },
+  cancelLogin: (vendor: string) =>
+    send<{ ok: boolean }>(
+      `/api/accounts/${encodeURIComponent(vendor)}/cancel-login`,
+      "POST",
+      {},
+    ),
+  disconnectAccount: (vendor: string) =>
+    send<{ ok: boolean; ran?: string[]; note?: string }>(
+      `/api/accounts/${encodeURIComponent(vendor)}/disconnect`,
+      "POST",
+      { confirm: true },
+    ),
+  refreshAccount: (vendor: string) =>
+    send<VendorStatus>(
+      `/api/accounts/${encodeURIComponent(vendor)}/refresh`,
+      "POST",
+      {},
+    ),
+  localModels: () => get<LocalCatalog>("/api/local-models"),
   addLocalModel: (path: string) =>
-    send<{ ok: boolean; local_engine?: Record<string, unknown> }>(
+    send<{ ok: boolean; local_engine?: LocalCatalog }>(
       "/api/local-models/add",
       "POST",
       { path },
     ),
   removeLocalModel: (path: string) =>
-    send<{ ok: boolean; deleted_weights: boolean }>(
+    send<{ ok: boolean; deleted_weights: boolean; detail?: string }>(
       "/api/local-models/remove",
       "POST",
       { path },
     ),
-  cliAgents: () =>
-    get<{
-      vendors: Record<
-        string,
-        {
-          state?: string;
-          status?: string;
-          detail?: string;
-          version?: string | null;
-          fix?: string;
-        }
-      >;
-      config: Record<string, unknown>;
-    }>("/api/cli-agents"),
-  detectProviders: (refresh = false) =>
-    get<{ providers: DetectedProvider[] }>(
-      `/api/providers/detect${refresh ? "?refresh=1" : ""}`,
+  importOllama: (tag: string) =>
+    send<{ ok: boolean; local_engine?: LocalCatalog }>(
+      "/api/local-models/import-ollama",
+      "POST",
+      { tag },
     ),
-  testModel: (body: {
-    provider: string;
-    name?: string;
-    endpoint?: string;
-    api_key_env?: string;
-  }) => send<ModelTestResult>("/api/models/test", "POST", body),
-  selectModel: (
-    id: string,
-    extra: { name?: string; provider?: string; endpoint?: string } = {},
-  ) =>
-    send<Record<string, unknown>>("/api/models/select", "POST", {
-      id,
-      ...extra,
-    }),
-  registerModel: (id: string, provider: string, name = "", endpoint = "") =>
-    send<Record<string, unknown>>("/api/models/register", "POST", {
-      id,
-      provider,
-      name,
-      endpoint,
-    }),
+  loadLocalModel: (id: string) =>
+    send<{ ok: boolean; loaded?: LocalCatalog["loaded"] }>(
+      "/api/local-models/load",
+      "POST",
+      { id },
+    ),
+  unloadLocalModel: () =>
+    send<{ ok: boolean }>("/api/local-models/unload", "POST", {}),
+  setSessionTarget: (sessionId: string, targetId: string) =>
+    send<{ ok: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/target`,
+      "POST",
+      { target_id: targetId },
+    ),
   projects: () => get<{ projects: Project[] }>("/api/projects"),
   openProject: (path: string) =>
     send<{
@@ -521,23 +622,7 @@ export const api = {
     }),
   deleteSession: (id: string) =>
     send<{ ok: boolean }>(`/api/sessions/${id}`, "DELETE"),
-  version: () => get<{ name: string; version: string }>("/api/version"),
-  updateCheck: () => get<UpdateInfo>("/api/update/check"),
-  providers: () => get<{ providers: ProviderInfo[] }>("/api/providers"),
-  routing: () => get<RoutingView>("/api/routing"),
-  saveRouting: (values: Record<string, string | boolean>) =>
-    send<RoutingView>("/api/routing", "PUT", {
-      values,
-      api_key: "",
-      api_key_env: "",
-    }),
   doctor: () => get<DoctorReport>("/api/doctor"),
-  doctorFix: () =>
-    send<{ applied: string[]; report: DoctorReport }>(
-      "/api/doctor/fix",
-      "POST",
-      {},
-    ),
   goals: () => get<{ goals: Goal[] }>("/api/goals"),
   createGoal: (instruction: string, run: boolean, session_id?: string) =>
     send<Goal>("/api/goals", "POST", {
@@ -578,7 +663,7 @@ export const api = {
       hash,
       enabled,
     }),
-  mcpServers: () => get<McpCatalog>("/api/mcp/servers"),
+  mcpServers: () => get<NativeMcpCatalog>("/api/mcp/servers"),
   registerMcp: (definition: Record<string, unknown>, hash = "") =>
     send<NativeMcpCatalog>("/api/mcp/servers", "POST", { definition, hash }),
   activateMcp: (
@@ -595,12 +680,6 @@ export const api = {
     }),
   removeMcp: (server: string, hash: string) =>
     send<NativeMcpCatalog>("/api/mcp/servers/delete", "POST", { server, hash }),
-  saveMcpServers: (servers: McpServer[]) =>
-    send<{ servers: McpServer[] }>("/api/mcp/servers", "PUT", {
-      values: { servers },
-      api_key: "",
-      api_key_env: "",
-    }),
   worktrees: () =>
     get<{ workspace: string; worktrees: ManagedWorktree[] }>("/api/worktrees"),
   createWorktree: (workspace: string, reference: string) =>
@@ -658,7 +737,7 @@ export const api = {
       id,
       hash,
     }),
-  plugins: () => get<LegacyPluginCatalog | NativePluginCatalog>("/api/plugins"),
+  plugins: () => get<NativePluginCatalog>("/api/plugins"),
   previewPlugin: (source: { name: string } | { bundle: unknown }) =>
     send<PluginPreview>("/api/plugins/preview", "POST", source),
   installNativePlugin: (workspace: string, preview: PluginPreview) =>
@@ -673,10 +752,6 @@ export const api = {
       name,
       hash,
     }),
-  installPlugin: (name: string) =>
-    send<{ name: string }>(`/api/plugins/${name}/install`, "POST", {}),
-  removePlugin: (name: string) =>
-    send<{ ok: boolean }>(`/api/plugins/${name}/remove`, "POST", {}),
   taskCheckpoint: (taskId: string) =>
     get<{
       rewindable: boolean;
@@ -701,15 +776,9 @@ export const api = {
   historyPage: (id: string, before: number) =>
     get<HistoryPage>(`/api/sessions/${id}/events?view=window&before=${before}`),
   session: (id: string) =>
-    get<SessionDetail>(
-      `/api/sessions/${id}${isNative() ? "?view=window" : ""}`,
-    ),
+    get<SessionDetail>(`/api/sessions/${id}?view=window`),
   activateSession: (id: string) =>
-    send<SessionDetail>(
-      `/api/sessions/${id}/activate${isNative() ? "?view=window" : ""}`,
-      "POST",
-      {},
-    ),
+    send<SessionDetail>(`/api/sessions/${id}/activate?view=window`, "POST", {}),
   currentJob: (id: string) =>
     get<{ job: Job | null }>(
       `/api/jobs/current?session_id=${encodeURIComponent(id)}&include_finished=true`,
@@ -720,10 +789,6 @@ export const api = {
       workspace,
       title,
     }),
-  events: (sessionId?: string) =>
-    get<{ events: EventRow[] }>(
-      `/api/events?limit=240${sessionId ? `&session_id=${sessionId}` : ""}`,
-    ),
   files: (path = ".") =>
     get<{
       entries: FileEntry[];
@@ -783,29 +848,32 @@ export const api = {
         api_key_env?: string;
         context_limit?: number;
       };
-      permissions: { level: string; network?: boolean };
+      permissions: { level: string; network?: boolean; mode?: string };
       onboarding?: { completed: boolean };
       routing?: Record<string, string | boolean>;
       trusted?: boolean;
     }>("/api/workspace/status"),
-  startJob: (
-    task: string,
-    workspace?: string,
-    session_id?: string,
-    model?: string,
-    purpose: string = "coder",
-    queue = false,
-    images: string[] = [],
-  ) =>
-    send<Job>("/api/jobs", "POST", {
-      task,
-      workspace,
-      session_id,
-      model: model || undefined,
-      purpose,
-      queue,
-      images: images.length ? images : undefined,
-    }),
+  /** Starts (or queues) a task. A cloud route that needs the user's consent
+   * answers `needs_consent` (HTTP 409 or an IPC value); nothing is created
+   * until the request is repeated with `handoff_consent: true`. */
+  startJob: async (
+    body: StartJobRequest,
+  ): Promise<{ job: Job } | { consent: ConsentRequest }> => {
+    try {
+      const value = await send<Job | ConsentRequest>("/api/jobs", "POST", {
+        purpose: "coder",
+        ...body,
+        images: body.images?.length ? body.images : undefined,
+      });
+      const consent = consentFrom(value);
+      return consent ? { consent } : { job: value as Job };
+    } catch (error) {
+      const consent =
+        error instanceof ApiError ? consentFrom(error.body) : null;
+      if (consent) return { consent };
+      throw error;
+    }
+  },
   job: (id: string) => get<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string, only_if_queued = false) =>
     send<Job>(`/api/jobs/${id}/cancel`, "POST", { only_if_queued }),
@@ -824,12 +892,6 @@ export const api = {
       restored: string[];
       note?: string;
     }>(`/api/jobs/${id}/rewind`, "POST", {}),
-  cancelCurrent: (session_id?: string) =>
-    send<{ ok: boolean }>(
-      `/api/run/cancel${session_id ? `?session_id=${session_id}` : ""}`,
-      "POST",
-      {},
-    ),
   approvals: (sessionId?: string) =>
     get<{ approvals: Approval[] }>(
       `/api/approvals${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
@@ -862,52 +924,11 @@ export const api = {
       "POST",
       { filename, data_base64 },
     ),
-  undo: () =>
-    send<{ ok: boolean; restored: string[] }>(
-      "/api/checkpoints/undo",
-      "POST",
-      {},
-    ),
-  exportUrl: (sessionId: string, format: "md" | "json" = "md") =>
-    `/api/sessions/${sessionId}/export?format=${format}`,
   branchSession: (sessionId: string, title = "") =>
     send<{ id: string; parent_id: string }>(
       `/api/sessions/${sessionId}/branch`,
       "POST",
       { workspace: "", title },
-    ),
-  sessionCost: (sessionId: string) =>
-    get<{
-      session_id: string;
-      usage: Record<string, number>;
-      tasks: {
-        task_id: string;
-        prompt: string;
-        status: string;
-        usage: Record<string, number>;
-      }[];
-    }>(`/api/sessions/${sessionId}/cost`),
-  listPins: (sessionId: string) =>
-    get<{
-      pins: {
-        id: number;
-        session_id: string;
-        label: string;
-        body: string;
-        ts: number;
-      }[];
-    }>(`/api/sessions/${sessionId}/pins`),
-  addPin: (sessionId: string, label: string, body: string) =>
-    send<{ ok: boolean; id: number }>(
-      `/api/sessions/${sessionId}/pins`,
-      "POST",
-      { name: label, content: body },
-    ),
-  deletePin: (sessionId: string, pinId: number) =>
-    send<{ ok: boolean }>(
-      `/api/sessions/${sessionId}/pins/${pinId}`,
-      "DELETE",
-      {},
     ),
   commands: () =>
     get<{
@@ -959,11 +980,6 @@ export type CommandResult = {
   metadata: Record<string, unknown>;
 };
 
-export type LegacyPluginCatalog = {
-  format?: undefined;
-  installed: { name: string; version: string; description: string }[];
-  available: { name: string; installed: boolean }[];
-};
 export type PluginFile = {
   path: string;
   kind: string;

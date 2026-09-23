@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { Approval, CommandResult } from "../api";
 import { Markdown } from "./Markdown";
 
@@ -6,13 +5,10 @@ export type ChatItem =
   | { kind: "command"; card: CommandResult; text: string; taskId?: string }
   | { kind: "user"; text: string; taskId?: string }
   | { kind: "note"; text: string; taskId?: string; warning?: boolean }
-  | {
-      kind: "thinking";
-      text: string;
-      taskId?: string;
-      durationSec?: number;
-      live?: boolean;
-    }
+  /** Provider change inside one conversation (agent.handoff). */
+  | { kind: "divider"; text: string; taskId?: string }
+  /** Final card for a finished task; content comes from transcript.activity. */
+  | { kind: "summary"; taskId: string; text: string }
   | {
       kind: "agent";
       text: string;
@@ -140,42 +136,6 @@ export function OpCard({
               )}
             </div>
           )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function ThinkingCard({
-  text,
-  durationSec,
-  live,
-}: {
-  text: string;
-  durationSec?: number;
-  live?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className={`thinking-card ${live ? "live" : ""}`}>
-      <button
-        type="button"
-        className="thinking-header"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="thinking-icon" aria-hidden="true">
-          🧠
-        </span>
-        <span className="thinking-title">
-          {live ? "Reasoning in progress…" : "Reasoning process"}
-          {durationSec ? ` (${durationSec.toFixed(1)}s)` : ""}
-        </span>
-        <span className="op-chev">{open ? "▾" : "▸"}</span>
-      </button>
-      {open && (
-        <div className="thinking-body">
-          <pre className="thinking-text">{text}</pre>
         </div>
       )}
     </div>

@@ -7,6 +7,9 @@ const event = (
   payload: Record<string, unknown>,
   task_id = "one",
 ): EventRow => ({ id, ts: id, type, payload, task_id });
+// Completed tasks also get a summary card; these checks cover the messages.
+const messages = (items: ReturnType<typeof replay>["items"]) =>
+  items.filter((item) => item.kind !== "summary");
 describe("durable transcript", () => {
   it("preserves running state during queue changes and moves each prompt to its execution turn", () => {
     const started = replay([
@@ -86,7 +89,7 @@ describe("durable transcript", () => {
       rows[1],
       event(3, "agent.completed", { summary: "Done", success: false }),
     ]);
-    expect(failed.items.at(-1)).toMatchObject({
+    expect(messages(failed.items).at(-1)).toMatchObject({
       kind: "agent",
       who: "Needs attention",
       taskId: "one",
@@ -218,7 +221,7 @@ describe("durable transcript", () => {
       event(5, "model.delta", { text: "Hello there.", message_id: "reply" }),
       event(6, "agent.completed", { summary: "Hello there.", success: true }),
     ]);
-    expect(state.items.map((i) => i.text)).toEqual([
+    expect(messages(state.items).map((i) => i.text)).toEqual([
       "Read the project",
       "Hello there.",
     ]);
@@ -269,19 +272,19 @@ describe("durable transcript", () => {
     ];
     const state = replay(rows);
     expect(rows.reduce(applyEvent, state)).toEqual(state);
-    expect(state.items.map((i) => i.text)).toEqual([
+    expect(messages(state.items).map((i) => i.text)).toEqual([
       "Make it work",
       "Inspecting files",
       "Finished",
     ]);
   });
   it("does not duplicate a final model response", () => {
-    expect(
-      replay([
-        event(1, "model.delta", { text: "Done" }),
-        event(2, "agent.completed", { summary: "Done", success: true }),
-      ]).items,
-    ).toHaveLength(1);
+    const items = replay([
+      event(1, "model.delta", { text: "Done" }),
+      event(2, "agent.completed", { summary: "Done", success: true }),
+    ]).items;
+    expect(messages(items)).toHaveLength(1);
+    expect(items.filter((item) => item.kind === "summary")).toHaveLength(1);
   });
   it("matches simultaneous calls of the same tool by call ID", () => {
     const state = replay([

@@ -5,6 +5,21 @@ import type {
   RoutingDecision,
 } from "../api";
 import type { ChatItem } from "../components/cards";
+import {
+  addChanged,
+  classifyTool,
+  emptyActivity,
+  parseVerification,
+  type TaskActivity,
+  type WebSource,
+} from "./activity";
+import type { UsageSnapshot } from "./picker";
+
+export type LimitReached = {
+  vendor: string;
+  usage?: UsageSnapshot | null;
+  taskId?: string;
+};
 
 export type Transcript = {
   items: ChatItem[];
@@ -14,6 +29,11 @@ export type Transcript = {
   plan: PlanStep[];
   routing?: RoutingDecision;
   activeTaskId?: string;
+  /** Per-task activity derived from recorded events. */
+  activity: Record<string, TaskActivity>;
+  limit?: LimitReached;
+  /** Increments on usage.updated so the picker can refresh its rows. */
+  usageVersion: number;
 };
 export const emptyTranscript = (): Transcript => ({
   items: [],
@@ -21,7 +41,52 @@ export const emptyTranscript = (): Transcript => ({
   stage: "IDLE",
   usage: {},
   plan: [],
+  activity: {},
+  usageVersion: 0,
 });
+
+const VENDOR_LABELS: Record<string, string> = {
+  codex: "Codex",
+  claude: "Claude Code",
+  cursor: "Cursor",
+  antigravity: "Antigravity",
+  grok: "Grok",
+};
+
+/** "cli:cursor:auto" / "cli-cursor" / "cursor" → "Cursor"; local routes →
+ * "this computer". Unknown values are shown as given. */
+export function providerLabel(value: unknown): string {
+  const text = String(value || "").trim();
+  if (!text) return "another model";
+  if (/^(local|llamacpp)/.test(text) || text === "this-computer")
+    return "this computer";
+  const vendor = text
+    .replace(/^cli[:-]/, "")
+    .split(/[:\s]/)[0]
+    .toLowerCase();
+  return VENDOR_LABELS[vendor] || text;
+}
+
+function sourcesFrom(value: unknown): WebSource[] {
+  const list = Array.isArray(value) ? value : value ? [value] : [];
+  return list
+    .map((raw) => (raw || {}) as Record<string, unknown>)
+    .filter((s) => typeof s.url === "string" && s.url)
+    .map((s) => ({
+      url: String(s.url),
+      final_url: s.final_url ? String(s.final_url) : undefined,
+      title: s.title ? String(s.title) : undefined,
+      status: (s.status as number | string | undefined) ?? undefined,
+    }));
+}
+
+function withSources(activity: TaskActivity, sources: WebSource[]) {
+  if (!sources.length) return activity;
+  const next = [...activity.sources];
+  for (const source of sources)
+    if (!next.some((s) => s.url === source.url)) next.push(source);
+  return { ...activity, sources: next };
+}
 
 /** The event ID is the replay boundary. Native streaming messages and parallel
  * tool calls carry their own IDs; a final message replaces its streamed text. */
@@ -34,8 +99,18 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let plan = state.plan;
   let routing = state.routing;
   let activeTaskId = state.activeTaskId;
+  let activity = state.activity;
+  let limit = state.limit;
+  let usageVersion = state.usageVersion;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
+  const touch = (update: (current: TaskActivity) => TaskActivity) => {
+    if (!taskId) return;
+    activity = {
+      ...activity,
+      [taskId]: update(activity[taskId] || emptyActivity(taskId)),
+    };
+  };
   if (event.type === "history.omitted") {
     items = [...items, { kind: "note", taskId, text, warning: true }];
   }
@@ -130,17 +205,101 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   }
   if (event.type === "files.changed") {
     const paths = Array.isArray(p.paths) ? p.paths.map(String) : [];
+    touch((a) => ({
+      ...a,
+      changed: addChanged(a.changed, paths),
+      calls: [
+        ...a.calls,
+        {
+          callId: `files-${event.id ?? a.calls.length}`,
+          tool: "files.changed",
+          step: "editing",
+          label: paths.length
+            ? `Changed ${paths.join(", ")}`
+            : "Reported file changes",
+          live: false,
+          ok: true,
+          output: String(p.detail || ""),
+        },
+      ],
+    }));
+  }
+  if (event.type === "checkpoint.updated") {
+    touch((a) => ({ ...a, changed: addChanged(a.changed, p.paths) }));
+  }
+  if (event.type === "checkpoint.restored") {
+    const paths = Array.isArray(p.paths) ? p.paths : [];
     items = [
       ...items,
       {
         kind: "note",
         taskId,
-        text: paths.length
-          ? `Vendor agent changed ${paths.join(", ")}`
-          : "Vendor agent reported file changes",
+        text: `Rewind restored ${paths.length} file${paths.length === 1 ? "" : "s"} from this task's checkpoint`,
       },
     ];
   }
+  if (event.type === "approval.requested") {
+    touch((a) => ({
+      ...a,
+      approvalsPending: a.approvalsPending + 1,
+      approvalsSeen: a.approvalsSeen + 1,
+    }));
+  }
+  if (event.type === "approval.resolved") {
+    touch((a) => ({
+      ...a,
+      approvalsPending: Math.max(0, a.approvalsPending - 1),
+    }));
+  }
+  if (event.type === "web.source") {
+    touch((a) => withSources(a, sourcesFrom(p)));
+  }
+  if (event.type === "verification.summary") {
+    const verification = parseVerification(p);
+    touch((a) => ({ ...a, verification }));
+  }
+  if (event.type === "agent.handoff") {
+    items = [
+      ...items,
+      {
+        kind: "divider",
+        taskId,
+        text: `Continued on ${providerLabel(p.to)} · previous context summarized${
+          Number(p.excerpt_chars) > 0
+            ? ` (${Number(p.excerpt_chars).toLocaleString()} characters)`
+            : ""
+        }`,
+      },
+    ];
+  }
+  if (event.type === "model.switched") {
+    items = [
+      ...items,
+      {
+        kind: "note",
+        taskId,
+        text: `Switched to ${String(p.to || "another model")} on ${providerLabel(p.provider)} · ${p.resumed ? "provider session resumed" : "new provider session"}`,
+      },
+    ];
+  }
+  if (event.type === "limit.reached") {
+    const vendor = providerLabel(p.vendor);
+    limit = {
+      vendor,
+      usage: (p.usage as UsageSnapshot | undefined) || null,
+      taskId,
+    };
+    items = [
+      ...items,
+      {
+        kind: "note",
+        taskId,
+        warning: true,
+        text: `Plan limit reached on ${vendor}. The task paused; choose another model to continue.`,
+      },
+    ];
+  }
+  if (event.type === "usage.updated") usageVersion += 1;
   if (event.type === "workflow.selected") {
     items = [
       ...items,
@@ -168,19 +327,29 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     plan = [];
     usage = {};
     routing = undefined;
+    limit = undefined;
+    touch((a) => ({ ...a, startedAt: a.startedAt ?? event.ts }));
   }
   if (event.type === "routing.selected" || event.type === "routing.fallback") {
     if (p.model_id && p.model_name && p.provider)
       routing = p as unknown as RoutingDecision;
-    const selected = [
+    const name = String(
       p.model_name || p.model_id || p.fallback || "configured model",
-      p.provider,
-      p.purpose,
-    ]
-      .filter(Boolean)
-      .map(String)
-      .join(" · ");
+    );
+    // With `inference` the row name says enough; older records also name
+    // the provider and purpose.
+    const selected = p.inference
+      ? name
+      : [name, p.provider, p.purpose].filter(Boolean).map(String).join(" · ");
     const warning = event.type === "routing.fallback";
+    const where =
+      p.inference === "local"
+        ? name.includes("This computer")
+          ? ""
+          : " · This computer"
+        : p.inference === "cloud"
+          ? " · Cloud"
+          : "";
     items = [
       ...items,
       {
@@ -188,8 +357,8 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
         taskId,
         warning,
         text: warning
-          ? `Using default: ${selected}. ${String(p.fallback_reason || "The saved model is unavailable.")}`
-          : `Using ${selected}${p.source === "explicit" ? " · selected for this task" : ""}`,
+          ? `Using default: ${selected}${where}. ${String(p.fallback_reason || "The saved model is unavailable.")}`
+          : `Using ${selected}${where}${p.source === "explicit" ? " · selected for this task" : ""}`,
       },
     ];
   }
@@ -236,6 +405,27 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     }
   }
   if (event.type === "tool.started") {
+    const args = (p.arguments || {}) as Record<string, unknown>;
+    const command = args.command;
+    touch((a) => ({
+      ...a,
+      calls: [
+        ...a.calls,
+        {
+          callId: String(p.call_id || `call-${a.calls.length}`),
+          tool: String(p.tool),
+          step: classifyTool(String(p.tool), args),
+          label: String(p.headline || p.tool),
+          live: true,
+          path: typeof args.path === "string" ? args.path : undefined,
+          command: Array.isArray(command)
+            ? command.map(String).join(" ")
+            : typeof command === "string"
+              ? command
+              : undefined,
+        },
+      ],
+    }));
     items = [
       ...items,
       {
@@ -291,6 +481,52 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     items = [...items];
     if (index < 0) items.push(card);
     else items[index] = card;
+    const completedArgs = (args || {}) as Record<string, unknown>;
+    touch((a) => {
+      const at = a.calls.findIndex(
+        (call) =>
+          call.live &&
+          (p.call_id
+            ? call.callId === String(p.call_id)
+            : call.tool === p.tool),
+      );
+      const previousCall = at >= 0 ? a.calls[at] : undefined;
+      const step =
+        previousCall?.step ?? classifyTool(String(p.tool), completedArgs);
+      const path =
+        (card.kind === "tool" && card.path) || previousCall?.path || undefined;
+      const call = {
+        callId: String(
+          p.call_id || previousCall?.callId || `call-${a.calls.length}`,
+        ),
+        tool: String(p.tool),
+        step,
+        label: String(p.headline || previousCall?.label || p.tool),
+        live: false,
+        ok: Boolean(p.success),
+        output: card.kind === "tool" ? card.fullOutput || card.text : "",
+        path,
+        command: previousCall?.command,
+      };
+      const calls = [...a.calls];
+      if (at >= 0) calls[at] = call;
+      else calls.push(call);
+      const outputPaths =
+        p.output && typeof p.output === "object"
+          ? (p.output as Record<string, unknown>).paths
+          : undefined;
+      return withSources(
+        {
+          ...a,
+          calls,
+          changed:
+            step === "editing" && p.success
+              ? addChanged(a.changed, outputPaths || path)
+              : a.changed,
+        },
+        sourcesFrom(p.sources),
+      );
+    });
   }
   if (p.stage && (!activeTaskId || activeTaskId === taskId))
     stage = String(p.stage);
@@ -342,6 +578,26 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       if (item.kind === "agent")
         items[forkIndex] = { ...item, eventId: event.id, live: false };
     }
+    const verification = parseVerification(p.verification);
+    touch((a) => ({
+      ...a,
+      finishedAt: event.ts,
+      verification: verification || a.verification,
+      calls: a.calls.map((call) =>
+        call.live ? { ...call, live: false } : call,
+      ),
+      approvalsPending: 0,
+      finished: {
+        success: Boolean(p.success),
+        cancelled: Boolean(p.cancelled),
+        summary: text,
+      },
+    }));
+    if (
+      taskId &&
+      !items.some((item) => item.kind === "summary" && item.taskId === taskId)
+    )
+      items = [...items, { kind: "summary", taskId, text }];
     if (!activeTaskId || activeTaskId === taskId) {
       stage = p.cancelled ? "CANCELLED" : p.success ? "DONE" : "FAILED";
       usage = (p.usage as Record<string, number>) || {};
@@ -355,6 +611,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     plan,
     routing,
     activeTaskId,
+    activity,
+    limit,
+    usageVersion,
     cursor: event.id || state.cursor,
   };
 }

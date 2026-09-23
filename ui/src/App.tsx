@@ -2,72 +2,80 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import {
   ArrowDown,
-  ArrowUp,
   Check,
   ChevronRight,
-  Code2,
-  FileCode2,
   FolderOpen,
   GitBranch,
   GitPullRequest,
   ListChecks,
-  ListPlus,
   LoaderCircle,
   PanelLeft,
-  Paperclip,
   Search,
-  ShieldCheck,
-  Square,
-  TerminalSquare,
   X,
 } from "lucide-react";
 import {
   api,
   type Approval,
   type CommandResult,
+  type ConsentRequest,
   type Health,
   type Job,
-  type ModelInfo,
   type Project,
-  type ProviderInfo,
   type Session,
+  type StartJobRequest,
 } from "./api";
-import {
-  ApprovalCard,
-  CommandCardView,
-  OpCard,
-  ThinkingCard,
-} from "./components/cards";
+import { ApprovalCard, CommandCardView, OpCard } from "./components/cards";
 import { Drawer, type DrawerTab } from "./components/Drawer";
 import { Sidebar } from "./components/Sidebar";
 import { Markdown } from "./components/Markdown";
 import { Onboarding } from "./components/Onboarding";
-import { FlowGuide } from "./components/FlowGuide";
-import { OpenWeightHub } from "./components/OpenWeightHub";
 import { WelcomeBanner } from "./components/WelcomeBanner";
-import { ToolsControl } from "./components/ToolsControl";
-import { ActivityTimeline, deriveTimeline } from "./components/ActivityTimeline";
+import { ActivityTimeline } from "./components/ActivityTimeline";
+import { TaskSummary, type DiffStat } from "./components/TaskSummary";
+import { ConsentDialog } from "./components/ConsentDialog";
+import { Composer } from "./components/Composer";
 import {
-  CustomModelDialog,
+  NetworkPill,
+  PermissionControl,
+  WebToggle,
+  type PermissionMode,
+} from "./components/ComposerControls";
+import {
   Help,
   Palette,
   ProjectPicker,
   TrustDialog,
   type PaletteItem,
 } from "./components/overlays";
-import { Settings, type SettingsSection } from "./components/Settings";
+import {
+  Settings,
+  type AdvancedTab,
+  type SettingsSection,
+} from "./components/Settings";
 import { QueuedTasks } from "./components/QueuedTasks";
 import { TaskSteerBar } from "./components/TaskSteerBar";
 import { UnifiedPicker } from "./components/UnifiedPicker";
 import { useConversation } from "./hooks/useConversation";
-import { modelLabel } from "./lib/models";
-import { type VendorStatusMap } from "./lib/cliAgents";
-import { targetsFromModels, type PickerTarget } from "./lib/picker";
+import {
+  isLocal,
+  isReady,
+  rememberRecent,
+  vendorKey,
+  type PickerTarget,
+} from "./lib/picker";
+import {
+  checkAttachment,
+  sendBlockedByImages,
+  toBase64,
+  type Attachment,
+} from "./lib/attachments";
+import { formatDuration } from "./lib/activity";
 import { conversationJob } from "./lib/jobs";
 import {
   isProjectTrustError,
@@ -76,42 +84,58 @@ import {
   trustPromptFor,
   trustRequestFor,
 } from "./lib/trust";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import {
   exportSession as saveExport,
+  invoke,
   isNative,
+  listen,
   openExternal,
 } from "./lib/transport";
 
-type Overlay =
-  | ""
-  | "settings"
-  | "help"
-  | "palette"
-  | "project"
-  | "custom-model"
-  | "flow-guide"
-  | "open-weights";
+type Overlay = "" | "settings" | "help" | "palette" | "project";
 type Toast = { id: number; text: string; kind: "ok" | "err" | "info" };
+type Consent = {
+  request: ConsentRequest;
+  body: StartJobRequest;
+  original: { task: string; attachments: Attachment[] };
+};
 const formatTokens = (n: number) =>
   n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 const draftKey = (id: string, workspace: string) =>
   `shadow:draft:${id || workspace}`;
+const targetKey = (workspace: string) => `shadow:model:${workspace}`;
 const isSessionCommand = (text: string) =>
   ["/new", "/clear"].includes(text.trim());
+const readStore = (key: string) => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const writeStore = (key: string, value: string | null) => {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    /* Browser storage only holds conveniences. */
+  }
+};
+const ADVANCED_PANELS: Record<string, AdvancedTab> = {
+  goals: "goals",
+  skills: "skills",
+  health: "health",
+  doctor: "health",
+  background: "background",
+};
 
 export default function App() {
   const [ready, setReady] = useState(false);
   const [needsOnboard, setNeedsOnboard] = useState(false);
   const [workspace, setWorkspace] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
   const [pickerTargets, setPickerTargets] = useState<PickerTarget[]>([]);
-  const [cliAgents, setCliAgents] = useState<VendorStatusMap | null>(null);
-  const [webEnabled, setWebEnabled] = useState(
-    () => localStorage.getItem("shadow:web") !== "off",
-  );
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [pickerLoaded, setPickerLoaded] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
@@ -126,26 +150,26 @@ export default function App() {
     { name: string; description: string; arg_spec: string }[]
   >([]);
   const [task, setTask] = useState("");
-  const [chips, setChips] = useState<string[]>([]);
-  const [previews, setPreviews] = useState<Record<string, string>>({});
-  const [settingsSection, setSettingsSection] =
-    useState<SettingsSection>("accounts");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [settings, setSettings] = useState<{
+    section: SettingsSection;
+    advanced?: AdvancedTab;
+    vendor?: string;
+  }>({ section: "accounts" });
   const [commandCards, setCommandCards] = useState<CommandResult[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [modelChoice, setModelChoice] = useState("");
-  const [mode, setMode] = useState("coder");
+  const [runningChoice, setRunningChoice] = useState("");
+  const [webEnabled, setWebEnabled] = useState(
+    () => readStore("shadow:web") === "on",
+  );
+  const [consent, setConsent] = useState<Consent | null>(null);
   const [sidebar, setSidebar] = useState(
-    () =>
-      localStorage.getItem("shadow:sidebar") !== "closed" &&
-      window.innerWidth > 760,
+    () => readStore("shadow:sidebar") !== "closed" && window.innerWidth > 760,
   );
   const [panel, setPanel] = useState<DrawerTab | null>(null);
   const [diffPath, setDiffPath] = useState("");
   const [overlay, setOverlay] = useState<Overlay>("");
-  function openSettings(section: SettingsSection = "accounts") {
-    setSettingsSection(section);
-    setOverlay("settings");
-  }
   const [trust, setTrust] = useState<{
     path: string;
     name?: string;
@@ -160,8 +184,6 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [cancellingQueued, setCancellingQueued] = useState<string[]>([]);
   const [switching, setSwitching] = useState(false);
-  const [slashIndex, setSlashIndex] = useState(0);
-  const [slashOpen, setSlashOpen] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [git, setGit] = useState<{ branch: string; count: number }>({
     branch: "",
@@ -169,7 +191,6 @@ export default function App() {
   });
   const [elapsed, setElapsed] = useState(0);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef("");
   const selection = useRef(0);
@@ -180,6 +201,7 @@ export default function App() {
   const activationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const stick = useRef(true);
   const browsingHistory = useRef(false);
+  const pickerFetched = useRef(0);
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastSeq.current;
@@ -191,21 +213,28 @@ export default function App() {
     );
   }, []);
 
+  function openSettings(
+    section: SettingsSection = "accounts",
+    extra: { advanced?: AdvancedTab; vendor?: string } = {},
+  ) {
+    setSettings({ section, ...extra });
+    setOverlay("settings");
+  }
+
   useEffect(() => {
-    if (!isNative()) return;
     let stopped = false;
     let unsubscribe: (() => void) | undefined;
-    void listen<{ status: string; message?: string }>(
-      "shadowcode:shutdown",
-      (event) => setShutdown(event.payload),
-    )
-      .then((stop) => {
-        if (stopped) stop();
-        else unsubscribe = stop;
-      })
-      .catch((error) => {
-        if (!stopped) toast(String(error), "err");
-      });
+    if (isNative())
+      void listen("shadowcode:shutdown", (payload) =>
+        setShutdown(payload as { status: string; message?: string }),
+      )
+        .then((stop) => {
+          if (stopped) stop();
+          else unsubscribe = stop;
+        })
+        .catch((error) => {
+          if (!stopped) toast(String(error), "err");
+        });
     const external = (event: MouseEvent) => {
       const anchor = (
         event.target as Element | null
@@ -224,16 +253,20 @@ export default function App() {
     };
   }, [toast]);
 
-  useEffect(() => {
-    if (!workspace) return;
-    const saved = localStorage.getItem(`shadow:model:${workspace}`);
-    if (saved) setModelChoice(saved);
-  }, [workspace]);
-  useEffect(() => {
-    if (workspace && modelChoice) {
-      localStorage.setItem(`shadow:model:${workspace}`, modelChoice);
-    }
-  }, [workspace, modelChoice]);
+  const reloadPicker = useCallback(
+    async (refresh = false) => {
+      pickerFetched.current = Date.now();
+      try {
+        const result = await api.picker(refresh);
+        setPickerTargets(Array.isArray(result.targets) ? result.targets : []);
+      } catch (e) {
+        toast(`Could not load models: ${String(e)}`, "err");
+      } finally {
+        setPickerLoaded(true);
+      }
+    },
+    [toast],
+  );
 
   const refresh = useCallback(async () => {
     const [s, p, active, state] = await Promise.all([
@@ -263,6 +296,7 @@ export default function App() {
   }, []);
   const conversation = useConversation(() => {
     void refresh().catch(() => undefined);
+    void reloadPicker();
   });
   const { transcript, setTranscript, job, busy, connection } = conversation;
   const locked = busy || submitting || switching || Boolean(shutdown);
@@ -273,38 +307,19 @@ export default function App() {
         item.workspace === workspace &&
         ["queued", "running", "cancelling"].includes(item.status),
     );
-  const queueing = isNative() && projectBusy;
-  const composerLocked =
-    submitting || switching || Boolean(shutdown) || (busy && !isNative());
-  const queuedJobs = isNative()
-    ? jobs
-        .filter(
-          (item) => item.workspace === workspace && item.status === "queued",
-        )
-        .slice()
-        .reverse()
-    : [];
+  const queueing = projectBusy;
+  const composerLocked = submitting || switching || Boolean(shutdown);
+  const queuedJobs = jobs
+    .filter((item) => item.workspace === workspace && item.status === "queued")
+    .slice()
+    .reverse();
   const commandWaiting = queueing && task.trim().startsWith("/");
   taskRef.current = task;
 
   async function reloadConfig() {
-    const [config, state, modelData, providerData] = await Promise.all([
-      api.config(),
-      api.status(),
-      api.models(),
-      api.providers(),
-    ]);
+    const [config, state] = await Promise.all([api.config(), api.status()]);
     setCfg(config);
     setStatus(state);
-    setModels(modelData.models);
-    setCliAgents(modelData.cli_agents || null);
-    const fromApi = Array.isArray(modelData.picker)
-      ? (modelData.picker as PickerTarget[])
-      : [];
-    setPickerTargets(
-      fromApi.length ? fromApi : targetsFromModels(modelData.models),
-    );
-    setProviders(providerData.providers);
   }
 
   async function openSession(id: string) {
@@ -312,9 +327,9 @@ export default function App() {
     if (selectedRef.current) {
       const draft = taskRef.current;
       if (draft && !isSessionCommand(draft))
-        localStorage.setItem(draftKey(selectedRef.current, workspace), draft);
+        writeStore(draftKey(selectedRef.current, workspace), draft);
       else if (!draft)
-        localStorage.removeItem(draftKey(selectedRef.current, workspace));
+        writeStore(draftKey(selectedRef.current, workspace), null);
     }
     const ticket = ++selection.current;
     setSwitching(true);
@@ -330,13 +345,20 @@ export default function App() {
       selectedRef.current = id;
       setSessionId(id);
       setWorkspace(detail.workspace);
-      localStorage.setItem("shadow:selected", id);
+      writeStore("shadow:selected", id);
       conversation.load(detail, active.job);
-      setTask(localStorage.getItem(draftKey(id, detail.workspace)) || "");
-      setChips([]);
+      // The conversation's own target wins; a new conversation starts on the
+      // project's last choice. Nothing falls back to a configured default.
+      setModelChoice(
+        detail.execution_target || readStore(targetKey(detail.workspace)) || "",
+      );
+      setRunningChoice(
+        active.job?.model || active.job?.routing?.requested || "",
+      );
+      setTask(readStore(draftKey(id, detail.workspace)) || "");
+      setAttachments([]);
       setCommandCards([]);
       setApprovals([]);
-      setSlashOpen(false);
       stick.current = true;
       setAtBottom(true);
       await refresh();
@@ -366,12 +388,14 @@ export default function App() {
       setWorkspace(h.workspace);
       setNeedsOnboard(!onboard.completed);
       await reloadConfig();
+      void reloadPicker();
       await refresh();
-      const saved = localStorage.getItem("shadow:selected");
+      const saved = readStore("shadow:selected");
       const initial =
         sessionData.sessions.find((s) => s.id === saved) ||
         sessionData.sessions.find((s) => s.workspace === h.workspace);
       if (onboard.completed && initial) await openSession(initial.id);
+      else setModelChoice(readStore(targetKey(h.workspace)) || "");
       const latest = await api.status();
       setStatus(latest);
       const prompt = trustPromptFor(
@@ -391,14 +415,29 @@ export default function App() {
       booted.current = true;
       void boot();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Theme: explicit light/dark, or follow the system when unset or "system".
   useEffect(() => {
-    document.documentElement.dataset.theme = String(
-      (cfg.ui as { theme?: string })?.theme || "light",
+    const preference = String(
+      (cfg.ui as { theme?: string })?.theme || "system",
     );
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const apply = () => {
+      document.documentElement.dataset.theme =
+        preference === "light" || preference === "dark"
+          ? preference
+          : media?.matches
+            ? "dark"
+            : "light";
+    };
+    apply();
+    if (preference === "light" || preference === "dark" || !media) return;
+    media.addEventListener?.("change", apply);
+    return () => media.removeEventListener?.("change", apply);
   }, [cfg]);
   useEffect(() => {
-    localStorage.setItem("shadow:sidebar", sidebar ? "open" : "closed");
+    writeStore("shadow:sidebar", sidebar ? "open" : "closed");
   }, [sidebar]);
   useEffect(() => {
     const compact = window.matchMedia("(max-width: 760px)");
@@ -408,6 +447,18 @@ export default function App() {
     compact.addEventListener("change", resize);
     return () => compact.removeEventListener("change", resize);
   }, []);
+  // Readiness and usage change outside the app (sign-in in a browser, plan
+  // resets): refresh rows when the window regains focus.
+  useEffect(() => {
+    const onFocus = () => {
+      if (Date.now() - pickerFetched.current > 15000) void reloadPicker();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [reloadPicker]);
+  useEffect(() => {
+    if (transcript.usageVersion) void reloadPicker();
+  }, [transcript.usageVersion, reloadPicker]);
   useEffect(() => {
     document.title = `${busy ? "● " : ""}ShadowCode`;
   }, [busy]);
@@ -415,23 +466,16 @@ export default function App() {
     const key = draftKey(sessionId, workspace);
     const timer = setTimeout(() => {
       if (isSessionCommand(task)) return;
-      if (task) localStorage.setItem(key, task);
-      else localStorage.removeItem(key);
+      writeStore(key, task || null);
     }, 200);
     return () => clearTimeout(timer);
   }, [task, sessionId, workspace]);
-  useEffect(() => {
-    const el = promptRef.current;
-    if (el) {
-      el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-    }
-  }, [task]);
   useLayoutEffect(() => {
     if (ready && !switching && stick.current)
       streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
   }, [
     transcript.items,
+    transcript.activity,
     commandCards,
     busy,
     submitting,
@@ -468,14 +512,14 @@ export default function App() {
       }
     }
     void poll();
-    const timer = setInterval(poll, busy ? 1200 : isNative() ? 2000 : 5000);
+    const timer = setInterval(poll, busy ? 1200 : 2000);
     return () => {
       live = false;
       clearInterval(timer);
     };
   }, [sessionId, busy]);
-  // Goals and queued follow-ups can start after the visible job has finished.
-  // Reload before attaching their stream so intervening milestones are retained.
+  // Queued follow-ups can start after the visible job has finished. Reload
+  // before attaching their stream so intervening milestones are retained.
   useEffect(() => {
     if (!sessionId || busy || submitting || switching) return;
     const sessionJobs = jobs.filter((item) => item.session_id === sessionId);
@@ -484,8 +528,14 @@ export default function App() {
     let live = true;
     void Promise.all([api.session(sessionId), api.job(next.id)])
       .then(([detail, fullJob]) => {
-        if (live && selectedRef.current === sessionId && !submittingRef.current)
+        if (
+          live &&
+          selectedRef.current === sessionId &&
+          !submittingRef.current
+        ) {
           conversation.load(detail, fullJob, true);
+          setRunningChoice(fullJob.model || fullJob.routing?.requested || "");
+        }
       })
       .catch(() => {
         /* The next poll retries a failed snapshot. */
@@ -493,15 +543,7 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [
-    jobs,
-    sessionId,
-    busy,
-    submitting,
-    switching,
-    job?.id,
-    conversation.load,
-  ]);
+  }, [jobs, sessionId, busy, submitting, switching, job, conversation.load]);
   useEffect(() => {
     if (!job || !busy) return;
     const tick = () =>
@@ -511,6 +553,40 @@ export default function App() {
     return () => clearInterval(timer);
   }, [job?.id, busy]);
 
+  const selectedTarget = pickerTargets.find((t) => t.id === modelChoice);
+  const canAttachImages = selectedTarget?.vision === true;
+  const permissions = (cfg.permissions || {}) as Record<string, unknown>;
+  const permissionMode: PermissionMode =
+    permissions.mode === "allow_edits" ? "allow_edits" : "ask";
+  const readOnly =
+    (status?.permissions.level || permissions.level) === "read_only";
+  const networkMode = String(
+    ((cfg.network || {}) as { mode?: string }).mode || "online",
+  );
+  const vendorNotes = (permissions.vendor_notes || {}) as Record<
+    string,
+    string
+  >;
+  const vendorNote =
+    selectedTarget && !isLocal(selectedTarget)
+      ? vendorNotes[vendorKey(selectedTarget)] ||
+        vendorNotes[`cli-${vendorKey(selectedTarget)}`] ||
+        `${selectedTarget.name.split(" · ")[0]} runs its own tools, sandbox and web access; ShadowCode passes this choice to it where the tool supports it.`
+      : undefined;
+  const webAllowed =
+    Boolean(selectedTarget && isLocal(selectedTarget)) &&
+    networkMode === "online";
+
+  async function selectTarget(id: string) {
+    setModelChoice(id);
+    rememberRecent(id);
+    if (workspace) writeStore(targetKey(workspace), id);
+    if (sessionId)
+      await api.setSessionTarget(sessionId, id).catch(() => {
+        /* The choice still applies: every job carries its target. */
+      });
+  }
+
   async function newSession(opts?: { force?: boolean }) {
     if (!opts?.force && (submitting || switching)) return;
     if (!workspace) {
@@ -519,7 +595,7 @@ export default function App() {
     }
     try {
       const created = await api.createSession(workspace, "New task");
-      localStorage.setItem("shadow:selected", created.id);
+      writeStore("shadow:selected", created.id);
       await openSession(created.id);
       promptRef.current?.focus();
     } catch (e) {
@@ -630,17 +706,24 @@ export default function App() {
       await newSession();
       return;
     }
-    const panels: Record<string, DrawerTab> = {
+    if (name === "model") {
+      // The picker is the only place a model is chosen.
+      setPickerOpen(true);
+      return;
+    }
+    const drawers: Record<string, DrawerTab> = {
       sessions: "sessions",
       diff: "changes",
-      goals: "goals",
-      skills: "skills",
-      health: "health",
-      ...(!isNative() ? { doctor: "health" as DrawerTab } : {}),
-      background: "background",
+      changes: "changes",
+      files: "files",
+      terminal: "terminal",
     };
-    if (panels[name] && !args) {
-      setPanel(panels[name]);
+    if (drawers[name] && !args) {
+      setPanel(drawers[name]);
+      return;
+    }
+    if (ADVANCED_PANELS[name] && !args) {
+      openSettings("advanced", { advanced: ADVANCED_PANELS[name] });
       return;
     }
     if (name === "settings" && !args) {
@@ -649,7 +732,6 @@ export default function App() {
     }
     const result = await api.runCommand(name, args, sessionId || undefined, {
       model: modelChoice || undefined,
-      purpose: mode,
     });
     if (ticket !== selection.current) {
       await refresh();
@@ -661,30 +743,18 @@ export default function App() {
       if (started.session_id !== selectedRef.current) {
         selectedRef.current = started.session_id;
         setSessionId(started.session_id);
-        localStorage.setItem("shadow:selected", started.session_id);
+        writeStore("shadow:selected", started.session_id);
       }
       conversation.start(started);
     } else if (typeof metadata.session_id === "string") {
       await openSession(metadata.session_id);
     } else if (result.kind === "overlay") {
-      setOverlay((result.overlay as Overlay) || "settings");
-    } else if (metadata.action === "expand") {
-      setTranscript((state) => {
-        const index = state.items.map((item) => item.kind).lastIndexOf("tool");
-        return {
-          ...state,
-          items: state.items.map((item, i) =>
-            i === index && item.kind === "tool"
-              ? { ...item, collapsed: item.collapsed === false }
-              : item,
-          ),
-        };
-      });
+      if (["model", "picker"].includes(result.overlay)) setPickerOpen(true);
+      else openSettings();
     } else if (metadata.action === "quit" || result.quit) {
-      if (isNative()) await invoke("desktop_quit");
-      else toast("Close this browser tab to leave ShadowCode.", "info");
+      await invoke("desktop_quit");
     } else if (!metadata.panel) {
-      if (isNative() && originSession) {
+      if (originSession) {
         const [detail, current] = await Promise.all([
           api.session(originSession),
           api.currentJob(originSession),
@@ -693,23 +763,105 @@ export default function App() {
           conversation.load(detail, current.job);
       } else setCommandCards((prev) => [...prev, result]);
     }
-    if (
-      typeof metadata.panel === "string" &&
-      [...Object.values(panels), "changes"].includes(
-        metadata.panel as DrawerTab,
-      )
-    )
-      setPanel(metadata.panel as DrawerTab);
+    if (typeof metadata.panel === "string") {
+      const panelName = metadata.panel;
+      if (drawers[panelName]) setPanel(drawers[panelName]);
+      else if (["sessions", "files", "terminal", "changes"].includes(panelName))
+        setPanel(panelName as DrawerTab);
+      else if (ADVANCED_PANELS[panelName])
+        openSettings("advanced", { advanced: ADVANCED_PANELS[panelName] });
+    }
     if (metadata.reload_config) await reloadConfig();
     await refresh();
   }
+
+  const sendBlocked = useMemo(() => {
+    if (task.trim().startsWith("/")) return null;
+    if (!pickerLoaded) return null;
+    if (!selectedTarget)
+      return modelChoice
+        ? "The saved model is no longer available. Choose a model to send."
+        : "Choose a model to send.";
+    if (!isReady(selectedTarget))
+      return `${selectedTarget.name}: ${selectedTarget.availability_label || "Unavailable"}${selectedTarget.reason ? ` · ${selectedTarget.reason}` : ""}`;
+    return sendBlockedByImages(
+      attachments,
+      canAttachImages,
+      selectedTarget.name,
+    );
+  }, [
+    task,
+    pickerLoaded,
+    selectedTarget,
+    modelChoice,
+    attachments,
+    canAttachImages,
+  ]);
+  const hasContent = Boolean(task.trim() || attachments.length);
+  const canSend =
+    !composerLocked &&
+    !commandWaiting &&
+    hasContent &&
+    !sendBlocked &&
+    (task.trim().startsWith("/") || Boolean(selectedTarget));
+
+  async function startTask(
+    body: StartJobRequest,
+    original: { task: string; attachments: Attachment[] },
+  ) {
+    const submitTicket = selection.current;
+    submittingRef.current = true;
+    setSubmitting(true);
+    setError("");
+    try {
+      const result = await api.startJob(body);
+      if ("consent" in result) {
+        if (submitTicket === selection.current)
+          setConsent({ request: result.consent, body, original });
+        return;
+      }
+      const started = result.job;
+      if (submitTicket !== selection.current) {
+        await refresh();
+        return;
+      }
+      if (started.session_id !== selectedRef.current) {
+        selectedRef.current = started.session_id;
+        setSessionId(started.session_id);
+        writeStore("shadow:selected", started.session_id);
+      }
+      for (const a of original.attachments)
+        if (a.preview) URL.revokeObjectURL(a.preview);
+      // Keep streaming the current task while a follow-up waits.
+      if (!busy) {
+        conversation.start(started);
+        setRunningChoice(body.model || "");
+      }
+      if (body.queue)
+        toast(
+          "Follow-up queued. It will run after earlier project tasks.",
+          "ok",
+        );
+      await refresh().catch(() => undefined);
+    } catch (e) {
+      if (submitTicket !== selection.current) {
+        toast(String(e), "err");
+        return;
+      }
+      setTask(original.task);
+      setAttachments(original.attachments);
+      setError(String(e));
+      toast(String(e), "err");
+      if (isProjectTrustError(e) && workspace)
+        setTrust(trustRequestFor(workspace, status?.permissions));
+    } finally {
+      setSubmitting(false);
+      submittingRef.current = false;
+    }
+  }
+
   async function submit() {
-    if (
-      composerLocked ||
-      submittingRef.current ||
-      (!task.trim() && !chips.length)
-    )
-      return;
+    if (composerLocked || submittingRef.current || !hasContent) return;
     if (commandWaiting) {
       setError(
         "Wait for this project's active work to finish before running a slash command. You can queue a message now.",
@@ -731,144 +883,109 @@ export default function App() {
       setError("");
       return;
     }
-    const submitTicket = selection.current;
-    const original = task;
-    const attached = [...chips];
-    const imagePaths = attached.filter((p) => /\.(png|jpe?g|webp)$/i.test(p));
-    const textPaths = attached.filter((p) => !imagePaths.includes(p));
-    const text = (
-      task.trim() +
-      (textPaths.length ? `\n\nAttached paths: ${textPaths.join(", ")}` : "") +
-      (imagePaths.length ? `\n\nAttached images: ${imagePaths.join(", ")}` : "")
-    ).trim();
-    submittingRef.current = true;
-    setSubmitting(true);
-    setError("");
-    setTask("");
-    setChips([]);
-    setSlashOpen(false);
-    localStorage.removeItem(draftKey(sessionId, workspace));
-    stick.current = true;
-    setAtBottom(true);
-    try {
-      if (text.startsWith("/")) {
-        await runSlash(text);
-        return;
-      }
-      const started = await api.startJob(
-        text || (imagePaths.length ? "Describe the attached image(s)." : ""),
-        workspace || undefined,
-        sessionId || undefined,
-        modelChoice || undefined,
-        mode,
-        queueing,
-        imagePaths,
-      );
-      if (submitTicket !== selection.current) {
-        await refresh();
-        return;
-      }
-      if (started.session_id !== selectedRef.current) {
-        selectedRef.current = started.session_id;
-        setSessionId(started.session_id);
-        localStorage.setItem("shadow:selected", started.session_id);
-      }
-      // Keep streaming the current task while the follow-up waits. A task
-      // submitted from an idle conversation can itself be waiting on a project.
-      if (!busy) conversation.start(started);
-      if (queueing)
-        toast(
-          "Follow-up queued. It will run after earlier project tasks.",
-          "ok",
-        );
-      await refresh().catch(() => undefined);
-    } catch (e) {
-      if (submitTicket !== selection.current) {
+    const original = { task, attachments };
+    if (task.trim().startsWith("/")) {
+      setTask("");
+      stick.current = true;
+      submittingRef.current = true;
+      setSubmitting(true);
+      try {
+        await runSlash(task.trim());
+      } catch (e) {
+        setTask(original.task);
         toast(String(e), "err");
-        return;
+      } finally {
+        setSubmitting(false);
+        submittingRef.current = false;
       }
-      setTask(original);
-      setChips(attached);
-      setError(String(e));
-      toast(String(e), "err");
-      if (isProjectTrustError(e) && workspace) {
-        setTrust(trustRequestFor(workspace, status?.permissions));
-      }
-    } finally {
-      setSubmitting(false);
-      submittingRef.current = false;
-    }
-  }
-  async function attach(files: FileList | File[]) {
-    if (projectBusy || composerLocked) {
-      toast("Attach files after the project's active work finishes.", "info");
       return;
     }
-    const imageExt = /\.(png|jpe?g|webp)$/i;
-    for (const file of Array.from(files)) {
-      const isImage =
-        file.type.startsWith("image/") || imageExt.test(file.name);
-      if (file.size > 1_000_000 && !isImage) {
-        toast(
-          `${file.name}: text attachments must be smaller than 1 MB`,
-          "err",
-        );
-        continue;
-      }
-      if (isImage) {
-        if (!canAttachImages) {
-          toast(
-            `${file.name}: the selected model does not accept images`,
-            "err",
-          );
-          continue;
-        }
-        if (file.size > 4_000_000) {
-          toast(`${file.name}: images must be smaller than 4 MB`, "err");
-          continue;
-        }
-        if (
-          !["image/png", "image/jpeg", "image/webp", ""].includes(file.type) &&
-          !imageExt.test(file.name)
-        ) {
-          toast(`${file.name}: use PNG, JPEG, or WebP`, "err");
-          continue;
-        }
-        try {
-          const buffer = await file.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
-          let binary = "";
-          const chunk = 0x8000;
-          for (let i = 0; i < bytes.length; i += chunk) {
-            binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-          }
-          const data_base64 = btoa(binary);
-          const saved = await api.attachImage(file.name, data_base64);
-          const preview = URL.createObjectURL(file);
-          setPreviews((prev) => ({ ...prev, [saved.path]: preview }));
-          setChips((prev) => [...new Set([...prev, saved.path])]);
-        } catch (e) {
-          toast(String(e), "err");
-        }
+    // Re-check at send time: the row may have changed after attaching.
+    if (!selectedTarget || !isReady(selectedTarget) || sendBlocked) {
+      if (sendBlocked) toast(sendBlocked, "err");
+      return;
+    }
+    const images = attachments
+      .filter((a) => a.kind === "image")
+      .map((a) => a.path);
+    const texts = attachments
+      .filter((a) => a.kind === "text")
+      .map((a) => a.path);
+    const text = (
+      task.trim() +
+      (texts.length ? `\n\nAttached paths: ${texts.join(", ")}` : "") +
+      (images.length ? `\n\nAttached images: ${images.join(", ")}` : "")
+    ).trim();
+    setTask("");
+    setAttachments([]);
+    writeStore(draftKey(sessionId, workspace), null);
+    stick.current = true;
+    setAtBottom(true);
+    await startTask(
+      {
+        task: text || "Describe the attached image(s).",
+        workspace: workspace || undefined,
+        session_id: sessionId || undefined,
+        model: selectedTarget.id,
+        purpose: "coder",
+        queue: queueing,
+        images,
+        web: webAllowed && webEnabled,
+      },
+      original,
+    );
+  }
+
+  async function attach(files: File[]) {
+    if (composerLocked) return;
+    let images = attachments.filter((a) => a.kind === "image").length;
+    for (const file of files) {
+      const check = checkAttachment(file, {
+        vision: canAttachImages,
+        images,
+        modelName: selectedTarget?.name,
+      });
+      if (!check.ok) {
+        toast(check.error, "err");
         continue;
       }
       try {
-        const text = await file.text();
-        if (
-          text.includes("\0") ||
-          (file.type &&
-            !file.type.startsWith("text/") &&
-            !/json|javascript|xml|yaml/.test(file.type))
-        ) {
-          toast(`${file.name}: attach a text, source, or image file`, "err");
-          continue;
+        if (check.kind === "image") {
+          images += 1;
+          const saved = await api.attachImage(file.name, await toBase64(file));
+          const preview = URL.createObjectURL(file);
+          setAttachments((prev) =>
+            prev.some((a) => a.path === saved.path)
+              ? prev
+              : [
+                  ...prev,
+                  { path: saved.path, name: file.name, kind: "image", preview },
+                ],
+          );
+        } else {
+          const text = await file.text();
+          if (text.includes("\0")) {
+            toast(`${file.name}: attach a text, source, or image file.`, "err");
+            continue;
+          }
+          const saved = await api.attach(file.name, text);
+          setAttachments((prev) =>
+            prev.some((a) => a.path === saved.path)
+              ? prev
+              : [...prev, { path: saved.path, name: file.name, kind: "text" }],
+          );
         }
-        const saved = await api.attach(file.name, text);
-        setChips((prev) => [...new Set([...prev, saved.path])]);
       } catch (e) {
         toast(String(e), "err");
       }
     }
+  }
+  function removeAttachment(path: string) {
+    setAttachments((prev) => {
+      const gone = prev.find((a) => a.path === path);
+      if (gone?.preview) URL.revokeObjectURL(gone.preview);
+      return prev.filter((a) => a.path !== path);
+    });
   }
   async function rewind(taskId: string) {
     if (busy) {
@@ -883,23 +1000,34 @@ export default function App() {
       toast(String(e), "err");
     }
   }
+  const diffStat = useCallback(async (path: string): Promise<DiffStat> => {
+    const diff = await api.gitDiff(path);
+    let add = 0;
+    let del = 0;
+    for (const hunk of [...(diff.hunks || []), ...(diff.staged_hunks || [])])
+      for (const line of hunk.lines) {
+        if (line.kind === "add") add++;
+        else if (line.kind === "del") del++;
+      }
+    return { add, del };
+  }, []);
+  function reviewChanges(path?: string) {
+    setDiffPath(path || "");
+    setPanel("changes");
+  }
   function exportSession(format: "md" | "json" = "md") {
     if (sessionId)
       void saveExport(sessionId, format).catch((e) => toast(String(e), "err"));
   }
+  async function setPermissionMode(mode: PermissionMode) {
+    try {
+      await api.saveConfig({ permissions: { mode } });
+      await reloadConfig();
+    } catch (e) {
+      toast(String(e), "err");
+    }
+  }
   const palette: PaletteItem[] = [
-    {
-      id: "flow-guide",
-      label: "20-Minute Fast-Track Guide",
-      hint: "Master the workflow",
-      run: () => setOverlay("flow-guide"),
-    },
-    {
-      id: "open-weights",
-      label: "Open-Weight Models Showcase",
-      hint: "Qwen, DeepSeek, Llama",
-      run: () => setOverlay("open-weights"),
-    },
     {
       id: "new",
       label: "New task",
@@ -907,13 +1035,19 @@ export default function App() {
       run: () => void newSession(),
     },
     {
+      id: "model",
+      label: "Choose a model",
+      hint: "Ctrl+M",
+      run: () => setPickerOpen(true),
+    },
+    {
       id: "project",
       label: "Open project",
       hint: "Ctrl+P",
       run: () => setOverlay("project"),
     },
-    { id: "files", label: "Browse files", run: () => setPanel("files") },
     { id: "changes", label: "Review changes", run: () => setPanel("changes") },
+    { id: "files", label: "Browse files", run: () => setPanel("files") },
     {
       id: "terminal",
       label: "Run a terminal command",
@@ -924,17 +1058,23 @@ export default function App() {
       label: "Manage tasks · rename, branch, export, delete",
       run: () => setPanel("sessions"),
     },
+    { id: "accounts", label: "Accounts", run: () => openSettings("accounts") },
+    { id: "local", label: "Local models", run: () => openSettings("local") },
     {
       id: "goals",
       label: "Goals and milestones",
-      run: () => setPanel("goals"),
+      run: () => openSettings("advanced", { advanced: "goals" }),
     },
     {
       id: "skills",
       label: "Skills and instructions",
-      run: () => setPanel("skills"),
+      run: () => openSettings("advanced", { advanced: "skills" }),
     },
-    { id: "health", label: "Workspace health", run: () => setPanel("health") },
+    {
+      id: "health",
+      label: "Workspace health",
+      run: () => openSettings("advanced", { advanced: "health" }),
+    },
     {
       id: "export",
       label: "Export this task as Markdown",
@@ -967,7 +1107,7 @@ export default function App() {
           .saveConfig({
             ui: {
               theme:
-                (cfg.ui as { theme?: string })?.theme === "dark"
+                document.documentElement.dataset.theme === "dark"
                   ? "light"
                   : "dark",
             },
@@ -990,68 +1130,53 @@ export default function App() {
         (e.target as HTMLElement)?.tagName || "",
       );
       if (e.key === "Escape") {
+        if (consent) return;
         if (overlay) setOverlay("");
         else if (trust) setTrust(null);
-        else if (slashOpen) setSlashOpen(false);
+        else if (pickerOpen) setPickerOpen(false);
         else if (panel) setPanel(null);
         return;
       }
+      // Dialogs own the keyboard while they are open.
+      if (overlay || trust || consent || needsOnboard) return;
       if (mod && key === "k") {
         e.preventDefault();
         setOverlay("palette");
-      }
-      if (mod && key === "b" && !e.shiftKey) {
+      } else if (mod && key === "b" && !e.shiftKey) {
         e.preventDefault();
         setSidebar((v) => !v);
-      }
-      if (mod && e.shiftKey && key === "b") {
+      } else if (mod && e.shiftKey && key === "b") {
         e.preventDefault();
         setPanel((p) => (p ? null : "changes"));
-      }
-      if (mod && key === ",") {
+      } else if (mod && key === ",") {
         e.preventDefault();
         openSettings();
-      }
-      if (mod && key === "p") {
+      } else if (mod && key === "p") {
         e.preventDefault();
         setOverlay("project");
-      }
-      if (mod && key === "n") {
+      } else if (mod && key === "n") {
         e.preventDefault();
         void newSession();
-      }
-      if (mod && key === "l") {
+      } else if (mod && key === "m") {
+        e.preventDefault();
+        setPickerOpen(true);
+      } else if (mod && key === "l") {
         e.preventDefault();
         promptRef.current?.focus();
-      }
-      if (mod && key === ".") {
+      } else if (mod && key === ".") {
         e.preventDefault();
         void stop();
-      }
-      if (mod && e.shiftKey && key === "e") {
+      } else if (mod && e.shiftKey && key === "e") {
         e.preventDefault();
         exportSession();
-      }
-      if (key === "?" && !inField) {
+      } else if (key === "?" && !inField) {
         e.preventDefault();
         setOverlay("help");
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [
-    overlay,
-    trust,
-    slashOpen,
-    panel,
-    workspace,
-    sessionId,
-    busy,
-    modelChoice,
-    mode,
-    submitting,
-    switching,
-  ]);
+  });
   const reloadCommands = useCallback(async () => {
     const result = await api.commands();
     setCommands(result.commands);
@@ -1071,24 +1196,13 @@ export default function App() {
     };
   }, [workspace]);
 
-  const current = sessions.find((s) => s.id === sessionId);
-  const title = current?.title || "New task";
-  const selectedTarget = pickerTargets.find((t) => t.id === modelChoice);
-  const selectedModel = models.find(
-    (candidate) => candidate.id === modelChoice,
-  );
-  const canAttachImages = Boolean(selectedTarget?.vision);
+  const currentSession = sessions.find((s) => s.id === sessionId);
+  const title = currentSession?.title || "New task";
   const activeModel = job?.routing || transcript.routing;
-  const model =
-    busy && activeModel
-      ? activeModel.model_name
-      : selectedModel
-        ? modelLabel(selectedModel, models)
-        : status?.routing?.enabled
-          ? "Automatic by task mode"
-          : status?.model.name || status?.model.default || "Choose model";
   const contextLimit =
-    activeModel?.context_limit || status?.model.context_limit;
+    activeModel && !activeModel.provider?.startsWith("cli:")
+      ? activeModel.context_limit
+      : 0;
   const ctx = contextLimit
     ? Math.min(
         100,
@@ -1097,9 +1211,6 @@ export default function App() {
         ),
       )
     : 0;
-  const slashHits = slashOpen
-    ? commands.filter((c) => c.name.startsWith(task.slice(1))).slice(0, 8)
-    : [];
   const empty =
     !transcript.items.length &&
     !commandCards.length &&
@@ -1109,6 +1220,18 @@ export default function App() {
   const completedSteps = transcript.plan.filter(
     (p) => p.status === "done",
   ).length;
+  const activeTaskId = transcript.activeTaskId || job?.task_id || "";
+  const lastIndexByTask = useMemo(() => {
+    const map: Record<string, number> = {};
+    transcript.items.forEach((item, index) => {
+      if (item.taskId) map[item.taskId] = index;
+    });
+    return map;
+  }, [transcript.items]);
+  const pendingNote =
+    busy && modelChoice && runningChoice && modelChoice !== runningChoice
+      ? "Applies to your next message"
+      : undefined;
   const [bootTimeout, setBootTimeout] = useState(false);
   useEffect(() => {
     if (!ready) {
@@ -1121,13 +1244,13 @@ export default function App() {
       <div className="boot">
         <img src="/icon.svg" alt="" />
         <span>Opening your workspace…</span>
-        <LoaderCircle className="spin" size={18} />
+        <LoaderCircle className="spin" size={18} aria-hidden="true" />
         {bootTimeout && (
           <div className="boot-timeout">
             <p>
-              Taking longer than expected. The backend may be starting up or
-              unreachable.
+              Taking longer than expected. The engine may still be starting.
             </p>
+            {error && <p className="health-bad">{error}</p>}
             <button
               type="button"
               onClick={() => {
@@ -1151,6 +1274,54 @@ export default function App() {
       />
     );
 
+  const picker = (
+    <UnifiedPicker
+      targets={pickerTargets}
+      value={modelChoice}
+      open={pickerOpen}
+      onOpenChange={setPickerOpen}
+      loading={!pickerLoaded}
+      note={pendingNote}
+      onSelect={(id) => {
+        void selectTarget(id);
+        promptRef.current?.focus();
+      }}
+      onConnect={(vendor) => openSettings("accounts", { vendor })}
+      onSetup={(target) =>
+        isLocal(target)
+          ? openSettings("local")
+          : openSettings("accounts", { vendor: vendorKey(target) })
+      }
+      onAddLocal={() => openSettings("local")}
+    />
+  );
+  const controls = (
+    <>
+      <PermissionControl
+        mode={permissionMode}
+        readOnly={readOnly}
+        vendorNote={vendorNote}
+        onChange={(mode) => void setPermissionMode(mode)}
+        onOpenSettings={() => openSettings("permissions")}
+      />
+      {networkMode === "offline" ? (
+        <NetworkPill mode="offline" />
+      ) : selectedTarget && isLocal(selectedTarget) ? (
+        networkMode === "web_off" ? (
+          <NetworkPill mode="web_off" />
+        ) : (
+          <WebToggle
+            enabled={webEnabled}
+            onChange={(next) => {
+              setWebEnabled(next);
+              writeStore("shadow:web", next ? "on" : "off");
+            }}
+          />
+        )
+      ) : null}
+    </>
+  );
+
   return (
     <div
       className={`app ${sidebar ? "with-sidebar" : ""} ${panel ? "drawer-open" : ""}`}
@@ -1165,9 +1336,7 @@ export default function App() {
           onSelect={(id) => void openSession(id)}
           onNew={() => void newSession()}
           onProject={(path) => void pickProject(path)}
-          onPanel={setPanel}
           onSettings={() => openSettings()}
-          onHome={() => void newSession()}
           onHide={() => setSidebar(false)}
         />
       )}
@@ -1180,7 +1349,7 @@ export default function App() {
             title="Show sidebar (Ctrl+B)"
             onClick={() => setSidebar(true)}
           >
-            <PanelLeft size={18} />
+            <PanelLeft size={18} aria-hidden="true" />
           </button>
         )}
         <button
@@ -1189,10 +1358,10 @@ export default function App() {
           title={workspace || "Open project"}
           onClick={() => setOverlay("project")}
         >
-          <FolderOpen size={15} />
+          <FolderOpen size={15} aria-hidden="true" />
           <span>{workspace.split("/").pop() || "Open project"}</span>
         </button>
-        <ChevronRight size={13} className="dim" />
+        <ChevronRight size={13} className="dim" aria-hidden="true" />
         <span className="top-title" title={title}>
           {title}
         </span>
@@ -1201,10 +1370,10 @@ export default function App() {
             type="button"
             className={`top-action ${panel === "changes" ? "on" : ""}`}
             aria-label="Review changes"
-            title="Git changes"
+            title="Changes (Ctrl+Shift+B)"
             onClick={() => setPanel(panel === "changes" ? null : "changes")}
           >
-            <GitPullRequest size={15} />
+            <GitPullRequest size={15} aria-hidden="true" />
             <span>Changes</span>
             {git.count > 0 && <span className="count">{git.count}</span>}
           </button>
@@ -1216,7 +1385,7 @@ export default function App() {
             aria-label="Command palette"
             onClick={() => setOverlay("palette")}
           >
-            <Search size={16} />
+            <Search size={16} aria-hidden="true" />
           </button>
         </div>
       </header>
@@ -1225,6 +1394,21 @@ export default function App() {
           <div className="connection-banner" role="status">
             Connected to your running engine. Closing this window leaves its
             work running.
+          </div>
+        )}
+        {transcript.limit && (
+          <div className="connection-banner limit-banner" role="alert">
+            <span>
+              Plan limit reached on {transcript.limit.vendor} · choose another
+              model
+            </span>
+            <button
+              type="button"
+              className="mini"
+              onClick={() => setPickerOpen(true)}
+            >
+              Choose model
+            </button>
           </div>
         )}
         {job?.status === "interrupted" && (
@@ -1248,7 +1432,7 @@ export default function App() {
         )}
         {connection === "reconnecting" && (
           <div className="connection-banner" role="status">
-            <LoaderCircle size={14} className="spin" />
+            <LoaderCircle size={14} className="spin" aria-hidden="true" />
             Reconnecting… Your task continues in the background.
           </div>
         )}
@@ -1310,7 +1494,7 @@ export default function App() {
                   aria-label="Dismiss error"
                   onClick={() => setError("")}
                 >
-                  <X size={14} />
+                  <X size={14} aria-hidden="true" />
                 </button>
               </div>
             )}
@@ -1383,7 +1567,7 @@ export default function App() {
               )}
             {switching ? (
               <div className="loading-task">
-                <LoaderCircle size={20} className="spin" />
+                <LoaderCircle size={20} className="spin" aria-hidden="true" />
                 Opening task…
               </div>
             ) : empty && !conversation.history.viewing ? (
@@ -1395,89 +1579,126 @@ export default function App() {
               />
             ) : (
               <>
-                {transcript.items.map((item, i) =>
-                  item.kind === "user" &&
-                  transcript.activeTaskId !== item.taskId &&
-                  queuedJobs.some(
-                    (queued) => queued.task_id === item.taskId,
-                  ) ? null : item.kind === "tool" ? (
-                    <OpCard
-                      key={i}
-                      item={item}
-                      onToggle={() =>
-                        setTranscript((s) => ({
-                          ...s,
-                          items: s.items.map((it, n) =>
-                            n === i && it.kind === "tool"
-                              ? { ...it, collapsed: it.collapsed === false }
-                              : it,
-                          ),
-                        }))
-                      }
-                      onRewind={(tid) => void rewind(tid)}
-                      onReviewDiff={(path) => {
-                        setDiffPath(path);
-                        setPanel("changes");
-                      }}
-                    />
-                  ) : item.kind === "command" ? (
-                    <CommandCardView key={i} card={item.card} />
-                  ) : item.kind === "note" ? (
-                    <div
-                      key={i}
-                      className={`msg-note ${item.warning ? "warning" : ""}`}
-                    >
-                      {item.text}
-                    </div>
-                  ) : item.kind === "thinking" ? (
-                    <ThinkingCard
-                      key={i}
-                      text={item.text}
-                      durationSec={item.durationSec}
-                      live={item.live}
-                    />
-                  ) : item.kind === "user" ? (
-                    <div key={i} className="msg-user">
-                      <div className="user-pill">
-                        <div className="bubble">{item.text}</div>
+                {transcript.items.map((item, i) => {
+                  const node =
+                    item.kind === "user" &&
+                    transcript.activeTaskId !== item.taskId &&
+                    queuedJobs.some(
+                      (queued) => queued.task_id === item.taskId,
+                    ) ? null : item.kind === "tool" ? (
+                      // Tool calls live in the activity timeline; lifecycle
+                      // hooks have no tool event and stay as cards.
+                      item.tool === "hook" ? (
+                        <OpCard
+                          key={i}
+                          item={item}
+                          onToggle={() =>
+                            setTranscript((s) => ({
+                              ...s,
+                              items: s.items.map((it, n) =>
+                                n === i && it.kind === "tool"
+                                  ? { ...it, collapsed: it.collapsed === false }
+                                  : it,
+                              ),
+                            }))
+                          }
+                        />
+                      ) : null
+                    ) : item.kind === "command" ? (
+                      <CommandCardView key={i} card={item.card} />
+                    ) : item.kind === "note" ? (
+                      <div
+                        key={i}
+                        className={`msg-note ${item.warning ? "warning" : ""}`}
+                      >
+                        {item.text}
                       </div>
+                    ) : item.kind === "divider" ? (
+                      <div key={i} className="msg-divider" role="separator">
+                        <span>{item.text}</span>
+                      </div>
+                    ) : item.kind === "summary" ? (
+                      transcript.activity[item.taskId] ? (
+                        <div key={i} className="msg-summary">
+                          <ActivityTimeline
+                            activity={transcript.activity[item.taskId]}
+                          />
+                          <TaskSummary
+                            activity={transcript.activity[item.taskId]}
+                            diffStat={diffStat}
+                            onReview={reviewChanges}
+                            onRewind={
+                              transcript.activity[item.taskId].verification
+                                ?.status === "vendor_owned"
+                                ? undefined
+                                : () => void rewind(item.taskId)
+                            }
+                          />
+                        </div>
+                      ) : null
+                    ) : item.kind === "user" ? (
+                      <div key={i} className="msg-user">
+                        <div className="user-pill">
+                          <div className="bubble">{item.text}</div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div key={i} className="msg-agent">
+                        {item.who && <div className="who">{item.who}</div>}
+                        <Markdown>{item.text}</Markdown>
+                        {item.eventId && !item.live && (
+                          <button
+                            type="button"
+                            className="ghost fork-action"
+                            disabled={
+                              busy || submitting || switching || forking
+                            }
+                            onClick={() =>
+                              void (async () => {
+                                setForking(true);
+                                try {
+                                  const branch = await api.forkSession(
+                                    sessionId,
+                                    item.eventId!,
+                                  );
+                                  await openSession(branch.fork.id);
+                                  toast(
+                                    "New conversation created from this point",
+                                    "ok",
+                                  );
+                                } catch (error) {
+                                  toast(String(error), "err");
+                                } finally {
+                                  setForking(false);
+                                }
+                              })()
+                            }
+                          >
+                            Fork from here
+                          </button>
+                        )}
+                      </div>
+                    );
+                  // A task that stopped without a completion record still shows
+                  // what it did.
+                  const stranded =
+                    item.taskId &&
+                    lastIndexByTask[item.taskId] === i &&
+                    item.taskId !== activeTaskId &&
+                    transcript.activity[item.taskId] &&
+                    !transcript.activity[item.taskId].finished &&
+                    transcript.activity[item.taskId].calls.length > 0;
+                  return stranded ? (
+                    <div key={i}>
+                      {node}
+                      <ActivityTimeline
+                        activity={transcript.activity[item.taskId!]}
+                      />
                     </div>
                   ) : (
-                    <div key={i} className="msg-agent">
-                      {item.who && <div className="who">{item.who}</div>}
-                      <Markdown>{item.text}</Markdown>
-                      {isNative() && item.eventId && !item.live && (
-                        <button
-                          type="button"
-                          className="ghost fork-action"
-                          disabled={busy || submitting || switching || forking}
-                          onClick={() =>
-                            void (async () => {
-                              setForking(true);
-                              try {
-                                const branch = await api.forkSession(
-                                  sessionId,
-                                  item.eventId!,
-                                );
-                                await openSession(branch.fork.id);
-                                toast(
-                                  "New conversation created from this point",
-                                  "ok",
-                                );
-                              } catch (error) {
-                                toast(String(error), "err");
-                              } finally {
-                                setForking(false);
-                              }
-                            })()
-                          }
-                        >
-                          Fork from here
-                        </button>
-                      )}
-                    </div>
-                  ),
-                )}
+                    node
+                  );
+                })}
                 {commandCards.map((card, i) => (
                   <CommandCardView key={`c${i}`} card={card} />
                 ))}
@@ -1493,42 +1714,15 @@ export default function App() {
               />
             ))}
             {(busy || submitting) && !switching && (
-              <div className="working" role="status">
+              <div className="working" role="status" aria-live="polite">
                 <ActivityTimeline
-                  steps={deriveTimeline({
-                    busy: Boolean(busy || submitting),
-                    stage: transcript.stage,
-                    waitingApproval: approvals.length > 0,
-                    finished: job?.status === "completed",
-                    hasDiff: git.count > 0,
-                    testSummary: transcript.items
-                      .filter((item) => item.kind === "tool" && /test/i.test(item.tool || item.headline || ""))
-                      .map((item) => item.kind === "tool" ? item.text : "")
-                      .filter(Boolean)
-                      .at(-1),
-                  })}
-                  output={transcript.items
-                    .flatMap((item) =>
-                      item.kind === "tool"
-                        ? [
-                            [item.headline || item.tool, item.path, item.fullOutput || item.text]
-                              .filter(Boolean)
-                              .join("\n"),
-                          ]
-                        : item.kind === "note" && /https?:\/\//.test(item.text)
-                          ? [item.text]
-                          : [],
-                    )
-                    .slice(-8)
-                    .join("\n\n")}
+                  activity={
+                    activeTaskId ? transcript.activity[activeTaskId] : undefined
+                  }
+                  pendingApprovals={approvals.length}
+                  elapsed={busy ? formatDuration(elapsed) : undefined}
                 />
-                <span className="dim">
-                  {elapsed >= 60
-                    ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
-                    : `${elapsed}s`}
-                </span>
                 {job &&
-                  isNative() &&
                   (job.status === "running" || job.status === "paused") && (
                     <TaskSteerBar
                       job={job}
@@ -1553,18 +1747,11 @@ export default function App() {
               });
             }}
           >
-            <ArrowDown size={14} />
+            <ArrowDown size={14} aria-hidden="true" />
             Latest activity
           </button>
         )}
-        <div
-          className="composer-wrap"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            void attach(e.dataTransfer.files);
-          }}
-        >
+        <div className="composer-wrap">
           <QueuedTasks
             jobs={queuedJobs}
             sessions={sessions}
@@ -1577,7 +1764,7 @@ export default function App() {
           {transcript.plan.length > 0 && (
             <details className="task-plan">
               <summary>
-                <ListChecks size={15} />
+                <ListChecks size={15} aria-hidden="true" />
                 <span>Task plan</span>
                 <span className="dim">
                   {completedSteps} of {transcript.plan.length}
@@ -1594,7 +1781,7 @@ export default function App() {
                 {transcript.plan.map((p) => (
                   <li key={p.id} className={`plan-${p.status}`}>
                     {p.status === "done" ? (
-                      <Check size={14} />
+                      <Check size={14} aria-hidden="true" />
                     ) : (
                       <span className="plan-circle" />
                     )}
@@ -1605,237 +1792,44 @@ export default function App() {
               </ol>
             </details>
           )}
-          {slashOpen && (
-            <div
-              className="slash-menu"
-              role="listbox"
-              aria-label="Slash commands"
-            >
-              {slashHits.length ? (
-                slashHits.map((c, i) => (
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={i === slashIndex}
-                    className={`slash-hit ${i === slashIndex ? "on" : ""}`}
-                    key={c.name}
-                    onClick={() => {
-                      setTask(`/${c.name}${c.arg_spec ? " " : ""}`);
-                      setSlashOpen(false);
-                      promptRef.current?.focus();
-                    }}
-                  >
-                    <strong>/{c.name}</strong>
-                    <span>{c.description}</span>
-                  </button>
-                ))
-              ) : (
-                <div className="slash-empty">No matching commands</div>
-              )}
-            </div>
-          )}
-          <form
-            className={`composer ${locked ? "is-working" : ""}`}
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submit();
-            }}
-          >
-            {chips.length > 0 && (
-              <div className="chips">
-                {chips.map((c) => (
-                  <button
-                    type="button"
-                    className="path-chip"
-                    key={c}
-                    onClick={() => {
-                      const preview = previews[c];
-                      if (preview) URL.revokeObjectURL(preview);
-                      setPreviews((prev) => {
-                        const next = { ...prev };
-                        delete next[c];
-                        return next;
-                      });
-                      setChips(chips.filter((x) => x !== c));
-                    }}
-                  >
-                    {previews[c] ? (
-                      <img src={previews[c]} alt="" className="chip-preview" />
-                    ) : (
-                      <FileCode2 size={12} />
-                    )}
-                    {c.split("/").pop()}
-                    <X size={12} />
-                  </button>
-                ))}
-              </div>
-            )}
-            <textarea
-              ref={promptRef}
-              aria-label="Message ShadowCode"
-              value={task}
-              rows={2}
-              placeholder={
-                queueing
-                  ? "Add a follow-up to the queue…"
-                  : busy
-                    ? "Draft your next step while ShadowCode works…"
-                    : empty
-                      ? "Describe what you want to build…"
-                      : "Ask for a follow-up change…"
-              }
-              onChange={(e) => {
-                setTask(e.target.value);
-                setSlashIndex(0);
-                setSlashOpen(/^\/\S*$/.test(e.target.value));
-              }}
-              onKeyDown={(e) => {
-                if (slashOpen && slashHits.length) {
-                  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setSlashIndex(
-                      (i) =>
-                        (i +
-                          (e.key === "ArrowDown" ? 1 : slashHits.length - 1)) %
-                        slashHits.length,
-                    );
-                    return;
-                  }
-                  if (e.key === "Tab") {
-                    e.preventDefault();
-                    setTask(`/${slashHits[slashIndex].name} `);
-                    setSlashOpen(false);
-                    return;
-                  }
-                }
-                if (
-                  e.key === "Enter" &&
-                  !e.shiftKey &&
-                  !e.nativeEvent.isComposing
-                ) {
-                  e.preventDefault();
-                  void submit();
-                }
-              }}
-            />
-            <div className="composer-footer">
-              <button
-                type="button"
-                className="icon-btn attach-btn"
-                aria-label="Attach files or images"
-                title={
-                  canAttachImages
-                    ? "Attach text files or images (PNG, JPEG, WebP)"
-                    : "This model does not accept images. Attach text files only."
-                }
-                disabled={projectBusy || composerLocked}
-                onClick={() => fileRef.current?.click()}
-              >
-                <Paperclip size={17} />
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                accept={
-                  canAttachImages
-                    ? ".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp,text/*,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.toml,.yaml,.yml,.css,.html,.svg"
-                    : "text/*,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.toml,.yaml,.yml,.css,.html,.svg"
-                }
-                hidden
-                onChange={(e) => {
-                  if (e.target.files) void attach(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-              <UnifiedPicker
-                targets={pickerTargets}
-                value={modelChoice}
-                automaticLabel={
-                  selectedTarget?.name ||
-                  status?.model.name ||
-                  status?.model.default ||
-                  "Choose a model"
-                }
-                onChange={setModelChoice}
-                onConnect={() => openSettings("accounts")}
-                onAddLocal={() => openSettings("local")}
-                disabled={projectBusy || composerLocked}
-              />
-              <ToolsControl
-                webEnabled={webEnabled}
-                onWebEnabled={(next) => {
-                  setWebEnabled(next);
-                  localStorage.setItem("shadow:web", next ? "on" : "off");
-                }}
-                permissionLabel={
-                  String(
-                    (cfg.permissions as { level?: string } | undefined)?.level ||
-                      "workspace",
-                  ) === "read_only"
-                    ? "Project access is restricted"
-                    : "Project access is limited to this workspace"
-                }
-                onOpenSettings={() => openSettings("permissions")}
-              />
-              <span className="grow" />
-              <span className="composer-hint">
-                {commandWaiting
-                  ? "Commands wait until idle"
-                  : task
-                    ? queueing
-                      ? "↵ Queue"
-                      : "↵ Send"
-                    : queueing
-                      ? "Queue a follow-up"
-                      : "/ for commands"}
-              </span>
-              {busy ? (
-                <button
-                  type="button"
-                  className="submit-btn stop"
-                  aria-label="Stop task"
-                  title="Stop task (Ctrl+.)"
-                  disabled={job?.status === "cancelling"}
-                  onClick={() => void stop()}
-                >
-                  <Square size={14} fill="currentColor" />
-                </button>
-              ) : null}
-              {(!busy || isNative()) && (
-                <button
-                  type="submit"
-                  className="submit-btn"
-                  aria-label={queueing ? "Queue follow-up" : "Send task"}
-                  title={queueing ? "Queue follow-up" : "Send task"}
-                  disabled={
-                    composerLocked ||
-                    commandWaiting ||
-                    (!task.trim() && !chips.length)
-                  }
-                >
-                  {submitting ? (
-                    <LoaderCircle size={17} className="spin" />
-                  ) : queueing ? (
-                    <ListPlus size={19} />
-                  ) : (
-                    <ArrowUp size={19} />
-                  )}
-                </button>
-              )}
-            </div>
-          </form>
-          <div className="composer-note">
-            <ShieldCheck size={12} />
-            <span>
-              {status?.permissions.level === "read_only"
-                ? "Read-only"
-                : "Workspace tools"}
-            </span>
-            <button type="button" onClick={() => setOverlay("help")}>
-              Shortcuts
-            </button>
-          </div>
+          <Composer
+            task={task}
+            onTask={setTask}
+            promptRef={promptRef}
+            attachments={attachments}
+            onRemoveAttachment={removeAttachment}
+            onAttach={(files) => void attach(files)}
+            canAttachImages={canAttachImages}
+            attachDisabled={composerLocked}
+            picker={picker}
+            controls={controls}
+            commands={commands}
+            placeholder={
+              queueing
+                ? "Add a follow-up to the queue…"
+                : empty
+                  ? "Describe what you want to build…"
+                  : "Ask for a follow-up change…"
+            }
+            hint={
+              commandWaiting
+                ? "Commands wait until idle"
+                : task
+                  ? queueing
+                    ? "↵ Queue"
+                    : "↵ Send"
+                  : "/ for commands"
+            }
+            busy={busy}
+            queueing={queueing}
+            submitting={submitting}
+            locked={locked}
+            canSend={canSend}
+            sendBlocked={hasContent || !selectedTarget ? sendBlocked : null}
+            stopDisabled={job?.status === "cancelling"}
+            onSubmit={() => void submit()}
+            onStop={() => void stop()}
+          />
         </div>
         <footer className="statusline" aria-live="polite">
           <span className={`status-dot ${busy ? "active" : ""}`} />
@@ -1850,13 +1844,15 @@ export default function App() {
           </span>
           {git.branch && (
             <>
-              <span className="sep">·</span>
+              <span className="sep" aria-hidden="true">
+                ·
+              </span>
               <button
                 type="button"
                 title="Review git changes"
                 onClick={() => setPanel("changes")}
               >
-                <GitBranch size={12} />
+                <GitBranch size={12} aria-hidden="true" />
                 {git.branch}
               </button>
             </>
@@ -1865,6 +1861,8 @@ export default function App() {
           {ctx > 0 && (
             <span
               className={`ctx-bar${ctx >= 80 ? " ctx-warn" : ""}`}
+              role="img"
+              aria-label={`${ctx}% of context used`}
               title={`${ctx}% of context used · ${formatTokens(transcript.usage.total_tokens || 0)} tokens`}
             >
               <span
@@ -1901,15 +1899,8 @@ export default function App() {
               else await newSession();
             }
           }}
-          onSkillsChanged={reloadCommands}
-          onUseSkill={(name) => {
-            setTask(`/skill ${name} `);
-            setPanel(null);
-            promptRef.current?.focus();
-          }}
           diffPath={diffPath}
           onDiffPath={setDiffPath}
-          health={health}
           busy={busy}
           toast={toast}
           onAskAgent={(prompt) => {
@@ -1936,7 +1927,7 @@ export default function App() {
                 setToasts((prev) => prev.filter((x) => x.id !== t.id))
               }
             >
-              <X size={13} />
+              <X size={13} aria-hidden="true" />
             </button>
           </div>
         ))}
@@ -1948,18 +1939,54 @@ export default function App() {
           onConfirm={() => void confirmTrust()}
         />
       )}
+      {consent && (
+        <ConsentDialog
+          request={consent.request}
+          destination={
+            pickerTargets.find((t) => t.id === consent.body.model)?.name
+          }
+          attachments={consent.original.attachments.map((a) => a.name)}
+          onCancel={() => {
+            setTask(consent.original.task);
+            setAttachments(consent.original.attachments);
+            setConsent(null);
+            promptRef.current?.focus();
+          }}
+          onSend={() => {
+            const { body, original } = consent;
+            setConsent(null);
+            void startTask({ ...body, handoff_consent: true }, original);
+          }}
+        />
+      )}
       {overlay === "settings" && (
         <Settings
           cfg={cfg}
-          initialSection={settingsSection}
-          onOpenProject={(path) => void pickProject(path)}
+          initialSection={settings.section}
+          initialAdvanced={settings.advanced}
+          focusVendor={settings.vendor}
+          health={health}
+          sessionId={sessionId}
+          busy={busy}
           onClose={() => setOverlay("")}
           onToast={toast}
-          onSave={async (values, key, env) => {
-            await api.saveConfig(values, key, env);
-            await reloadConfig();
-            setOverlay("");
-            toast("Settings saved", "ok");
+          onOpenProject={(path) => void pickProject(path)}
+          onOpenSession={(id) => void openSession(id)}
+          onSkillsChanged={reloadCommands}
+          onUseSkill={(name) => {
+            setTask(`/skill ${name} `);
+            promptRef.current?.focus();
+          }}
+          onCatalogChanged={() => void reloadPicker()}
+          onSave={async (values) => {
+            try {
+              await api.saveConfig(values);
+              await reloadConfig();
+              void reloadPicker();
+              toast("Settings saved", "ok");
+            } catch (e) {
+              toast(String(e), "err");
+            }
           }}
         />
       )}
@@ -1975,45 +2002,6 @@ export default function App() {
           current={workspace}
           onClose={() => setOverlay("")}
           onPick={(path) => void pickProject(path)}
-        />
-      )}
-      {overlay === "custom-model" && (
-        <CustomModelDialog
-          providers={providers}
-          onClose={() => setOverlay("")}
-          onSubmit={async (id, provider, endpoint) => {
-            try {
-              await api.selectModel(id, { provider, endpoint, name: id });
-              await reloadConfig();
-              setModelChoice("");
-              setOverlay("");
-              toast("Model updated", "ok");
-            } catch (e) {
-              toast(String(e), "err");
-            }
-          }}
-        />
-      )}
-      {overlay === "flow-guide" && (
-        <FlowGuide
-          onClose={() => setOverlay("")}
-          onSelectPrompt={(prompt, chosenMode) => {
-            setTask(prompt);
-            if (chosenMode) setMode(chosenMode);
-            promptRef.current?.focus();
-          }}
-        />
-      )}
-      {overlay === "open-weights" && (
-        <OpenWeightHub
-          models={models}
-          providers={providers}
-          activeModelId={modelChoice || status?.model.name || ""}
-          onSelectModel={(id) => {
-            setModelChoice(id);
-          }}
-          onClose={() => setOverlay("")}
-          onToast={toast}
         />
       )}
     </div>

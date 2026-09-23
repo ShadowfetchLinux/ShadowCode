@@ -1,0 +1,61 @@
+/* ShadowCode design tokens: the single source for colours, radii and fonts.
+   Text colours keep at least 4.5:1 contrast on every surface in both themes. */
+:root {
+  --canvas: #fdfdfc;
+  --surface: #fff;
+  --surface-2: #f5f5f2;
+  --surface-3: #eeefec;
+  --border: #e7e8e3;
+  --border-strong: #c8ccc4;
+  --text: #242824;
+  --text-2: #50574f;
+  --muted: #5c6459;
+  --dim: #626a5f;
+  --hover: rgba(0, 0, 0, 0.045);
+  --ok: #30704d;
+  --warn: #8a5300;
+  --info: #336f5d;
+  --danger: #b63343;
+  --accent: #386c51;
+  --accent-soft: #e6eee7;
+  --sidebar: #f2f3ef;
+  --add-bg: rgba(31, 157, 87, 0.09);
+  --del-bg: rgba(210, 58, 74, 0.09);
+  --shadow-1:
+    0 1px 2px rgba(20, 25, 30, 0.04), 0 2px 8px rgba(20, 25, 30, 0.05);
+  --shadow-2: 0 4px 20px #202e2410, 0 1px 3px #202e2408;
+  --radius: 14px;
+  --radius-sm: 8px;
+  --pill: 999px;
+  --font:
+    -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui,
+    sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --drawer-w: 420px;
+  --rail-w: 254px;
+}
+[data-theme="dark"] {
+  --canvas: #181a19;
+  --surface: #202321;
+  --surface-2: #252825;
+  --surface-3: #2d312d;
+  --border: #323831;
+  --border-strong: #4a5549;
+  --text: #e9ece5;
+  --text-2: #bec6b8;
+  --muted: #a0aa9a;
+  --dim: #a2ac9b;
+  --hover: rgba(255, 255, 255, 0.07);
+  --ok: #93cda7;
+  --warn: #f5c86b;
+  --info: #a0cbb2;
+  --danger: #fb8c96;
+  --accent: #b1d4b8;
+  --accent-soft: #2d4031;
+  --sidebar: #141715;
+  --add-bg: rgba(61, 220, 132, 0.12);
+  --del-bg: rgba(255, 107, 122, 0.12);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 4px 24px #0003;
+  color-scheme: dark;
+}
