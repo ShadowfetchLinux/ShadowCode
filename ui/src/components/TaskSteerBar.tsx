@@ -74,20 +74,20 @@ export function TaskSteerBar({
         <CornerDownLeft size={12} />
         Steer
       </button>
-      <button
-        type="button"
-        className="mini"
-        disabled={busy || !paused || vendorAgent}
-        title={
-          vendorAgent
-            ? "Rewind does not apply to Claude / Codex / Grok vendor-agent tasks"
-            : "Restore checkpointed files after the current operation has reached the pause boundary"
-        }
-        onClick={() => void run("Rewound files", () => api.rewindJob(job.id))}
-      >
-        <RotateCcw size={12} />
-        Rewind files
-      </button>
+      {/* Rewind only exists at a pause boundary of a ShadowCode-run task;
+          vendor agents keep their own edits. */}
+      {paused && !vendorAgent && (
+        <button
+          type="button"
+          className="mini"
+          disabled={busy}
+          title="Restore checkpointed files after the current operation has reached the pause boundary"
+          onClick={() => void run("Rewound files", () => api.rewindJob(job.id))}
+        >
+          <RotateCcw size={12} aria-hidden="true" />
+          Rewind files
+        </button>
+      )}
       {steerOpen && (
         <form
           className="steer-form"

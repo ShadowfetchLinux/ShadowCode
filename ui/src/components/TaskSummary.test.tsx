@@ -49,8 +49,10 @@ it("lists changed files with diff counts, checks with exit codes and duration", 
   expect(screen.getByText("−1")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "src/app.ts" }));
   expect(onReview).toHaveBeenCalledWith("src/app.ts");
+  onReview.mockClear();
+  // Review changes opens the task's first changed file, so a diff shows.
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
-  expect(onReview).toHaveBeenCalledWith();
+  expect(onReview).toHaveBeenCalledWith(base.changed[0]);
   expect(screen.getByRole("button", { name: "Rewind" })).toBeTruthy();
 });
 

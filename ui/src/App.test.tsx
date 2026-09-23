@@ -84,13 +84,11 @@ it("runs a task and shows the event-derived timeline and summary", async () => {
   expect(within(summary).getByText("exit 0")).toBeTruthy();
   await waitFor(() => expect(within(summary).getByText("+1")).toBeTruthy());
   const timeline = screen.getAllByLabelText("Agent activity").at(-1)!;
-  for (const label of [
-    "Reading project",
-    "Editing files",
-    "Running tests",
-    "Finished",
-  ])
+  for (const label of ["Reading project", "Editing files", "Running checks"])
     expect(within(timeline).getByText(label)).toBeTruthy();
+  // The summary card states the outcome; the timeline does not repeat it.
+  expect(within(timeline).queryByText("Finished")).toBeNull();
+  expect(within(summary).getByText("Finished")).toBeTruthy();
   expect(screen.getByText(/Using .*This computer/)).toBeTruthy();
   fireEvent.click(
     within(summary).getByRole("button", { name: "Review changes" }),

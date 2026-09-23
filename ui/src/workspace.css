@@ -584,6 +584,11 @@ kbd {
   gap: 6px;
   margin-left: auto;
 }
+.steer-bar > button.mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 .steer-form {
   display: flex;
   flex-wrap: wrap;

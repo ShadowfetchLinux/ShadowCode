@@ -65,9 +65,30 @@ button.link {
   border-color: var(--accent);
   border-style: dashed;
 }
+/* One row at every width: the picker shrinks and the hint and chip labels
+   give way when the composer is narrow (small window or open drawer). */
+.composer {
+  container-type: inline-size;
+}
 .composer-footer {
-  flex-wrap: wrap;
-  row-gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.composer-footer > .unified-picker {
+  flex: 0 1 auto;
+}
+.composer-footer > * {
+  flex-shrink: 0;
+}
+.composer-footer > .unified-picker,
+.composer-footer > .grow {
+  flex-shrink: 1;
+}
+@container (max-width: 620px) {
+  .composer-hint,
+  .composer-chip span {
+    display: none;
+  }
 }
 .composer-hint {
   font-size: 11px;
@@ -526,6 +547,9 @@ div.activity-step {
   display: grid;
   gap: 10px;
   margin: 0 0 22px;
+}
+.msg-with-activity > .activity-timeline {
+  margin: 0 0 12px;
 }
 .task-summary {
   border: 1px solid var(--border);

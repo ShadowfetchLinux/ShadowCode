@@ -189,8 +189,14 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
           ? `Autonomy budget ${Math.round(Number(p.ratio || 0) * 100)}% of ${String(p.max_steps || "")} steps`
           : event.type === "context.compacted"
             ? `Context compacted; ${String(p.omitted_messages || 0)} earlier messages omitted`
-            : `Context ${String(p.used_estimated_tokens || 0)}/${String(p.limit || 0)} estimated tokens`;
-    items = [...items, { kind: "note", taskId, text: detail }];
+            : `Context nearly full: ${String(p.used_estimated_tokens || 0)}/${String(p.limit || 0)} estimated tokens`;
+    // Every model call reports its budget; the status bar shows the level, so
+    // only a nearly full context earns a line in the conversation.
+    const quietBudget =
+      event.type === "context.budget" &&
+      Number(p.used_estimated_tokens || 0) < 0.75 * Number(p.limit || Infinity);
+    if (!quietBudget)
+      items = [...items, { kind: "note", taskId, text: detail }];
   }
   if (event.type === "agent.warning") {
     items = [
@@ -350,17 +356,16 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
         : p.inference === "cloud"
           ? " · Cloud"
           : "";
-    items = [
-      ...items,
-      {
-        kind: "note",
-        taskId,
-        warning,
-        text: warning
-          ? `Using default: ${selected}${where}. ${String(p.fallback_reason || "The saved model is unavailable.")}`
-          : `Using ${selected}${where}${p.source === "explicit" ? " · selected for this task" : ""}`,
-      },
-    ];
+    const note = warning
+      ? `Using default: ${selected}${where}. ${String(p.fallback_reason || "The saved model is unavailable.")}`
+      : `Using ${selected}${where}`;
+    // Say which model ran once, and again only when it changes: the picker
+    // already names the conversation's model.
+    const previous = [...items]
+      .reverse()
+      .find((item) => item.kind === "note" && item.text.startsWith("Using "));
+    if (warning || previous?.text !== note)
+      items = [...items, { kind: "note", taskId, warning, text: note }];
   }
   if (
     ["model.stream", "model.delta", "model.stream_end"].includes(event.type)

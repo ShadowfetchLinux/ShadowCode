@@ -11,12 +11,18 @@ export function ActivityTimeline({
   activity,
   pendingApprovals = 0,
   elapsed,
+  withSummary = false,
 }: {
   activity: TaskActivity | undefined;
   pendingApprovals?: number;
   elapsed?: string;
+  /** A summary card follows and states the outcome; skip the last step. */
+  withSummary?: boolean;
 }) {
-  const steps = deriveSteps(activity, pendingApprovals);
+  const steps = deriveSteps(activity, pendingApprovals).filter(
+    (step) => !(withSummary && step.id === "finished"),
+  );
+  if (!steps.length && withSummary) return null;
   if (!steps.length)
     return (
       <div className="activity-timeline" aria-label="Agent activity">

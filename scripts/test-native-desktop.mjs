@@ -1,229 +1,193 @@
-// Real Tauri/WebKit window test. Requires a display (xvfb-run works), DBus,
-// tauri-driver, and WebKitWebDriver. No Python service or browser launcher.
+// Real Tauri/WebKit window test for the 0.28 desktop app.
+//
+// Drives the actual `shadowcode` binary through tauri-driver + WebKitWebDriver:
+// first-run onboarding, the unified model picker (real vendor CLI rows when
+// they are installed, read-only probes done by the app itself), a local GGUF
+// row served by a test-double llama-server (scripts/fake-llama-server.py, no
+// GPU, no weights), approvals, the activity timeline, the summary card, the
+// Changes drawer, reload persistence, Settings pages, the cloud consent dialog
+// (always cancelled: no vendor turn ever runs), Stop, light/dark/compact
+// layouts with axe checks, and process cleanup after quit.
+//
+// Requirements: a display (xvfb-run), DBus, tauri-driver, WebKitWebDriver.
+//   xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- \
+//     node scripts/test-native-desktop.mjs
+// Environment:
+//   SHADOW_DESKTOP_BINARY   binary to drive (default target/debug/shadowcode)
+//   SHADOW_DESKTOP_ARGS     JSON array of extra arguments (e.g. AppImage flags)
+//   SHADOW_TAURI_DRIVER     tauri-driver path (default: tauri-driver on PATH)
+//   SHADOW_WEBKIT_DRIVER    WebKitWebDriver path (passed as --native-driver)
+//   SHADOW_NATIVE_ARTIFACTS screenshots/reports directory (default artifacts/native)
+//   SHADOW_EXPECT_VENDORS   e.g. "codex=Ready,claude=Sign in": exact picker
+//                           availability expected for vendors on this machine
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createWriteStream } from "node:fs";
-import { mkdtemp, mkdir, readFile, writeFile, readlink, readdir, rm, rename } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { createWriteStream, existsSync } from "node:fs";
+import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const binary = process.env.SHADOW_DESKTOP_BINARY || path.join(root, "target/debug/shadowcode");
 const binaryArgs = JSON.parse(process.env.SHADOW_DESKTOP_ARGS || "[]");
-assert.ok(Array.isArray(binaryArgs) && binaryArgs.every(arg => typeof arg === "string"), "SHADOW_DESKTOP_ARGS must be a JSON array of strings");
+assert.ok(Array.isArray(binaryArgs) && binaryArgs.every((arg) => typeof arg === "string"), "SHADOW_DESKTOP_ARGS must be a JSON array of strings");
 const artifacts = process.env.SHADOW_NATIVE_ARTIFACTS || path.join(root, "artifacts/native");
+await rm(artifacts, { recursive: true, force: true });
 await mkdir(artifacts, { recursive: true });
-for (const name of ["attached-engine.png", "accessibility-attached-engine.json", "result.json", "failure.txt", "failure.png", "workspace-light.png", "workspace-dark.png", "command-approval.png", "task-complete.png", "compact.png", "goals.png", "routing.png", "background.png", "webdriver.log", "accessibility-light.json", "accessibility-dark.json", "accessibility-compact.json", "accessibility-goals.json", "accessibility-routing.json", "accessibility-background.json", "skills.png", "accessibility-skills.json"]) {
-  await rm(path.join(artifacts, name), { force: true });
-}
 const axeSource = await readFile(path.join(root, "ui/node_modules/axe-core/axe.min.js"), "utf8");
-for (const name of ["hooks.png", "accessibility-hooks.json", "mcp.png", "accessibility-mcp.json", "mcp-http.png", "accessibility-mcp-http.json", "inspection.png", "accessibility-inspection.json", "diagnostics.png", "accessibility-diagnostics.json", "plugins.png", "accessibility-plugins.json", "accessibility-plugins-dark.json", "accessibility-plugins-compact.json"]) await rm(path.join(artifacts, name), { force: true });
-for (const theme of ["light","dark","compact"]) for (const name of [`queue-${theme}.png`,`accessibility-queue-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
-for (const theme of ["light","dark","compact"]) for (const name of [`background-approval-${theme}.png`,`accessibility-background-approval-${theme}.json`]) await rm(path.join(artifacts,name),{force:true});
-for (const view of ["worktree-copy", "worktree-return", "worktree-recovery", "worktree-repair", "history"]) for (const name of [`${view}.png`, `accessibility-${view}.json`, `accessibility-${view}-dark.json`, `accessibility-${view}-compact.json`]) await rm(path.join(artifacts,name),{force:true});
+const run = promisify(execFile);
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const WIDE = { width: 1360, height: 860 };
+const checks = [];
+const note = (text) => { checks.push(text); console.log(`  ok  ${text}`); };
+
+// ---------------------------------------------------------------- fixtures
 const scratch = await mkdtemp(path.join(tmpdir(), "shadowcode-window-"));
 const project = path.join(scratch, "project");
 const profile = path.join(scratch, "profile");
-const defaultProfile = process.env.SHADOW_NATIVE_DEFAULT_PROFILE === "1";
-const profileArgs = defaultProfile ? [] : ["--profile",profile];
-const configDirectory = path.join(profile,defaultProfile ? "config/shadow-agent" : "config");
-const dataDirectory = path.join(profile,defaultProfile ? "data/shadow-agent" : "data");
-const stateDirectory = path.join(profile,defaultProfile ? "state/shadow-agent" : "state");
-const nativeEnv = {...process.env, TMPDIR: path.join(scratch,"images"), ...(defaultProfile ? {
-  XDG_CONFIG_HOME: path.join(profile,"config"), XDG_DATA_HOME: path.join(profile,"data"), XDG_STATE_HOME: path.join(profile,"state"),
-} : {})};
-delete nativeEnv.NO_CLEANUP;
-nativeEnv.SHADOW_WINDOW_MCP_PID = path.join(scratch, "mcp-pids.json");
-nativeEnv.SHADOW_WINDOW_MCP_REQUESTS = path.join(scratch, "mcp-requests.jsonl");
-nativeEnv.SHADOW_WINDOW_MCP_SECRET = "private-window-mcp-credential";
-nativeEnv.SHADOW_WINDOW_HTTP_SECRET = "http-private-fixture-key";
-const httpRoot = path.join(scratch,"http-peer");
-await mkdir(httpRoot);
-let httpPeer, attachedOwner;
-await mkdir(nativeEnv.TMPDIR);
-await mkdir(project); await mkdir(configDirectory, { recursive: true });
-await writeFile(path.join(project, "README.md"), "# Native desktop test\nA disposable workspace.\n");
-for (const args of [["init","-q"],["config","user.name","Desktop Test"],["config","user.email","test@example.invalid"],["add","README.md"],["commit","-qm","Desktop fixture base"]]) await promisify(execFile)("git",["-c","core.hooksPath=/dev/null","-c","user.name=Desktop Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd:project});
-await mkdir(path.join(project, ".shadowcode/hooks"), { recursive: true });
-await writeFile(path.join(project, ".shadowcode/hooks/verify.json"), JSON.stringify({
-  name: "verify-result", events: ["on_complete"], timeout_sec: 10,
-  description: "Verify the completed change before the task succeeds.",
-  command: "test \"$(cat hello.txt)\" = native-window-ok && printf native-hook-ok > hook-result.txt && printf native-hook-check-passed",
+const runtimeDir = path.join(scratch, "runtime");
+const modelsDir = path.join(scratch, "models");
+const configDirectory = path.join(profile, "config/shadow-agent");
+for (const dir of [project, configDirectory, runtimeDir, modelsDir, path.join(scratch, "tmp")]) await mkdir(dir, { recursive: true });
+
+// Disposable git project.
+await writeFile(path.join(project, "README.md"), "# Window test\nA disposable workspace.\n");
+for (const args of [["init", "-q"], ["add", "README.md"], ["commit", "-qm", "Window fixture base"]])
+  await run("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=Window Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: project });
+
+// Test-double llama-server runtime: binary + COMMIT + architectures.txt, the
+// layout ShadowCode's managed runtime directory has.
+const fakeServer = path.join(runtimeDir, "llama-server");
+await copyFile(path.join(root, "scripts/fake-llama-server.py"), fakeServer);
+await chmod(fakeServer, 0o755);
+await writeFile(path.join(runtimeDir, "architectures.txt"), "qwen3\nllama\ngemma4\n");
+await writeFile(path.join(runtimeDir, "COMMIT"), "commit=testdouble\nbackend=cpu\nbuilt=2026-09-23T00:00:00Z\n");
+
+// A tiny synthetic GGUF (header + pretend weights), as gguf::test_support
+// writes it: a qwen3 model whose chat template supports tools.
+function gguf(kv, tensors, padding = 4096) {
+  const parts = [];
+  const u32 = (v) => { const b = Buffer.alloc(4); b.writeUInt32LE(v); parts.push(b); };
+  const u64 = (v) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(v)); parts.push(b); };
+  const str = (s) => { const b = Buffer.from(s, "utf8"); u64(b.length); parts.push(b); };
+  parts.push(Buffer.from("GGUF")); u32(3); u64(tensors.length); u64(kv.length);
+  for (const [key, value] of kv) {
+    str(key);
+    if (typeof value === "number") { u32(4); u32(value); } else { u32(8); str(value); }
+  }
+  for (const name of tensors) { str(name); u32(2); u64(4); u64(4); u32(0); u64(0); }
+  parts.push(Buffer.alloc(padding));
+  return Buffer.concat(parts);
+}
+const modelFile = path.join(modelsDir, "coder-test-1b.gguf");
+await writeFile(modelFile, gguf([
+  ["general.architecture", "qwen3"], ["general.name", "Coder Test 1B"],
+  ["qwen3.context_length", 32768], ["qwen3.embedding_length", 1024], ["qwen3.block_count", 8],
+  ["qwen3.attention.head_count", 16], ["qwen3.attention.head_count_kv", 4],
+  ["tokenizer.chat_template", "{% if tools %}<tool_call>{% endif %}{% if enable_thinking %}{% endif %}"],
+], ["token_embd.weight", "output.weight"]));
+
+// Isolated profile through XDG roots. HOME stays real so the vendor CLIs can
+// be probed read-only; the local runtime is pinned to the test double through
+// local_engine.llama_binary (it outranks ~/.local/lib/shadowcode) and
+// SHADOWCODE_LLAMA_SERVER. No onboarding record: this is a first run.
+await writeFile(path.join(configDirectory, "config.yaml"), JSON.stringify({
+  local_engine: { llama_binary: fakeServer },
+  ui: { notify: false },
 }));
-let modelError;
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// cursor-agent keeps its sign-in under $XDG_CONFIG_HOME/cursor. Link that one
+// directory (never copied or written by the test) so the app's own read-only
+// probe sees the real account, as it would outside the isolated profile.
+const realConfig = process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config");
+for (const dir of ["cursor"])
+  if (existsSync(path.join(realConfig, dir))) await symlink(path.join(realConfig, dir), path.join(profile, "config", dir));
+const nativeEnv = {
+  ...process.env,
+  XDG_CONFIG_HOME: path.join(profile, "config"),
+  XDG_DATA_HOME: path.join(profile, "data"),
+  XDG_STATE_HOME: path.join(profile, "state"),
+  XDG_CACHE_HOME: path.join(profile, "cache"),
+  TMPDIR: path.join(scratch, "tmp"),
+  SHADOWCODE_LLAMA_SERVER: fakeServer,
+  WEBKIT_DISABLE_DMABUF_RENDERER: "1",
+};
+delete nativeEnv.NO_CLEANUP;
+// Stay on the xvfb display: GTK would otherwise prefer a Wayland session the
+// test was started from and open the window on the user's desktop.
+delete nativeEnv.WAYLAND_DISPLAY;
+delete nativeEnv.WAYLAND_SOCKET;
+nativeEnv.GDK_BACKEND = "x11";
+const launches = () => readFile(path.join(runtimeDir, "launches.jsonl"), "utf8").then((t) => t.trim().split("\n").filter(Boolean).map(JSON.parse), () => []);
+const modelRequests = () => readFile(path.join(runtimeDir, "requests.jsonl"), "utf8").then((t) => t.trim().split("\n").filter(Boolean).map(JSON.parse), () => []);
+
+// Vendors on this machine (for rows the picker must show).
+const VENDOR_BINARIES = { codex: "codex", claude: "claude", cursor: "cursor-agent", antigravity: "agy", grok: "grok" };
+const installed = Object.entries(VENDOR_BINARIES)
+  .filter(([, bin]) => (process.env.PATH || "").split(":").some((dir) => dir && existsSync(path.join(dir, bin))))
+  .map(([vendor]) => vendor);
+const expectedVendors = Object.fromEntries((process.env.SHADOW_EXPECT_VENDORS || "").split(",").filter(Boolean).map((pair) => pair.split("=").map((s) => s.trim())));
+
+// ---------------------------------------------------------------- helpers
 async function until(label, fn, timeout = 15000) {
   const end = Date.now() + timeout;
   let last;
   while (Date.now() < end) {
-    if (modelError) throw modelError;
     try { const value = await fn(); if (value) return value; } catch (error) { last = error; }
-    await delay(80);
+    await delay(100);
   }
-  throw new Error(`${label} timed out${last ? `: ${last}` : ""}`);
+  throw new Error(`${label} timed out${last ? `: ${last.message || last}` : ""}`);
 }
 async function unusedPort() {
   const server = createServer();
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  const port = server.address().port;
-  await new Promise(resolve => server.close(resolve));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  await new Promise((resolve) => server.close(resolve));
   return port;
 }
 async function dead(pid) {
   try { return /\) [ZX] /.test(await readFile(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
 }
-let requests = 0;
-const requestedModels = [];
-let goalMode = false;
-let workflowMode = false;
-let workflowCalls = 0;
-let mcpMode = false, mcpCalls = 0, mcpHttpCalls = 0;
-let queueMode = false;
-const queueRequests = [], queueReplies = new Map();
-let backgroundToolMode = false, backgroundToolCalls = 0, modelBackgroundId;
-const modelBackgroundCommand = "sleep 60 & echo $! > model-background-child.pid; printf model-background-ready; wait";
-const milestoneCalls = new Map();
-const sockets = new Set();
-const model = createServer(async (req, res) => {
-  try {
-  let body = "";
-  for await (const chunk of req) body += chunk;
-  const payload = JSON.parse(body);
-  assert.ok(["native-fixture", "native-build"].includes(payload.model));
-  requestedModels.push(payload.model);
-  const index = requests++;
-  const tool = (name, args) => ({ id: `call-${index}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
-  if (backgroundToolMode) {
-    const call = backgroundToolCalls++;
-    let message;
-    if (backgroundToolMode === "start") {
-      assert.ok(payload.tools.some(item=>item.function.name==="background_start"));
-      if (call === 0) message = {role:"assistant",content:"Starting a managed project watcher.",tool_calls:[tool("background_start",{name:"model-watcher",command:modelBackgroundCommand})]};
-      else if (call === 1) {
-        const result = JSON.parse(payload.messages.filter(item=>item.role==="tool").at(-1).content);
-        assert.equal(result.success,true);
-        assert.equal(result.output.lifetime,"project");
-        modelBackgroundId=result.output.id;
-        await until("Model watcher child exists",async()=>Number((await readFile(path.join(project,"model-background-child.pid"),"utf8")).trim())>0);
-        message={role:"assistant",content:"Reading the watcher log.",tool_calls:[tool("background_output",{id:modelBackgroundId})]};
-      } else {
-        assert.equal(call,2);
-        const result = JSON.parse(payload.messages.filter(item=>item.role==="tool").at(-1).content);
-        assert.equal(result.success,true);
-        assert.ok(result.output.output.includes("model-background-ready"));
-        message={role:"assistant",content:"The managed watcher reports model-background-ready and remains running."};
-      }
-    } else if (call === 0) message={role:"assistant",content:"Stopping the recorded project watcher.",tool_calls:[tool("background_stop",{id:modelBackgroundId})]};
-    else {
-      assert.equal(call,1);
-      const result = JSON.parse(payload.messages.filter(item=>item.role==="tool").at(-1).content);
-      assert.equal(result.success,true);
-      assert.equal(result.output.status,"CANCELLED");
-      message={role:"assistant",content:"The managed watcher stopped and cleanup finished."};
-    }
-    res.writeHead(200,{"Content-Type":"application/json"});
-    res.end(JSON.stringify({choices:[{message,finish_reason:message.tool_calls?"tool_calls":"stop"}],usage:{prompt_tokens:30,completion_tokens:10,total_tokens:40}}));
-    return;
+/** Every live descendant of `pid` (walks /proc ppid links). */
+async function descendants(pid) {
+  const parents = new Map();
+  for (const name of await readdir("/proc")) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const stat = await readFile(`/proc/${name}/stat`, "utf8");
+      const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (rest[0] === "Z") continue;
+      parents.set(Number(name), Number(rest[1]));
+    } catch { /* exited */ }
   }
-  if (queueMode) {
-    const task = payload.messages.filter(message => message.role === "user").at(-1).content;
-    assert.ok(["Queue probe: first", "Queue probe: second"].includes(task), "Cancelled queued tasks must not contact the model");
-    queueRequests.push(task);
-    if (task.endsWith("second")) {
-      assert.equal(payload.model,"native-build");
-      assert.ok(payload.tools.every(item => !["exec","write_file"].includes(item.function.name)), "Queued Review preserves read-only tools");
-      assert.ok(payload.messages.some(message => message.role === "assistant" && message.content?.includes("First task stays visible")), "The follow-up receives the completed predecessor's conversation");
-    }
-    res.writeHead(200,{"Content-Type":"text/event-stream"});
-    await delay(120);
-    res.write(`data: ${JSON.stringify({choices:[{delta:{content:task.endsWith("first") ? "First task stays visible while follow-ups wait." : "Second queued task completed."}}]})}\n\n`);
-    queueReplies.set(task,()=>res.end(`data: ${JSON.stringify({choices:[{delta:{},finish_reason:"stop"}],usage:{prompt_tokens:30,completion_tokens:10,total_tokens:40}})}\n\ndata: [DONE]\n\n`));
-    return;
-  }
-  if (mcpMode) {
-    const http = mcpMode === "http";
-    const call = http ? mcpHttpCalls++ : mcpCalls++;
-    const server = http ? "config:window-http" : "config:window-mcp";
-    const expected = http ? "native-http-ok" : "native-mcp-ok";
-    assert.ok(payload.tools.some(t => t.function.name === "mcp_call"));
-    if (call === 2) {
-      const result = JSON.parse(payload.messages.filter(m => m.role === "tool").at(-1).content);
-      assert.equal(result.success, true);
-      assert.equal(result.output.result.structuredContent.arguments.message, expected);
-      if (http) assert.equal(result.output.result.structuredContent.headers.authorization, "Bearer [redacted]");
-      else assert.equal(result.output.result.structuredContent.environment, "[redacted]");
-      assert.equal(JSON.stringify(payload).includes(http ? nativeEnv.SHADOW_WINDOW_HTTP_SECRET : nativeEnv.SHADOW_WINDOW_MCP_SECRET), false);
-    }
-    const message = call === 0 ? {role:"assistant", content:"Inspecting the enabled MCP tool.", tool_calls:[tool("mcp_tools",{server,tool:"echo"})]}
-      : call === 1 ? {role:"assistant", content:"Requesting the external tool call.", tool_calls:[tool("mcp_call",{server,tool:"echo",arguments:{message:expected,...(http?{action:"sse"}:{})}})]}
-      : {role:"assistant",content:`External fixture returned ${expected}.`};
-    res.writeHead(200,{"Content-Type":"application/json"});
-    res.end(JSON.stringify({choices:[{message,finish_reason:call<2?"tool_calls":"stop"}],usage:{prompt_tokens:30,completion_tokens:10,total_tokens:40}}));
-    return;
-  }
-  if (workflowMode) {
-    const system = payload.messages.find(m => m.role === "system").content;
-    assert.ok(system.includes("WINDOW_SKILL: inspect README.md"));
-    assert.ok(payload.tools.every(t => !["write_file", "exec"].includes(t.function.name)), "Selected review skill must have read-only tools");
-    const first = workflowCalls++ === 0;
-    const message = first ? {role: "assistant", content: "Inspecting selected skill context.", tool_calls: [tool("read_file", {path: "README.md"})]}
-      : {role: "assistant", content: "Selected skill reviewed README.md."};
-    res.writeHead(200, {"Content-Type": "application/json"});
-    res.end(JSON.stringify({choices: [{message, finish_reason: first ? "tool_calls" : "stop"}], usage: {prompt_tokens: 30, completion_tokens: 10, total_tokens: 40}}));
-    return;
-  }
-  if (goalMode) {
-    const task = payload.messages.filter(m => m.role === "user").at(-1).content;
-    const milestone = task.split("\n")[0];
-    const count = milestoneCalls.get(milestone) || 0;
-    milestoneCalls.set(milestone, count + 1);
-    const call = milestone.startsWith("Inspect") ? tool("read_file", { path: "README.md" })
-      : milestone.startsWith("Implement") ? tool("write_file", { path: "goal.txt", content: "goal-native-ok\n", expected_hash: "missing" })
-      : tool("exec", { command: "test \"$(cat goal.txt)\" = goal-native-ok" });
-    const message = count === 0 ? { role: "assistant", content: milestone, tool_calls: [call] }
-      : { role: "assistant", content: `Milestone complete: ${milestone}.` };
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ choices: [{ message, finish_reason: count === 0 ? "tool_calls" : "stop" }], usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 } }));
-    return;
-  }
-  if (index >= 3) { res.writeHead(200, { "Content-Type": "application/json" }); res.flushHeaders(); return; }
-  const message = index === 0
-    ? { role: "assistant", content: "Writing the file.", tool_calls: [tool("write_file", { path: "hello.txt", content: "native-window-ok\n", expected_hash: "missing" })] }
-    : index === 1
-      ? { role: "assistant", content: "Checking the result.", tool_calls: [tool("exec", { command: "test \"$(cat hello.txt)\" = native-window-ok && printf native-window-verified" })] }
-      : { role: "assistant", content: "Created hello.txt and verified its contents." };
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ choices: [{ message, finish_reason: index < 2 ? "tool_calls" : "stop" }], usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 } }));
-  } catch (error) {
-    modelError = error;
-    res.writeHead(500, {"Content-Type": "application/json"});
-    res.end(JSON.stringify({error: String(error)}));
-  }
-});
-model.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
-await new Promise(resolve => model.listen(0, "127.0.0.1", resolve));
-await writeFile(path.join(configDirectory, "config.yaml"), JSON.stringify({
-  model: { default: "native-fixture", name: "native-fixture", provider: "local", endpoint: `http://127.0.0.1:${model.address().port}/v1`, context_limit: 16384 },
-  onboarding: { completed: true, workspace: project }, trusted_workspaces: [project], ui: { theme: "light", notify: false },
-}));
+  const out = [];
+  const walk = (p) => { for (const [child, parent] of parents) if (parent === p) { out.push(child); walk(child); } };
+  walk(pid);
+  return out;
+}
+async function commandLine(pid) {
+  try { return (await readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").join(" ").trim(); } catch { return "(exited)"; }
+}
 
 const port = await unusedPort(), nativePort = await unusedPort();
-const output = createWriteStream(path.join(artifacts, "webdriver.log"));
-const args = ["--port", String(port), "--native-port", String(nativePort)];
-if (process.env.SHADOW_WEBKIT_DRIVER) args.push("--native-driver", process.env.SHADOW_WEBKIT_DRIVER);
-const driver = spawn(process.env.SHADOW_TAURI_DRIVER || "tauri-driver", args, {
-  cwd: project, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...nativeEnv, WEBKIT_DISABLE_DMABUF_RENDERER: "1" },
+const driverLog = createWriteStream(path.join(artifacts, "webdriver.log"));
+const driverArgs = ["--port", String(port), "--native-port", String(nativePort)];
+if (process.env.SHADOW_WEBKIT_DRIVER) driverArgs.push("--native-driver", process.env.SHADOW_WEBKIT_DRIVER);
+const driver = spawn(process.env.SHADOW_TAURI_DRIVER || "tauri-driver", driverArgs, {
+  cwd: project, detached: true, stdio: ["ignore", "pipe", "pipe"], env: nativeEnv,
 });
-driver.stdout.pipe(output); driver.stderr.pipe(output);
+driver.stdout.pipe(driverLog); driver.stderr.pipe(driverLog);
 let spawnError;
-driver.on("error", error => { spawnError = error; });
+driver.on("error", (error) => { spawnError = error; });
 let session;
+const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 async function wd(method, endpoint, body) {
-  const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(30000) });
+  const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+    method, headers: { "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(60000),
+  });
   const data = await response.json();
   if (!response.ok || data.value?.error) throw new Error(JSON.stringify(data.value));
   return data.value;
@@ -231,762 +195,431 @@ async function wd(method, endpoint, body) {
 const execute = (script, args = []) => wd("POST", `/session/${session}/execute/sync`, { script, args });
 async function native(command, args = {}) {
   const response = await wd("POST", `/session/${session}/execute/async`, {
-    script: "const done=arguments[arguments.length-1]; window.__TAURI_INTERNALS__.invoke(arguments[0],arguments[1]).then(value=>done({value}),error=>done({error:String(error)}));", args: [command, args],
+    script: "const done=arguments[arguments.length-1]; window.__TAURI_INTERNALS__.invoke(arguments[0],arguments[1]).then(value=>done({value}),error=>done({error:String(error)}));",
+    args: [command, args],
   });
   if (response.error) throw new Error(response.error);
   return response.value;
 }
 const api = (method, endpoint, body = null) => native("api", { request: { method, path: endpoint, body } });
+const text = () => execute("return document.body.innerText");
+const visible = (selector) => execute("const e=document.querySelector(arguments[0]);return !!e && e.getClientRects().length>0", [selector]);
 async function element(selector) {
-  return (await wd("POST", `/session/${session}/element`, { using: "css selector", value: selector }))["element-6066-11e4-a52e-4f735466cecf"];
+  return (await wd("POST", `/session/${session}/element`, { using: "css selector", value: selector }))[ELEMENT];
 }
 async function click(selector) {
+  await until(`Visible: ${selector}`, () => visible(selector));
   await wd("POST", `/session/${session}/element/${await element(selector)}/click`, {});
 }
-async function clickButton(text) {
-  await until(`Button ready: ${text}`, () => execute("return [...document.querySelectorAll('button')].some(button => button.textContent.replace(/\\s+/g, ' ').trim() === arguments[0] && !button.disabled && button.getClientRects().length > 0)", [text]));
-  const found = await wd("POST", `/session/${session}/element`, { using: "xpath", value: `//button[normalize-space(.)='${text}']` });
-  await wd("POST", `/session/${session}/element/${found["element-6066-11e4-a52e-4f735466cecf"]}/click`, {});
+/** Click the visible, enabled button whose text (or aria-label) is `label`. */
+async function clickButton(label, scope = "") {
+  const xpath = `${scope}//button[(normalize-space(.)='${label}' or @aria-label='${label}') and not(@disabled)]`;
+  await until(`Button ready: ${label}`, () => execute(
+    "const r=document.evaluate(arguments[0],document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);for(let i=0;i<r.snapshotLength;i++){if(r.snapshotItem(i).getClientRects().length)return true}return false", [xpath]));
+  const found = await wd("POST", `/session/${session}/elements`, { using: "xpath", value: xpath });
+  for (const item of found) {
+    const shown = await wd("GET", `/session/${session}/element/${item[ELEMENT]}/displayed`).catch(() => false);
+    if (shown) { await wd("POST", `/session/${session}/element/${item[ELEMENT]}/click`, {}); return; }
+  }
+  throw new Error(`No displayed button ${label}`);
 }
-async function type(selector, text) {
-  await wd("POST", `/session/${session}/element/${await element(selector)}/value`, { text: text.replaceAll("\n", "\uE006") });
+async function type(selector, value) {
+  await wd("POST", `/session/${session}/element/${await element(selector)}/value`, { text: value });
 }
-async function fill(selector, text) {
+async function fill(selector, value) {
   await click(selector);
-  // WebKit's element-clear may skip the input event React needs. Clear through
-  // the browser's native value setter and emit input, then type with WebDriver.
-  await execute("const el=document.querySelector(arguments[0]);const prototype=el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(prototype,'value').set.call(el,'');el.dispatchEvent(new Event('input',{bubbles:true}));", [selector]);
-  await type(selector, text);
-  assert.equal(await execute("return document.querySelector(arguments[0]).value", [selector]), text);
+  // WebKit's element-clear may skip the input event React needs.
+  await execute("const el=document.querySelector(arguments[0]);const p=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(el,'');el.dispatchEvent(new Event('input',{bubbles:true}));", [selector]);
+  if (value) await type(selector, value);
+  await until(`Filled ${selector}`, async () => (await execute("return document.querySelector(arguments[0]).value", [selector])) === value);
 }
-async function openSettings() {
-  if (await execute("return !!document.querySelector('button[aria-label=\"Show sidebar\"]')")) await click('button[aria-label="Show sidebar"]');
-  await until("Sidebar Settings available",()=>execute("return [...document.querySelectorAll('.sidebar button')].some(e=>e.querySelector('span')?.textContent==='Settings')"));
-  await execute("[...document.querySelectorAll('.sidebar button')].find(e=>e.querySelector('span')?.textContent==='Settings').click()");
+async function setWindow({ width, height }) {
+  await wd("POST", `/session/${session}/window/rect`, { width, height });
+  await until(`Window ${width}px (inner ${await execute("return window.innerWidth+'x'+window.innerHeight")})`, async () => Math.abs((await execute("return window.innerWidth")) - width) < 40, 8000);
+  await delay(300);
 }
+async function setTheme(theme) {
+  await execute("document.documentElement.dataset.theme=arguments[0]", [theme]);
+  await delay(250);
+}
+async function settle() {
+  // Finite transitions only: spinners loop forever.
+  await execute("return Promise.race([Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))),new Promise(r=>setTimeout(r,2000))]).then(()=>true)").catch(() => undefined);
+  await delay(150);
+}
+const shots = [];
 async function screenshot(name) {
-  await writeFile(path.join(artifacts, `${name}.png`), Buffer.from(await wd("GET", `/session/${session}/screenshot`), "base64"));
+  await settle();
+  const file = path.join(artifacts, `${name}.png`);
+  await writeFile(file, Buffer.from(await wd("GET", `/session/${session}/screenshot`), "base64"));
+  shots.push(file);
 }
+const axeFindings = {};
+/** axe (WCAG 2 A/AA): no serious or critical violations. */
 async function accessibility(name) {
+  await settle();
   const report = await wd("POST", `/session/${session}/execute/async`, {
-    script: `${axeSource}\nconst done=arguments[arguments.length-1];getComputedStyle(document.body).color;Promise.all(document.getAnimations().filter(a=>"transitionProperty" in a).map(a=>a.finished.catch(()=>{}))).then(()=>window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}})).then(result=>done({violations:result.violations}),error=>done({error:String(error)}));`, args: [],
+    script: `${axeSource}\nconst done=arguments[arguments.length-1];window.axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}).then(r=>done({violations:r.violations.map(v=>({id:v.id,impact:v.impact,help:v.help,nodes:v.nodes.map(n=>({target:n.target,summary:n.failureSummary}))}))}),e=>done({error:String(e)}));`,
+    args: [],
   });
   await writeFile(path.join(artifacts, `accessibility-${name}.json`), JSON.stringify(report, null, 2));
-  assert.equal(report.error, undefined);
-  assert.deepEqual(report.violations, [], `${name} native accessibility`);
+  assert.equal(report.error, undefined, `${name}: axe failed`);
+  axeFindings[name] = report.violations.map((v) => `${v.impact}:${v.id}`);
+  const severe = report.violations.filter((v) => ["serious", "critical"].includes(v.impact));
+  assert.deepEqual(severe.map((v) => `${v.id}: ${v.help} ${JSON.stringify(v.nodes.slice(0, 3))}`), [], `${name}: serious/critical accessibility violations`);
 }
+function horizontalOverflow() {
+  return execute("return document.documentElement.scrollWidth>window.innerWidth+1 || document.body.scrollWidth>window.innerWidth+1");
+}
+const composer = 'textarea[aria-label="Message ShadowCode"]';
+async function openPicker() {
+  if (!(await visible(".unified-picker-menu"))) await click(".unified-picker-trigger");
+  await until("Picker open", () => visible(".unified-picker-menu"));
+}
+/** Visible picker rows: [{name, meta, group, blocked}]. */
+const pickerRows = () => execute(`return [...document.querySelectorAll('.unified-picker-group')].flatMap(g=>{const group=g.querySelector('.unified-picker-heading').textContent;return [...g.querySelectorAll('.unified-picker-row')].map(r=>({group,id:r.id,name:r.querySelector('strong').textContent,meta:r.querySelector('small').textContent,blocked:r.classList.contains('is-blocked'),selected:r.getAttribute('aria-selected')==='true'}))})`);
+async function pickRow(name) {
+  await openPicker();
+  await until(`Picker row ${name}`, () => execute("const r=[...document.querySelectorAll('.unified-picker-row')].find(r=>r.querySelector('strong').textContent===arguments[0]);if(!r)return false;r.scrollIntoView({block:'nearest'});return true", [name]), 15000);
+  const id = await execute("return [...document.querySelectorAll('.unified-picker-row')].find(r=>r.querySelector('strong').textContent===arguments[0]).id", [name]);
+  await click(`#${id}`);
+  await until(`Picker shows ${name}`, async () => (await execute("return document.querySelector('.unified-picker-trigger').getAttribute('aria-label')")) === `Model for this task: ${name}`);
+}
+async function openSettings(section) {
+  if (await visible('button[aria-label="Show sidebar"]')) await click('button[aria-label="Show sidebar"]');
+  const settingsButton = "//aside//button[.//span[normalize-space(.)='Settings']]";
+  await until("Sidebar Settings", () => execute("return !!document.evaluate(arguments[0],document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue", [settingsButton]));
+  const found = await wd("POST", `/session/${session}/element`, { using: "xpath", value: settingsButton });
+  await wd("POST", `/session/${session}/element/${found[ELEMENT]}/click`, {});
+  await until("Settings open", () => visible(".settings-nav"));
+  if (section) await clickButton(section, "//nav[@aria-label='Settings sections']");
+}
+async function closeSettings() {
+  await clickButton("Close", "//div[contains(@class,'settings-close')]");
+  await until("Settings closed", async () => !(await visible(".settings-nav")));
+}
+async function send(message) {
+  await fill(composer, message);
+  await click('button[aria-label="Send task"]');
+}
+async function approve(match) {
+  await until(`Approval for ${match}`, () => execute("return [...document.querySelectorAll('.approval')].some(a=>a.textContent.includes(arguments[0]))", [match]), 30000);
+  await execute("[...document.querySelectorAll('.approval')].find(a=>a.textContent.includes(arguments[0])).scrollIntoView({block:'center'})", [match]);
+  await screenshot(`approval-${match.replace(/[^a-z0-9]+/gi, "-")}`);
+  const id = await execute("return [...document.querySelectorAll('.approval')].find(a=>a.textContent.includes(arguments[0])).dataset.approvalId", [match]);
+  await clickButton("Allow", `//div[@data-approval-id='${id}']`);
+  await until(`Approval ${match} resolved`, async () => !(await execute("return !!document.querySelector(`[data-approval-id='${arguments[0]}']`)", [id])), 15000);
+}
+/** This conversation's jobs, newest first. */
+async function jobsFor(sessionId) {
+  const jobs = (await api("GET", "/api/jobs")).jobs.filter((j) => j.session_id === sessionId);
+  return jobs.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+}
+
+let appPid;
 try {
   await until("WebDriver startup", async () => { if (spawnError) throw spawnError; return wd("GET", "/status"); });
-  // First launch has no explicit workspace and uses a relative isolated profile.
-  // This catches AppImage launchers selecting their extraction directory.
-  const initialProfileArgs = defaultProfile ? [] : ["--profile", path.relative(project, profile)];
-  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: binary, args: [...binaryArgs, ...initialProfileArgs] } } } });
+  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: { "tauri:options": { application: binary, args: binaryArgs } } } });
   session = created.sessionId;
-  await wd("POST", `/session/${session}/timeouts`, { script: 20000, implicit: 0, pageLoad: 30000 });
-  await until("Native workspace", () => execute("return !!document.querySelector('textarea[aria-label=\"Message ShadowCode\"]') && !document.querySelector('textarea[aria-label=\"Message ShadowCode\"]').disabled;"), 25000);
-  const version = await api("GET", "/api/version");
-  assert.equal((await api("GET", "/api/workspace/status")).workspace, project, "First desktop launch selects the caller project");
-  assert.equal(version.runtime, "rust"); assert.equal(version.transport, "native");
-  const expectedScript = (await readFile(path.join(root,"ui/dist/index.html"),"utf8")).match(/src="([^"]+\.js)"/)[1];
-  assert.equal(await execute("return new URL(document.querySelector('script[type=module]').src).pathname"), expectedScript, "Desktop binary must embed the current compiled interface");
-  assert.equal(path.basename(await readlink(`/proc/${version.pid}/exe`)), "shadowcode");
-  assert.match(await execute("return location.href"), /^(tauri:\/\/localhost|https?:\/\/tauri.localhost)/);
-  assert.equal((await readFile(`/proc/${version.pid}/maps`, "utf8")).includes("libpython"), false);
-  if (defaultProfile) {
-    // Run under a private DBus session and disposable XDG roots. Repeated
-    // activation must reuse this real window and preserve its extracted files.
-    await Promise.all(Array.from({length:3},()=>promisify(execFile)(binary,[...binaryArgs,"--workspace",project],{env:nativeEnv,timeout:20000,maxBuffer:2_000_000})));
-    assert.equal(path.basename(await readlink(`/proc/${version.pid}/exe`)),"shadowcode","Activation must not unlink the running executable");
-    assert.equal((await api("GET","/api/version")).pid,version.pid);
-    await wd("POST",`/session/${session}/refresh`,{});
-    await until("Workspace after repeated activation",()=>execute("return !!document.querySelector('textarea[aria-label=\"Message ShadowCode\"]') && !document.querySelector('textarea[aria-label=\"Message ShadowCode\"]').disabled;"),25000);
-    if (binaryArgs.includes("--appimage-extract-and-run")) assert.equal((await readdir(nativeEnv.TMPDIR)).filter(name=>name.startsWith("appimage_extracted_")).length,1,"Only the live window's extraction remains");
-  }
-  await screenshot("workspace-light");
-  await accessibility("light");
-  await execute("document.documentElement.dataset.theme='dark'"); await screenshot("workspace-dark");
-  await accessibility("dark");
-  await execute("document.documentElement.dataset.theme='light'");
-  await openSettings();
-  await until("Context control",()=>execute("return !!document.querySelector('#model-context')"));
-  assert.ok(Number(await execute("return document.querySelector('#model-context').value"))>=1024);
-  await screenshot("model-settings"); await accessibility("model-settings");
-  await clickButton("Advanced");
-  await until("Advanced workspaces loaded",()=>execute("return !!document.querySelector('textarea[aria-label=\"Work items\"]')"));
-  await screenshot("advanced-light"); await accessibility("advanced-light");
-  await execute("document.documentElement.dataset.theme='dark'");await screenshot("advanced-dark");await accessibility("advanced-dark");
-  await execute("document.documentElement.dataset.theme='light'");
-  await clickButton("Close");
-  const registered = await api("POST", "/api/models/register", { provider: "local", endpoint: `http://127.0.0.1:${model.address().port}/v1`, name: "native-build" });
-  await click('button[aria-label="Terminal"]');
-  await clickButton("Health");
-  await until("Native routing controls", () => execute("return !!document.querySelector('#routing-coder')"));
-  await execute("const select=document.querySelector('#routing-coder');select.value=arguments[0];select.dispatchEvent(new Event('change',{bubbles:true}));", [registered.model.default]);
-  await until("Build route saved", async () => (await api("GET", "/api/routing")).config.coder === registered.model.default);
-  await until("Router ready", () => execute("return !document.querySelector('#routing-coder').disabled"));
-  await clickButton("Enable routing");
-  await until("Routing enabled", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable routing' && !e.disabled)"));
-  await screenshot("routing");
-  await accessibility("routing");
-  await click('button.drawer-close');
-  assert.match(await execute("return document.querySelector('select[aria-label=\"Model for this task\"]').selectedOptions[0].textContent"), /Automatic/);
-  await click('button[aria-label="Terminal"]');
-  await clickButton("Background");
-  assert.equal(await execute("return document.querySelector('#background-name').value"), "dev");
-  await type('#background-command', "printf 'native-background-ready\\n'; trap 'printf graceful-stop; exit 0' TERM; while :; do sleep 1; done");
-  await clickButton("Start process");
-  const background = await until("Background process output", async () => {
-    const task = (await api("GET", "/api/background")).tasks[0];
-    return task?.status === "RUNNING" && task.output.includes("native-background-ready") && task;
-  });
-  await until("Background output in drawer", () => execute("return !!document.querySelector('.background-output pre')?.textContent.includes('native-background-ready')"));
-  await clickButton("Read retained output");
-  await until("Retained background output", () => execute("return !!document.querySelector('.background-output summary')?.textContent.includes('Retained output snapshot')"));
-  await clickButton("Return to live output");
-  await screenshot("background");
-  await accessibility("background");
-  await click('button.drawer-close');
-  await openSettings();
-  await clickButton("Worktrees");
-  await until("Worktree creation ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Create worktree' && !b.disabled)"));
-  await clickButton("Create worktree");
-  const worktree=await until("Managed worktree created",async()=>(await api("GET","/api/worktrees")).worktrees.find(w=>w.state==="ready"));
-  assert.equal(await readFile(path.join(worktree.path,"README.md"),"utf8"),"# Native desktop test\nA disposable workspace.\n");
-  await until("Worktree open button",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Open worktree'&&!b.disabled)"));await clickButton("Open worktree");
-  await until("Explicit worktree trust",()=>execute("return [...document.querySelectorAll('h2')].some(e=>e.textContent==='Trust this folder?')"));await clickButton("Cancel");
-  await openSettings();await clickButton("Worktrees");await until("Worktree inspect ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Inspect removal'&&!b.disabled)"));await clickButton("Inspect removal");
-  await until("Worktree review focused",()=>execute("return document.activeElement?.classList.contains('worktree-review')"));
-  await screenshot("worktrees");await accessibility("worktrees");
-  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktrees-dark");await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktrees-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
-  await clickButton("Remove clean worktree");await until("Managed worktree removed",async()=>!(await api("GET","/api/worktrees")).worktrees.length);
-  assert.equal((await promisify(execFile)("git",["rev-parse",worktree.branch],{cwd:project})).stdout.trim(),worktree.base_commit);
-  await until("Recovery fixture creation ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Create worktree'&&!b.disabled)"));
-  await clickButton("Create worktree");
-  const missingWorktree=await until("Recovery fixture created",async()=>(await api("GET","/api/worktrees")).worktrees.find(w=>w.state==="ready"));
-  const originalRecord=path.join(dataDirectory,"managed-worktrees/records",`${missingWorktree.id}.json`);
-  const originalRecordBytes=await readFile(originalRecord,"utf8");
-  await rename(missingWorktree.path,path.join(scratch,"saved-recovery-checkout"));
-  await until("Recovery review ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Review missing checkout'&&!b.disabled)"));
-  await clickButton("Review missing checkout");
-  await until("Recovery review focused",()=>execute("return document.activeElement?.getAttribute('aria-label')==='Review worktree recovery'"));
-  assert.ok(await execute("return document.querySelector('[aria-label=\"Review worktree recovery\"]').textContent.includes('Missing uncommitted files are not reconstructed')"));
-  await screenshot("worktree-recovery");await accessibility("worktree-recovery");
-  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktree-recovery-dark");await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktree-recovery-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
-  await clickButton("Restore in new worktree");
-  const restoredWorktree=await until("Committed work restored",async()=>(await api("GET","/api/worktrees")).worktrees.find(w=>w.id!==missingWorktree.id&&w.state==="ready"));
-  assert.equal(await readFile(path.join(restoredWorktree.path,"README.md"),"utf8"),"# Native desktop test\nA disposable workspace.\n");
-  assert.equal(await readFile(originalRecord,"utf8"),originalRecordBytes);
-  assert.equal((await promisify(execFile)("git",["rev-parse",missingWorktree.branch],{cwd:project})).stdout.trim(),missingWorktree.base_commit);
-  await clickButton("Plugins");
-  await until("Native plugin catalog",()=>execute("return !!document.querySelector('.plugin-settings')"));
-  await clickButton("Review python-expert");
-  await until("Builtin plugin preview",()=>execute("return !!document.querySelector('.plugin-preview')?.textContent.includes('ruff-format')"));
-  await clickButton("Install python-expert");
-  await until("Builtin plugin installed",async()=>(await api("GET","/api/plugins")).installed.some(p=>p.name==="python-expert"));
-  assert.ok((await api("GET","/api/hooks")).hooks.filter(h=>h.name.startsWith("python-expert--")).every(h=>!h.enabled));
-  await clickButton("Remove python-expert");
-  await until("Builtin plugin removed",async()=>!(await api("GET","/api/plugins")).installed.length);
-  await click('.plugin-import summary');
-  const windowBundle={format:"shadowcode-plugin-v1",name:"window-bundle",version:"1.0.0",description:"Native window integration fixture",skills:{audit:{description:"Review the requested file",mode:"review",content:"WINDOW_SKILL: inspect $ARGUMENTS"}},hooks:[{name:"finished",events:["on_complete"],command:"printf plugin-window-ok"}]};
-  await fill('.plugin-import textarea',JSON.stringify(windowBundle));
-  await clickButton("Review imported bundle");
-  await until("Imported plugin preview",()=>execute("return !!document.querySelector('.plugin-preview')?.textContent.includes('window-bundle')"));
-  await until("Plugin review receives focus",()=>execute("return document.activeElement?.classList.contains('plugin-preview')"));
-  await click('.plugin-preview details summary');
-  await screenshot("plugins"); await accessibility("plugins");
-  await execute("document.documentElement.dataset.theme='dark'"); await accessibility("plugins-dark");
-  await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST", `/session/${session}/window/rect`, { width: 620, height: 850 });
-  await accessibility("plugins-compact");
-  assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST", `/session/${session}/window/rect`, { width: 1380, height: 920 });
-  await clickButton("Install window-bundle");
-  await until("Custom plugin installed",async()=>(await api("GET","/api/plugins")).installed.some(p=>p.name==="window-bundle"));
-  await clickButton("Review plugin hooks");
-  await until("Plugin hook refreshed",()=>execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Enable window-bundle--finished')"));
-  await clickButton("Enable window-bundle--finished");
-  await until("Plugin hook enabled",async()=>(await api("GET","/api/hooks")).hooks.find(h=>h.name==="window-bundle--finished")?.enabled);
-  await clickButton("Disable window-bundle--finished");
-  await until("Plugin hook disabled",async()=>!(await api("GET","/api/hooks")).hooks.find(h=>h.name==="window-bundle--finished")?.enabled);
-  await clickButton("Hooks");
-  await until("Hook definition in Settings", () => execute("return !!document.querySelector('.hook-command')?.textContent.includes('native-hook-check-passed')"));
-  await clickButton("Refresh hooks");
-  await until("Hook refresh completed", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Enable verify-result' && !e.disabled)"));
-  await clickButton("Enable verify-result");
-  await until("Reviewed hook enabled", async () => (await api("GET", "/api/hooks")).hooks[0].enabled);
-  await screenshot("hooks");
-  await accessibility("hooks");
-  await clickButton("Close");
-  await type('textarea[aria-label="Message ShadowCode"]', "Create hello.txt containing native-window-ok and verify its contents with the terminal.");
-  await click('button[aria-label="Send task"]');
-  await until("Command approval", () => execute("return !!document.querySelector('.approval button.primary')"));
-  await screenshot("command-approval");
-  await click(".approval button.primary");
-  await until("Verified task", async () => {
-    const { jobs } = await api("GET", "/api/jobs");
-    assert.notEqual(jobs[0]?.status, "failed", jobs[0]?.summary);
-    return jobs[0]?.status === "completed";
-  });
-  assert.equal(await readFile(path.join(project, "hello.txt"), "utf8"), "native-window-ok\n");
-  assert.equal(await readFile(path.join(project, "hook-result.txt"), "utf8"), "native-hook-ok");
-  assert.deepEqual(requestedModels, ["native-build", "native-build", "native-build"]);
-  await until("Selected model visible", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('native-build · local · coder'))"));
-  await until("Completion in transcript", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Created hello.txt and verified')) && !document.querySelector('button[aria-label=\"Stop task\"]');"));
-  assert.equal(await execute("return document.querySelectorAll('.msg-user').length"), 1);
-  assert.equal(await execute("return [...document.querySelectorAll('.msg-agent')].filter(e=>e.textContent.includes('Created hello.txt and verified')).length"), 1);
-  await screenshot("task-complete");
-  const forkSource=await execute("return localStorage.getItem('shadow:selected')");
-  if(await execute("return !!document.querySelector('button[aria-label=\"Show sidebar\"]')")) await click('button[aria-label="Show sidebar"]');
-  await until("Response fork action",()=>execute("return !!document.querySelector('.fork-action:not(:disabled)')"));
-  await click('.fork-action:not(:disabled)');
-  await until("Fork selected",()=>execute("const el=document.querySelector('.task-link[aria-current=\"page\"]');return el && el.dataset.sessionId!==arguments[0] && !document.querySelector('.loading-task')",[forkSource]));
-  await screenshot("response-fork");await accessibility("response-fork");
-  await click(`button.task-link[data-session-id="${forkSource}"]`);
-  await until("Original conversation restored",()=>execute("return document.querySelector('.task-link[aria-current=\"page\"]')?.dataset.sessionId===arguments[0] && !document.querySelector('.loading-task')",[forkSource]));
+  await wd("POST", `/session/${session}/timeouts`, { script: 60000, implicit: 0, pageLoad: 30000 });
+  await setWindow(WIDE);
 
-  await wd("POST", `/session/${session}/refresh`, {});
-  await until("Persisted conversation", () => execute("return document.querySelectorAll('.msg-user').length===1 && [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Created hello.txt and verified'));"));
-  assert.equal(await execute("return [...document.querySelectorAll('.msg-note')].filter(e=>e.textContent.includes('native-build')).length"), 1);
-  await until("One persisted hook result", () => execute("return [...document.querySelectorAll('.op-card')].filter(e=>e.textContent.includes('Hook · verify-result')).length===1"));
-  await openSettings();
-  await clickButton("Hooks");
-  await until("Hook disable control", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable verify-result')"));
-  await clickButton("Disable verify-result");
-  await until("Hook disabled", async () => !(await api("GET", "/api/hooks")).hooks[0].enabled);
-  await clickButton("MCP");
-  await until("Native MCP Settings", () => execute("return !!document.querySelector('.mcp-settings form')"));
-  await type('.mcp-settings input', "window-mcp");
-  await type('.mcp-settings textarea', JSON.stringify(["node", path.join(root,"native/core/tests/fixtures/mcp-server.mjs"),"normal"]));
-  await fill('.mcp-settings textarea[rows="2"]', JSON.stringify({MCP_PID_FILE:"SHADOW_WINDOW_MCP_PID",MCP_REQUEST_FILE:"SHADOW_WINDOW_MCP_REQUESTS",MCP_LITERAL:"SHADOW_WINDOW_MCP_SECRET"}));
-  await clickButton("Register MCP server");
-  await until("MCP registration in Settings", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Enable window-mcp' && !e.disabled)"));
-  assert.equal(await readFile(nativeEnv.SHADOW_WINDOW_MCP_PID).then(()=>true,()=>false),false);
-  await clickButton("Enable window-mcp");
-  await until("MCP activated", async () => (await api("GET","/api/mcp/servers")).servers[0].enabled);
-  await screenshot("mcp");
-  await accessibility("mcp");
-  await clickButton("Close");
-  mcpMode = true;
-  await fill('textarea[aria-label="Message ShadowCode"]', "Call the enabled fixture tool with the message native-mcp-ok.");
-  await click('button[aria-label="Send task"]');
-  await until("External tool approval", () => execute("return !!document.querySelector('.approval')?.textContent.includes('window-mcp')"));
-  assert.match(await execute("return document.querySelector('.approval .code').textContent"), /MCP config:window-mcp \/ echo[\s\S]*"message": "native-mcp-ok"/);
-  assert.ok((await readFile(nativeEnv.SHADOW_WINDOW_MCP_REQUESTS,"utf8")).split("\n").filter(Boolean).map(line=>JSON.parse(line)).every(r=>r.method!=="tools/call"));
-  await click(".approval button.primary");
-  await until("External tool completed", () => execute("return document.querySelector('.msg-agent:last-of-type')?.textContent.includes('External fixture returned native-mcp-ok.') || [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('External fixture returned native-mcp-ok.'))"));
-  await until("External task finished", async () => !(await api("GET","/api/jobs")).jobs.some(j=>j.status==="running" || j.status==="queued"));
-  const mcpPids = JSON.parse(await readFile(nativeEnv.SHADOW_WINDOW_MCP_PID,"utf8"));
-  for (const pid of mcpPids) {
-    await until("MCP process cleanup", async () => { try { return /\) [ZX] /.test(await readFile(`/proc/${pid}/stat`,"utf8")); } catch (error) { if(error.code!=="ENOENT") throw error; return true; } });
-  }
-  assert.equal(mcpCalls,3);
-  mcpMode = false;
-  await openSettings();
-  await clickButton("MCP");
-  await until("MCP disable control", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Disable window-mcp' && !e.disabled)"));
-  await clickButton("Disable window-mcp");
-  await until("MCP disabled", async () => !(await api("GET","/api/mcp/servers")).servers[0].enabled);
-  await until("MCP removal ready", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Remove window-mcp' && !e.disabled)"));
-  await clickButton("Remove window-mcp");
-  await until("MCP registration removed", async () => !(await api("GET","/api/mcp/servers")).servers.length);
-  // Exercise HTTP registration and the same exact-argument approval in WebKit.
-  httpPeer = spawn(process.execPath,[path.join(root,"native/core/tests/fixtures/mcp-http.mjs"),"auth",httpRoot],{stdio:["ignore","ignore","pipe"]});
-  httpPeer.stderr.pipe(output, {end:false});
-  let httpUrl;
-  await until("HTTP peer ready", async()=> { httpUrl=JSON.parse(await readFile(path.join(httpRoot,"ready.json"),"utf8")).url; return httpUrl; });
-  const httpRequests = async()=> (await readFile(path.join(httpRoot,"requests.jsonl"),"utf8").catch(e=>{if(e.code!=="ENOENT")throw e;return "";})).split("\n").filter(Boolean).map(line=>JSON.parse(line));
-  await until("MCP registration form reopened", () => execute("return document.querySelector('.mcp-add').open"));
-  await type('.mcp-settings input', "window-http");
-  await execute("const select=document.querySelector('.mcp-settings select');select.value='http';select.dispatchEvent(new Event('change',{bubbles:true}));");
-  await type('.mcp-settings input[type="url"]',httpUrl);
-  await type('.mcp-settings input[placeholder="MY_MCP_TOKEN"]',"SHADOW_WINDOW_HTTP_SECRET");
-  await clickButton("Register MCP server");
-  await until("HTTP registration in Settings", () => execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Enable window-http' && !e.disabled)"));
-  assert.equal((await httpRequests()).length,0);
-  await clickButton("Enable window-http");
-  await until("HTTP activated", async()=> (await api("GET","/api/mcp/servers")).servers[0].enabled);
-  assert.equal((await httpRequests()).length,0);
-  await screenshot("mcp-http");
-  await accessibility("mcp-http");
-  await clickButton("Close");
-  mcpMode = "http";
-  await fill('textarea[aria-label="Message ShadowCode"]',"Call the HTTP fixture with native-http-ok.");
-  await click('button[aria-label="Send task"]');
-  await until("HTTP tool approval",()=>execute("return !!document.querySelector('.approval')?.textContent.includes('window-http')"));
-  assert.match(await execute("return document.querySelector('.approval .code').textContent"),/MCP config:window-http \/ echo[\s\S]*"message": "native-http-ok"/);
-  assert.ok((await httpRequests()).every(r=>r.message?.method!=="tools/call"));
-  await click(".approval button.primary");
-  await until("HTTP tool completed",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('External fixture returned native-http-ok.'))"));
-  await until("HTTP task completed", async()=> (await api("GET","/api/jobs")).jobs[0].status==="completed");
-  assert.equal(mcpHttpCalls,3);
-  assert.equal((await httpRequests()).filter(r=>r.message?.method==="tools/call").length,1);
-  await until("HTTP streams closed",async()=> (await (await fetch(httpUrl.replace("/mcp","/status"))).json()).streams===0);
-  mcpMode=false;
-  await openSettings();
-  await clickButton("MCP");
-  await until("HTTP removal ready",()=>execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Remove window-http' && !e.disabled)"));
-  await clickButton("Remove window-http");
-  await until("HTTP registration removed",async()=>!(await api("GET","/api/mcp/servers")).servers.length);
-  await clickButton("Close");
-  // A missing model in an older saved configuration must be visible when the
-  // engine chooses the default, including after the conversation is reloaded.
-  await api("PUT", "/api/config", { values: { routing: { coder: "removed-native-model" } } });
-  const beforeFallback = requests;
-  await type('textarea[aria-label="Message ShadowCode"]', "Explain the result again.");
-  await click('button[aria-label="Send task"]');
-  await until("Fallback model request", () => requests > beforeFallback);
-  await until("Fallback visible", () => execute("return [...document.querySelectorAll('.msg-note.warning')].some(e=>e.textContent.includes('Using default: native-fixture'))"));
-  assert.equal(requestedModels.at(-1), "native-fixture");
-  await click('button[aria-label="Stop task"]');
-  await until("Cancellation persisted", async () => (await api("GET", "/api/jobs")).jobs[0].status === "cancelled");
-  await until("Cancellation visible", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>/cancelled/i.test(e.textContent));"));
-  await api("PUT", "/api/routing", { values: { enabled: false } });
-  queueMode = true;
-  await type('textarea[aria-label="Message ShadowCode"]', "Queue probe: first");
-  await until("Idle composer after cancellation",()=>execute("return !!document.querySelector('button[aria-label=\"Send task\"]')"));
-  await click('button[aria-label="Send task"]');
-  await until("First queue task streaming",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('First task stays visible'))"));
-  const firstQueue = (await api("GET","/api/jobs")).jobs.find(job=>job.task==="Queue probe: first");
-  await execute("const select=document.querySelector('select[aria-label=\"Agent mode\"]'); select.value='reviewer'; select.dispatchEvent(new Event('change',{bubbles:true})); const model=document.querySelector('select[aria-label=\"Model for this task\"]'); model.value=arguments[0]; model.dispatchEvent(new Event('change',{bubbles:true}));",[registered.model.default]);
-  await type('textarea[aria-label="Message ShadowCode"]', "Queue probe: second");
-  await click('button[aria-label="Queue follow-up"]');
-  await until("Second task queued",()=>execute("return !!document.querySelector('.task-queue')?.textContent.includes('Queue probe: second')"));
-  await execute("const select=document.querySelector('select[aria-label=\"Agent mode\"]');select.value='coder';select.dispatchEvent(new Event('change',{bubbles:true}));const model=document.querySelector('select[aria-label=\"Model for this task\"]');model.value='';model.dispatchEvent(new Event('change',{bubbles:true}));");
-  await type('textarea[aria-label="Message ShadowCode"]', "Queue probe: cancel");
-  await click('button[aria-label="Queue follow-up"]');
-  await until("Two queued follow-ups",()=>execute("return document.querySelectorAll('.task-queue li').length===2"));
-  assert.equal((await api("GET",`/api/jobs/current?session_id=${firstQueue.session_id}&include_finished=true`)).job.id,firstQueue.id);
-  assert.equal(queueRequests.length,1);
-  await click("button.new-task");
-  await until("New conversation selected",()=>execute("return !!document.querySelector('.task-link[aria-current=\"page\"]') && document.querySelector('.task-link[aria-current=\"page\"]').dataset.sessionId!==arguments[0] && !document.querySelector('.loading-task')",[firstQueue.session_id]));
-  await type('textarea[aria-label="Message ShadowCode"]', "Queue probe: other");
-  await click('button[aria-label="Queue follow-up"]');
-  await until("Project queue spans conversations",()=>execute("return document.querySelectorAll('.task-queue li').length===3"));
-  const otherQueue = (await api("GET","/api/jobs")).jobs.find(job=>job.task==="Queue probe: other");
-  assert.notEqual(otherQueue.session_id,firstQueue.session_id);
-  await click(`.task-queue li[data-job-id="${otherQueue.id}"] .queue-cancel`);
-  await until("Other conversation queue item cancelled",async()=>(await api("GET",`/api/jobs/${otherQueue.id}`)).status==="cancelled");
-  await click(`button.task-link[data-session-id="${firstQueue.session_id}"]`);
-  await until("Original stream retained after switching",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('First task stays visible'))"));
-  await wd("POST",`/session/${session}/refresh`,{});
-  await until("Queue restored after reload",()=>execute("return document.querySelectorAll('.task-queue li').length===2 && !!document.querySelector('button[aria-label=\"Stop task\"]')"),25000);
-  await until("Reload follows the running response",()=>execute("const item=[...document.querySelectorAll('.msg-agent')].find(item=>item.textContent.includes('First task stays visible'));if(!item)return false;const bounds=item.getBoundingClientRect();const queue=document.querySelector('.task-queue').getBoundingClientRect();return bounds.top>=55 && bounds.bottom<=queue.top"));
-  assert.equal((await api("GET",`/api/jobs/current?session_id=${firstQueue.session_id}&include_finished=true`)).job.id,firstQueue.id);
-  for (const theme of ["light","dark"]) {
-    await execute("document.documentElement.dataset.theme=arguments[0]",[theme]);
-    await screenshot(`queue-${theme}`);
-    await accessibility(`queue-${theme}`);
-  }
-  await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST",`/session/${session}/window/rect`,{width:620,height:850});
-  await until("Compact queue sidebar closes",()=>execute("return !document.querySelector('.sidebar')"));
-  await screenshot("queue-compact");
-  await accessibility("queue-compact");
-  assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST",`/session/${session}/window/rect`,{width:1380,height:920});
-  const cancelledQueue = (await api("GET","/api/jobs")).jobs.find(job=>job.task==="Queue probe: cancel");
-  await click(`.task-queue li[data-job-id="${cancelledQueue.id}"] .queue-cancel`);
-  await until("Queued cancellation persisted",async()=>(await api("GET",`/api/jobs/${cancelledQueue.id}`)).status==="cancelled");
-  assert.equal((await api("GET",`/api/jobs/${firstQueue.id}`)).status,"running");
-  assert.equal(queueRequests.length,1);
-  queueReplies.get("Queue probe: first")();
-  await until("Next queued model call",()=>queueReplies.has("Queue probe: second"));
-  await until("Next queued response streams",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('Second queued task completed'))"));
-  queueReplies.get("Queue probe: second")();
-  await until("Queue drains",async()=>!(await api("GET","/api/jobs")).jobs.some(job=>["queued","running","cancelling"].includes(job.status)));
-  await until("Queue clears in desktop",()=>execute("return !document.querySelector('.task-queue') && !!document.querySelector('button[aria-label=\"Send task\"]')"));
-  await until("Sidebar no longer marks completed tasks as running",()=>execute("return !document.querySelector('.task-link .running-dot')"));
-  assert.deepEqual(queueRequests,["Queue probe: first","Queue probe: second"]);
-  assert.equal(await execute("return [...document.querySelectorAll('.msg-user')].filter(item=>item.textContent==='Queue probe: second').length"),1);
-  queueMode=false;
-  assert.equal((await api("GET", `/api/background/${background.id}`)).status, "RUNNING");
-  await click('button[aria-label="Terminal"]');
-  await clickButton("Background");
-  await until("Background stop control", () => execute("return !!document.querySelector('button[aria-label=\"Stop dev\"]')"));
-  await click('button[aria-label="Stop dev"]');
-  await until("Background cancellation persisted", async () => {
-    const task = await api("GET", `/api/background/${background.id}`);
-    return task.status === "CANCELLED" && task.output.includes("graceful-stop");
+  // ------------------------------------------------------------ first run
+  await until("Onboarding dialog", () => visible("#onboarding-folder"), 30000);
+  const version = await api("GET", "/api/version");
+  appPid = version.pid;
+  assert.equal(version.runtime, "rust"); assert.equal(version.transport, "native");
+  assert.equal(path.basename(await readlink(`/proc/${appPid}/exe`)), "shadowcode");
+  const expectedScript = (await readFile(path.join(root, "ui/dist/index.html"), "utf8")).match(/src="([^"]+\.js)"/)[1];
+  assert.equal(await execute("return new URL(document.querySelector('script[type=module]').src).pathname"), expectedScript, "The binary embeds the current ui/dist build");
+  const onboarding = await text();
+  assert.match(onboarding, /Welcome to ShadowCode/);
+  assert.match(onboarding, /Ask before actions/); assert.match(onboarding, /Allow project edits/);
+  assert.doesNotMatch(onboarding, /\b(Provider|provider|Endpoint|endpoint|API key|Choose a model|Next)\b/, "Onboarding has no model step");
+  assert.deepEqual(await execute("return [...document.querySelectorAll('.wizard input, .wizard select, .wizard textarea')].map(e=>e.type||e.tagName)"), ["text", "radio", "radio"], "Onboarding asks only for the folder and the permission mode");
+  assert.equal(await execute("return document.querySelector('input[name=onboarding-mode]:checked').closest('label').textContent.includes('Ask before actions')"), true, "Ask before actions is the default");
+  await fill("#onboarding-folder", project);
+  await screenshot("onboarding");
+  await accessibility("onboarding");
+  await clickButton("Trust and open");
+  await until("Workspace ready", () => execute("const t=document.querySelector(arguments[0]);return !!t && !t.disabled && !document.querySelector('.wizard')", [composer]), 20000);
+  const status = await api("GET", "/api/workspace/status");
+  assert.equal(status.workspace, project);
+  const config = await api("GET", "/api/config");
+  const cfgValues = config.values || config.config || config;
+  assert.equal(cfgValues.permissions?.mode, "ask", "Onboarding saved Ask before actions");
+  note("first run: folder, trust and permission mode (Ask before actions), no model step");
+
+  // Quiet welcome.
+  const readyAt = Date.now();
+  const suggestions = await until("Welcome suggestions", async () => {
+    const found = await execute("return [...document.querySelectorAll('.welcome-suggestions button')].map(b=>b.textContent)");
+    return found.length > 0 && found;
   });
-  await until("Background cancellation visible", () => execute("return !!document.querySelector('.bg-task .st-cancelled')"));
-  await click('button.drawer-close');
-  // Return a committed worktree change after the source background process stops.
-  const returnGit=async(cwd,args)=>(await promisify(execFile)("git",["-c","core.hooksPath=/dev/null","-c","user.name=Desktop Test","-c","user.email=test@example.invalid","-c","commit.gpgsign=false",...args],{cwd})).stdout.trim();
-  await returnGit(project,["add","."]);await returnGit(project,["commit","-qm","Preserve source fixture state"]);
-  await writeFile(path.join(restoredWorktree.path,"returned-window.txt"),"reviewed desktop return\n");
-  await returnGit(restoredWorktree.path,["add","returned-window.txt"]);await returnGit(restoredWorktree.path,["commit","-qm","Reviewed worktree result"]);
-  const sourceHeadBeforeReturn=await returnGit(project,["rev-parse","HEAD"]);
-  await openSettings();await clickButton("Worktrees");
-  await until("Return card ready",()=>execute("return !!document.querySelector(arguments[0])",[`[data-worktree-id="${restoredWorktree.id}"]`]));
-  const returnButton=await wd("POST",`/session/${session}/element`,{using:"xpath",value:`//article[@data-worktree-id='${restoredWorktree.id}']//button[normalize-space(.)='Review return']`});
-  await wd("POST",`/session/${session}/element/${returnButton["element-6066-11e4-a52e-4f735466cecf"]}/click`,{});
-  await until("Return review focused",()=>execute("return document.activeElement?.getAttribute('aria-label')==='Review returned changes'"));
-  assert.ok(await execute("return document.querySelector('[aria-label=\"Incoming worktree diff\"]').textContent.includes('+reviewed desktop return')"));
-  await screenshot("worktree-return");await accessibility("worktree-return");
-  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktree-return-dark");await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktree-return-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
-  await clickButton("Prepare merge in source");
-  await until("Returned merge pending",async()=>(await api("GET","/api/worktrees")).worktrees.some(w=>w.id===restoredWorktree.id&&w.state==="merge_pending"));
-  assert.equal(await readFile(path.join(project,"returned-window.txt"),"utf8"),"reviewed desktop return\n");
-  assert.equal(await returnGit(project,["rev-parse","HEAD"]),sourceHeadBeforeReturn);
-  await until("Open source available",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Open source project'&&!b.disabled)"));
-  await clickButton("Close");
-  await returnGit(project,["merge","--abort"]);
-  assert.equal(await returnGit(project,["rev-parse","HEAD"]),sourceHeadBeforeReturn);
-  // Copy a reviewed dirty source through the desktop, preserving its staging split.
-  const copyReadme = await readFile(path.join(project,"README.md"),"utf8");
-  await writeFile(path.join(project,"README.md"),copyReadme+"\nStaged desktop copy\n");
-  await returnGit(project,["add","README.md"]);
-  await writeFile(path.join(project,"README.md"),copyReadme+"\nStaged desktop copy\nUnstaged desktop copy\n");
-  await writeFile(path.join(project,"copy-untracked.txt"),"untracked desktop copy\n");
-  const copySourceStatus=await returnGit(project,["status","--porcelain"]);
-  const copySourceIndex=await returnGit(project,["show",":README.md"]);
-  const previousCopyIds=new Set((await api("GET","/api/worktrees")).worktrees.map(w=>w.id));
-  await openSettings();await clickButton("Worktrees");await clickButton("Review current edits");
-  await until("Copy review focused",()=>execute("return document.activeElement?.getAttribute('aria-label')==='Review copied changes'"));
-  assert.ok(await execute("return document.querySelector('[aria-label=\"Staged copy diff\"]').textContent.includes('+Staged desktop copy')"));
-  assert.ok(await execute("return document.querySelector('[aria-label=\"Unstaged copy diff\"]').textContent.includes('+Unstaged desktop copy')"));
-  await screenshot("worktree-copy");await accessibility("worktree-copy");
-  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktree-copy-dark");await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktree-copy-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
-  await clickButton("Copy into new worktree");
-  const copiedWorktree=await until("Desktop changes copied",async()=>(await api("GET","/api/worktrees")).worktrees.find(w=>!previousCopyIds.has(w.id)&&w.state==="ready"));
-  assert.equal(await returnGit(project,["status","--porcelain"]),copySourceStatus);
-  assert.equal(await returnGit(project,["show",":README.md"]),copySourceIndex);
-  assert.equal(await returnGit(copiedWorktree.path,["show",":README.md"]),copySourceIndex);
-  assert.equal(await readFile(path.join(copiedWorktree.path,"README.md"),"utf8"),await readFile(path.join(project,"README.md"),"utf8"));
-  assert.equal(await readFile(path.join(copiedWorktree.path,"copy-untracked.txt"),"utf8"),"untracked desktop copy\n");
-  await clickButton("Close");
-  const repairAdmin=path.join(copiedWorktree.common_directory,"worktrees",copiedWorktree.id);
-  const beforeRepairIndex=await readFile(path.join(repairAdmin,"index"));
-  await rm(path.join(copiedWorktree.path,".git"));
-  await openSettings();await clickButton("Worktrees");
-  await until("Repair card ready",()=>execute("return !!document.querySelector(arguments[0])",[`[data-worktree-id="${copiedWorktree.id}"]`]));
-  const repairButton=await wd("POST",`/session/${session}/element`,{using:"xpath",value:`//article[@data-worktree-id='${copiedWorktree.id}']//button[normalize-space(.)='Review connection repair']`});
-  await wd("POST",`/session/${session}/element/${repairButton["element-6066-11e4-a52e-4f735466cecf"]}/click`,{});
-  await until("Connection repair focused",()=>execute("return document.activeElement?.getAttribute('aria-label')==='Review connection repair'"));
-  await screenshot("worktree-repair");await accessibility("worktree-repair");
-  await execute("document.documentElement.dataset.theme='dark'");await accessibility("worktree-repair-dark");await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("worktree-repair-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
-  await clickButton("Restore Git connection");
-  await until("Connection repair persisted",async()=>(await api("GET","/api/worktrees")).worktrees.some(w=>w.id===copiedWorktree.id&&w.state==="ready"&&w.detail.includes("connection restored")));
-  assert.deepEqual(await readFile(path.join(repairAdmin,"index")),beforeRepairIndex);
-  assert.equal(await returnGit(copiedWorktree.path,["show",":README.md"]),copySourceIndex);
-  assert.equal(await readFile(path.join(copiedWorktree.path,"README.md"),"utf8"),await readFile(path.join(project,"README.md"),"utf8"));
-  await clickButton("Close");
-  backgroundToolMode="start";
-  await type('textarea[aria-label="Message ShadowCode"]', "Start the managed project watcher and read its log.");
-  await click('button[aria-label="Send task"]');
-  await until("Model background start approval",()=>execute("return !!document.querySelector('.approval')?.textContent.includes('Start background process: model-watcher')"));
-  assert.ok((await execute("return document.querySelector('.approval .code').textContent")).includes(modelBackgroundCommand));
-  assert.ok((await execute("return document.querySelector('.approval').textContent")).includes("including cancellation"));
-  assert.ok(!(await api("GET","/api/background")).tasks.some(task=>task.name==="model-watcher"));
-  await until("New approval remains visible",()=>execute("const card=document.querySelector('.approval').getBoundingClientRect();const stream=document.querySelector('.chat-stream').getBoundingClientRect();return card.top>=stream.top && card.bottom<=stream.bottom"));
-  for (const theme of ["light","dark"]) {
-    await execute("document.documentElement.dataset.theme=arguments[0]",[theme]);
-    await screenshot(`background-approval-${theme}`);
-    await accessibility(`background-approval-${theme}`);
+  assert.ok(suggestions.length <= 3, `At most three suggestions (${suggestions})`);
+  assert.equal(await execute("return document.querySelectorAll('.unified-picker-trigger').length"), 1, "Exactly one model picker");
+  assert.equal(await execute("return document.querySelectorAll('select').length"), 0, "No select-based model controls in the workspace");
+  assert.ok(await visible('button[aria-label^="Attach"]'), "Attachment button");
+  await screenshot("welcome-light");
+  await accessibility("welcome-light");
+  note(`quiet welcome with ${suggestions.length} suggestions, one picker, attachment button`);
+
+  // ------------------------------------------------------------ picker
+  await until("Picker loaded", async () => !/Loading models/.test(await execute("return document.querySelector('.unified-picker-current').textContent")), 60000);
+  const pickerLoadMs = Date.now() - readyAt;
+  console.log(`  ..  picker rows usable ${pickerLoadMs} ms after the workspace opened`);
+  const picker = await until("Vendor rows probed", async () => {
+    const data = await api("GET", "/api/picker");
+    const vendorsChecked = installed.every((vendor) => data.targets.some((t) => t.provider === `cli:${vendor}` && t.reason !== "Not checked yet"));
+    return vendorsChecked && data;
+  }, 90000);
+  await openPicker();
+  await until("Picker rows rendered", async () => (await pickerRows()).length > 0 || installed.length === 0);
+  const rows = await pickerRows();
+  const groups = await execute("return [...document.querySelectorAll('.unified-picker-heading')].map(h=>h.textContent)");
+  assert.deepEqual(groups, ["Subscriptions", "On this computer"]);
+  assert.match(await execute("return document.querySelector('.unified-picker-group:last-child').textContent"), /No local models added yet/);
+  const vendorSummary = {};
+  for (const vendor of installed) {
+    const backend = picker.targets.filter((t) => t.provider === `cli:${vendor}`);
+    assert.ok(backend.length > 0, `${vendor}: backend has picker rows`);
+    const shown = rows.filter((r) => backend.some((t) => t.name === r.name));
+    assert.ok(shown.length > 0, `${vendor}: picker shows its rows`);
+    for (const row of shown) {
+      const target = backend.find((t) => t.name === row.name);
+      assert.ok(row.meta.includes(target.availability_label), `${row.name}: shows ${target.availability_label} (${row.meta})`);
+      assert.equal(row.blocked, target.availability !== "ready");
+      assert.equal(row.group, "Subscriptions");
+    }
+    vendorSummary[vendor] = [...new Set(backend.map((t) => t.availability_label))].join("/");
+    if (expectedVendors[vendor]) assert.ok(backend.some((t) => t.availability_label === expectedVendors[vendor]), `${vendor}: expected ${expectedVendors[vendor]}, backend says ${vendorSummary[vendor]} (${[...new Set(backend.map((t) => t.reason))].join("; ")})`);
   }
-  await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST",`/session/${session}/window/rect`,{width:620,height:850});
-  if(await execute("return !!document.querySelector('.jump-latest')")) await click('.jump-latest');
-  await until("Compact approval visible",()=>execute("const card=document.querySelector('.approval').getBoundingClientRect();const stream=document.querySelector('.chat-stream').getBoundingClientRect();return card.top>=stream.top && card.bottom<=stream.bottom"));
-  await screenshot("background-approval-compact");
-  await accessibility("background-approval-compact");
-  assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST",`/session/${session}/window/rect`,{width:1380,height:920});
-  await click(".approval button.primary");
-  await until("Model watcher task complete",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('reports model-background-ready')) && !!document.querySelector('button[aria-label=\"Send task\"]')"));
-  const modelBackground=await api("GET",`/api/background/${modelBackgroundId}`);
-  assert.equal(modelBackground.status,"RUNNING");
-  assert.ok(modelBackground.origin_task_id);
-  await click('button[aria-label="Terminal"]');
-  await clickButton("Background");
-  await until("Model watcher shared with Background panel",()=>execute("return [...document.querySelectorAll('.bg-task')].some(item=>item.textContent.includes('model-watcher') && item.textContent.includes('model-background-ready'))"));
-  await click('button.drawer-close');
-  backgroundToolMode="stop"; backgroundToolCalls=0;
-  await type('textarea[aria-label="Message ShadowCode"]', "Stop the managed project watcher.");
-  await click('button[aria-label="Send task"]');
-  await until("Model background stop approval",()=>execute("return !!document.querySelector('.approval')?.textContent.includes('Stop background process: model-watcher')"));
-  const stopPrompt=await execute("return document.querySelector('.approval .code').textContent");
-  assert.ok(stopPrompt.includes(modelBackgroundId) && stopPrompt.includes(modelBackgroundCommand));
-  await click(".approval button.primary");
-  await until("Model watcher stopped",()=>execute("return [...document.querySelectorAll('.msg-agent')].some(item=>item.textContent.includes('watcher stopped and cleanup finished')) && !!document.querySelector('button[aria-label=\"Send task\"]')"));
-  assert.equal((await api("GET",`/api/background/${modelBackgroundId}`)).status,"CANCELLED");
-  await until("Model-started watcher child cleanup",async()=>dead((await readFile(path.join(project,"model-background-child.pid"),"utf8")).trim()));
-  await until("Model-started watcher parent cleanup",()=>dead(modelBackground.pid));
-  backgroundToolMode=false;
-  await wd("POST", `/session/${session}/window/rect`, { width: 620, height: 850 });
-  await until("Compact sidebar collapsed", () => execute("return !document.querySelector('.sidebar')"));
+  for (const [vendor, label] of Object.entries(expectedVendors)) assert.ok(installed.includes(vendor), `${vendor} expected (${label}) but not installed`);
+  const names = rows.map((r) => r.name);
+  assert.equal(new Set(names).size, names.length, `No duplicate model labels in the picker: ${names}`);
+  await screenshot("picker-vendors");
+  await accessibility("picker-vendors");
+  await execute("document.querySelector('.unified-picker-search input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
+  await until("Picker closed", async () => !(await visible(".unified-picker-menu")));
+  note(`picker: Subscriptions (${Object.entries(vendorSummary).map(([v, s]) => `${v} ${s}`).join(", ") || "no vendor CLIs installed"}) and On this computer`);
+
+  // ------------------------------------------------------------ local model
+  await openPicker();
+  await clickButton("Add local model…");
+  await until("Local models page", () => visible("#local-gguf"));
+  await until("Runtime ready", async () => /Ready · CPU · 0\.0\.0-test/.test(await execute("return document.querySelector('.local-runtime').textContent")), 20000);
+  await fill("#local-gguf", modelFile);
+  await clickButton("Add");
+  await until("Local model listed", () => execute("return !!document.querySelector('article.local-model[aria-label=\"coder-test-1b\"]')"), 15000);
+  const catalog = await api("GET", "/api/local-models");
+  const localEntry = catalog.models.find((m) => m.path === modelFile);
+  assert.ok(localEntry?.compatible, `Synthetic GGUF is compatible: ${JSON.stringify(localEntry)}`);
+  assert.equal(catalog.runtime.path, fakeServer, "Runtime is the test double, never the real managed llama-server");
+  assert.equal(catalog.loaded, null, "Adding does not load");
+  await execute("document.querySelector('.settings-body').scrollTop=0");
+  await screenshot("local-models");
+  await accessibility("local-models");
+  await closeSettings();
+  note("local model added from Settings › Local models (runtime, hardware, GGUF entry)");
+
+  const localTarget = (await api("GET", "/api/picker")).targets.find((t) => t.id === localEntry.id);
+  assert.ok(localTarget, "Picker has the local row");
+  await pickRow(localTarget.name);
+  assert.equal(localTarget.group, "local");
+  await openPicker();
+  const withLocal = await pickerRows();
+  assert.ok(withLocal.some((r) => r.group === "On this computer" && r.name === localTarget.name && r.selected), "Local row selected under On this computer");
+  await screenshot("picker");
+  await accessibility("picker");
+  await execute("document.querySelector('.unified-picker-search input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
+  await until("Picker closed", async () => !(await visible(".unified-picker-menu")));
+  note(`selected local row "${localTarget.name}"`);
+
+  // ------------------------------------------------------------ local task
+  await send("Create hello.txt with a greeting, then check it.");
+  await until("Model server launched", async () => (await launches()).length > 0, 20000);
+  await approve("hello.txt");
+  await approve("cat hello.txt");
+  await until("Summary card", () => visible('section[aria-label="Task summary"]'), 30000);
+  assert.equal(await readFile(path.join(project, "hello.txt"), "utf8"), "Hello from ShadowCode\n");
+  const summary = await execute("return document.querySelector('section[aria-label=\"Task summary\"]').innerText");
+  assert.match(summary, /Finished/); assert.match(summary, /hello\.txt/);
+  const steps = await execute("return [...document.querySelectorAll('.msg-with-activity .activity-step, .msg-summary .activity-step')].map(s=>s.innerText.replace(/\\s+/g,' ').trim())");
+  assert.ok(steps.length >= 2, `Activity timeline has steps: ${steps}`);
+  assert.match(await text(), /Created hello\.txt with a greeting/);
+  const firstJob = (await api("GET", "/api/jobs")).jobs.find((j) => /Create hello\.txt/.test(j.task || ""));
+  const sessionId = firstJob.session_id;
+  assert.equal(firstJob.status, "completed");
+  assert.equal(firstJob.routing?.model_id, localEntry.id, "Job keeps the exact picker id");
+  const launchRecords = await launches();
+  assert.ok(launchRecords.every((l) => l.key_env && !l.key_in_argv), "API key only in the environment");
+  assert.ok(launchRecords[0].argv.includes("--jinja") && launchRecords[0].argv.includes("--no-webui"));
+  assert.ok((await modelRequests()).every((r) => r.auth), "Every model request authenticated");
+  await screenshot("task-complete");
+  await accessibility("task-complete");
+  note(`local task: write_file and exec approved, timeline [${steps.join(" | ")}], summary lists hello.txt`);
+
+  // Changes drawer.
+  await clickButton("Review changes");
+  await until("Changes diff", () => execute("return /Hello from ShadowCode/.test(document.querySelector('[aria-label=\"Drawer\"], .drawer')?.innerText||'')"), 15000);
+  await screenshot("changes");
+  await accessibility("changes");
+  await click("button.drawer-close");
+  note("Changes drawer shows the hello.txt diff");
+
+  // Workspace screenshots with a finished conversation.
+  await screenshot("workspace-light");
+  await accessibility("workspace-light");
+  await setTheme("dark");
+  await screenshot("workspace-dark");
+  await accessibility("workspace-dark");
+  await setTheme("light");
+
+  // ------------------------------------------------------------ reload
+  await wd("POST", `/session/${session}/refresh`, {});
+  await until("Conversation restored after reload", async () => {
+    const body = await text();
+    return /Create hello\.txt with a greeting/.test(body) && /Created hello\.txt with a greeting/.test(body) && await visible('section[aria-label="Task summary"]');
+  }, 20000);
+  await until("Picker keeps the conversation's local row after reload", async () => (await execute("return document.querySelector('.unified-picker-trigger').getAttribute('aria-label')")) === `Model for this task: ${localTarget.name}`);
+  assert.equal(await execute("return document.querySelector('.unified-picker-current').textContent"), localTarget.name.replace(/ · This computer$/, ""), "The Local badge replaces the suffix");
+  await screenshot("reloaded");
+  note("reload restores the conversation, summary card and the conversation's model");
+
+  // ------------------------------------------------------------ settings
+  await openSettings("Accounts");
+  await until("Accounts statuses", () => execute("return document.querySelectorAll('.settings-body article, .settings-body .account-card, .settings-body section').length>0"));
+  await delay(500);
+  const accounts = await execute("return document.querySelector('.settings-body').innerText");
+  for (const vendor of installed) {
+    const label = picker.vendors?.[`cli-${vendor}`]?.label;
+    if (label) assert.ok(accounts.includes(label), `Accounts lists ${label}`);
+  }
+  await screenshot("accounts");
+  await accessibility("accounts");
+  await clickButton("Local models", "//nav[@aria-label='Settings sections']");
+  await until("Local models page", () => execute("return !!document.querySelector('article.local-model[aria-label=\"coder-test-1b\"]')"));
+  assert.match(await execute("return document.querySelector('.settings-body').innerText"), /Hardware/);
+  await screenshot("settings-local-models");
+  await clickButton("Permissions & network", "//nav[@aria-label='Settings sections']");
+  await until("Permissions page", () => execute("return /Ask before actions/.test(document.querySelector('.settings-body').innerText)"));
+  await screenshot("permissions");
+  await accessibility("permissions");
+  await closeSettings();
+  note("Settings › Accounts, Local models, Permissions & network render (no Connect/Disconnect clicked)");
+
+  // ------------------------------------------------------------ cloud consent
+  const cloud = (await api("GET", "/api/picker")).targets.find((t) => t.inference === "cloud" && t.availability === "ready");
+  if (cloud) {
+    const before = (await jobsFor(sessionId)).length;
+    // Guard: the page may only send this conversation's first cloud request
+    // without consent (the backend must answer needs_consent); any request
+    // with consent, or for another conversation, is refused in the page.
+    // Tauri's invoke is read-only; the guard sits on the IPC transport
+    // (fetch to ipc://localhost/<command>), which every invoke goes through.
+    await execute(`
+      const SID = ${JSON.stringify(sessionId)};
+      const originalFetch = window.fetch;
+      window.__ipcSeen = 0;
+      window.__cloudRequests = [];
+      window.fetch = function(input, init) {
+        const url = String((input && input.url) || input);
+        if (/^(ipc:\\/\\/localhost|https?:\\/\\/ipc\\.localhost)\\/api(\\?|$)/.test(url)) {
+          window.__ipcSeen++;
+          let args = null;
+          try { args = JSON.parse(init && init.body); } catch (e) {}
+          const r = args && args.request;
+          if (r && r.method === 'POST' && r.path === '/api/jobs' && !String((r.body && r.body.model) || '').startsWith('local:')) {
+            window.__cloudRequests.push(r.body);
+            if (r.body.handoff_consent || r.body.session_id !== SID || !r.body.model) return Promise.reject(new Error('window test: cloud job blocked'));
+          }
+        }
+        return originalFetch.apply(this, arguments);
+      };
+      return true;`);
+    await api("GET", "/api/version");
+    assert.ok(await execute("return window.__ipcSeen > 0"), "Cloud request guard sees IPC traffic");
+    const lastJob = (await jobsFor(sessionId))[0];
+    assert.equal(lastJob?.routing?.inference || "local", "local", "Previous turn ran on this computer, so consent is required");
+    await pickRow(cloud.name);
+    await send("Summarize what changed.");
+    await until("Consent dialog", () => visible(".consent-dialog"), 15000);
+    const consent = await execute("return document.querySelector('.consent-dialog').innerText");
+    assert.match(consent, /Send to/); assert.match(consent, new RegExp(cloud.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    await screenshot("consent");
+    await accessibility("consent");
+    await clickButton("Cancel", "//div[contains(@class,'consent-dialog')]");
+    await until("Consent closed", async () => !(await visible(".consent-dialog")));
+    assert.equal(await execute("return document.querySelector(arguments[0]).value", [composer]), "Summarize what changed.", "Cancel keeps the message");
+    const cloudRequests = await execute("return window.__cloudRequests");
+    assert.equal(cloudRequests.length, 1); assert.equal(cloudRequests[0].handoff_consent, undefined);
+    assert.equal((await jobsFor(sessionId)).length, before, "No job was created for the cloud row");
+    note(`cloud row "${cloud.name}": consent dialog shown and cancelled; no vendor turn ran`);
+    await fill(composer, "");
+    await pickRow(localTarget.name);
+  } else note("no Ready cloud row on this machine: consent step skipped");
+
+  // ------------------------------------------------------------ stop
+  await send("stop-probe: look around the project.");
+  await until("Local task streaming", async () => (await modelRequests()).some((r) => r.request.includes("stop-probe")), 20000);
+  await until("Stop button", () => visible('button[aria-label="Stop task"]'));
+  await screenshot("running");
+  await accessibility("running");
+  await click('button[aria-label="Stop task"]');
+  await until("Task stopped", async () => !(await visible('button[aria-label="Stop task"]')) && /Stopped|cancelled|Cancelled/.test(await text()), 20000);
+  const stopped = (await jobsFor(sessionId)).find((j) => /stop-probe/.test(j.task || ""));
+  assert.ok(!stopped || ["cancelled", "cancelling"].includes(stopped.status), `Stopped job status ${stopped?.status}`);
+  await screenshot("stopped");
+  note("Stop ends a running local task");
+
+  // ------------------------------------------------------------ compact
+  await setWindow({ width: 520, height: 860 });
+  assert.equal(await horizontalOverflow(), false, "No horizontal scroll at 520 px");
   await screenshot("compact");
   await accessibility("compact");
-  assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"), true);
-  await wd("POST", `/session/${session}/window/rect`, { width: 1380, height: 920 });
-  await click('button[aria-label="Terminal"]');
-  await clickButton("Skills");
-  await fill('#skill-name', "audit");
-  await type('#skill-body', "---\nmode: review\n---\nWINDOW_SKILL: inspect $ARGUMENTS");
-  assert.equal(await execute("return document.querySelector('#skill-body').value"), "---\nmode: review\n---\nWINDOW_SKILL: inspect $ARGUMENTS");
-  await clickButton("Save skill");
-  await until("Saved skill usable", () => execute("return [...document.querySelectorAll('button')].some(button=>button.textContent==='Use /audit')"));
-  await click(".drawer-body .list details summary");
-  await screenshot("skills");
-  await accessibility("skills");
-  workflowMode = true;
-  await clickButton("Use /audit");
-  assert.equal(await execute("return document.querySelector('textarea[aria-label=\"Message ShadowCode\"]').value"), "/skill audit ");
-  await type('textarea[aria-label="Message ShadowCode"]', "README.md");
-  await click('button[aria-label="Send task"]');
-  await until("Selected skill result", () => execute("return [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Selected skill reviewed README.md.')) && !document.querySelector('button[aria-label=\"Stop task\"]')"));
-  assert.equal(workflowCalls, 2);
-  await until("Skill provenance", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('.shadow/skills/audit.md') && e.textContent.includes('review'))"));
-  workflowCalls = 0;
-  await click('button[aria-label="Terminal"]'); await clickButton("Skills");
-  await until("Installed plugin skill",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Use /window-bundle--audit')"));
-  await execute("[...document.querySelectorAll('.drawer-body details')].find(d=>d.querySelector('summary')?.textContent.includes('window-bundle--audit')).querySelector('summary').click()");
-  await clickButton("Use /window-bundle--audit");
-  await type('textarea[aria-label="Message ShadowCode"]',"README.md");
-  await click('button[aria-label="Send task"]');
-  await until("Installed plugin skill executed",()=>execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('.shadowcode/skills/window-bundle--audit/SKILL.md')) && !!document.querySelector('button[aria-label=\"Send task\"]')"));
-  assert.equal(workflowCalls,2);
-  // Uninstall preserves a user's edited workflow while removing the unchanged hook.
-  await writeFile(path.join(project,".shadowcode/skills/window-bundle--audit/SKILL.md"),"My retained plugin skill");
-  await openSettings();
-  await clickButton("Plugins");
-  await until("Plugin removal ready",()=>execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Remove window-bundle')"));
-  await clickButton("Remove window-bundle");
-  await until("Preserved plugin edits visible",()=>execute("return !!document.querySelector('.plugin-settings [role=status]')?.textContent.includes('SKILL.md')"));
-  assert.equal(await readFile(path.join(project,".shadowcode/skills/window-bundle--audit/SKILL.md"),"utf8"),"My retained plugin skill");
-  assert.ok(!(await api("GET","/api/hooks")).hooks.some(h=>h.name==="window-bundle--finished"));
-  await clickButton("Close");
-  workflowMode = false;
-  await type('textarea[aria-label="Message ShadowCode"]', "/status");
-  await click('button[aria-label="Send task"]');
-  await until("Durable command card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Permission mode'))"));
-  const selectedMemory = (await api("POST", "/api/commands/run", {name:"memory", args:""})).metadata;
-  assert.ok(selectedMemory.task_id, "The selected conversation has an exact task for notes");
-  await type('textarea[aria-label="Message ShadowCode"]', `/memory --task ${selectedMemory.task_id} Keep the desktop fixture local.`);
-  await click('button[aria-label="Send task"]');
-  await until("Task memory card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Note saved') && e.textContent.includes('Keep the desktop fixture local.'))"));
-  await type('textarea[aria-label="Message ShadowCode"]', "/understand");
-  await click('button[aria-label="Send task"]');
-  await until("Native project map card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Project map') && e.textContent.includes('Test candidates'))"));
-  assert.equal(await execute("return [...document.querySelectorAll('.tool-card .markdown h1')].some(e=>e.textContent==='Project map')"), true);
-  await type('textarea[aria-label="Message ShadowCode"]', "/doctor");
-  await click('button[aria-label="Send task"]');
-  await until("Native diagnostic card", () => execute("return [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Native diagnostics') && e.textContent.includes('SQLite quick_check passed'))"));
-  await screenshot("inspection");
-  await accessibility("inspection");
-  await type('textarea[aria-label="Message ShadowCode"]', "/health");
-  await click('button[aria-label="Send task"]');
-  await until("Native diagnostics in Health", () => execute("return [...document.querySelectorAll('.diagnostic-check')].some(e=>e.textContent.includes('Actual model response') && e.textContent.includes('Not checked'))"));
-  assert.equal(await execute("return [...document.querySelectorAll('.status-row code')].every(e=>e.getBoundingClientRect().right<=e.closest('.tool-card').getBoundingClientRect().right+1 && e.scrollWidth<=e.clientWidth+1)"), true, "Command details wrap within the narrowed conversation");
-  assert.equal(await execute("return [...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Auto-fix')"), false);
-  assert.equal(await execute("return [...document.querySelectorAll('.diagnostic-check')].some(e=>e.textContent.includes('Actual model response') && e.querySelector('.health-bad'))"), false);
-  await screenshot("diagnostics");
-  await accessibility("diagnostics");
-  await wd("POST", `/session/${session}/refresh`, {});
-  await until("Skill and command reload", () => execute("return [...document.querySelectorAll('.msg-note')].some(e=>e.textContent.includes('.shadow/skills/audit.md')) && [...document.querySelectorAll('.tool-card')].some(e=>e.textContent.includes('Permission mode'))"));
-  goalMode = true;
-  await click('button[aria-label="Terminal"]');
-  await clickButton("Goals");
-  await type('textarea[aria-label="Goal instruction"]', "Create goal.txt containing goal-native-ok and verify its contents.");
-  await clickButton("Plan & run");
-  await until("Goal command approval", () => execute("return !!document.querySelector('.approval button.primary')"));
-  const goalApproval = (await api("GET", "/api/approvals")).approvals.find(a=>a.command.includes("goal-native-ok"));
-  assert.ok(goalApproval, "The displayed goal has an exact pending command approval");
-  const otherSelection = await api("POST", "/api/sessions", {workspace:project,title:"Approval selection regression"});
-  await api("POST", `/api/sessions/${otherSelection.id}/activate`);
-  await click(`.approval[data-approval-id="${goalApproval.id}"] button.primary`);
-  await until("Goal approval resolved for its own conversation", async () => !(await api("GET", "/api/approvals")).approvals.some(a=>a.id===goalApproval.id));
-  await api("POST", `/api/sessions/${goalApproval.session_id}/activate`);
-  await until("Goal completion", async () => {
-    const goal = (await api("GET", "/api/goals")).goals[0];
-    assert.notEqual(goal?.status, "blocked", goal?.run_detail);
-    return goal?.status === "completed" && !goal.running;
-  });
-  await until("Goal checklist and transcript", () => execute("return document.querySelectorAll('.milestones li.done').length===3 && [...document.querySelectorAll('.msg-agent')].some(e=>e.textContent.includes('Milestone complete: Run the acceptance checks'));"));
-  assert.equal(await readFile(path.join(project, "goal.txt"), "utf8"), "goal-native-ok\n");
-  assert.equal(milestoneCalls.size, 3);
-  assert.deepEqual([...milestoneCalls.values()], [2, 2, 2]);
-  await until("Goal progress bar", () => execute("const bar=document.querySelector('.goal.completed .bar');return bar && bar.querySelector('i').getBoundingClientRect().width >= bar.getBoundingClientRect().width*0.99;"));
-  await screenshot("goals");
-  await accessibility("goals");
-  goalMode = false;
-  const beforePause = requests;
-  await type('textarea[aria-label="Goal instruction"]', "Explain how this project is organized.");
-  await clickButton("Plan & run");
-  await until("Running goal to pause", () => requests > beforePause);
-  await until("Pause control", () => execute("return [...document.querySelectorAll('.goal button')].some(e=>e.textContent.trim()==='Pause' && !e.disabled);"));
-  await clickButton("Pause");
-  await until("Goal paused", async () => {
-    const goal = (await api("GET", "/api/goals")).goals[0];
-    return goal?.status === "paused" && !goal.running && goal.milestones.every(m => m.status === "pending");
-  });
-  const pausedGoal = (await api("GET", "/api/goals")).goals[0];
-  await api("DELETE", `/api/sessions/${pausedGoal.session_id}`);
-  await until("Resume control", () => execute("return [...document.querySelectorAll('.goal button')].some(e=>e.textContent.trim()==='Run' && !e.disabled);"));
-  await clickButton("Run");
-  await until("Goal resumed in a fresh conversation", async () => {
-    const goal = (await api("GET", `/api/goals/${pausedGoal.id}`));
-    return requests > beforePause + 1 && goal.running && goal.session_id !== pausedGoal.session_id;
-  });
-  await until("Resumed pause control", () => execute("return [...document.querySelectorAll('.goal button')].some(e=>e.textContent.trim()==='Pause' && !e.disabled);"));
-  await clickButton("Pause");
-  await until("Resumed goal paused", async () => {
-    const goal = (await api("GET", `/api/goals/${pausedGoal.id}`));
-    return goal.status === "paused" && !goal.running;
-  });
-  // Populate only this disposable profile with a history larger than the old cap.
-  const historySession=await api("POST","/api/sessions",{workspace:project,title:"Long saved history"});
-  const historyDb=new DatabaseSync(path.join(stateDirectory,"shadow-agent.db"));
-  historyDb.exec("PRAGMA busy_timeout=5000; BEGIN");
-  const putHistory=historyDb.prepare("INSERT INTO events(ts,type,session_id,task_id,payload) VALUES(?,'model.delta',?,NULL,?)");
-  for(let index=0;index<12000;index++)putHistory.run(Date.now()/1000,historySession.id,JSON.stringify({text:`History message ${index}`,message_id:`history-${index}`}));
-  historyDb.exec("COMMIT");historyDb.close();
-  await execute("localStorage.setItem('shadow:selected',arguments[0])",[historySession.id]);
-  await wd("POST",`/session/${session}/refresh`,{});
-  await until("Bounded history snapshot",()=>execute("return document.querySelector('.chat-inner')?.textContent.includes('History message 11999') && !!document.querySelector('[aria-label=\"Conversation history\"]')"));
-  assert.equal(await execute("return document.querySelectorAll('.msg-agent').length"),128);
-  let historyPages=0;
-  while(await execute("return [...document.querySelectorAll('button')].some(b=>b.textContent==='Older messages'&&!b.disabled)")) {
-    const first=await execute("return document.querySelector('.msg-agent .markdown')?.textContent");
-    await clickButton("Older messages");
-    await until("Earlier saved page rendered",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent!==arguments[0] && !document.querySelector('[aria-label=\"Conversation history\"] [role=status]')",[first]));
-    assert.ok(await execute("return document.querySelectorAll('.msg-agent').length<=128"));
-    assert.ok(++historyPages<100,"History cursor must make progress");
-  }
-  assert.equal(await execute("return document.querySelector('.msg-agent .markdown').textContent.trim()"),"History message 0");
-  assert.equal(historyPages,93);
-  await screenshot("history");await accessibility("history");
-  await execute("document.documentElement.dataset.theme='dark'");await accessibility("history-dark");await execute("document.documentElement.dataset.theme='light'");
-  await wd("POST", `/session/${session}/window/rect`,{width:620,height:850});await accessibility("history-compact");assert.equal(await execute("return document.documentElement.scrollWidth<=window.innerWidth+1"),true);
-  await wd("POST", `/session/${session}/window/rect`,{width:1380,height:920});
-  await clickButton("Newer messages");
-  await until("Newer saved page",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent.trim()==='History message 96'"));
-  await clickButton("Latest activity");
-  await until("Floating latest returns to live history",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent.trim()==='History message 11872'"));
-  await clickButton("Older messages");
-  await until("Earlier history reopened",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent.trim()==='History message 11744'"));
-  await clickButton("Latest messages");
-  await until("Latest history restored",()=>execute("return document.querySelector('.msg-agent .markdown')?.textContent.trim()==='History message 11872'"));
-  assert.equal(await execute("return document.querySelectorAll('.msg-agent').length"),128);
-  await click('button[aria-label="Terminal"]');
-  await clickButton("Background");
-  await fill('#background-name', "shutdown-server");
-  await type('#background-command', "trap '' TERM; sleep 60 & echo $! > background-child.pid; printf shutdown-ready; wait");
-  await clickButton("Start process");
-  const shutdownBackground = await until("Background process for shutdown", async () => {
-    const task = (await api("GET", "/api/background")).tasks[0];
-    return task?.name === "shutdown-server" && task.output.includes("shutdown-ready") && task;
-  });
-  const backgroundChild = (await readFile(path.join(project, "background-child.pid"), "utf8")).trim();
-  // A separate CLI in another project shares this actual desktop's engine.
-  // It must not change the visible or remembered project/session selection.
-  const cliProject = path.join(scratch, "cli-project"); await mkdir(cliProject);
-  const cliEnv = {...nativeEnv}; delete cliEnv.DISPLAY; delete cliEnv.WAYLAND_DISPLAY;
-  const cli = async args => {
-    const result = await promisify(execFile)(binary, [...binaryArgs.filter(arg => arg !== "ui"), ...profileArgs, "--workspace", cliProject, "--json", ...args], {env: cliEnv, timeout: 20000, maxBuffer: 2_000_000});
-    return JSON.parse(result.stdout);
-  };
-  const remembered = await readFile(path.join(stateDirectory, "last-workspace.txt"), "utf8");
-  assert.equal((await cli(["health"])).workspace, cliProject);
-  await cli(["trust"]);
-  assert.ok((await cli(["command", "new"])).metadata.session_id);
-  const cliProcess = await cli(["background", "start", "--name", "cli-owner", "--command", "printf cli-ready; sleep 60"]);
-  await until("CLI logs through desktop owner", async () => (await cli(["background", "logs", cliProcess.id])).output.includes("cli-ready"));
-  await cli(["background", "stop", cliProcess.id]);
-  assert.equal((await api("GET", "/api/workspace/status")).workspace, project);
-  assert.equal(await readFile(path.join(stateDirectory, "last-workspace.txt"), "utf8"), remembered);
-  const desktopProcesses = (await api("GET", "/api/background")).tasks;
-  assert.ok(desktopProcesses.some(p => p.id === shutdownBackground.id && p.status === "RUNNING"));
-  assert.ok(desktopProcesses.every(p => p.id !== cliProcess.id));
-  // A terminal command is still running when the actual native quit command is
-  // invoked. The process and its child must be gone before shutdown completes.
-  await execute("window.__TAURI_INTERNALS__.invoke('api',{request:{method:'POST',path:'/api/workspace/exec',body:{command:'sleep 60 & echo $! > child.pid; wait',timeout:120}}}).catch(()=>{});return true;");
-  const child = await until("Terminal child", async () => (await readFile(path.join(project, "child.pid"), "utf8")).trim());
+  await setTheme("dark");
+  await accessibility("compact-dark");
+  await setTheme("light");
+  await openPicker();
+  assert.equal(await horizontalOverflow(), false, "Picker fits at 520 px");
+  await screenshot("compact-picker");
+  await accessibility("compact-picker");
+  await execute("document.querySelector('.unified-picker-search input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
+  await setWindow(WIDE);
+  note("520 px compact layout without horizontal scroll, light and dark axe clean");
+
+  // ------------------------------------------------------------ quit
+  const children = await descendants(appPid);
+  const serverPids = (await launches()).map((l) => l.pid);
+  const described = await Promise.all(children.map(async (pid) => `${pid} ${await commandLine(pid)}`));
+  await writeFile(path.join(artifacts, "children-before-quit.txt"), described.join("\n"));
   await execute("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('desktop_quit'),30);return true;");
-  await until("Native shutdown", () => dead(version.pid));
-  await until("Terminal cleanup", () => dead(child));
-  await until("Background child cleanup", () => dead(backgroundChild));
-  await until("Background process cleanup", () => dead(shutdownBackground.pid));
-  // Reopen the actual window against an already running headless engine.
-  await wd("DELETE", `/session/${session}`); session = undefined;
-  let ownerOutput = "", ownerSpawnError;
-  attachedOwner = spawn(binary, [...binaryArgs.filter(arg => arg !== "ui"), ...profileArgs, "--workspace", cliProject, "serve"], {env: cliEnv, detached: true, stdio: ["ignore", "pipe", "pipe"]});
-  attachedOwner.on("error", error => { ownerSpawnError = error; });
-  attachedOwner.stdout.on("data", chunk => { ownerOutput += chunk; });
-  attachedOwner.stderr.on("data", chunk => { ownerOutput += chunk; });
-  await until("Headless owner ready", () => {
-    if(ownerSpawnError) throw ownerSpawnError;
-    assert.equal(attachedOwner.exitCode, null, ownerOutput);
-    return ownerOutput.includes(" · serving ");
-  }, 25000);
-  const ownerHealth = await cli(["health"]);
-  const attached = await wd("POST", "/session", {capabilities: {alwaysMatch: {"tauri:options": {application: binary, args: [...binaryArgs, ...profileArgs, "--workspace", project]}}}});
-  session = attached.sessionId;
-  await wd("POST", `/session/${session}/timeouts`, {script:20000, implicit:0, pageLoad:30000});
-  await until("Attached desktop ready", () => execute("return document.body.innerText.includes('Connected to your running engine')"), 25000);
-  const attachedVersion = await api("GET", "/api/version");
-  assert.equal(attachedVersion.desktop_attached, true);
-  assert.equal(ownerHealth.workspace, cliProject);
-  const attachedRuntime = await api("GET", "/api/runtime");
-  assert.equal(attachedRuntime.mode, "server");
-  assert.equal(attachedVersion.pid, attachedRuntime.pid);
-  assert.notEqual(attachedVersion.desktop_pid, attachedVersion.pid);
-  assert.equal((await api("GET", "/api/workspace/status")).workspace, project);
-  assert.equal((await api("POST", "/api/workspace/exec", {command:"printf attached-native-window"})).stdout, "attached-native-window");
-  const attachedWakeHandler = await execute("window.__attachedWakeups=[]; return window.__TAURI_INTERNALS__.transformCallback(event=>window.__attachedWakeups.push(event.payload));");
-  await native("plugin:event|listen", {event:"shadowcode:events", target:{kind:"Any"}, handler:attachedWakeHandler});
-  const attachedJob = await api("POST", "/api/jobs", {task:"Wait for the attachment lifetime check.", workspace:project});
-  await until("Engine event reaches attached window", () => execute("return window.__attachedWakeups.some(event=>event.session_id===arguments[0])", [attachedJob.session_id]));
-  await until("Attached task running", async () => (await api("GET", `/api/jobs/${attachedJob.id}`)).status === "running");
-  await until("Attached task controls visible", () => execute("return !!document.querySelector('button[aria-label=\"Stop task\"]')"));
-  await screenshot("attached-engine"); await accessibility("attached-engine");
-  await execute("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('desktop_quit'),30);return true;");
-  await until("Attached window detached", () => dead(attachedVersion.desktop_pid));
-  assert.equal(await dead(attachedVersion.pid), false, "Closing an attached window must leave its engine running");
-  assert.equal((await cli(["jobs", attachedJob.id])).status, "running");
-  await cli(["jobs", attachedJob.id, "--cancel"]);
-  await until("Detached task cancelled explicitly", async () => (await cli(["jobs", attachedJob.id])).status === "cancelled");
-  await wd("DELETE", `/session/${session}`); session = undefined;
-  const reopened = await wd("POST", "/session", {capabilities: {alwaysMatch: {"tauri:options": {application: binary, args: [...binaryArgs, ...profileArgs, "--workspace", project]}}}});
-  session = reopened.sessionId;
-  await until("Reattached desktop ready", () => execute("return document.body.innerText.includes('Connected to your running engine')"), 25000);
-  const reopenedVersion = await api("GET", "/api/version");
-  attachedOwner.kill("SIGINT");
-  await until("Headless owner shutdown", () => dead(attachedVersion.pid));
-  await execute("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('desktop_quit'),30);return true;");
-  await until("Window can close after its owner exits", () => dead(reopenedVersion.desktop_pid));
-  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, runtime: version.runtime, modelRequests: requests, requestedModels, mcpCalls, mcpHttpCalls, queueRequests, checks: [...(defaultProfile ? ["repeated default-profile activation preserves the live window and its extraction"] : []), "native worktree creation, trust prompt, reviewed removal, missing checkout rescue, reviewed return without committing, preserved original metadata and light/dark/compact accessibility",
-    "native built-in/custom plugin review and installation, separate hook activation, actual installed skill execution, removal with local edits preserved", "model context controls, parallel and Guardian diagnostics with light/dark accessibility", "response fork opens a new conversation and original can be reopened", "embedded interface", "Rust IPC", "native approval", "real file write and terminal verification", "durable reload", "queued follow-ups, project FIFO, cross-conversation cancellation, reload selection, model/mode snapshots and inherited results", "native routing controls and persisted model/fallback notices", "background start, live output, coexistence with tasks, stop, and child cleanup on quit", "model background tools, visible exact-command approvals, light/dark/compact approval accessibility, shared panel state and immediate stop cleanup", "selected skill execution, mode enforcement, provenance and durable command cards", "project inspection, native diagnostic cards and Health status distinctions", "task-note command persistence and goal approval after backend selection changes", "reviewed hook activation and disable in Settings, actual completion check, durable hook result", "shared CLI engine with independent project selection and background controls", "MCP registration, exact-argument approval, stdio and authenticated HTTP results, credential redaction, cleanup and removal", "cancellation", "compact layout", "native light/dark/compact/goals/routing/background/skills/hooks/mcp/mcp-http/inspection/diagnostics and queue accessibility", "goal creation, automatic milestone progression, verification, live transcript and pause", "12,000-event history with bounded DOM, all 94 pages, newer/latest navigation and three-layout accessibility", "managed native shutdown", "desktop attachment to headless owner, independent project selection, visible lifetime notice, terminal execution, durable task surviving window close and window exit after owner shutdown"] }, null, 2));
-  console.log("Native desktop window passed: IPC, approval, file/terminal tools, routing, background processes, MCP, shared CLI isolation, replay, cancellation, layout, goals, accessibility, shutdown.");
+  await until("App exited", () => dead(appPid), 30000);
+  for (const pid of [...children, ...serverPids]) await until(`Child ${pid} exited (${await commandLine(pid)})`, () => dead(pid), 15000);
+  const strays = (await run("pgrep", ["-f", runtimeDir]).catch(() => ({ stdout: "" }))).stdout.trim();
+  assert.equal(strays, "", "No llama-server test double remains");
+  note(`quit: app and ${children.length} child processes (${serverPids.length} llama-server launches) exited`);
+  await wd("DELETE", `/session/${session}`).catch(() => {}); session = undefined;
+
+  await writeFile(path.join(artifacts, "result.json"), JSON.stringify({ passed: true, version: version.version, vendors: vendorSummary, checks, axe: axeFindings, screenshots: shots }, null, 2));
+  console.log(`Native desktop window passed (${checks.length} checks). Screenshots in ${artifacts}`);
 } catch (error) {
   if (session) {
-    await screenshot("failure").catch(() => {});
-    await execute("return document.body.innerText").then(text => writeFile(path.join(artifacts, "failure.txt"), text)).catch(() => {});
+    await writeFile(path.join(artifacts, "failure.png"), Buffer.from(await wd("GET", `/session/${session}/screenshot`), "base64")).catch(() => {});
+    await text().then((body) => writeFile(path.join(artifacts, "failure.txt"), body)).catch(() => {});
   }
   throw error;
 } finally {
   if (session) await wd("DELETE", `/session/${session}`).catch(() => {});
-  try { process.kill(-driver.pid, "SIGTERM"); } catch { /* Already exited. */ }
-  for (const socket of sockets) socket.destroy();
-  model.close();
-  await delay(300);
-  try { process.kill(-driver.pid, "SIGKILL"); } catch { /* Already exited. */ }
-  if(httpPeer && httpPeer.exitCode === null && httpPeer.signalCode === null) { const closed=new Promise(resolve=>httpPeer.once("close",resolve)); httpPeer.kill("SIGKILL"); await closed; }
-  if(attachedOwner && attachedOwner.exitCode === null && attachedOwner.signalCode === null) {
-    const closed = new Promise(resolve => attachedOwner.once("close", resolve));
-    try { process.kill(-attachedOwner.pid, "SIGKILL"); } catch {}
-    await closed;
+  if (appPid && !(await dead(appPid))) {
+    // A failed run must not leave the window (and xvfb-run) behind.
+    const stray = await descendants(appPid);
+    for (const pid of [appPid, ...stray]) try { process.kill(pid, "SIGKILL"); } catch { /* exited */ }
   }
-  output.end();
-  await rm(scratch, { recursive: true, force: true });
+  try { process.kill(-driver.pid, "SIGTERM"); } catch { /* exited */ }
+  await delay(300);
+  try { process.kill(-driver.pid, "SIGKILL"); } catch { /* exited */ }
+  for (const record of await launches()) try { process.kill(record.pid, "SIGKILL"); } catch { /* exited */ }
+  driverLog.end();
+  if (!process.env.SHADOW_KEEP_SCRATCH) await rm(scratch, { recursive: true, force: true });
 }

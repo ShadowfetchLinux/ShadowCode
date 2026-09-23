@@ -46,20 +46,14 @@ it("hides rewind for vendor CLI agent tasks", () => {
       onToast={toast}
     />,
   );
-  expect(
-    (screen.getByRole("button", { name: "Rewind files" }) as HTMLButtonElement)
-      .disabled,
-  ).toBe(true);
+  expect(screen.queryByRole("button", { name: "Rewind files" })).toBeNull();
 });
 
 it("distinguishes task pause from goal pause and prevents rewind while running", async () => {
   const toast = vi.fn();
   render(<TaskSteerBar job={job} onToast={toast} />);
-  const rewind = screen.getByRole("button", {
-    name: "Rewind files",
-  }) as HTMLButtonElement;
-  expect(rewind.disabled).toBe(true);
-  fireEvent.click(rewind);
+  // No rewind control while the task runs (only at a pause boundary).
+  expect(screen.queryByRole("button", { name: "Rewind files" })).toBeNull();
   expect(api.rewindJob).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Pause task" }));
   await waitFor(() =>

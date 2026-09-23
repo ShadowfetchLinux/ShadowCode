@@ -843,7 +843,7 @@ impl Store {
                 json!({"text":prompt}).to_string()
             ],
         )?;
-        tx.execute("UPDATE sessions SET updated_at=?,title=CASE WHEN title IS NULL OR title='' THEN ? ELSE title END WHERE id=?",params![now(),prompt.chars().take(80).collect::<String>(),session_id])?;
+        tx.execute("UPDATE sessions SET updated_at=?,title=CASE WHEN title IS NULL OR title='' OR title IN ('New task','Welcome') THEN ? ELSE title END WHERE id=?",params![now(),prompt.chars().take(80).collect::<String>(),session_id])?;
         tx.commit()?;
         Ok(())
     }

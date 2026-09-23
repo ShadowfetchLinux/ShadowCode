@@ -128,7 +128,11 @@ export function TaskSummary({
         )}
       </div>
       <div className="row task-summary-actions">
-        <button type="button" className="mini" onClick={() => onReview()}>
+        <button
+          type="button"
+          className="mini"
+          onClick={() => onReview(changed[0])}
+        >
           Review changes
         </button>
         {onRewind && changed.length > 0 && (

@@ -109,7 +109,7 @@ export function Sidebar({
           className="task-link"
           data-session-id={s.id}
           aria-current={s.id === selected ? "page" : undefined}
-          title={s.title || "Untitled task"}
+          title={s.title || "New task"}
           onClick={() => onSelect(s.id)}
         >
           {running ? (
@@ -123,7 +123,7 @@ export function Sidebar({
           ) : (
             <MessageSquare size={14} />
           )}
-          <span>{s.title || "Untitled task"}</span>
+          <span>{s.title || "New task"}</span>
         </button>
         <button
           type="button"
@@ -167,7 +167,7 @@ export function Sidebar({
         />
       </label>
       <div className="sidebar-section-title">
-        Recent / Projects
+        Projects
         <button
           type="button"
           className="icon-btn"

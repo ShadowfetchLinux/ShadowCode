@@ -314,26 +314,32 @@ describe("durable transcript", () => {
         used_estimated_tokens: 1200,
         limit: 8000,
       }),
-      event(2, "autonomy.budget", { ratio: 0.8, max_steps: 64 }),
-      event(3, "runaway.warning", {
+      event(2, "context.budget", {
+        used_estimated_tokens: 7000,
+        limit: 8000,
+      }),
+      event(3, "autonomy.budget", { ratio: 0.8, max_steps: 64 }),
+      event(4, "runaway.warning", {
         action: "replan",
         tool: "read_file",
         repeats: 4,
       }),
-      event(4, "runaway.warning", {
+      event(5, "runaway.warning", {
         kind: "assistant_text",
         action: "pause",
         repeats: 5,
       }),
-      event(5, "runaway.warning", {
+      event(6, "runaway.warning", {
         kind: "prose_command",
         action: "pause",
         repeats: 5,
       }),
     ]);
-    expect(state.items.map((item) => item.text).join("\n")).toMatch(
-      /Context 1200\/8000/,
-    );
+    const text = state.items.map((item) => item.text).join("\n");
+    // A routine budget report stays out of the conversation; a nearly full
+    // context is surfaced.
+    expect(text).not.toMatch(/1200\/8000/);
+    expect(text).toMatch(/Context nearly full: 7000\/8000/);
     expect(state.items.some((item) => /Autonomy budget/.test(item.text))).toBe(
       true,
     );

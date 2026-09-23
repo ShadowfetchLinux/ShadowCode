@@ -66,6 +66,11 @@ export const LOCAL_USAGE = "Runs on this computer · No subscription quota";
 export const isLocal = (target: PickerTarget) =>
   target.inference === "local" || target.group === "local";
 
+/** The row name without the " · This computer" suffix, for places that
+ * already carry a Local badge next to it (the composer trigger). */
+export const shortName = (target: PickerTarget) =>
+  isLocal(target) ? target.name.replace(/ · This computer$/, "") : target.name;
+
 export const isReady = (target: PickerTarget) =>
   target.availability === "ready";
 
