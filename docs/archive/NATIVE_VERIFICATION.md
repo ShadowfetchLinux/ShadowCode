@@ -253,7 +253,7 @@ records **29 scripted model requests and 21 passing accessibility views**.
 
 The native CLI performs built-in and local-file installs with reviewed hashes,
 checks skill discovery and stale-hash refusal, and verifies edited-file retention.
-The [plugin guide](NATIVE_PLUGINS.md) documents the supported schema, example
+The [plugin guide](../NATIVE_PLUGINS.md) documents the supported schema, example
 bundle, limits, separate executable activation and partial-install recovery.
 Legacy Python bundles remain on disk and are explicitly reported for conversion.
 

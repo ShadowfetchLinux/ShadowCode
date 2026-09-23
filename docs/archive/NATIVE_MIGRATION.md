@@ -53,7 +53,7 @@ acceptance gates for the published 0.21 release.
 
 ## Current implementation
 
-- [Isolated worktree creation](NATIVE_WORKTREES.md) from local commits, with a
+- [Isolated worktree creation](../NATIVE_WORKTREES.md) from local commits, with a
   separate managed branch, preserved source edits, private recovery records and
   CLI inventory, desktop Settings controls and reviewed clean removal that retains
   branches and commits.
@@ -91,15 +91,15 @@ Implemented foundation:
 - Native Ollama and compatible streaming transports with incremental UTF-8/SSE
   parsing, parallel tool-call assembly, usage accounting, bounded responses,
   cancellation, and rejection of incomplete tool arguments.
-- [Provider-aware model registration and routing](NATIVE_ROUTING.md), with
+- [Provider-aware model registration and routing](../NATIVE_ROUTING.md), with
   editable Plan/Build/Review/Test selections, preserved custom credentials and
   context limits, queued configuration snapshots, explicit per-task overrides,
   persisted model/fallback notices, and goal verification routed to Test.
-- [Native commands and project skills](NATIVE_WORKFLOWS.md) with confined
+- [Native commands and project skills](../NATIVE_WORKFLOWS.md) with confined
   discovery, explicit invocation, frozen queued instructions, model routing,
   preserved Plan/Review permissions, source/hash provenance, durable command
   cards, validated editing, and project notes included in task guidance.
-- [Native CLI](NATIVE_CLI.md) for tasks, commands/skills, approvals, sessions and
+- [Native CLI](../NATIVE_CLI.md) for tasks, commands/skills, approvals, sessions and
   export, model settings, goals, checkpoints, and background controls. It starts
   without a display and shares an active desktop or explicit headless owner
   through a private local connection. Client navigation does not switch the
@@ -110,23 +110,23 @@ Implemented foundation:
   through independent connection-scoped navigation. Closing an attached window
   leaves shared work running. A bounded event feed drives durable replay and
   completion notifications. Automatic reattachment remains open; see
-  [desktop lifetime](NATIVE_DESKTOP.md).
-- [Native terminal interface](NATIVE_TUI.md) with a shared engine, model/session/project
+  [desktop lifetime](../NATIVE_DESKTOP.md).
+- [Native terminal interface](../NATIVE_TUI.md) with a shared engine, model/session/project
   pickers, Unicode composer, explicit approvals, task modes, queued follow-ups,
   tool cards and paged history. Real PTY checks cover submission, approval and
   cleanup. Broader terminal navigation, visual and stress checks remain open.
-- [Native project plugins](NATIVE_PLUGINS.md) with built-in and custom bundle
+- [Native project plugins](../NATIVE_PLUGINS.md) with built-in and custom bundle
   review/import in Settings and CLI, namespaced usable workflows, separately
   activated hooks/MCP, collision and stale-hash checks, private recovery journals,
   and uninstall that preserves edits and legacy plugin contents. Bundles cannot
   install dependencies, execute scripts or change permissions during installation.
-- [Native lifecycle hooks](NATIVE_HOOKS.md) with explicit project/content
+- [Native lifecycle hooks](../NATIVE_HOOKS.md) with explicit project/content
   activation, bounded sequential command execution, gates before commands and
   commits, checks after edits/tests, completion repair, and error/compaction
   events. Settings and CLI expose review/activation; durable cards expose results.
   Changed definitions fail closed, read-only tasks stay inert, and cancellation
   cleans up owned subprocesses. Legacy Python callbacks require conversion.
-- [Managed background processes](NATIVE_BACKGROUND.md) for project servers and
+- [Managed background processes](../NATIVE_BACKGROUND.md) for project servers and
   watchers, with permission checks, bounded live log tails, durable status and
   audit events, project-scoped controls, bounded concurrency, legacy history
   import, and stop/shutdown that waits for process-group cleanup. Model tools
@@ -142,12 +142,12 @@ Implemented foundation:
   workspaces, scoped approvals, cancellation that waits for cleanup, restart
   recovery, and atomic completion/usage/event commits. Continuation and branching
   retain valid function-call histories; interrupted calls are never blindly replayed.
-- [Paged native desktop history](NATIVE_HISTORY.md) bounds saved snapshots and
+- [Paged native desktop history](../NATIVE_HISTORY.md) bounds saved snapshots and
   supports older/newer/latest navigation while current work continues. Original
   records and exports remain intact. Large single responses preview the first
   512 KiB before an explicit full render. Long-running live transcript memory
   and renderer virtualization remain separate gates.
-- A [desktop follow-up queue](NATIVE_QUEUE.md) with visible project-wide waiting
+- A [desktop follow-up queue](../NATIVE_QUEUE.md) with visible project-wide waiting
   messages, model/mode snapshots, independent queued cancellation, continued
   streaming, conversation switching and reload recovery. Active history remains
   discoverable beyond recent-list limits; a stale queue action cannot cancel a
@@ -173,7 +173,7 @@ Implemented foundation:
   persisted window state, notifications, and managed close/termination handling.
   Native UI replay preserves streaming message IDs, tool paths, and durable
   completion. The actual window is exercised through WebKit WebDriver.
-- [Native goals and milestones](NATIVE_GOALS.md) with persisted task attribution,
+- [Native goals and milestones](../NATIVE_GOALS.md) with persisted task attribution,
   sequential execution through the shared workspace queue, pause/cancellation,
   resume that skips completed work, and conservative recovery after interruption.
   The default inspection requires current reads; final verification requires a
@@ -201,7 +201,7 @@ The native release gates are complete for the published 0.21 Linux packages.
 Future work can extend provider and platform coverage without changing the
 release's Python-free runtime contract.
 
-The [native MCP client](NATIVE_MCP.md) has bounded Rust stdio and Streamable HTTP
+The [native MCP client](../NATIVE_MCP.md) has bounded Rust stdio and Streamable HTTP
 transports, inert Settings/CLI registration, explicit project/content activation, lazy tool
 discovery, individually approved calls, and task-owned process/stream cleanup.
 HTTP uses explicit credential references, prevents redirects and automatic call
@@ -217,18 +217,18 @@ in the verification record. Private engine-side ownership now cancels
 MCP jobs after gateway SIGKILL, including unread submission replies, queued tasks
 and active command children; unrelated work continues.
 
-[Native project inspection](NATIVE_INSPECTION.md) supplies bounded maps, generated
+[Native project inspection](../NATIVE_INSPECTION.md) supplies bounded maps, generated
 note sections that preserve user text, native runtime/profile/project diagnostics,
 and literal-path Git history. CLI and desktop commands use the same service.
 MCP test jobs run actual commands without a model, with exact approvals, hooks,
 queue ownership, real output/exit status, and timeout/process cleanup.
 
-[Native task notes](NATIVE_MEMORY.md) extend project memory with scoped persistent
+[Native task notes](../NATIVE_MEMORY.md) extend project memory with scoped persistent
 notes, legacy-file preservation, atomic edits with stale-hash rejection, bounded
 continuation context, independent branch archives and complete note exports.
 The desktop, CLI and MCP server share this service.
 
-[Native SQLite inspection](NATIVE_SQLITE.md) replaces the Python built-in tools
+[Native SQLite inspection](../NATIVE_SQLITE.md) replaces the Python built-in tools
 with confined, bounded read-only queries, typed results, parameter binding,
 live WAL coordination and cancellation. Model tools, CLI and MCP share the
 reader. The history store also uses the updated bundled SQLite 3.53.2 library.
@@ -245,7 +245,7 @@ shipped runtime sources in a container with networking disabled and compares
 the resulting machine code. Corresponding sources for all remaining redistributed
 dependencies and the broader release gates above still apply.
 
-See [native desktop development](NATIVE_DESKTOP.md) for prerequisites and isolated
+See [native desktop development](../NATIVE_DESKTOP.md) for prerequisites and isolated
 build/run instructions. Compile the interface before checks that include the
 desktop crate.
 
