@@ -225,6 +225,16 @@ async fn native_doctor_reports_real_checks_without_implicit_model_or_shell_execu
         .unwrap()
         .iter()
         .any(|c| c["id"] == "python" || c["id"] == "port"));
+    for id in ["cli-codex", "cli-grok", "cli-claude"] {
+        assert!(
+            report["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["id"] == id && c["status"] != "fail"),
+            "doctor missing {id}"
+        );
+    }
     assert!(model.requests.lock().unwrap().is_empty());
     let tested = api(&service, "GET", "/api/doctor?test_model=true", Value::Null)
         .await

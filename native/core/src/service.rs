@@ -649,8 +649,16 @@ impl Service {
             }
             ("GET", "/api/health") => {
                 let cfg = self.config()?;
+                let vendor = crate::cli_agent::Vendor::from_provider(&cfg.model.provider);
+                let provider_detail = if cfg.model.provider == "mock" {
+                    "Select a model to run coding tasks"
+                } else if vendor.is_some() {
+                    "Vendor CLI agent; login stays with the official CLI. Use Doctor for install/login status."
+                } else {
+                    "Configured; use Test model to verify connectivity"
+                };
                 return Ok(
-                    json!({"ok":true,"app":"ShadowCode","version":crate::VERSION,"workspace":self.workspace()?,"model":cfg.model,"onboarding":cfg.onboarding,"trusted":cfg.is_trusted(&self.workspace()?),"permissions":cfg.permissions,"provider":{"ok":cfg.model.provider!="mock","name":cfg.model.provider,"detail":if cfg.model.provider=="mock"{"Select a model to run coding tasks"}else{"Configured; use Test model to verify connectivity"}},"runtime":"rust"}),
+                    json!({"ok":true,"app":"ShadowCode","version":crate::VERSION,"workspace":self.workspace()?,"model":cfg.model,"onboarding":cfg.onboarding,"trusted":cfg.is_trusted(&self.workspace()?),"permissions":cfg.permissions,"provider":{"ok":cfg.model.provider!="mock","name":cfg.model.provider,"detail":provider_detail},"runtime":"rust","cli_agents":cfg.cli_agents}),
                 );
             }
             ("GET", "/api/workspace/status") => {
@@ -851,7 +859,20 @@ impl Service {
                 }
                 let cfg = self.config()?;
                 self.register(&cfg.model)?;
-                return Ok(json!({"models":model_registry::catalog(&store,&cfg.model)?}));
+                let mut models = model_registry::catalog(&store, &cfg.model)?;
+                for vendor in crate::cli_agent::catalog_models(&cfg.cli_agents) {
+                    if !models.iter().any(|row| row["id"] == vendor["id"] || row["provider"] == vendor["provider"]) {
+                        models.push(vendor);
+                    }
+                }
+                return Ok(json!({"models":models,"cli_agents":crate::cli_agent::doctor::status(&cfg.cli_agents).await}));
+            }
+            ("GET", "/api/cli-agents") => {
+                let cfg = self.config()?;
+                return Ok(json!({
+                    "vendors": crate::cli_agent::doctor::status(&cfg.cli_agents).await,
+                    "config": cfg.cli_agents
+                }));
             }
             ("POST", "/api/models/test") => {
                 let cfg = self.config()?;
@@ -860,6 +881,27 @@ impl Service {
                     model.provider != "mock",
                     "The offline preview is not a coding model"
                 );
+                if let Some(vendor) = crate::cli_agent::Vendor::from_provider(&model.provider) {
+                    let home = std::env::var_os("HOME")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::path::PathBuf::from("/nonexistent"));
+                    let check = crate::cli_agent::doctor::check_vendor(
+                        vendor,
+                        &cfg.cli_agents,
+                        &home,
+                        None,
+                    )
+                    .await;
+                    let ready = check["state"] == "ready";
+                    return Ok(json!({
+                        "ok":ready,
+                        "reply":check["detail"],
+                        "error":if ready { Value::Null } else { check["fix"].clone() },
+                        "vendor":vendor.id(),
+                        "state":check["state"],
+                        "latency_ms":0
+                    }));
+                }
                 let started = Instant::now();
                 let client = ModelClient::new(model.clone(), self.engine.paths())?;
                 let cancel = CancellationToken::new();
@@ -1562,6 +1604,15 @@ impl Service {
             .as_str()
             .filter(|v| !v.is_empty())
             .unwrap_or(&fallback.provider);
+        if let Some(vendor) = crate::cli_agent::Vendor::from_provider(provider)
+            .or_else(|| crate::cli_agent::resolve_vendor(provider).and_then(|m| crate::cli_agent::Vendor::from_provider(&m.provider)))
+        {
+            let name = body["name"]
+                .as_str()
+                .filter(|v| !v.is_empty() && *v != vendor.provider() && *v != vendor.label())
+                .or_else(|| body["model"].as_str().filter(|v| !v.is_empty()));
+            return crate::cli_agent::vendor_model(vendor, name);
+        }
         let preset = models::preset(provider);
         let provider_changed = provider != fallback.provider;
         let name = body["name"]

@@ -5,6 +5,7 @@ pub mod background;
 pub mod checkpoint;
 #[cfg(unix)]
 pub mod cli;
+pub mod cli_agent;
 pub mod config;
 pub mod context;
 #[cfg(unix)]

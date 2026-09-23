@@ -435,6 +435,15 @@ impl Engine {
             mode: request.mode,
             model: if context.command.is_some() {
                 "native command".into()
+            } else if let Some(vendor) =
+                crate::cli_agent::Vendor::from_provider(&config.model.provider)
+            {
+                ensure!(
+                    config.cli_agents.vendor_enabled(vendor),
+                    "{} is disabled in Settings → Advanced",
+                    vendor.label()
+                );
+                vendor.label().into()
             } else {
                 config.model.name.clone()
             },
@@ -611,6 +620,9 @@ impl Engine {
     pub fn rewind_job(&self, id: &str) -> Result<Value> {
         let running = self.running(id)?;
         let job = self.job(id)?.context("Job not found")?;
+        if vendor_job(&job, running.as_deref()) {
+            bail!("Rewind does not apply to Claude / Codex / Grok vendor-agent tasks. Those CLIs write files with their own tools; use Git or the vendor CLI to undo.");
+        }
         let _reservation = if running.is_none() {
             Some(self.reserve_workspace(&job.workspace)?)
         } else {
@@ -908,6 +920,9 @@ impl Engine {
             task_id: job.task_id.clone(),
             sender: self.0.sender.clone(),
         };
+        if crate::cli_agent::is_cli_provider(&running.config.model.provider) {
+            return self.run_cli_agent(running, job, events).await;
+        }
         let tools = ToolExecutor::new(
             running.workspace.clone(),
             running.config.clone(),
@@ -932,6 +947,100 @@ impl Engine {
                 Err(error.context(format!("External tool cleanup failed: {cleanup:#}")))
             }
         }
+    }
+    async fn run_cli_agent(
+        &self,
+        running: &Running,
+        job: Job,
+        events: TaskEvents,
+    ) -> Result<(String, Value)> {
+        let vendor = crate::cli_agent::Vendor::from_provider(&running.config.model.provider)
+            .context("Not a vendor CLI provider")?;
+        let cli = &running.config.cli_agents;
+        ensure!(
+            cli.vendor_enabled(vendor),
+            "{} is disabled in Settings → Advanced",
+            vendor.label()
+        );
+        events.emit(
+            "agent.started",
+            json!({
+                "job_id":job.id,
+                "task":job.task,
+                "mode":job.mode,
+                "model":job.model,
+                "native":false,
+                "vendor_agent":vendor.id(),
+                "images":job.images
+            }),
+        )?;
+        events.emit(
+            "agent.warning",
+            json!({"text":"Vendor agent: the official CLI owns tools and sandbox. Rewind does not apply to this task."}),
+        )?;
+        if let Some(decision) = &job.routing {
+            events.emit(
+                if decision.fallback_reason.is_some() {
+                    "routing.fallback"
+                } else {
+                    "routing.selected"
+                },
+                json!(decision),
+            )?;
+        }
+        let mut prompt = job.task.clone();
+        if !job.images.is_empty() {
+            prompt.push_str("\n\nAttached images (workspace-relative): ");
+            prompt.push_str(&job.images.join(", "));
+        }
+        let binary = cli.binary(vendor).to_owned();
+        let options = crate::cli_agent::LaunchOptions {
+            binary,
+            workspace: running.workspace.path.clone(),
+            model: running.config.model.name.clone(),
+            read_only: running.config.permissions.level
+                == crate::config::PermissionLevel::ReadOnly,
+        };
+        #[cfg(unix)]
+        let (text, usage) = crate::cli_agent::runner::run(crate::cli_agent::runner::Request {
+            vendor,
+            options,
+            config: cli,
+            prompt,
+            session_id: job.session_id.clone(),
+            task_id: job.task_id.clone(),
+            job_id: job.id.clone(),
+            events: &events,
+            approvals: &self.0.approvals,
+            cancel: running.cancel.clone(),
+            steer: &running.steer,
+        })
+        .await?;
+        #[cfg(not(unix))]
+        let (text, usage) = {
+            let _ = (options, prompt, events);
+            bail!("Vendor CLI backends require a Unix host")
+        };
+        {
+            let mut record = running
+                .record
+                .lock()
+                .map_err(|_| anyhow!("Job lock poisoned"))?;
+            record.usage.add(&usage);
+            record.steps = record.steps.saturating_add(1);
+            self.0.store.save_job(&json!(*record))?;
+        }
+        events.emit(
+            "verification.summary",
+            json!({
+                "status":"vendor_owned",
+                "commands":[],
+                "verified":false,
+                "vendor_agent":vendor.id(),
+                "note":"The vendor CLI owns verification; ShadowCode does not claim a harness verdict."
+            }),
+        )?;
+        Ok((text, json!({"goal":"","steps":[]})))
     }
     async fn await_steering(
         &self,
@@ -1571,6 +1680,15 @@ impl Engine {
         }
         bail!("Task reached its {}-step limit. Review the changes and continue with a focused follow-up.",running.config.agent.max_steps)
     }
+}
+fn vendor_job(job: &Job, running: Option<&Running>) -> bool {
+    running
+        .map(|job| crate::cli_agent::is_cli_provider(&job.config.model.provider))
+        .unwrap_or(false)
+        || job
+            .routing
+            .as_ref()
+            .is_some_and(|decision| crate::cli_agent::is_cli_provider(&decision.provider))
 }
 impl Running {
     fn snapshot(&self) -> Result<Job> {

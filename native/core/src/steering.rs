@@ -76,6 +76,7 @@ impl SteerControl {
             .map_err(|_| anyhow::anyhow!("Steer lock poisoned"))?;
         state.pause_hashes = hashes;
         self.paused.store(true, Ordering::Release);
+        self.notify.notify_waiters();
         Ok(())
     }
 

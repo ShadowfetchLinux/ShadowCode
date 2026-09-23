@@ -114,6 +114,14 @@ pub fn from_row(row: &Value) -> Result<ModelConfig> {
     Ok(model)
 }
 pub fn resolve(store: &Store, id: &str, default: &ModelConfig) -> Result<ModelConfig> {
+    if let Some(model) = crate::cli_agent::resolve_vendor(id) {
+        validate(&model)?;
+        return Ok(model);
+    }
+    if crate::cli_agent::is_cli_provider(&default.provider) && (id == default.default || id == default.name) {
+        validate(default)?;
+        return Ok(default.clone());
+    }
     if id == default.default {
         validate(default)?;
         return Ok(default.clone());

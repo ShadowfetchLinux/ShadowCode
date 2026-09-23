@@ -155,6 +155,8 @@ pub struct Config {
     pub trusted_workspaces: Vec<String>,
     #[serde(default)]
     pub guardian: Value,
+    #[serde(default)]
+    pub cli_agents: crate::cli_agent::CliAgentsConfig,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -173,6 +175,7 @@ impl Default for Config {
             logging: json!({"level":"info"}),
             trusted_workspaces: Vec::new(),
             guardian: json!({"enabled":false,"interval_sec":3600,"allow_prepare_patch":false}),
+            cli_agents: crate::cli_agent::CliAgentsConfig::default(),
             extra: BTreeMap::new(),
         }
     }
@@ -298,6 +301,7 @@ impl Config {
         #[cfg(unix)]
         crate::mcp::registry::validate_config(&self.mcp)?;
         crate::routing::validate(&self.routing)?;
+        self.cli_agents.validate()?;
         self.hooks.validate()?;
         ensure!(
             serde_yaml_ng::to_string(self)?.len() <= MAX_CONFIG_BYTES,

@@ -305,6 +305,14 @@ impl Service {
                 "",
             ));
             checks.extend(crate::sandbox::doctor_checks());
+            for mut check in crate::cli_agent::doctor::checks(&cfg.cli_agents).await {
+                let status = check["status"].as_str().unwrap_or("info").to_owned();
+                check["ok"] = json!(status == "pass");
+                if check.get("title").is_none() {
+                    check["title"] = check["label"].clone();
+                }
+                checks.push(check);
+            }
         }
         let failures = checks.iter().filter(|c| c["status"] == "fail").count();
         Ok(

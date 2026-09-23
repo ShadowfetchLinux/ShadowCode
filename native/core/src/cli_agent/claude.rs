@@ -1,0 +1,367 @@
+//! Claude Code headless adapter.
+//!
+//! Spawns `claude -p --output-format stream-json --input-format stream-json
+//! --verbose --include-partial-messages --permission-prompts host`
+//! (https://code.claude.com/docs/en/headless). stdout is NDJSON:
+//! `system/init`, `stream_event` (Anthropic streaming events, text deltas in
+//! `content_block_delta`), `assistant` (complete message with `text` and
+//! `tool_use` blocks), `user` (`tool_result` blocks), and a final `result`.
+//! With `--permission-prompts host` the CLI asks the host to answer
+//! permission prompts as `control_request` / `can_use_tool` frames, answered
+//! with `control_response` (`behavior: allow|deny`). Interrupts are a
+//! client→CLI `control_request` with subtype `interrupt`.
+//!
+//! Policy: Anthropic forbids third-party clients from using Pro/Max OAuth
+//! tokens directly; driving the official `claude` binary with the user's own
+//! login is currently tolerated but not guaranteed. ShadowCode never touches
+//! the credential and exposes `cli_agents.claude_enabled` to opt out.
+use super::{clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, Step, Update, Vendor};
+use anyhow::{bail, Result};
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+
+const OUTPUT_PREVIEW: usize = 8000;
+
+#[derive(Default)]
+pub struct ClaudeAdapter {
+    started: bool,
+    initialized: bool,
+    streamed_text: bool,
+    pending_prompt: Option<String>,
+    pending_permissions: HashSet<String>,
+    tool_names: HashMap<String, String>,
+    tool_paths: HashMap<String, String>,
+    turn_active: bool,
+    control_counter: u64,
+}
+impl ClaudeAdapter {
+    fn user_message(text: &str) -> String {
+        json!({"type":"user","message":{"role":"user","content":[{"type":"text","text":text}]}})
+            .to_string()
+    }
+    fn content_blocks(message: &Value) -> Vec<Value> {
+        match &message["content"] {
+            Value::Array(blocks) => blocks.clone(),
+            Value::String(text) => vec![json!({"type":"text","text":text})],
+            _ => Vec::new(),
+        }
+    }
+    fn assistant(&mut self, message: &Value) -> Step {
+        let mut step = Step::default();
+        for block in Self::content_blocks(message) {
+            match block["type"].as_str().unwrap_or("") {
+                "text" => {
+                    // Text already streamed via stream_event deltas is not
+                    // emitted twice; without --include-partial-messages the
+                    // complete message is the only copy.
+                    if !self.streamed_text {
+                        if let Some(text) = block["text"].as_str().filter(|t| !t.is_empty()) {
+                            step.updates.push(Update::Text(redact(text)));
+                        }
+                    }
+                }
+                "tool_use" => {
+                    let id = block["id"].as_str().unwrap_or("").to_owned();
+                    let name = format!("claude.{}", block["name"].as_str().unwrap_or("tool"));
+                    self.tool_names.insert(id.clone(), name.clone());
+                    step.updates.push(Update::ToolStarted {
+                        id,
+                        name,
+                        detail: redact_value(json!({"input":block["input"]})),
+                    });
+                }
+                _ => {}
+            }
+        }
+        // A new assistant message resets the streamed-text marker for the
+        // next message; deltas set it again as they arrive.
+        self.streamed_text = false;
+        step
+    }
+    fn tool_results(&mut self, message: &Value) -> Step {
+        let mut step = Step::default();
+        for block in Self::content_blocks(message) {
+            if block["type"] != "tool_result" {
+                continue;
+            }
+            let id = block["tool_use_id"].as_str().unwrap_or("").to_owned();
+            let name = self
+                .tool_names
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| "claude.tool".into());
+            let success = block["is_error"].as_bool() != Some(true);
+            let text = match &block["content"] {
+                Value::String(text) => text.clone(),
+                Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(|p| p["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => String::new(),
+            };
+            step.updates.push(Update::ToolCompleted {
+                id: id.clone(),
+                name: name.clone(),
+                success,
+                output: redact_value(json!({"output":clip(&text, OUTPUT_PREVIEW)})),
+            });
+            if success {
+                if let Some(paths) = self.edited_paths(&id) {
+                    step.updates.push(Update::FilesChanged {
+                        paths,
+                        detail: json!({"tool":name}),
+                    });
+                }
+            }
+        }
+        step
+    }
+    fn edited_paths(&self, tool_use_id: &str) -> Option<Vec<String>> {
+        let name = self.tool_names.get(tool_use_id)?;
+        let path = self.tool_inputs_path(tool_use_id)?;
+        matches!(
+            name.as_str(),
+            "claude.Edit" | "claude.Write" | "claude.MultiEdit" | "claude.NotebookEdit"
+        )
+        .then_some(vec![path])
+    }
+    fn tool_inputs_path(&self, tool_use_id: &str) -> Option<String> {
+        self.tool_paths.get(tool_use_id).cloned()
+    }
+    fn control_request(&mut self, message: &Value) -> Step {
+        let request_id = message["request_id"].as_str().unwrap_or("").to_owned();
+        let request = &message["request"];
+        match request["subtype"].as_str().unwrap_or("") {
+            "can_use_tool" => {
+                let tool = request["tool_name"].as_str().unwrap_or("tool").to_owned();
+                let input = &request["input"];
+                let command = input["command"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .or_else(|| input["file_path"].as_str().map(str::to_owned))
+                    .unwrap_or_else(|| tool.clone());
+                let kind = match tool.as_str() {
+                    "Bash" => "command",
+                    "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => "file_change",
+                    _ => "tool",
+                };
+                if request_id.is_empty() {
+                    return Step::update(Update::Warning(
+                        "Claude permission request had no request_id; ignored".into(),
+                    ));
+                }
+                self.pending_permissions.insert(request_id.clone());
+                Step::update(Update::Approval(ApprovalPrompt {
+                    request_id,
+                    kind: kind.into(),
+                    tool: format!("claude.{tool}"),
+                    command: redact(&command),
+                    reason: redact(
+                        request["description"]
+                            .as_str()
+                            .or_else(|| input["description"].as_str())
+                            .unwrap_or("Claude requests permission to use a tool"),
+                    ),
+                    arguments: redact_value(json!({"tool":tool,"input":input})),
+                }))
+            }
+            other => Step {
+                send: if request_id.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![json!({"type":"control_response","response":{"subtype":"error","request_id":request_id,"error":"Unsupported control request"}}).to_string()]
+                },
+                updates: vec![Update::Warning(format!(
+                    "Claude control request `{other}` is not supported and was declined"
+                ))],
+            },
+        }
+    }
+}
+impl CliAdapter for ClaudeAdapter {
+    fn vendor(&self) -> Vendor {
+        Vendor::Claude
+    }
+    fn command(&self, options: &LaunchOptions) -> (String, Vec<String>) {
+        let mut args: Vec<String> = [
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--input-format",
+            "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--permission-prompts",
+            "host",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        if options.read_only {
+            args.push("--permission-mode".into());
+            args.push("plan".into());
+        }
+        if !options.model.is_empty() && options.model != "default" {
+            args.push("--model".into());
+            args.push(options.model.clone());
+        }
+        (options.binary.clone(), args)
+    }
+    fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {
+        let _ = options;
+        self.started = true;
+        // stream-json input accepts the first user message immediately; the
+        // `system/init` frame confirms the session started.
+        match self.pending_prompt.take() {
+            Some(prompt) => {
+                self.turn_active = true;
+                vec![Self::user_message(&prompt)]
+            }
+            None => Vec::new(),
+        }
+    }
+    fn ready(&self) -> bool {
+        self.started
+    }
+    fn prompt(&mut self, text: &str) -> Result<Vec<String>> {
+        if self.started {
+            self.turn_active = true;
+            Ok(vec![Self::user_message(text)])
+        } else {
+            self.pending_prompt = Some(text.to_owned());
+            Ok(Vec::new())
+        }
+    }
+    fn on_line(&mut self, line: &str) -> Result<Step> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(Step::default());
+        }
+        let message: Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
+            Err(_) => {
+                return Ok(Step::update(Update::Warning(format!(
+                    "Ignored a non-JSON line from claude: {}",
+                    clip(&redact(trimmed), 200)
+                ))))
+            }
+        };
+        if !message.is_object() {
+            return Ok(Step::update(Update::Warning(
+                "Ignored a non-object frame from claude".into(),
+            )));
+        }
+        Ok(match message["type"].as_str().unwrap_or("") {
+            "system" => {
+                if message["subtype"] == "init" {
+                    self.initialized = true;
+                }
+                Step::default()
+            }
+            "stream_event" => {
+                let event = &message["event"];
+                if event["type"] == "content_block_delta" && event["delta"]["type"] == "text_delta"
+                {
+                    match event["delta"]["text"].as_str() {
+                        Some(text) if !text.is_empty() => {
+                            self.streamed_text = true;
+                            Step::update(Update::Text(redact(text)))
+                        }
+                        _ => Step::default(),
+                    }
+                } else {
+                    Step::default()
+                }
+            }
+            "assistant" => {
+                let message = message["message"].clone();
+                for block in Self::content_blocks(&message) {
+                    if block["type"] == "tool_use" {
+                        if let (Some(id), Some(path)) = (
+                            block["id"].as_str(),
+                            block["input"]["file_path"]
+                                .as_str()
+                                .or_else(|| block["input"]["notebook_path"].as_str()),
+                        ) {
+                            self.tool_paths.insert(id.to_owned(), path.to_owned());
+                        }
+                    }
+                }
+                self.assistant(&message)
+            }
+            "user" => self.tool_results(&message["message"].clone()),
+            "control_request" => self.control_request(&message),
+            "control_response" | "control_cancel_request" | "keep_alive" => Step::default(),
+            "result" => {
+                self.turn_active = false;
+                let mut step = Step::default();
+                let usage = &message["usage"];
+                if let (Some(input), Some(output)) = (
+                    usage["input_tokens"].as_u64(),
+                    usage["output_tokens"].as_u64(),
+                ) {
+                    step.updates.push(Update::Usage { input, output });
+                }
+                if message["is_error"].as_bool() == Some(true)
+                    || message["subtype"]
+                        .as_str()
+                        .is_some_and(|s| s.starts_with("error"))
+                {
+                    let detail = message["result"]
+                        .as_str()
+                        .or_else(|| message["error"].as_str())
+                        .unwrap_or("Claude reported an error");
+                    step.updates.push(Update::TurnFailed(format!(
+                        "Claude {}: {}",
+                        message["subtype"].as_str().unwrap_or("error"),
+                        redact(detail)
+                    )));
+                } else {
+                    // `result` repeats the final assistant text; it is only
+                    // emitted when nothing was streamed for this turn.
+                    let text = message["result"]
+                        .as_str()
+                        .filter(|t| !t.is_empty() && !self.streamed_text && self.tool_names.is_empty())
+                        .map(|t| redact(t));
+                    step.updates.push(Update::TurnCompleted {
+                        text,
+                        interrupted: false,
+                    });
+                }
+                step
+            }
+            "" => Step::update(Update::Warning(
+                "Ignored a frame without type from claude".into(),
+            )),
+            _ => Step::default(),
+        })
+    }
+    fn approve(&mut self, request_id: &str, approve: bool) -> Result<Vec<String>> {
+        if !self.pending_permissions.remove(request_id) {
+            bail!("Unknown Claude permission request {request_id}")
+        }
+        let response = if approve {
+            json!({"behavior":"allow"})
+        } else {
+            json!({"behavior":"deny","message":"The user denied this action in ShadowCode"})
+        };
+        Ok(vec![json!({
+            "type":"control_response",
+            "response":{"subtype":"success","request_id":request_id,"response":response}
+        })
+        .to_string()])
+    }
+    fn interrupt(&mut self) -> Vec<String> {
+        if !self.turn_active {
+            return Vec::new();
+        }
+        self.control_counter += 1;
+        vec![json!({
+            "type":"control_request",
+            "request_id":format!("shadowcode-interrupt-{}", self.control_counter),
+            "request":{"subtype":"interrupt"}
+        })
+        .to_string()]
+    }
+}
