@@ -45,6 +45,23 @@ daemon.
   Install path: `~/.local/lib/shadowcode/llama-server` with `$ORIGIN` rpath.
 - One model is loaded at a time on 127.0.0.1. Local vision is true only when an
   mmproj companion file is present next to the GGUF.
+- Live CPU generation smoke (2026-09-23): official
+  `Qwen/Qwen2.5-0.5B-Instruct-GGUF` `qwen2.5-0.5b-instruct-q4_k_m.gguf`
+  (491400032 bytes, sha256
+  `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`,
+  URL
+  `https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf`)
+  at `~/.local/share/shadowcode/models/`. Added through
+  `POST /api/local-models/add` / `inspect_gguf`. `GET /api/picker` listed it
+  under group `local` as `qwen2.5-0.5b-instruct-q4_k_m · This computer` with
+  subtitle `Runs on this computer · No subscription quota` (UI section
+  "On this computer"). Vision false (no mmproj). Managed
+  `~/.local/lib/shadowcode/llama-server` (CPU build, commit `18f9f7bef`)
+  loaded the GGUF on 127.0.0.1 and returned: "Python's zip() function
+  returns an iterator that yields tuples containing elements from each of
+  the iterables passed to it." `llama-cli` on the same file answered the
+  same question. GPU was visible to `nvidia-smi` (RTX 5060 Ti) but this
+  runtime has no CUDA/Vulkan; tokens were CPU. No AppImage rebuild.
 
 ## Tests and packaging
 
@@ -69,9 +86,7 @@ AppImage build and install happen after this commit. Binaries under
 
 - No hosted ShadowCode account or cloud orchestration.
 - Antigravity quota API is not in CLI 1.2.8. Antigravity images stay rejected.
-- No compatible chat GGUF was present on this machine, so a live load/generation
-  smoke against user weights was not run. The managed binaries were proven with
-  `--version`, and a unit test proves the engine resolves the bundled path
-  rather than PATH-only.
+- The 0.5B Q4_K_M smoke proves load + text generation only. It is not a
+  coding-quality model and was not used to claim agent/tool-calling quality.
 - GPU llama.cpp was not built: CUDA toolkit is absent and Vulkan shader tools
   are missing. CPU inference is what ships.
