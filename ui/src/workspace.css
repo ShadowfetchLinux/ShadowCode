@@ -1368,8 +1368,6 @@ kbd {
   background: var(--accent-soft);
 }
 
-/* Progress bar for FlowGuide */
-
 /* Boot screen timeout state */
 .boot-timeout {
   display: flex;
@@ -1397,11 +1395,8 @@ kbd {
   opacity: 0.9;
 }
 
-/* Learned indicator for FlowGuide */
-
 /* ─── 0.25.0 Supreme UX ──────────────────────────────────────────── */
 
-/* --- Welcome Banner -------------------------------------------- */
 @keyframes fade-up {
   from {
     opacity: 0;
