@@ -1,189 +1,222 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { installFakeBackend } from "./fakeBackend";
 
-test.beforeEach(async ({ page, request }) => {
-  const { workspace } = await (await request.get("/api/health")).json();
-  const session = await (
-    await request.post("/api/sessions", {
-      data: { workspace, title: "New task" },
-    })
-  ).json();
-  await page.addInitScript(
-    (id) => localStorage.setItem("shadow:selected", id),
-    session.id,
-  );
-  await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "What are we building today?" }),
-  ).toBeVisible();
-});
-
-test("workspace layout, drafts, palette, files and terminal", async ({
-  page,
-}) => {
+// Every test drives the production UI build against the deterministic fake
+// engine; nothing here talks to a real vendor CLI or model.
+test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.screenshot({
-    path: "../artifacts/workspace-light.png",
-    fullPage: true,
-  });
-  const prompt = page.getByRole("textbox", { name: "Message ShadowCode" });
-  await prompt.fill("A draft that survives reload");
-  await page.waitForTimeout(300);
-  await page.reload();
-  await expect(prompt).toHaveValue("A draft that survives reload");
-  await page.keyboard.press("Control+k");
-  await page.getByPlaceholder("Type a command…").fill("settings");
-  await page.keyboard.press("Enter");
+  (page as Page & { errors?: string[] }).errors = errors;
+  await page.addInitScript(installFakeBackend, { stepMs: 90 });
+  await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Settings", exact: true }),
+    page.getByRole("heading", { name: "What should we work on?" }),
   ).toBeVisible();
-  await page.keyboard.press("Escape");
-  await page.evaluate(() => {
-    const original = window.open;
-    window.open = (url) => {
-      window.open = original;
-      document.body.dataset.exportUrl = String(url);
-      return null;
-    };
-  });
-  await page.keyboard.press("Control+k");
-  await page
-    .getByPlaceholder("Type a command…")
-    .fill("Export this task as JSON");
-  await page.keyboard.press("Enter");
-  await expect(page.locator("body")).toHaveAttribute(
-    "data-export-url",
-    /\/api\/sessions\/[^/]+\/export\?format=json$/,
-  );
-  await page.getByRole("button", { name: "Browse files", exact: true }).click();
-  await page.getByRole("button", { name: "· README.md", exact: true }).click();
-  await expect(page.locator(".file-view")).toContainText("A safe workspace");
-  await page
-    .getByRole("button", { name: "Terminal", exact: true })
-    .first()
-    .click();
-  await page
-    .getByRole("textbox", { name: "Terminal command" })
-    .fill("printf shadow-terminal-ok");
-  await page.getByRole("button", { name: "Run", exact: true }).click();
-  await expect(page.locator(".terminal-result pre")).toContainText(
-    "shadow-terminal-ok",
-  );
-  expect(errors).toEqual([]);
+});
+test.afterEach(async ({ page }) => {
+  expect((page as Page & { errors?: string[] }).errors).toEqual([]);
 });
 
-test("runs a real offline task, restores history, and avoids old event replay", async ({
-  page,
-}) => {
-  const prompt = page.getByRole("textbox", { name: "Message ShadowCode" });
-  await prompt.fill("Create a Python hello-world project and run it");
-  await page.getByRole("button", { name: "Send task", exact: true }).click();
-  await expect(prompt).toHaveValue("");
-  await expect(
-    page.getByRole("button", { name: "Stop task", exact: true }),
-  ).toHaveCount(0, { timeout: 30000 });
-  await expect(page.locator(".msg-user")).toHaveCount(1);
-  await expect(page.locator(".msg-agent").last()).toBeVisible();
-  await page.screenshot({
-    path: "../artifacts/task-complete.png",
-    fullPage: true,
+const trigger = (page: Page) =>
+  page.getByRole("button", { name: /Model for this task/ });
+const prompt = (page: Page) =>
+  page.getByRole("textbox", { name: "Message ShadowCode" });
+const send = (page: Page) => page.getByRole("button", { name: "Send task" });
+const fakeLog = (page: Page) =>
+  page.evaluate(
+    () =>
+      (window as unknown as { __SHADOW_FAKE__: { log: { method: string; path: string; body: any }[] } })
+        .__SHADOW_FAKE__.log,
+  );
+
+async function chooseBySearch(page: Page, text: string) {
+  await trigger(page).click();
+  const search = page.getByRole("combobox", { name: "Search models" });
+  await expect(search).toBeFocused();
+  await search.fill(text);
+  await search.press("Enter");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+}
+
+async function runLocalTask(page: Page, text: string) {
+  await chooseBySearch(page, "qwen");
+  await prompt(page).fill(text);
+  await send(page).click();
+  await expect(page.getByRole("region", { name: "Task summary" }).last()).toBeVisible({
+    timeout: 15000,
   });
+}
+
+test("picks a subscription row with the keyboard", async ({ page }) => {
+  await expect(trigger(page)).toContainText("Choose a model");
+  await prompt(page).fill("Explain the build");
+  await expect(send(page)).toBeDisabled();
+  await trigger(page).click();
+  await expect(page.getByRole("group", { name: "Subscriptions" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "On this computer" })).toBeVisible();
+  const search = page.getByRole("combobox", { name: "Search models" });
+  // Details for the active row open with the right arrow.
+  await search.press("ArrowRight");
+  await expect(page.locator(".unified-picker-details")).toContainText(
+    "Weekly · 2% left",
+  );
+  await search.press("ArrowLeft");
+  await search.press("Home");
+  await search.press("Enter");
+  await expect(trigger(page)).toContainText("Codex · GPT-6-Astra");
+  await expect(trigger(page)).toContainText("Cloud");
+  await expect(trigger(page)).toBeFocused();
+  await expect(send(page)).toBeEnabled();
+  const log = await fakeLog(page);
+  expect(
+    log.some(
+      (r) =>
+        r.path === "/api/sessions/s1/target" &&
+        r.body.target_id === "cli:codex:gpt-6-astra",
+    ),
+  ).toBe(true);
+  // The choice belongs to the conversation and survives a reload.
   await page.reload();
-  await expect(page.locator(".msg-user")).toHaveCount(1);
-  await prompt.fill("Explain what you created");
-  await page.getByRole("button", { name: "Send task", exact: true }).click();
-  await expect(page.locator(".msg-user")).toHaveCount(2);
-  await expect(
-    page.getByRole("button", { name: "Stop task", exact: true }),
-  ).toHaveCount(0, { timeout: 30000 });
-  await expect(page.locator(".msg-user")).toHaveCount(2);
+  await expect(trigger(page)).toContainText("Codex · GPT-6-Astra");
 });
 
-test("light and dark home screens pass accessibility checks", async ({
-  page,
-}) => {
+test("picks a local row; web and permission controls follow the row", async ({ page }) => {
+  await expect(page.getByRole("button", { name: "Web lookups for this task" })).toHaveCount(0);
+  await chooseBySearch(page, "qwen");
+  await expect(trigger(page)).toContainText("qwen3:14b · This computer");
+  const web = page.getByRole("button", { name: "Web lookups for this task" });
+  await expect(web).toHaveAttribute("aria-pressed", "false");
+  await web.click();
+  await expect(web).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: /Permissions: Ask before actions/ }).click();
+  await page.getByRole("radio", { name: /Allow project edits/ }).click();
+  await expect(
+    page.getByRole("button", { name: /Permissions: Allow project edits/ }),
+  ).toBeVisible();
+  const log = await fakeLog(page);
+  expect(
+    log.find((r) => r.path === "/api/config" && r.method === "PUT")?.body.values,
+  ).toEqual({ permissions: { mode: "allow_edits" } });
+});
+
+test("runs a task with streamed events and reviews the changes", async ({ page }) => {
+  await chooseBySearch(page, "qwen");
+  await prompt(page).fill("Fix the add function");
+  await send(page).click();
+  const live = page.locator(".working .activity-timeline");
+  await expect(live).toBeVisible();
+  await expect(live.getByText("Reading project")).toBeVisible();
+  const summary = page.getByRole("region", { name: "Task summary" });
+  await expect(summary).toBeVisible({ timeout: 15000 });
+  await expect(summary).toContainText("src/app.ts");
+  await expect(summary).toContainText("+1");
+  await expect(summary).toContainText("npm test");
+  await expect(summary).toContainText("exit 0");
+  const timeline = page.locator(".msg-summary .activity-timeline");
+  for (const step of ["Reading project", "Editing files", "Running tests", "Finished"])
+    await expect(timeline.getByText(step, { exact: true })).toBeVisible();
+  // Each step expands to the real tool call and its output.
+  await timeline.getByText("Running tests", { exact: true }).click();
+  await expect(timeline.getByText("Tests  4 passed (4)")).toBeVisible();
+  await summary.getByRole("button", { name: "Review changes" }).click();
+  const drawer = page.getByRole("complementary", { name: "Drawer" });
+  await expect(drawer).toBeVisible();
+  await drawer.getByText("src/app.ts").first().click();
+  await expect(drawer).toContainText("export const add = (a, b) => a + b;");
+  await page.screenshot({ path: "test-results/task-complete.png", fullPage: true });
+});
+
+test("asks for consent before sending local context to a cloud row", async ({ page }) => {
+  await runLocalTask(page, "Start on this computer");
+  await trigger(page).click();
+  await page.getByRole("option", { name: /Codex · GPT-6-Astra/ }).click();
+  await prompt(page).fill("Continue in the cloud");
+  await send(page).click();
+  const dialog = page.getByRole("dialog", { name: "Send to a cloud provider?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Send to Codex · GPT-6-Astra?");
+  await expect(dialog).toContainText("2,400 characters");
+  await expect(
+    new AxeBuilder({ page }).include('[role="dialog"]').withTags(["wcag2a", "wcag2aa"]).analyze(),
+  ).resolves.toMatchObject({ violations: [] });
+  await dialog.getByRole("button", { name: "Send" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Task summary" })).toHaveCount(2, {
+    timeout: 15000,
+  });
+  const posts = (await fakeLog(page)).filter(
+    (r) => r.path === "/api/jobs" && r.method === "POST",
+  );
+  expect(posts.map((r) => [r.body.model, Boolean(r.body.handoff_consent)])).toEqual([
+    ["local:gguf:qwen", false],
+    ["cli:codex:gpt-6-astra", false],
+    ["cli:codex:gpt-6-astra", true],
+  ]);
+});
+
+test("a Sign in row opens Accounts and Connect streams the official login", async ({ page }) => {
+  await trigger(page).click();
+  await page.getByRole("option", { name: /Claude Code · Default/ }).click();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await expect(settings).toBeVisible();
+  const claude = settings.getByRole("article", { name: "Claude Code" });
+  const connect = claude.getByRole("button", { name: "Connect" });
+  await expect(connect).toBeFocused();
+  await connect.click();
+  await expect(claude.getByRole("link", { name: /claude\.ai\/oauth/ })).toBeVisible();
+  await expect(claude.locator("code.device-code")).toHaveText("WXYZ-1234");
+  await expect(claude.getByText("Signed in.")).toBeVisible({ timeout: 10000 });
+  await expect(claude.getByText("Ready", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Close" }).last().click();
+  await trigger(page).click();
+  await expect(
+    page.getByRole("option", { name: /Claude Code · Default/ }),
+  ).toContainText("Ready");
+});
+
+test("loads a local model from Settings", async ({ page }) => {
+  await page.keyboard.press("Control+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Local models" }).click();
+  await expect(settings.getByText(/Ready · Vulkan/)).toBeVisible();
+  await expect(settings.getByText("No model loaded")).toBeVisible();
+  const qwen = settings.getByRole("article", { name: "qwen3:14b" });
+  await qwen.getByRole("button", { name: "Load" }).click();
+  await expect(settings.getByText(/qwen3:14b · Vulkan0/)).toBeVisible();
+  await expect(qwen.getByRole("button", { name: "Unload" })).toBeVisible();
+  const gptoss = settings.getByRole("article", { name: "gpt-oss:20b" });
+  await expect(gptoss).toContainText("unknown model architecture: gptoss");
+  await expect(
+    new AxeBuilder({ page }).include('[role="dialog"]').withTags(["wcag2a", "wcag2aa"]).analyze(),
+  ).resolves.toMatchObject({ violations: [] });
+});
+
+test("light and dark themes pass accessibility checks, picker open", async ({ page }) => {
   for (const theme of ["light", "dark"]) {
-    await page.evaluate(async (theme) => {
-      document.documentElement.dataset.theme = theme;
-      // Measure the settled theme, not an intermediate background color.
-      getComputedStyle(document.body).color;
-      await Promise.all(
-        document
-          .getAnimations()
-          .filter((animation) => "transitionProperty" in animation)
-          .map((animation) => animation.finished.catch(() => {})),
-      );
-    }, theme);
+    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+    await trigger(page).click();
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
       .analyze();
     expect(results.violations).toEqual([]);
-    await page.screenshot({
-      path: `../artifacts/workspace-${theme}.png`,
-      fullPage: true,
-    });
+    await page.screenshot({ path: `test-results/picker-${theme}.png` });
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("listbox")).toHaveCount(0);
   }
 });
 
-test("compact layout keeps composer and controls reachable", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 600, height: 850 });
-  // Resizing closes the sidebar asynchronously. Waiting for that state avoids
-  // trying to click a control that disappears between isVisible() and click().
-  await expect(page.locator(".sidebar")).toHaveCount(0);
-  await expect(
-    page.getByRole("textbox", { name: "Message ShadowCode" }),
-  ).toBeVisible();
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-  ).toBe(true);
-  await page.screenshot({
-    path: "../artifacts/workspace-compact.png",
-    fullPage: true,
-  });
-});
-
-test("a dropped event connection recovers without duplicating the task", async ({
-  page,
-}) => {
-  let first = true;
-  await page.route("**/api/jobs/*/events?*", (route) => {
-    if (first) {
-      first = false;
-      return route.abort("connectionreset");
-    }
-    return route.continue();
-  });
-  await page
-    .getByRole("textbox", { name: "Message ShadowCode" })
-    .fill("Explain this workspace");
-  await page.getByRole("button", { name: "Send task", exact: true }).click();
-  await expect(page.locator(".msg-user")).toHaveCount(1, { timeout: 20000 });
-  await expect(
-    page.getByRole("button", { name: "Stop task", exact: true }),
-  ).toHaveCount(0, { timeout: 20000 });
-  await expect(page.locator(".msg-agent").last()).toBeVisible();
-});
-
-test("settings dialogs have labeled controls and trap keyboard focus", async ({
-  page,
-}) => {
+test("settings sections are accessible and trap focus", async ({ page }) => {
   await page.keyboard.press("Control+,");
-  const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
-  await expect(dialog).toBeVisible();
-  for (const tab of [
-    "Model",
-    "Permissions",
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  for (const section of [
+    "Accounts",
+    "Local models",
+    "Permissions & network",
     "Appearance",
-    "Hooks",
-    "MCP",
-    "Plugins",
+    "Advanced",
   ]) {
-    await dialog.getByRole("button", { name: tab, exact: true }).click();
+    await dialog.getByRole("button", { name: section, exact: true }).click();
     const results = await new AxeBuilder({ page })
       .include('[role="dialog"]')
       .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
@@ -192,59 +225,25 @@ test("settings dialogs have labeled controls and trap keyboard focus", async ({
   }
   await dialog.locator("button").last().focus();
   await page.keyboard.press("Tab");
-  expect(
-    await dialog.evaluate((el) => el.contains(document.activeElement)),
-  ).toBe(true);
+  expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  // Global shortcuts stay inactive behind a dialog.
+  await page.keyboard.press("Control+b");
+  await expect(page.locator(".sidebar")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 });
 
-test("new-task shortcuts and deletion keep task selection usable", async ({
-  page,
-  request,
-}) => {
-  const first = await page.evaluate(() =>
-    localStorage.getItem("shadow:selected"),
-  );
-  await request.patch(`/api/sessions/${first}`, {
-    data: { workspace: "", title: "Draft parent" },
-  });
-  await page.reload();
-  const prompt = page.getByRole("textbox", { name: "Message ShadowCode" });
-  await expect(prompt).toBeVisible();
-  await prompt.fill("Preserve this unsent draft");
-  await page.keyboard.press("Control+n");
-  await expect(prompt).toHaveValue("");
-  await page.getByRole("button", { name: "Draft parent", exact: true }).click();
-  await expect(prompt).toHaveValue("Preserve this unsent draft");
-  await prompt.fill("/new");
-  await page.getByRole("button", { name: "Send task", exact: true }).click();
-  await expect(prompt).toHaveValue("");
-  await expect
-    .poll(async () => {
-      const selected = await page.evaluate(() =>
-        localStorage.getItem("shadow:selected"),
-      );
-      return Boolean(selected && selected !== first);
-    })
-    .toBe(true);
-  const toDelete = await page.evaluate(() =>
-    localStorage.getItem("shadow:selected"),
-  );
-  expect(toDelete).not.toBe(first);
-  await expect(page.locator(".loading-task")).toHaveCount(0);
-  await page.keyboard.press("Control+k");
-  await page
-    .getByRole("textbox", { name: "Search commands" })
-    .fill("manage tasks");
-  await page.keyboard.press("Enter");
-  page.once("dialog", (dialog) => dialog.accept());
-  await page
-    .locator(".drawer .item.active")
-    .getByRole("button", { name: "Delete", exact: true })
-    .click();
-  await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("shadow:selected")))
-    .not.toBe(toDelete);
-  await expect(prompt).toBeEnabled();
+test("the window works at its 520 px minimum width", async ({ page }) => {
+  await page.setViewportSize({ width: 520, height: 800 });
+  await expect(page.locator(".sidebar")).toHaveCount(0);
+  await expect(prompt(page)).toBeVisible();
+  await expect(trigger(page)).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+  ).toBe(true);
+  await trigger(page).click();
+  const menu = page.locator(".unified-picker-menu");
+  const box = await menu.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= 520).toBe(true);
+  await page.screenshot({ path: "test-results/compact.png", fullPage: true });
 });

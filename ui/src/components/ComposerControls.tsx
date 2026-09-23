@@ -135,6 +135,7 @@ export function WebToggle({
       type="button"
       className={`composer-chip ${enabled ? "on" : ""}`}
       aria-pressed={enabled}
+      aria-label="Web lookups for this task"
       title={
         enabled
           ? "The local model may fetch web pages and search the web for this task"

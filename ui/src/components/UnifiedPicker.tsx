@@ -445,7 +445,6 @@ function Row({
       id={id}
       role="option"
       aria-selected={selected}
-      aria-disabled={ready ? undefined : true}
       aria-describedby={
         detailsOpen ? `${id}-meta ${detailsId}` : `${id}-meta`
       }

@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test",
+    "build:e2e": "tsc --noEmit && VITE_SHADOW_TEST_TRANSPORT=1 vite build --outDir dist-e2e --emptyOutDir",
+    "check:bundle": "node e2e/check-bundle.mjs",
+    "test:e2e": "node e2e/check-bundle.mjs && playwright test",
     "format": "prettier --write src e2e *.ts *.json"
   },
   "dependencies": {
