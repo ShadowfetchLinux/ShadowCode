@@ -678,6 +678,37 @@ async fn web_fetch_tool_records_sources_and_frames_content_as_data() {
     assert_eq!(before, after);
 }
 
+#[test]
+fn extraction_survives_malformed_and_multibyte_markup() {
+    for html in [
+        "",
+        "<",
+        "<a href=\"/x\">é <p>ü</p>   ñ</a> ok",
+        "<p title=\"unterminated>text",
+        "<div><p>Unclosed <b>tags <i>everywhere",
+        "<script>never closed",
+        "AT&T &amp &#x1F600; &#9731; &bogus; &#xZZ;",
+        "<ul><li>一</li><li>二<a href='https://例え.jp/パス'>リンク</a></li></ul>",
+    ] {
+        // Must not panic; malformed input degrades to text.
+        let base = reqwest::Url::parse("https://example.com/").unwrap();
+        let _ = web::extract_readable(html, Some(&base));
+        let _ = web::parse_search_page(html, 3);
+    }
+    let links = web::extract_readable(
+        "<ul><li>一</li><li>二<a href='/パス'>リンク</a></li></ul>",
+        reqwest::Url::parse("https://example.com/").ok().as_ref(),
+    );
+    assert_eq!(
+        links.text,
+        "- 一\n- 二リンク (https://example.com/%E3%83%91%E3%82%B9)"
+    );
+    let decoded = web::decode_entities("AT&T &amp &#x1F600; &#9731; &bogus; &lt;b&gt;");
+    assert_eq!(decoded, "AT&T &amp 😀 ☃ &bogus; <b>");
+    let page = web::extract_readable("<p>Tom &amp; Jerry</p><script>x()</script><p>Two</p>", None);
+    assert_eq!(page.text, "Tom & Jerry\n\nTwo");
+}
+
 /// Live check against the real internet. Run with
 /// `cargo test -p shadowcode-core --test web live_ -- --ignored --nocapture`.
 #[tokio::test]

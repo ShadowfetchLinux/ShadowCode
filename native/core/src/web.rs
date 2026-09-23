@@ -970,7 +970,7 @@ pub fn extract_readable(html: &str, base: Option<&Url>) -> Readable {
                     "code" if pre == 0 => out.push('`'),
                     "a" => {
                         if let Some((href, start)) = link.take() {
-                            let label = out[start.min(out.len())..].trim().to_owned();
+                            let label = out.get(start..).unwrap_or("").trim().to_owned();
                             if !label.is_empty() && label != href {
                                 out.push_str(&format!(" ({href})"));
                             }
