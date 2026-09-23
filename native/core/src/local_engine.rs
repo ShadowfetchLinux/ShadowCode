@@ -160,10 +160,6 @@ pub struct GgufEntry {
     pub thinking_switch: bool,
 }
 
-pub fn is_gguf(path: &Path) -> bool {
-    gguf::is_gguf(path)
-}
-
 fn canonical(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -711,13 +707,6 @@ pub fn runtime_from(candidates: Vec<(PathBuf, &'static str)>) -> Runtime {
         }
     }
     first_failure.expect("at least one candidate")
-}
-
-/// Compatibility shim for callers that only need a path. Only returns a
-/// runtime that passed `--version`.
-pub fn resolve_llama_binary(configured: &str) -> Option<PathBuf> {
-    let runtime = runtime(configured);
-    runtime.ready().then_some(runtime.path).flatten()
 }
 
 pub fn read_meminfo() -> u64 {
