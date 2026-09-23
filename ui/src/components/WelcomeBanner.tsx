@@ -1,127 +1,73 @@
-import {
-  Code2,
-  Wrench,
-  GitPullRequest,
-  Sparkles,
-  TestTube2,
-  ShieldCheck,
-  BookOpen,
-  Zap,
-} from "lucide-react";
+import { Code2, GitPullRequest, Search, Wrench } from "lucide-react";
 
 export type StarterCard = {
-  icon: React.ComponentType<{ size?: number }>;
   title: string;
   body: string;
   prompt: string;
-  mode: string;
 };
 
 const STARTERS: StarterCard[] = [
   {
-    icon: Code2,
     title: "Build a feature",
-    body: "Turn an idea into working, verified code",
+    body: "Turn an idea into working code",
     prompt: "Help me build ",
-    mode: "coder",
   },
   {
-    icon: Wrench,
     title: "Fix a bug",
-    body: "Find the root cause and apply a clean fix",
-    prompt:
-      "Find and fix the bug where ",
-    mode: "coder",
+    body: "Find the cause and apply a fix",
+    prompt: "Find and fix the bug where ",
   },
   {
-    icon: BookOpen,
-    title: "Explain this codebase",
-    body: "Get a guided tour of architecture & entry points",
+    title: "Understand code",
+    body: "See a guided explanation",
     prompt:
       "Explore this workspace and explain its architecture, key entry points, and how to run it.",
-    mode: "reviewer",
   },
   {
-    icon: TestTube2,
-    title: "Write tests",
-    body: "Author unit tests and verify they pass",
-    prompt:
-      "Write automated tests for the core modules and verify they pass.",
-    mode: "tester",
-  },
-  {
-    icon: GitPullRequest,
-    title: "Review my changes",
-    body: "Spot bugs, edge cases, and style issues",
-    prompt:
-      "Review the current git diff for bugs, edge cases, and code quality issues. Explain findings before changing anything.",
-    mode: "reviewer",
-  },
-  {
-    icon: Sparkles,
-    title: "Plan a refactor",
-    body: "Get a blueprint before touching code",
-    prompt:
-      "Create a detailed refactoring plan for ",
-    mode: "planner",
-  },
-  {
-    icon: ShieldCheck,
-    title: "Security audit",
-    body: "Find vulnerabilities and exposed secrets",
-    prompt:
-      "Audit this workspace for security risks, unvalidated inputs, and exposed secrets.",
-    mode: "reviewer",
-  },
-  {
-    icon: Zap,
-    title: "Optimize performance",
-    body: "Profile hot paths and reduce overhead",
-    prompt:
-      "Analyze this codebase for performance bottlenecks and suggest concrete optimizations.",
-    mode: "reviewer",
+    title: "Refactor",
+    body: "Improve structure and flow",
+    prompt: "Plan and apply a careful refactor for ",
   },
 ];
 
+const ICONS = [Code2, Wrench, Search, GitPullRequest];
+
 export function WelcomeBanner({
-  workspace,
-  model,
   onSelect,
 }: {
-  workspace: string;
-  model: string;
-  onSelect: (prompt: string, mode: string) => void;
+  workspace?: string;
+  model?: string;
+  onSelect: (prompt: string, mode?: string) => void;
 }) {
-  const projectName = workspace.split("/").pop() || "your project";
   return (
     <div className="welcome-banner">
       <div className="welcome-banner-header">
         <img src="/icon.svg" alt="" className="welcome-banner-icon" />
         <div>
-          <h1 className="welcome-banner-title">What are we building today?</h1>
+          <h1 className="welcome-banner-title">What would you like to build?</h1>
           <p className="welcome-banner-sub">
-            <strong>{projectName}</strong>
-            {model ? <> · <span className="welcome-model-pill">{model}</span></> : null}
+            One app. Every model. Real results.
           </p>
         </div>
       </div>
-      <div className="starter-grid">
-        {STARTERS.map((s) => (
-          <button
-            type="button"
-            className="starter-card"
-            key={s.title}
-            onClick={() => onSelect(s.prompt, s.mode)}
-          >
-            <span className="starter-icon">
-              <s.icon size={16} />
-            </span>
-            <span className="starter-text">
-              <strong className="starter-title">{s.title}</strong>
-              <span className="starter-body">{s.body}</span>
-            </span>
-          </button>
-        ))}
+      <div className="starter-grid starter-grid-quiet">
+        {STARTERS.map((s, i) => {
+          const Icon = ICONS[i];
+          return (
+            <button
+              type="button"
+              className="starter-chip"
+              key={s.title}
+              onClick={() => onSelect(s.prompt)}
+            >
+              <Icon size={15} />
+              <span>
+                <strong>{s.title}</strong>
+                <small>{s.body}</small>
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

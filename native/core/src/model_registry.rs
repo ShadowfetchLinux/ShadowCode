@@ -118,6 +118,19 @@ pub fn resolve(store: &Store, id: &str, default: &ModelConfig) -> Result<ModelCo
         validate(&model)?;
         return Ok(model);
     }
+    if id.starts_with("local:gguf:") || id.starts_with("llamacpp:") {
+        let model = ModelConfig {
+            default: id.into(),
+            name: id.rsplit(':').next().unwrap_or(id).into(),
+            provider: "llamacpp".into(),
+            endpoint: String::new(),
+            api_key_env: "UNUSED".into(),
+            keep_alive: "30m".into(),
+            context_limit: 8192,
+        };
+        validate(&model)?;
+        return Ok(model);
+    }
     if crate::cli_agent::is_cli_provider(&default.provider) && (id == default.default || id == default.name) {
         validate(default)?;
         return Ok(default.clone());

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.26.0 — Desktop coding agent
+
+- One searchable composer picker with **Subscriptions** and **On this computer**.
+  Rows are Codex, Claude Code, Cursor, Antigravity, and local GGUF/Ollama
+  compatibility targets. Routing uses stable IDs, never display names.
+- New Cursor ACP adapter (`cursor-agent acp`) and Antigravity `agy` stream-json
+  adapter. Grok remains available but is not featured in the primary menu.
+- Usage labels are truthful: unknown is "Usage unavailable", never a made-up
+  percent. Local rows say they run on this computer with no subscription quota.
+- Local GGUF catalog: add a file or folder you already have. Removing an entry
+  does not delete weights. llama.cpp is optional and not auto-downloaded.
+- Images attach only when the selected route actually supports vision. Vendor
+  CLIs reject images until the adapter forwards real image bytes.
+- Quieter home: four suggestion chips, compact tools control, activity timeline.
+  Provider chip stack and permanent Build/Plan/Review/Test tabs are off the
+  default composer. Settings leads with Accounts and Local models.
+
 ## 0.25.0 — "Supreme"
 
 - **Welcome Banner**: redesigned empty-state with 8 smart starter cards (Build a

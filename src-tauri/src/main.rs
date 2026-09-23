@@ -39,13 +39,45 @@ async fn api(
 
 #[tauri::command]
 async fn pick_directory(app: tauri::AppHandle) -> std::result::Result<Option<PathBuf>, String> {
+    pick_path(app, true, "Open a project folder").await
+}
+
+#[tauri::command]
+async fn pick_local_model(
+    app: tauri::AppHandle,
+    folder: bool,
+) -> std::result::Result<Option<PathBuf>, String> {
+    pick_path(
+        app,
+        folder,
+        if folder {
+            "Add a folder of GGUF models you already have"
+        } else {
+            "Add a GGUF file you already have"
+        },
+    )
+    .await
+}
+
+async fn pick_path(
+    app: tauri::AppHandle,
+    folder: bool,
+    title: &'static str,
+) -> std::result::Result<Option<PathBuf>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut picker = app.dialog().file().set_title("Open a project folder");
+        let mut picker = app.dialog().file().set_title(title);
+        if !folder {
+            picker = picker.add_filter("GGUF models", &["gguf"]);
+        }
         if let Some(window) = app.get_webview_window("main") {
             picker = picker.set_parent(&window);
         }
-        picker
-            .blocking_pick_folder()
+        let picked = if folder {
+            picker.blocking_pick_folder()
+        } else {
+            picker.blocking_pick_file()
+        };
+        picked
             .map(|p| p.into_path())
             .transpose()
             .map_err(|e| e.to_string())
@@ -238,6 +270,7 @@ fn run() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             api,
             pick_directory,
+            pick_local_model,
             export_session,
             open_external,
             desktop_quit

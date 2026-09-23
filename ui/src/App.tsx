@@ -22,11 +22,9 @@ import {
   Paperclip,
   Search,
   ShieldCheck,
-  Sparkles,
   Square,
   TerminalSquare,
   X,
-  Cpu,
 } from "lucide-react";
 import {
   api,
@@ -52,7 +50,8 @@ import { Onboarding } from "./components/Onboarding";
 import { FlowGuide } from "./components/FlowGuide";
 import { OpenWeightHub } from "./components/OpenWeightHub";
 import { WelcomeBanner } from "./components/WelcomeBanner";
-import { ModeTabs } from "./components/ModeTabs";
+import { ToolsControl } from "./components/ToolsControl";
+import { ActivityTimeline, deriveTimeline } from "./components/ActivityTimeline";
 import {
   CustomModelDialog,
   Help,
@@ -61,19 +60,14 @@ import {
   TrustDialog,
   type PaletteItem,
 } from "./components/overlays";
-import { Settings } from "./components/Settings";
+import { Settings, type SettingsSection } from "./components/Settings";
 import { QueuedTasks } from "./components/QueuedTasks";
 import { TaskSteerBar } from "./components/TaskSteerBar";
-import { ModelChooser } from "./components/ModelChooser";
-import { VendorAgentChip } from "./components/VendorAgentChip";
+import { UnifiedPicker } from "./components/UnifiedPicker";
 import { useConversation } from "./hooks/useConversation";
 import { modelLabel } from "./lib/models";
-import {
-  isVendorProvider,
-  LOCAL_GROUP,
-  VENDOR_GROUP,
-  type VendorStatusMap,
-} from "./lib/cliAgents";
+import { type VendorStatusMap } from "./lib/cliAgents";
+import { targetsFromModels, type PickerTarget } from "./lib/picker";
 import { conversationJob } from "./lib/jobs";
 import {
   isProjectTrustError,
@@ -112,7 +106,11 @@ export default function App() {
   const [needsOnboard, setNeedsOnboard] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [pickerTargets, setPickerTargets] = useState<PickerTarget[]>([]);
   const [cliAgents, setCliAgents] = useState<VendorStatusMap | null>(null);
+  const [webEnabled, setWebEnabled] = useState(
+    () => localStorage.getItem("shadow:web") !== "off",
+  );
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -129,6 +127,9 @@ export default function App() {
   >([]);
   const [task, setTask] = useState("");
   const [chips, setChips] = useState<string[]>([]);
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSection>("accounts");
   const [commandCards, setCommandCards] = useState<CommandResult[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [modelChoice, setModelChoice] = useState("");
@@ -141,6 +142,10 @@ export default function App() {
   const [panel, setPanel] = useState<DrawerTab | null>(null);
   const [diffPath, setDiffPath] = useState("");
   const [overlay, setOverlay] = useState<Overlay>("");
+  function openSettings(section: SettingsSection = "accounts") {
+    setSettingsSection(section);
+    setOverlay("settings");
+  }
   const [trust, setTrust] = useState<{
     path: string;
     name?: string;
@@ -219,6 +224,17 @@ export default function App() {
     };
   }, [toast]);
 
+  useEffect(() => {
+    if (!workspace) return;
+    const saved = localStorage.getItem(`shadow:model:${workspace}`);
+    if (saved) setModelChoice(saved);
+  }, [workspace]);
+  useEffect(() => {
+    if (workspace && modelChoice) {
+      localStorage.setItem(`shadow:model:${workspace}`, modelChoice);
+    }
+  }, [workspace, modelChoice]);
+
   const refresh = useCallback(async () => {
     const [s, p, active, state] = await Promise.all([
       api.sessions(),
@@ -282,6 +298,12 @@ export default function App() {
     setStatus(state);
     setModels(modelData.models);
     setCliAgents(modelData.cli_agents || null);
+    const fromApi = Array.isArray(modelData.picker)
+      ? (modelData.picker as PickerTarget[])
+      : [];
+    setPickerTargets(
+      fromApi.length ? fromApi : targetsFromModels(modelData.models),
+    );
     setProviders(providerData.providers);
   }
 
@@ -622,7 +644,7 @@ export default function App() {
       return;
     }
     if (name === "settings" && !args) {
-      setOverlay("settings");
+      openSettings();
       return;
     }
     const result = await api.runCommand(name, args, sessionId || undefined, {
@@ -794,6 +816,13 @@ export default function App() {
         continue;
       }
       if (isImage) {
+        if (!canAttachImages) {
+          toast(
+            `${file.name}: the selected model does not accept images`,
+            "err",
+          );
+          continue;
+        }
         if (file.size > 4_000_000) {
           toast(`${file.name}: images must be smaller than 4 MB`, "err");
           continue;
@@ -815,6 +844,8 @@ export default function App() {
           }
           const data_base64 = btoa(binary);
           const saved = await api.attachImage(file.name, data_base64);
+          const preview = URL.createObjectURL(file);
+          setPreviews((prev) => ({ ...prev, [saved.path]: preview }));
           setChips((prev) => [...new Set([...prev, saved.path])]);
         } catch (e) {
           toast(String(e), "err");
@@ -926,7 +957,7 @@ export default function App() {
       id: "settings",
       label: "Settings",
       hint: "Ctrl+,",
-      run: () => setOverlay("settings"),
+      run: () => openSettings(),
     },
     {
       id: "theme",
@@ -979,7 +1010,7 @@ export default function App() {
       }
       if (mod && key === ",") {
         e.preventDefault();
-        setOverlay("settings");
+        openSettings();
       }
       if (mod && key === "p") {
         e.preventDefault();
@@ -1042,9 +1073,11 @@ export default function App() {
 
   const current = sessions.find((s) => s.id === sessionId);
   const title = current?.title || "New task";
+  const selectedTarget = pickerTargets.find((t) => t.id === modelChoice);
   const selectedModel = models.find(
     (candidate) => candidate.id === modelChoice,
   );
+  const canAttachImages = Boolean(selectedTarget?.vision);
   const activeModel = job?.routing || transcript.routing;
   const model =
     busy && activeModel
@@ -1133,7 +1166,8 @@ export default function App() {
           onNew={() => void newSession()}
           onProject={(path) => void pickProject(path)}
           onPanel={setPanel}
-          onSettings={() => setOverlay("settings")}
+          onSettings={() => openSettings()}
+          onHome={() => void newSession()}
           onHide={() => setSidebar(false)}
         />
       )}
@@ -1165,24 +1199,6 @@ export default function App() {
         <div className="top-right">
           <button
             type="button"
-            className="icon-btn"
-            aria-label="Open-Weight Models & Vendor CLIs"
-            title="Models & AI providers"
-            onClick={() => setOverlay("open-weights")}
-          >
-            <Cpu size={17} />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="20-Minute Fast-Track Guide"
-            title="Fast-track guide (new to ShadowCode?)"
-            onClick={() => setOverlay("flow-guide")}
-          >
-            <Sparkles size={16} />
-          </button>
-          <button
-            type="button"
             className={`top-action ${panel === "changes" ? "on" : ""}`}
             aria-label="Review changes"
             title="Git changes"
@@ -1191,24 +1207,6 @@ export default function App() {
             <GitPullRequest size={15} />
             <span>Changes</span>
             {git.count > 0 && <span className="count">{git.count}</span>}
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title="Browse files"
-            aria-label="Browse files"
-            onClick={() => setPanel(panel === "files" ? null : "files")}
-          >
-            <FileCode2 size={17} />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title="Terminal"
-            aria-label="Terminal"
-            onClick={() => setPanel(panel === "terminal" ? null : "terminal")}
-          >
-            <TerminalSquare size={17} />
           </button>
           <span className="top-divider" />
           <button
@@ -1390,11 +1388,8 @@ export default function App() {
               </div>
             ) : empty && !conversation.history.viewing ? (
               <WelcomeBanner
-                workspace={workspace}
-                model={model || status?.model.name || ""}
-                onSelect={(prompt, selectedMode) => {
+                onSelect={(prompt) => {
                   setTask(prompt);
-                  setMode(selectedMode);
                   promptRef.current?.focus();
                 }}
               />
@@ -1499,24 +1494,34 @@ export default function App() {
             ))}
             {(busy || submitting) && !switching && (
               <div className="working" role="status">
-                <LoaderCircle size={15} className="spin" />
-                <span>
-                  {submitting
-                    ? queueing
-                      ? "Queuing follow-up"
-                      : "Starting task"
-                    : job?.status === "cancelling"
-                      ? "Stopping safely"
-                      : job?.status === "paused"
-                        ? "Paused — steer or resume"
-                        : job?.status === "queued"
-                          ? "Waiting for earlier work to finish"
-                          : transcript.stage === "UNDERSTAND"
-                            ? "Exploring your request"
-                            : transcript.stage
-                                .toLowerCase()
-                                .replaceAll("_", " ")}
-                </span>
+                <ActivityTimeline
+                  steps={deriveTimeline({
+                    busy: Boolean(busy || submitting),
+                    stage: transcript.stage,
+                    waitingApproval: approvals.length > 0,
+                    finished: job?.status === "completed",
+                    hasDiff: git.count > 0,
+                    testSummary: transcript.items
+                      .filter((item) => item.kind === "tool" && /test/i.test(item.tool || item.headline || ""))
+                      .map((item) => item.kind === "tool" ? item.text : "")
+                      .filter(Boolean)
+                      .at(-1),
+                  })}
+                  output={transcript.items
+                    .flatMap((item) =>
+                      item.kind === "tool"
+                        ? [
+                            [item.headline || item.tool, item.path, item.fullOutput || item.text]
+                              .filter(Boolean)
+                              .join("\n"),
+                          ]
+                        : item.kind === "note" && /https?:\/\//.test(item.text)
+                          ? [item.text]
+                          : [],
+                    )
+                    .slice(-8)
+                    .join("\n\n")}
+                />
                 <span className="dim">
                   {elapsed >= 60
                     ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
@@ -1643,9 +1648,22 @@ export default function App() {
                     type="button"
                     className="path-chip"
                     key={c}
-                    onClick={() => setChips(chips.filter((x) => x !== c))}
+                    onClick={() => {
+                      const preview = previews[c];
+                      if (preview) URL.revokeObjectURL(preview);
+                      setPreviews((prev) => {
+                        const next = { ...prev };
+                        delete next[c];
+                        return next;
+                      });
+                      setChips(chips.filter((x) => x !== c));
+                    }}
                   >
-                    <FileCode2 size={12} />
+                    {previews[c] ? (
+                      <img src={previews[c]} alt="" className="chip-preview" />
+                    ) : (
+                      <FileCode2 size={12} />
+                    )}
                     {c.split("/").pop()}
                     <X size={12} />
                   </button>
@@ -1705,7 +1723,11 @@ export default function App() {
                 type="button"
                 className="icon-btn attach-btn"
                 aria-label="Attach files or images"
-                title="Attach text files or images (PNG, JPEG, WebP)"
+                title={
+                  canAttachImages
+                    ? "Attach text files or images (PNG, JPEG, WebP)"
+                    : "This model does not accept images. Attach text files only."
+                }
                 disabled={projectBusy || composerLocked}
                 onClick={() => fileRef.current?.click()}
               >
@@ -1715,40 +1737,46 @@ export default function App() {
                 ref={fileRef}
                 type="file"
                 multiple
-                accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp,text/*,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.toml,.yaml,.yml,.css,.html,.svg"
+                accept={
+                  canAttachImages
+                    ? ".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp,text/*,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.toml,.yaml,.yml,.css,.html,.svg"
+                    : "text/*,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.toml,.yaml,.yml,.css,.html,.svg"
+                }
                 hidden
                 onChange={(e) => {
                   if (e.target.files) void attach(e.target.files);
                   e.target.value = "";
                 }}
               />
-              <ModelChooser
-                models={models}
+              <UnifiedPicker
+                targets={pickerTargets}
                 value={modelChoice}
                 automaticLabel={
-                  status?.routing?.enabled
-                    ? "Automatic by task mode"
-                    : status?.model.name ||
-                      status?.model.default ||
-                      "Choose model"
+                  selectedTarget?.name ||
+                  status?.model.name ||
+                  status?.model.default ||
+                  "Choose a model"
                 }
-                onChange={(id) => {
-                  if (id === "__custom__") setOverlay("custom-model");
-                  else setModelChoice(id);
+                onChange={setModelChoice}
+                onConnect={() => openSettings("accounts")}
+                onAddLocal={() => openSettings("local")}
+                disabled={projectBusy || composerLocked}
+              />
+              <ToolsControl
+                webEnabled={webEnabled}
+                onWebEnabled={(next) => {
+                  setWebEnabled(next);
+                  localStorage.setItem("shadow:web", next ? "on" : "off");
                 }}
-              />
-              <VendorAgentChip
-                status={cliAgents}
-                selected={
-                  selectedModel?.provider ||
-                  String(status?.model?.provider || "")
+                permissionLabel={
+                  String(
+                    (cfg.permissions as { level?: string } | undefined)?.level ||
+                      "workspace",
+                  ) === "read_only"
+                    ? "Project access is restricted"
+                    : "Project access is limited to this workspace"
                 }
-              />
-              <span className="control-divider" />
-              <ModeTabs
-                value={mode}
-                onChange={setMode}
-                disabled={busy && !isNative()}
+                onOpenSettings={() => openSettings("permissions")}
               />
               <span className="grow" />
               <span className="composer-hint">
@@ -1923,6 +1951,7 @@ export default function App() {
       {overlay === "settings" && (
         <Settings
           cfg={cfg}
+          initialSection={settingsSection}
           onOpenProject={(path) => void pickProject(path)}
           onClose={() => setOverlay("")}
           onToast={toast}

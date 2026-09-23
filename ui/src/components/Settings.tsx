@@ -3,7 +3,7 @@ import { Dialog } from "./Dialog";
 import { WorktreeSettings } from "./WorktreeSettings";
 import { PluginSettings } from "./PluginSettings";
 import { McpSettings } from "./McpSettings";
-import { isNative } from "../lib/transport";
+import { isNative, pickDirectory, pickLocalModel } from "../lib/transport";
 import { useEffect, useState } from "react";
 import {
   api,
@@ -16,7 +16,9 @@ import {
   type NativePluginCatalog,
 } from "../api";
 
-type Section =
+export type SettingsSection =
+  | "accounts"
+  | "local"
   | "model"
   | "permissions"
   | "appearance"
@@ -25,8 +27,11 @@ type Section =
   | "plugins"
   | "worktrees"
   | "advanced";
+type Section = SettingsSection;
 const SECTIONS: { id: Section; label: string }[] = [
-  { id: "model", label: "Model" },
+  { id: "accounts", label: "Accounts" },
+  { id: "local", label: "Local models" },
+  { id: "model", label: "Advanced model" },
   { id: "permissions", label: "Permissions" },
   { id: "appearance", label: "Appearance" },
   { id: "hooks", label: "Hooks" },
@@ -41,7 +46,7 @@ export function Settings({
   onClose,
   onSave,
   onToast,
-  initialSection = "model",
+  initialSection = "accounts",
   onOpenProject,
 }: {
   cfg: Record<string, unknown>;
@@ -75,6 +80,13 @@ export function Settings({
   const [apiKey, setApiKey] = useState("");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [detected, setDetected] = useState<DetectedProvider[]>([]);
+  const [accounts, setAccounts] = useState<Record<string, { state?: string; detail?: string; fix?: string; version?: string | null }>>({});
+  const [localCatalog, setLocalCatalog] = useState<{
+    llama?: { state?: string; detail?: string; path?: string };
+    models?: { id: string; name: string; path: string; detail: string; bytes: number }[];
+    hardware?: { gpu?: string; ram_bytes?: number; vram_bytes?: number };
+  }>({});
+  const [localPath, setLocalPath] = useState("");
   const [testState, setTestState] = useState<{
     busy: boolean;
     text: string;
@@ -170,6 +182,13 @@ export function Settings({
       .plugins()
       .then(updatePlugins)
       .catch((error) => setPluginError(String(error)));
+    void api
+      .accounts()
+      .then((d) => {
+        setAccounts((d.vendors || {}) as typeof accounts);
+        setLocalCatalog((d.local_engine || {}) as typeof localCatalog);
+      })
+      .catch(() => undefined);
   }, []);
 
   async function activateHook(path: string, hash: string, enabled: boolean) {
@@ -286,6 +305,8 @@ export function Settings({
             codex_binary: cliCodexBin,
             grok_binary: cliGrokBin,
             claude_binary: cliClaudeBin,
+            cursor_binary: "cursor-agent",
+            antigravity_binary: "agy",
             approval_timeout_sec: cliApprovalSec,
             stall_timeout_sec: cliStallSec,
           },
@@ -346,6 +367,151 @@ export function Settings({
         ))}
       </nav>
       <div className="settings-body">
+        {section === "accounts" && (
+          <section>
+            <h3>Connected accounts</h3>
+            <p className="hint">
+              Sign in with the official CLI. ShadowCode never asks for a
+              password and never reads vendor tokens.
+            </p>
+            {["codex", "claude", "cursor", "antigravity"].map((id) => {
+              const row = accounts[id] || {};
+              const label =
+                id === "claude"
+                  ? "Claude Code"
+                  : id === "antigravity"
+                    ? "Antigravity"
+                    : id[0].toUpperCase() + id.slice(1);
+              const state =
+                row.state === "ready"
+                  ? "Ready"
+                  : row.state === "not_logged_in"
+                    ? "Sign in"
+                    : row.state === "not_installed"
+                      ? "Setup required"
+                      : "Unavailable";
+              return (
+                <div className="account-row" key={id}>
+                  <div>
+                    <strong>{label}</strong>
+                    <p className="hint">
+                      {state}
+                      {row.detail ? ` · ${row.detail}` : ""}
+                    </p>
+                  </div>
+                  <span className="hint">{row.fix || "Manage in the official CLI"}</span>
+                </div>
+              );
+            })}
+          </section>
+        )}
+        {section === "local" && (
+          <section>
+            <h3>Local models</h3>
+            <p className="hint">
+              Add a GGUF file or folder you already have. Removing a catalog
+              entry never deletes the original weights. Models are not
+              downloaded automatically.
+            </p>
+            <p className="hint">
+              {localCatalog.llama?.detail ||
+                "llama.cpp binary not configured yet."}
+              {localCatalog.hardware?.gpu
+                ? ` GPU: ${localCatalog.hardware.gpu}.`
+                : ""}
+            </p>
+            {(localCatalog.models || []).map((m) => (
+              <div className="account-row" key={m.id}>
+                <div>
+                  <strong>{m.name}</strong>
+                  <p className="hint">{m.detail}</p>
+                </div>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() =>
+                    void api.removeLocalModel(m.path).then(() => {
+                      onToast("Removed from catalog. Weights were not deleted.", "ok");
+                      setLocalCatalog((cur) => ({
+                        ...cur,
+                        models: (cur.models || []).filter((x) => x.id !== m.id),
+                      }));
+                    })
+                  }
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <div className="field">
+              <label htmlFor="local-gguf">Selected GGUF file or folder</label>
+              <input
+                id="local-gguf"
+                value={localPath}
+                readOnly={isNative()}
+                onChange={(e) => setLocalPath(e.target.value)}
+                placeholder="Choose a file or folder you already have"
+              />
+            </div>
+            <div className="chip-row">
+              <button
+                type="button"
+                className="ghost"
+                onClick={() =>
+                  void (async () => {
+                    try {
+                      const path = isNative()
+                        ? await pickLocalModel(false)
+                        : null;
+                      if (path) setLocalPath(path);
+                    } catch (e) {
+                      onToast(String(e), "err");
+                    }
+                  })()
+                }
+              >
+                Choose GGUF file
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() =>
+                  void (async () => {
+                    try {
+                      const path = isNative()
+                        ? await pickLocalModel(true)
+                        : await pickDirectory();
+                      if (path) setLocalPath(path);
+                    } catch (e) {
+                      onToast(String(e), "err");
+                    }
+                  })()
+                }
+              >
+                Choose folder
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={!localPath.trim()}
+                onClick={() =>
+                  void api
+                    .addLocalModel(localPath.trim())
+                    .then((r) => {
+                      setLocalCatalog(
+                        (r.local_engine || {}) as typeof localCatalog,
+                      );
+                      setLocalPath("");
+                      onToast("Added to the local catalog", "ok");
+                    })
+                    .catch((e) => onToast(String(e), "err"))
+                }
+              >
+                Add to catalog
+              </button>
+            </div>
+          </section>
+        )}
         {section === "model" && (
           <section>
             <h3>Model</h3>

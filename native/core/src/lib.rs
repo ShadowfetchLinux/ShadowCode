@@ -17,6 +17,7 @@ pub mod hooks;
 pub mod intelligence;
 #[cfg(unix)]
 pub mod lifecycle;
+pub mod local_engine;
 #[cfg(unix)]
 pub mod mcp;
 pub mod memory;

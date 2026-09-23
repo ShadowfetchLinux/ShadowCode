@@ -1,6 +1,6 @@
 # ShadowCode
 
-![version](https://img.shields.io/badge/version-0.25.0-386c51) ![Rust](https://img.shields.io/badge/runtime-Rust%201.95-orange) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-0.26.0-386c51) ![Rust](https://img.shields.io/badge/runtime-Rust%201.95-orange) ![license](https://img.shields.io/badge/license-MIT-green)
 
 **Your ideas. Your models. Your machine.**
 
@@ -10,7 +10,8 @@ context, tools, permissions, checkpoints, plans, and verification.
 
 ![ShadowCode workspace](docs/images/workspace-light.png)
 
-**Native 0.25 release:** the `main` branch builds a Rust/Tauri desktop window
+**Native 0.26 release:** one unified model picker (Codex, Claude Code, Cursor,
+Antigravity, and local models). The `main` branch builds a Rust/Tauri desktop window
 with the interface embedded in the executable. It needs no Python runtime or
 browser launcher. See the [native desktop guide](docs/NATIVE_DESKTOP.md)
 and the [goals](docs/NATIVE_GOALS.md) and [model routing](docs/NATIVE_ROUTING.md)
@@ -36,7 +37,7 @@ Integrations and release checks are tracked under the [release gates](docs/NATIV
 
 ## Native AppImage
 
-Download the `v0.25.0` **x86_64 AppImage**
+Download the `v0.26.0` **x86_64 AppImage**
 and its `SHA256SUMS` file from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest).
 The native application embeds its interface; Python, Node.js and a browser
 launcher are not runtime dependencies. The release targets **Ubuntu 24.04 or
@@ -44,8 +45,8 @@ newer / glibc 2.39+**. Git and a model provider such as Ollama remain external.
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-chmod +x ShadowCode_0.25.0_amd64.AppImage
-./ShadowCode_0.25.0_amd64.AppImage --appimage-extract-and-run
+chmod +x ShadowCode_0.26.0_amd64.AppImage
+./ShadowCode_0.26.0_amd64.AppImage --appimage-extract-and-run
 ```
 
 Extraction mode works without FUSE. To install into `~/Applications`, add a
@@ -54,7 +55,7 @@ stable `shadow` and `shadowcode` commands, and replace the desktop launcher:
 ```bash
 git clone https://github.com/Shadowfetchapps/ShadowCode.git
 cd ShadowCode
-./scripts/install-appimage.sh /path/to/ShadowCode_0.25.0_amd64.AppImage
+./scripts/install-appimage.sh /path/to/ShadowCode_0.26.0_amd64.AppImage
 ```
 
 Keep `SHA256SUMS` beside the download and the installer verifies its matching

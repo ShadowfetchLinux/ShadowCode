@@ -96,6 +96,14 @@ coordination sidecars. Directory capabilities confine database/sidecar paths;
 query work, concurrent readers and output are bounded. Cancellation interrupts
 SQLite and releases its connection; an OS filesystem stall may delay return.
 
+## Vendor subscription CLIs
+
+Codex, Claude Code, Cursor, and Antigravity run as official local CLIs.
+ShadowCode does not scrape cookies, extract OAuth tokens, or treat a Gemini API
+key as Antigravity subscription access. Disconnecting ShadowCode does not always
+log out a shared native CLI — use that vendor's own logout when you want the
+CLI session gone.
+
 ## Secrets and transcript content
 
 Keys belong in `~/.config/shadow-agent/secrets.env` with mode 600 (recommended on this

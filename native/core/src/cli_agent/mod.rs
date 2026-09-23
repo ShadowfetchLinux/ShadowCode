@@ -1,5 +1,8 @@
-//! Vendor CLI agent backends: run the user's Claude, Codex, or Grok
-//! subscription by spawning the official vendor CLI as a subprocess.
+//! Vendor CLI agent backends: run the user's subscription CLI (Codex, Claude
+//! Code, Cursor, Antigravity, and optionally Grok) by spawning the official
+//! vendor process. The primary picker features Codex, Claude Code, Cursor, and
+//! Antigravity. Grok stays wired but is not featured unless the user already
+//! has that CLI.
 //!
 //! ShadowCode never reads, stores, proxies, or re-implements vendor OAuth
 //! tokens. The user logs in once with the vendor CLI (`claude auth login`,
@@ -20,11 +23,15 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub mod acp;
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
+pub mod discovery;
 pub mod doctor;
+pub mod picker;
 #[cfg(unix)]
 pub mod runner;
+pub mod usage;
 
 /// Provider prefix used in `ModelConfig.provider` for vendor CLI backends.
 pub const PROVIDER_PREFIX: &str = "cli:";
@@ -38,50 +45,107 @@ pub const MAX_MALFORMED_LINES: usize = 32;
 #[serde(rename_all = "lowercase")]
 pub enum Vendor {
     Codex,
-    Grok,
     Claude,
+    Cursor,
+    Antigravity,
+    Grok,
 }
 impl Vendor {
-    pub const ALL: [Vendor; 3] = [Vendor::Codex, Vendor::Grok, Vendor::Claude];
+    pub const ALL: [Vendor; 5] = [
+        Vendor::Codex,
+        Vendor::Claude,
+        Vendor::Cursor,
+        Vendor::Antigravity,
+        Vendor::Grok,
+    ];
+    /// Subscriptions shown in the primary picker.
+    pub const FEATURED: [Vendor; 4] = [
+        Vendor::Codex,
+        Vendor::Claude,
+        Vendor::Cursor,
+        Vendor::Antigravity,
+    ];
     pub fn id(self) -> &'static str {
         match self {
             Vendor::Codex => "codex",
-            Vendor::Grok => "grok",
             Vendor::Claude => "claude",
+            Vendor::Cursor => "cursor",
+            Vendor::Antigravity => "antigravity",
+            Vendor::Grok => "grok",
         }
     }
     pub fn provider(self) -> String {
         format!("{PROVIDER_PREFIX}{}", self.id())
     }
+    pub fn product_label(self) -> &'static str {
+        match self {
+            Vendor::Codex => "Codex",
+            Vendor::Claude => "Claude Code",
+            Vendor::Cursor => "Cursor",
+            Vendor::Antigravity => "Antigravity",
+            Vendor::Grok => "Grok",
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Vendor::Codex => "Codex (vendor agent)",
+            Vendor::Claude => "Claude Code (vendor agent)",
+            Vendor::Cursor => "Cursor (vendor agent)",
+            Vendor::Antigravity => "Antigravity (vendor agent)",
             Vendor::Grok => "Grok (vendor agent)",
-            Vendor::Claude => "Claude (vendor agent)",
         }
     }
     pub fn binary(self) -> &'static str {
-        self.id()
+        match self {
+            Vendor::Codex => "codex",
+            Vendor::Claude => "claude",
+            Vendor::Cursor => "cursor-agent",
+            Vendor::Antigravity => "agy",
+            Vendor::Grok => "grok",
+        }
+    }
+    pub fn featured(self) -> bool {
+        Self::FEATURED.contains(&self)
+    }
+    pub fn supports_auto_model(self) -> bool {
+        matches!(self, Vendor::Cursor | Vendor::Codex)
     }
     pub fn login_hint(self) -> &'static str {
         match self {
             Vendor::Codex => "Run `codex login` in a terminal, then re-run Doctor.",
-            Vendor::Grok => "Run `grok login` in a terminal, then re-run Doctor.",
             Vendor::Claude => "Run `claude auth login` in a terminal, then re-run Doctor.",
+            Vendor::Cursor => "Run `cursor-agent login` in a terminal, then re-run Doctor.",
+            Vendor::Antigravity => {
+                "Sign in with the official Antigravity CLI (`agy`), then re-run Doctor. ShadowCode does not collect Google passwords."
+            }
+            Vendor::Grok => "Run `grok login` in a terminal, then re-run Doctor.",
+        }
+    }
+    pub fn login_command(self) -> &'static [&'static str] {
+        match self {
+            Vendor::Codex => &["login"],
+            Vendor::Claude => &["auth", "login"],
+            Vendor::Cursor => &["login"],
+            Vendor::Antigravity => &["help"],
+            Vendor::Grok => &["login"],
         }
     }
     pub fn install_hint(self) -> &'static str {
         match self {
             Vendor::Codex => "Install the Codex CLI (`npm i -g @openai/codex`) so `codex` is on PATH.",
-            Vendor::Grok => "Install the Grok CLI so `grok` is on PATH (see https://docs.x.ai/build).",
             Vendor::Claude => "Install Claude Code so `claude` is on PATH (see https://code.claude.com/docs/en/headless).",
+            Vendor::Cursor => "Install Cursor Agent (`cursor-agent`) from https://cursor.com/docs/cli/acp so it is on PATH.",
+            Vendor::Antigravity => "Install the Antigravity CLI (`agy`) from https://antigravity.google/docs/cli/install/ so it is on PATH. The `antigravity` desktop app is not the CLI.",
+            Vendor::Grok => "Install the Grok CLI so `grok` is on PATH (see https://docs.x.ai/build).",
         }
     }
     pub fn from_provider(provider: &str) -> Option<Vendor> {
         match provider.strip_prefix(PROVIDER_PREFIX)? {
             "codex" => Some(Vendor::Codex),
-            "grok" => Some(Vendor::Grok),
             "claude" => Some(Vendor::Claude),
+            "cursor" => Some(Vendor::Cursor),
+            "antigravity" => Some(Vendor::Antigravity),
+            "grok" => Some(Vendor::Grok),
             _ => None,
         }
     }
@@ -217,8 +281,10 @@ pub fn adapter_for(vendor: Vendor, codex_exec_fallback: bool) -> Box<dyn CliAdap
     match vendor {
         Vendor::Codex if codex_exec_fallback => Box::new(codex::CodexExecAdapter::default()),
         Vendor::Codex => Box::new(codex::CodexAppServerAdapter::default()),
-        Vendor::Grok => Box::new(acp::AcpAdapter::new(Vendor::Grok)),
         Vendor::Claude => Box::new(claude::ClaudeAdapter::default()),
+        Vendor::Cursor => Box::new(acp::AcpAdapter::new(Vendor::Cursor)),
+        Vendor::Antigravity => Box::new(antigravity::AntigravityAdapter::default()),
+        Vendor::Grok => Box::new(acp::AcpAdapter::new(Vendor::Grok)),
     }
 }
 
@@ -235,6 +301,8 @@ pub struct CliAgentsConfig {
     pub codex_binary: String,
     pub grok_binary: String,
     pub claude_binary: String,
+    pub cursor_binary: String,
+    pub antigravity_binary: String,
     /// Seconds a vendor approval prompt waits for the user before it is denied.
     pub approval_timeout_sec: u64,
     /// Seconds without any stdout line before the run is considered stalled.
@@ -248,6 +316,8 @@ impl Default for CliAgentsConfig {
             codex_binary: "codex".into(),
             grok_binary: "grok".into(),
             claude_binary: "claude".into(),
+            cursor_binary: "cursor-agent".into(),
+            antigravity_binary: "agy".into(),
             approval_timeout_sec: 600,
             stall_timeout_sec: 900,
         }
@@ -265,6 +335,8 @@ impl CliAgentsConfig {
             ("codex_binary", &self.codex_binary),
             ("grok_binary", &self.grok_binary),
             ("claude_binary", &self.claude_binary),
+            ("cursor_binary", &self.cursor_binary),
+            ("antigravity_binary", &self.antigravity_binary),
         ] {
             if value.trim().is_empty() || value.len() > 1024 || value.contains(['\n', '\0']) {
                 bail!("cli_agents.{name} must be a non-empty executable name or path");
@@ -281,8 +353,10 @@ impl CliAgentsConfig {
     pub fn binary(&self, vendor: Vendor) -> &str {
         match vendor {
             Vendor::Codex => &self.codex_binary,
-            Vendor::Grok => &self.grok_binary,
             Vendor::Claude => &self.claude_binary,
+            Vendor::Cursor => &self.cursor_binary,
+            Vendor::Antigravity => &self.antigravity_binary,
+            Vendor::Grok => &self.grok_binary,
         }
     }
     pub fn vendor_enabled(&self, vendor: Vendor) -> bool {
@@ -309,16 +383,25 @@ pub fn vendor_model(vendor: Vendor, model_name: Option<&str>) -> crate::config::
     }
 }
 
-/// Resolve `cli:codex` / `cli:grok` / `cli:claude` (and their default names).
+/// Resolve `cli:codex`, `cli:cursor:auto`, product labels, or vendor ids.
 pub fn resolve_vendor(id: &str) -> Option<crate::config::ModelConfig> {
     let trimmed = id.trim();
     if let Some(vendor) = Vendor::from_provider(trimmed) {
         return Some(vendor_model(vendor, None));
     }
+    if let Some((prefix, model)) = trimmed.rsplit_once(':') {
+        if prefix.starts_with(PROVIDER_PREFIX) {
+            if let Some(vendor) = Vendor::from_provider(prefix) {
+                return Some(vendor_model(vendor, Some(model)));
+            }
+        }
+    }
     for vendor in Vendor::ALL {
         if trimmed == vendor.id()
+            || trimmed == vendor.product_label()
             || trimmed == vendor.label()
             || trimmed.eq_ignore_ascii_case(vendor.label())
+            || trimmed.eq_ignore_ascii_case(vendor.product_label())
         {
             return Some(vendor_model(vendor, None));
         }
@@ -333,8 +416,8 @@ pub fn catalog_models(config: &CliAgentsConfig) -> Vec<Value> {
         .filter(|vendor| config.vendor_enabled(*vendor))
         .map(|vendor| {
             json!({
-                "id": vendor.provider(),
-                "name": vendor.label(),
+                "id": picker::target_id(vendor, "default"),
+                "name": vendor.product_label(),
                 "provider": vendor.provider(),
                 "endpoint": "",
                 "context_limit": 200000,
@@ -342,7 +425,13 @@ pub fn catalog_models(config: &CliAgentsConfig) -> Vec<Value> {
                     "vendor_agent": true,
                     "kind": vendor.id(),
                     "label": vendor.label(),
+                    "product_label": vendor.product_label(),
+                    "featured": vendor.featured(),
                     "login_hint": vendor.login_hint(),
+                    "group": "subscriptions",
+                    "inference": "cloud",
+                    "model": "default",
+                    "route": "vendor_cli",
                 }
             })
         })

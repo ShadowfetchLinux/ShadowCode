@@ -1,3 +1,12 @@
+ShadowCode 0.26.0 is a desktop coding agent: open a project, pick one
+execution target, describe the task, watch it work. The composer has a single
+searchable picker for Codex, Claude Code, Cursor, Antigravity, and local
+models. Usage is shown only when a provider actually reports it. Local GGUF
+files you already have can be added to a catalog; weights are never deleted or
+auto-downloaded.
+
+Downloads: `ShadowCode_0.26.0_amd64.AppImage`, `ShadowCode_0.26.0_amd64.deb`.
+
 ShadowCode 0.25.0 ("Supreme") delivers a major flagship UX upgrade designed
 to simplify the onboarding flow and elevate workspace feel.
 

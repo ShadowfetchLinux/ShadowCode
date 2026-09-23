@@ -328,12 +328,20 @@ impl CliAdapter for AcpAdapter {
         self.vendor
     }
     fn command(&self, options: &LaunchOptions) -> (String, Vec<String>) {
-        let mut args = vec!["agent".to_owned()];
+        let mut args = Vec::new();
         if !options.model.is_empty() && options.model != "default" {
             args.push("--model".into());
             args.push(options.model.clone());
         }
-        args.push("stdio".into());
+        match self.vendor {
+            // Official Cursor ACP: `cursor-agent [--model …] acp`
+            // https://cursor.com/docs/cli/acp
+            Vendor::Cursor => args.push("acp".into()),
+            _ => {
+                args.insert(0, "agent".into());
+                args.push("stdio".into());
+            }
+        }
         (options.binary.clone(), args)
     }
     fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {

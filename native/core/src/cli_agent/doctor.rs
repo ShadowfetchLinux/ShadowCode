@@ -33,6 +33,8 @@ pub fn auth_marker(vendor: Vendor, home: &Path) -> PathBuf {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".claude"))
             .join(".credentials.json"),
+        Vendor::Cursor => home.join(".cursor").join("argv.json"),
+        Vendor::Antigravity => home.join(".agy").join("session.json"),
     }
 }
 
@@ -93,7 +95,11 @@ pub async fn version(binary: &Path, path_env: Option<&OsStr>) -> Option<String> 
 
 /// Login state without touching credential contents.
 pub async fn login_state(vendor: Vendor, binary: &Path, home: &Path, path_env: Option<&OsStr>) -> LoginState {
-    if marker_present(&auth_marker(vendor, home)) {
+    // Cursor/Antigravity login is reported by the official CLI. A nearby
+    // IDE config file is not proof of a subscription session.
+    if !matches!(vendor, Vendor::Cursor | Vendor::Antigravity)
+        && marker_present(&auth_marker(vendor, home))
+    {
         return LoginState::LoggedIn;
     }
     match vendor {
@@ -108,6 +114,36 @@ pub async fn login_state(vendor: Vendor, binary: &Path, home: &Path, path_env: O
                     Some(true) => LoginState::LoggedIn,
                     Some(false) => LoginState::NotLoggedIn,
                     None => LoginState::Unknown,
+                }
+            }
+            None => LoginState::Unknown,
+        },
+        Vendor::Cursor => match run_short(binary, &["status"], path_env).await {
+            Some((_, text)) => {
+                let lower = text.to_ascii_lowercase();
+                if lower.contains("logged in") {
+                    LoginState::LoggedIn
+                } else if lower.contains("not logged") || lower.contains("unauthenticated") {
+                    LoginState::NotLoggedIn
+                } else {
+                    LoginState::Unknown
+                }
+            }
+            None => LoginState::Unknown,
+        },
+        Vendor::Antigravity => match run_short(binary, &["models"], path_env).await {
+            Some((ok, text)) => {
+                let lower = text.to_ascii_lowercase();
+                if ok && (text.contains('\t') || lower.contains("gemini") || lower.contains("claude"))
+                {
+                    LoginState::LoggedIn
+                } else if lower.contains("login") || lower.contains("auth") || lower.contains("sign in")
+                {
+                    LoginState::NotLoggedIn
+                } else if ok {
+                    LoginState::LoggedIn
+                } else {
+                    LoginState::Unknown
                 }
             }
             None => LoginState::Unknown,

@@ -865,7 +865,58 @@ impl Service {
                         models.push(vendor);
                     }
                 }
-                return Ok(json!({"models":models,"cli_agents":crate::cli_agent::doctor::status(&cfg.cli_agents).await}));
+                let cli_agents = crate::cli_agent::doctor::status(&cfg.cli_agents).await;
+                let picker = crate::cli_agent::discovery::picker_targets(&cfg.cli_agents).await?;
+                let local = crate::local_engine::catalog(&cfg.local_engine);
+                return Ok(json!({
+                    "models":models,
+                    "cli_agents":cli_agents,
+                    "picker":picker["targets"],
+                    "local_engine":local
+                }));
+            }
+            ("GET", "/api/picker") => {
+                let cfg = self.config()?;
+                let mut picker = crate::cli_agent::discovery::picker_targets(&cfg.cli_agents).await?;
+                let local = crate::local_engine::catalog(&cfg.local_engine);
+                let llama_ready = local["llama"]["state"] == "ready";
+                let mut targets = picker["targets"].as_array().cloned().unwrap_or_default();
+                for model in local["models"].as_array().into_iter().flatten() {
+                    let availability = if llama_ready && model["compatible"] == true {
+                        "ready"
+                    } else {
+                        "setup_required"
+                    };
+                    targets.push(json!({
+                        "id": model["id"],
+                        "provider": "llamacpp",
+                        "account": "this-computer",
+                        "model": model["name"],
+                        "route": "local_llamacpp",
+                        "group": "local",
+                        "name": format!("{} · This computer", model["name"].as_str().unwrap_or("GGUF")),
+                        "subtitle": "Runs on this computer · No subscription quota",
+                        "inference": "local",
+                        "availability": availability,
+                        "availability_label": if availability == "ready" { "Ready" } else { "Setup required" },
+                        "reason": model["detail"],
+                        "featured": true,
+                        "vision": model["vision"],
+                        "tools": model["tools"],
+                        "usage": crate::cli_agent::usage::UsageSnapshot::local(),
+                    }));
+                }
+                picker["targets"] = json!(targets);
+                picker["local_engine"] = local;
+                return Ok(picker);
+            }
+            ("GET", "/api/accounts") => {
+                let cfg = self.config()?;
+                return Ok(json!({
+                    "vendors": crate::cli_agent::doctor::status(&cfg.cli_agents).await,
+                    "config": cfg.cli_agents,
+                    "local_engine": crate::local_engine::catalog(&cfg.local_engine),
+                }));
             }
             ("GET", "/api/cli-agents") => {
                 let cfg = self.config()?;
@@ -873,6 +924,38 @@ impl Service {
                     "vendors": crate::cli_agent::doctor::status(&cfg.cli_agents).await,
                     "config": cfg.cli_agents
                 }));
+            }
+            ("POST", "/api/local-models/add") => {
+                let path = PathBuf::from(text("path"));
+                ensure!(path.is_absolute(), "Choose an absolute file or directory");
+                let cfg = self.config()?;
+                let mut next = cfg.local_engine.clone();
+                if path.is_dir() {
+                    let p = path.display().to_string();
+                    if !next.directories.iter().any(|d| d == &p) {
+                        next.directories.push(p);
+                    }
+                } else {
+                    crate::local_engine::inspect_gguf(&path, 0)?;
+                    let p = path.display().to_string();
+                    if !next.files.iter().any(|d| d == &p) {
+                        next.files.push(p);
+                    }
+                }
+                next.validate()?;
+                Config::patch(self.engine.paths(), json!({"local_engine": next}))?;
+                let cfg = self.config()?;
+                return Ok(json!({"ok":true,"local_engine":crate::local_engine::catalog(&cfg.local_engine)}));
+            }
+            ("POST", "/api/local-models/remove") => {
+                let path = text("path");
+                ensure!(!path.is_empty(), "Missing catalog path");
+                let cfg = self.config()?;
+                let mut next = cfg.local_engine.clone();
+                next.files.retain(|p| p != path);
+                next.directories.retain(|p| p != path);
+                Config::patch(self.engine.paths(), json!({"local_engine": next}))?;
+                return Ok(json!({"ok":true,"deleted_weights":false,"detail":"Catalog entry removed. Original weights were not deleted."}));
             }
             ("POST", "/api/models/test") => {
                 let cfg = self.config()?;

@@ -76,6 +76,11 @@ pub fn validate_image_bytes(bytes: &[u8], filename: &str) -> Result<&'static str
 
 /// Whether this provider/model combination can accept image inputs.
 pub fn model_supports_vision(provider: &str, model: &str) -> bool {
+    // Vendor CLIs only accept images once the adapter actually forwards
+    // bytes. Path lists in the prompt are not vision support.
+    if crate::cli_agent::is_cli_provider(provider) {
+        return false;
+    }
     let name = model.to_ascii_lowercase();
     let hint = [
         "gemma4",
@@ -356,6 +361,11 @@ mod tests {
         assert!(!model_supports_vision("ollama", "gpt-oss:20b"));
         assert!(!model_supports_vision("ollama", "qwen3:14b"));
         assert!(model_supports_vision("openai", "gpt-4o-mini"));
+        assert!(!model_supports_vision("cli:codex", "gpt-5"));
+        assert!(!model_supports_vision("cli:cursor", "auto"));
+        assert!(!model_supports_vision("cli:antigravity", "gemini-3.8-flash-high"));
+        assert!(ensure_vision_or_bail("cli:claude", "default", 1).is_err());
+        assert!(ensure_vision_or_bail("cli:cursor", "auto", 0).is_ok());
     }
 
     #[test]

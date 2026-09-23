@@ -47,9 +47,11 @@ fn note(method: &str, params: Value) -> String {
 fn vendor_catalog_and_config_validation() {
     let config = CliAgentsConfig::default();
     let models = catalog_models(&config);
-    assert_eq!(models.len(), 3);
+    assert_eq!(models.len(), 5);
     assert!(models.iter().all(|m| m["metadata"]["vendor_agent"] == true));
     assert_eq!(resolve_vendor("cli:codex").unwrap().provider, "cli:codex");
+    assert_eq!(resolve_vendor("cli:cursor:auto").unwrap().name, "auto");
+    assert_eq!(resolve_vendor("cli:antigravity").unwrap().provider, "cli:antigravity");
     assert_eq!(vendor_model(Vendor::Grok, None).api_key_env, "UNUSED");
     let mut bad = config.clone();
     bad.codex_binary.clear();
@@ -61,7 +63,8 @@ fn vendor_catalog_and_config_validation() {
     off.claude_enabled = false;
     assert!(!off.vendor_enabled(Vendor::Claude));
     assert!(off.vendor_enabled(Vendor::Codex));
-    assert_eq!(catalog_models(&off).len(), 2);
+    assert!(off.vendor_enabled(Vendor::Cursor));
+    assert_eq!(catalog_models(&off).len(), 4);
 }
 
 #[test]
@@ -573,3 +576,108 @@ for raw in sys.stdin:
     elif msg.get("method") == "turn/start":
         time.sleep(30)
 "#;
+
+#[test]
+fn cursor_acp_command_and_cancel() {
+    let root = tempfile::tempdir().unwrap();
+    let mut adapter = adapter_for(Vendor::Cursor, false);
+    let (bin, args) = adapter.command(&LaunchOptions {
+        binary: "cursor-agent".into(),
+        workspace: root.path().to_path_buf(),
+        model: "auto".into(),
+        read_only: false,
+    });
+    assert_eq!(bin, "cursor-agent");
+    assert_eq!(args, vec!["--model", "auto", "acp"]);
+    adapter.on_start(&launch(root.path()));
+    adapter.prompt("hello").unwrap();
+    let (send, _) = feed(
+        &mut *adapter,
+        &[
+            &rpc_result(1, json!({"protocolVersion":1})),
+            &rpc_result(2, json!({"sessionId":"cur-1"})),
+        ],
+    );
+    assert!(send.iter().any(|l| l.contains("session/prompt")));
+    let interrupt = adapter.interrupt();
+    assert!(interrupt[0].contains("session/cancel"));
+    let stop = adapter
+        .on_line(&rpc_result(3, json!({"stopReason":"cancelled"})))
+        .unwrap();
+    assert!(matches!(
+        stop.updates[0],
+        Update::TurnCompleted { interrupted: true, .. }
+    ));
+}
+
+#[test]
+fn antigravity_stream_json_tools_and_cancel() {
+    let root = tempfile::tempdir().unwrap();
+    let mut adapter = adapter_for(Vendor::Antigravity, false);
+    let (bin, args) = adapter.command(&LaunchOptions {
+        binary: "agy".into(),
+        workspace: root.path().to_path_buf(),
+        model: "gemini-3.8-flash-high".into(),
+        read_only: true,
+    });
+    assert_eq!(bin, "agy");
+    assert!(args.contains(&"--print".into()));
+    assert!(args.contains(&"stream-json".into()));
+    assert!(args.contains(&"--mode".into()));
+    assert!(args.contains(&"plan".into()));
+    adapter.prompt("edit").unwrap();
+    adapter.on_start(&launch(root.path()));
+    let (_, updates) = feed(
+        &mut *adapter,
+        &[
+            r#"{"type":"system","subtype":"init"}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"a.rs"}}]}}"#,
+            r#"{"type":"control_request","request_id":"p1","request":{"subtype":"can_use_tool","tool_name":"Edit"}}"#,
+        ],
+    );
+    assert!(updates.iter().any(|u| matches!(u, Update::Text(t) if t == "Hi")));
+    let approval = updates
+        .iter()
+        .find_map(|u| match u {
+            Update::Approval(p) => Some(p.clone()),
+            _ => None,
+        })
+        .expect("antigravity permission");
+    let allow = adapter.approve(&approval.request_id, true).unwrap();
+    assert!(allow[0].contains("\"behavior\":\"allow\""));
+    assert!(!adapter.interrupt().is_empty());
+    let (_, done) = feed(
+        &mut *adapter,
+        &[r#"{"type":"result","subtype":"cancelled","usage":{"input_tokens":1,"output_tokens":2},"result":"ok"}"#],
+    );
+    assert!(done.iter().any(|u| matches!(u, Update::TurnCompleted { interrupted: true, .. })));
+}
+
+#[test]
+fn picker_routes_by_stable_id_not_display_name() {
+    use shadowcode_core::cli_agent::picker::{target_id, vendor_target, Availability};
+    use shadowcode_core::cli_agent::usage::UsageSnapshot;
+    let cursor = vendor_target(
+        Vendor::Cursor,
+        "sonnet",
+        "Claude 3.5 Sonnet",
+        Availability::Ready,
+        "Ready",
+        UsageSnapshot::unavailable("Cursor"),
+        false,
+    );
+    let claude = vendor_target(
+        Vendor::Claude,
+        "sonnet",
+        "Claude 3.5 Sonnet",
+        Availability::Ready,
+        "Ready",
+        UsageSnapshot::unavailable("Claude Code"),
+        false,
+    );
+    assert_ne!(cursor.id, claude.id);
+    assert_eq!(cursor.id, target_id(Vendor::Cursor, "sonnet"));
+    assert_eq!(resolve_vendor(&cursor.id).unwrap().provider, "cli:cursor");
+    assert_eq!(resolve_vendor(&claude.id).unwrap().provider, "cli:claude");
+}

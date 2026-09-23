@@ -429,6 +429,8 @@ export const api = {
   models: (refresh = false) =>
     get<{
       models: ModelInfo[];
+      picker?: Record<string, unknown>[];
+      local_engine?: Record<string, unknown>;
       cli_agents?: Record<
         string,
         {
@@ -440,6 +442,20 @@ export const api = {
         }
       >;
     }>(`/api/models${refresh ? "?refresh=1" : ""}`),
+  picker: () => get<{ targets: Record<string, unknown>[] }>("/api/picker"),
+  accounts: () => get<Record<string, unknown>>("/api/accounts"),
+  addLocalModel: (path: string) =>
+    send<{ ok: boolean; local_engine?: Record<string, unknown> }>(
+      "/api/local-models/add",
+      "POST",
+      { path },
+    ),
+  removeLocalModel: (path: string) =>
+    send<{ ok: boolean; deleted_weights: boolean }>(
+      "/api/local-models/remove",
+      "POST",
+      { path },
+    ),
   cliAgents: () =>
     get<{
       vendors: Record<

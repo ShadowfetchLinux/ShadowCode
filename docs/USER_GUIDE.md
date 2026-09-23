@@ -1,15 +1,17 @@
 # ShadowCode user guide
 
-This guide covers the supported 0.25 native release. The desktop, CLI, terminal
+This guide covers the supported 0.26 native release. The desktop, CLI, terminal
 interface, and integrations use the same Python-free Rust engine. See the
 [native desktop](NATIVE_DESKTOP.md), [native CLI](NATIVE_CLI.md), and
 [release gates](NATIVE_MIGRATION.md) guides for platform and integration details.
 
 ## Start a project
 
-Open ShadowCode, choose a project directory, and select a model. Local servers
-are detected when available. Remote providers need an endpoint, model ID, and
-API key. Test the connection before starting. Mock is a deterministic offline
+Open ShadowCode, choose a project directory, and pick one target from the
+composer dropdown. Subscriptions (Codex, Claude Code, Cursor, Antigravity) use
+the official CLI login. Local GGUF files you already have can be added in
+Settings → Local models. Remaining usage appears only when a provider reports
+it; otherwise the row says Usage unavailable. Mock is a deterministic offline
 demo; it can demonstrate a hello-world workflow without model credits.
 
 The left sidebar groups tasks by project. **New task** starts a fresh conversation
@@ -20,8 +22,8 @@ or execute work. To keep inspecting without edits, choose read-only permissions.
 ## Describe, inspect, review
 
 Write a task and press Enter. The composer clears after submission; Shift+Enter
-adds a line. Build/Research/Review/Test select the routing purpose, not a separate
-security boundary. Choose the permission level in Settings.
+adds a line. Tools and permissions sit in a compact control; they are not a
+separate security boundary. Choose the permission level in Settings.
 
 The transcript shows agent explanations and compact operations. Expand an
 operation to inspect its output. File-changing operations offer review and

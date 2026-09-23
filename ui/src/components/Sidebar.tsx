@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   ChevronDown,
-  Circle,
   Clock3,
   FolderOpen,
   MessageSquare,
@@ -12,9 +11,6 @@ import {
   Search,
   Settings2,
   SquarePen,
-  Target,
-  TerminalSquare,
-  Workflow,
 } from "lucide-react";
 import { api, type Job, type Project, type Session } from "../api";
 import type { DrawerTab } from "./Drawer";
@@ -30,6 +26,7 @@ export function Sidebar({
   onProject,
   onPanel,
   onSettings,
+  onHome,
   onHide,
 }: {
   sessions: Session[];
@@ -42,6 +39,7 @@ export function Sidebar({
   onProject: (path?: string) => void;
   onPanel: (tab: DrawerTab) => void;
   onSettings: () => void;
+  onHome?: () => void;
   onHide: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -173,22 +171,14 @@ export function Sidebar({
         />
         <span>⌕</span>
       </label>
-      <nav className="sidebar-tools" aria-label="Workspace tools">
-        <button type="button" onClick={() => onPanel("goals")}>
-          <Target size={16} />
-          Goals<span className="nav-meta">Plan & run</span>
-        </button>
-        <button type="button" onClick={() => onPanel("skills")}>
-          <Workflow size={16} />
-          Skills & instructions
-        </button>
-        <button type="button" onClick={() => onPanel("background")}>
-          <TerminalSquare size={16} />
-          Background processes
+      <nav className="sidebar-tools" aria-label="Workspace">
+        <button type="button" onClick={() => onHome?.()}>
+          <MessageSquare size={16} />
+          Home
         </button>
       </nav>
       <div className="sidebar-section-title">
-        Projects
+        Recent / Projects
         <button
           type="button"
           className="icon-btn"
@@ -266,11 +256,6 @@ export function Sidebar({
         )}
       </div>
       <div className="sidebar-bottom">
-        <button type="button" onClick={() => onPanel("health")}>
-          <Circle size={8} className="online-dot" />
-          <span>Workspace health</span>
-          <ArrowUpRight size={13} />
-        </button>
         <button type="button" onClick={onSettings}>
           <Settings2 size={16} />
           <span>Settings</span>

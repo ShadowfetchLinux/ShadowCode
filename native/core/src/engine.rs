@@ -920,6 +920,9 @@ impl Engine {
             task_id: job.task_id.clone(),
             sender: self.0.sender.clone(),
         };
+        if running.config.model.provider == "llamacpp" {
+            bail!("llama.cpp is not ready. Add an official llama-cli or llama-server in Settings → Local models, then pick a GGUF you already have. ShadowCode does not auto-download weights.");
+        }
         if crate::cli_agent::is_cli_provider(&running.config.model.provider) {
             return self.run_cli_agent(running, job, events).await;
         }
@@ -988,11 +991,12 @@ impl Engine {
                 json!(decision),
             )?;
         }
-        let mut prompt = job.task.clone();
-        if !job.images.is_empty() {
-            prompt.push_str("\n\nAttached images (workspace-relative): ");
-            prompt.push_str(&job.images.join(", "));
-        }
+        crate::vision::ensure_vision_or_bail(
+            &running.config.model.provider,
+            &running.config.model.name,
+            job.images.len(),
+        )?;
+        let prompt = job.task.clone();
         let binary = cli.binary(vendor).to_owned();
         let options = crate::cli_agent::LaunchOptions {
             binary,

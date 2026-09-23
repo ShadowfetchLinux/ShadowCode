@@ -124,17 +124,15 @@ def test_single_drawer_consolidates_inspect_panels() -> None:
 
 
 def test_model_picker_groups_all_providers_and_has_custom_entry() -> None:
-    chooser = _src(UI_SRC / "components" / "ModelChooser.tsx")
-    copy = _src(UI_SRC / "lib" / "cliAgents.ts")
+    picker = _src(UI_SRC / "components" / "UnifiedPicker.tsx")
     app = _src(APP_TSX)
-    assert "<optgroup" in chooser
-    assert 'LOCAL_GROUP = "Local model (ShadowCode agent)"' in copy
-    assert 'VENDOR_GROUP = "Claude / Codex / Grok (vendor agent)"' in copy
-    assert "LOCAL_GROUP" in chooser and "VENDOR_GROUP" in chooser
-    assert '"__custom__"' in chooser
-    assert "Custom model…" in chooser
+    assert "Subscriptions (use your account)" in picker
+    assert "On this computer" in picker
+    assert "Connect account" in picker
+    assert "Add local model" in picker
+    assert "<UnifiedPicker" in app
+    assert "VendorAgentChip" not in app
     assert "CustomModelDialog" in app
-    assert "<ModelChooser" in app
 
 
 
@@ -149,7 +147,7 @@ def test_onboarding_is_single_screen_one_click() -> None:
 
 def test_settings_overlay_grouped_sections() -> None:
     src = _src(SETTINGS_TSX)
-    for label in ("Model", "Permissions", "Appearance", "Hooks", "MCP", "Plugins"):
+    for label in ("Accounts", "Local models", "Permissions", "Appearance", "Hooks", "MCP", "Plugins"):
         assert f'label: "{label}"' in src, label
 
 

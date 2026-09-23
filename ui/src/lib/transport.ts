@@ -40,6 +40,9 @@ export async function request<T>(
 
 export const pickDirectory = () => invoke<string | null>("pick_directory");
 
+export const pickLocalModel = (folder = false) =>
+  invoke<string | null>("pick_local_model", { folder });
+
 export async function exportSession(
   sessionId: string,
   format: "md" | "json" = "md",
