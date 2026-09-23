@@ -7,11 +7,7 @@ import { AppearancePage, PermissionsPage } from "./settings/PreferencePages";
 import { AdvancedPage, type AdvancedTab } from "./settings/AdvancedPage";
 
 export type SettingsSection =
-  | "accounts"
-  | "local"
-  | "permissions"
-  | "appearance"
-  | "advanced";
+  "accounts" | "local" | "permissions" | "appearance" | "advanced";
 export type { AdvancedTab };
 
 const SECTIONS: { id: SettingsSection; label: string }[] = [

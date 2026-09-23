@@ -10,7 +10,12 @@ import { AdvancedTools } from "../AdvancedTools";
 import { McpSettings } from "../McpSettings";
 import { PluginSettings } from "../PluginSettings";
 import { WorktreeSettings } from "../WorktreeSettings";
-import { BackgroundTab, GoalsTab, HealthTab, SkillsTab } from "./AdvancedPanels";
+import {
+  BackgroundTab,
+  GoalsTab,
+  HealthTab,
+  SkillsTab,
+} from "./AdvancedPanels";
 
 export type AdvancedTab =
   | "skills"
@@ -73,7 +78,11 @@ export function AdvancedPage({
   return (
     <section className="settings-page">
       <h3>Advanced</h3>
-      <div className="advanced-tabs" role="tablist" aria-label="Advanced sections">
+      <div
+        className="advanced-tabs"
+        role="tablist"
+        aria-label="Advanced sections"
+      >
         {ADVANCED_TABS.map((t) => (
           <button
             type="button"
@@ -104,7 +113,11 @@ export function AdvancedPage({
           />
         )}
         {tab === "goals" && (
-          <GoalsTab sessionId={sessionId} onOpen={onOpenSession} toast={toast} />
+          <GoalsTab
+            sessionId={sessionId}
+            onOpen={onOpenSession}
+            toast={toast}
+          />
         )}
         {tab === "background" && <BackgroundTab toast={toast} />}
         {tab === "health" && <HealthTab health={health} />}
@@ -117,7 +130,11 @@ export function AdvancedPage({
           <WorktreeSettings onOpen={onOpenProject} onToast={onToast} />
         )}
         {tab === "guardian" && (
-          <GuardianPanel cfg={cfg} onSave={onSave} onOpenProject={onOpenProject} />
+          <GuardianPanel
+            cfg={cfg}
+            onSave={onSave}
+            onOpenProject={onOpenProject}
+          />
         )}
         {tab === "vendors" && <VendorToolsPanel cfg={cfg} onSave={onSave} />}
       </div>
@@ -136,7 +153,9 @@ function McpPanel({ onToast }: { onToast: Toast }) {
   }, []);
   if (error) return <p role="alert">{error}</p>;
   if (!catalog) return <p role="status">Loading MCP definitions…</p>;
-  return <McpSettings catalog={catalog} onChange={setCatalog} onToast={onToast} />;
+  return (
+    <McpSettings catalog={catalog} onChange={setCatalog} onToast={onToast} />
+  );
 }
 
 function PluginsPanel({
@@ -300,7 +319,9 @@ function GuardianPanel({
 }) {
   const guardian = (cfg.guardian || {}) as Record<string, unknown>;
   const [enabled, setEnabled] = useState(Boolean(guardian.enabled));
-  const [intervalSec, setIntervalSec] = useState(Number(guardian.interval_sec ?? 3600));
+  const [intervalSec, setIntervalSec] = useState(
+    Number(guardian.interval_sec ?? 3600),
+  );
   const [saving, setSaving] = useState(false);
   return (
     <>
@@ -376,7 +397,9 @@ function VendorToolsPanel({
       BINARIES.map(([key, , fallback]) => [key, String(cli[key] || fallback)]),
     ),
   );
-  const [approval, setApproval] = useState(Number(cli.approval_timeout_sec ?? 600));
+  const [approval, setApproval] = useState(
+    Number(cli.approval_timeout_sec ?? 600),
+  );
   const [stall, setStall] = useState(Number(cli.stall_timeout_sec ?? 900));
   const [saving, setSaving] = useState(false);
   return (

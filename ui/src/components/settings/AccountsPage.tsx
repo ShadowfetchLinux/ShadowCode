@@ -139,7 +139,8 @@ export function AccountsPage({
           vendor,
           state: "unsupported",
           lines: [],
-          detail: result.hint || result.note || "Sign in with the vendor's own app.",
+          detail:
+            result.hint || result.note || "Sign in with the vendor's own app.",
         });
       else
         setLogin({
@@ -158,7 +159,9 @@ export function AccountsPage({
   async function cancelLogin(vendor: string) {
     try {
       await api.cancelLogin(vendor);
-      setLogin((l) => (l ? { ...l, state: "failed", detail: "Sign-in cancelled." } : l));
+      setLogin((l) =>
+        l ? { ...l, state: "failed", detail: "Sign-in cancelled." } : l,
+      );
     } catch (e) {
       onToast(String(e), "err");
     }
@@ -233,9 +236,7 @@ export function AccountsPage({
               <span className={`avail avail-${status.availability}`}>
                 {status.availability_label}
               </span>
-              {status.version && (
-                <span className="dim">{status.version}</span>
-              )}
+              {status.version && <span className="dim">{status.version}</span>}
             </header>
             {status.detail && <p>{status.detail}</p>}
             {status.account &&
@@ -254,8 +255,7 @@ export function AccountsPage({
             {ready && (
               <div className="account-usage">
                 <p>
-                  <strong>Usage:</strong>{" "}
-                  {usageLabel(status.usage, "cloud")}
+                  <strong>Usage:</strong> {usageLabel(status.usage, "cloud")}
                 </p>
                 {usageLines.length > 0 && (
                   <ul>
@@ -295,7 +295,12 @@ export function AccountsPage({
                 </ul>
               </details>
             )}
-            {thisLogin && <LoginPanel login={thisLogin} onCancel={() => void cancelLogin(key)} />}
+            {thisLogin && (
+              <LoginPanel
+                login={thisLogin}
+                onCancel={() => void cancelLogin(key)}
+              />
+            )}
             <div className="row">
               {!ready && status.state !== "not_installed" && (
                 <button
@@ -311,7 +316,9 @@ export function AccountsPage({
               <button
                 type="button"
                 className="ghost"
-                data-primary={ready || status.state === "not_installed" ? true : undefined}
+                data-primary={
+                  ready || status.state === "not_installed" ? true : undefined
+                }
                 disabled={busy[key]}
                 onClick={() => void refreshOne(key).then(onChanged)}
               >
@@ -348,7 +355,11 @@ export function AccountsPage({
             </p>
           ) : null}
           <div className="row end">
-            <button type="button" className="ghost" onClick={() => setConfirm(null)}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setConfirm(null)}
+            >
               Cancel
             </button>
             <button
@@ -394,7 +405,13 @@ export function LoginLine({ line }: { line: string }) {
   );
 }
 
-function LoginPanel({ login, onCancel }: { login: Login; onCancel: () => void }) {
+function LoginPanel({
+  login,
+  onCancel,
+}: {
+  login: Login;
+  onCancel: () => void;
+}) {
   return (
     <div className="login-panel" role="status" aria-live="polite">
       {login.state === "running" && (
@@ -405,7 +422,9 @@ function LoginPanel({ login, onCancel }: { login: Login; onCancel: () => void })
       )}
       {login.state === "done" && <p className="health-ok">Signed in.</p>}
       {login.state === "failed" && (
-        <p className="health-bad">{login.detail || "Sign-in did not finish."}</p>
+        <p className="health-bad">
+          {login.detail || "Sign-in did not finish."}
+        </p>
       )}
       {login.state === "unsupported" && <p>{login.detail}</p>}
       {login.lines.length > 0 && (

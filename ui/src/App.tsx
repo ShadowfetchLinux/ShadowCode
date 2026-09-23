@@ -253,17 +253,20 @@ export default function App() {
     };
   }, [toast]);
 
-  const reloadPicker = useCallback(async (refresh = false) => {
-    pickerFetched.current = Date.now();
-    try {
-      const result = await api.picker(refresh);
-      setPickerTargets(Array.isArray(result.targets) ? result.targets : []);
-    } catch (e) {
-      toast(`Could not load models: ${String(e)}`, "err");
-    } finally {
-      setPickerLoaded(true);
-    }
-  }, [toast]);
+  const reloadPicker = useCallback(
+    async (refresh = false) => {
+      pickerFetched.current = Date.now();
+      try {
+        const result = await api.picker(refresh);
+        setPickerTargets(Array.isArray(result.targets) ? result.targets : []);
+      } catch (e) {
+        toast(`Could not load models: ${String(e)}`, "err");
+      } finally {
+        setPickerLoaded(true);
+      }
+    },
+    [toast],
+  );
 
   const refresh = useCallback(async () => {
     const [s, p, active, state] = await Promise.all([
@@ -325,7 +328,8 @@ export default function App() {
       const draft = taskRef.current;
       if (draft && !isSessionCommand(draft))
         writeStore(draftKey(selectedRef.current, workspace), draft);
-      else if (!draft) writeStore(draftKey(selectedRef.current, workspace), null);
+      else if (!draft)
+        writeStore(draftKey(selectedRef.current, workspace), null);
     }
     const ticket = ++selection.current;
     setSwitching(true);
@@ -346,11 +350,11 @@ export default function App() {
       // The conversation's own target wins; a new conversation starts on the
       // project's last choice. Nothing falls back to a configured default.
       setModelChoice(
-        detail.execution_target ||
-          readStore(targetKey(detail.workspace)) ||
-          "",
+        detail.execution_target || readStore(targetKey(detail.workspace)) || "",
       );
-      setRunningChoice(active.job?.model || active.job?.routing?.requested || "");
+      setRunningChoice(
+        active.job?.model || active.job?.routing?.requested || "",
+      );
       setTask(readStore(draftKey(id, detail.workspace)) || "");
       setAttachments([]);
       setCommandCards([]);
@@ -415,7 +419,9 @@ export default function App() {
   }, []);
   // Theme: explicit light/dark, or follow the system when unset or "system".
   useEffect(() => {
-    const preference = String((cfg.ui as { theme?: string })?.theme || "system");
+    const preference = String(
+      (cfg.ui as { theme?: string })?.theme || "system",
+    );
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
     const apply = () => {
       document.documentElement.dataset.theme =
@@ -522,7 +528,11 @@ export default function App() {
     let live = true;
     void Promise.all([api.session(sessionId), api.job(next.id)])
       .then(([detail, fullJob]) => {
-        if (live && selectedRef.current === sessionId && !submittingRef.current) {
+        if (
+          live &&
+          selectedRef.current === sessionId &&
+          !submittingRef.current
+        ) {
           conversation.load(detail, fullJob, true);
           setRunningChoice(fullJob.model || fullJob.routing?.requested || "");
         }
@@ -533,15 +543,7 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [
-    jobs,
-    sessionId,
-    busy,
-    submitting,
-    switching,
-    job,
-    conversation.load,
-  ]);
+  }, [jobs, sessionId, busy, submitting, switching, job, conversation.load]);
   useEffect(() => {
     if (!job || !busy) return;
     const tick = () =>
@@ -561,7 +563,10 @@ export default function App() {
   const networkMode = String(
     ((cfg.network || {}) as { mode?: string }).mode || "online",
   );
-  const vendorNotes = (permissions.vendor_notes || {}) as Record<string, string>;
+  const vendorNotes = (permissions.vendor_notes || {}) as Record<
+    string,
+    string
+  >;
   const vendorNote =
     selectedTarget && !isLocal(selectedTarget)
       ? vendorNotes[vendorKey(selectedTarget)] ||
@@ -569,7 +574,8 @@ export default function App() {
         `${selectedTarget.name.split(" · ")[0]} runs its own tools, sandbox and web access; ShadowCode passes this choice to it where the tool supports it.`
       : undefined;
   const webAllowed =
-    Boolean(selectedTarget && isLocal(selectedTarget)) && networkMode === "online";
+    Boolean(selectedTarget && isLocal(selectedTarget)) &&
+    networkMode === "online";
 
   async function selectTarget(id: string) {
     setModelChoice(id);
@@ -753,7 +759,8 @@ export default function App() {
           api.session(originSession),
           api.currentJob(originSession),
         ]);
-        if (ticket === selection.current) conversation.load(detail, current.job);
+        if (ticket === selection.current)
+          conversation.load(detail, current.job);
       } else setCommandCards((prev) => [...prev, result]);
     }
     if (typeof metadata.panel === "string") {
@@ -782,10 +789,20 @@ export default function App() {
       canAttachImages,
       selectedTarget.name,
     );
-  }, [task, pickerLoaded, selectedTarget, modelChoice, attachments, canAttachImages]);
+  }, [
+    task,
+    pickerLoaded,
+    selectedTarget,
+    modelChoice,
+    attachments,
+    canAttachImages,
+  ]);
   const hasContent = Boolean(task.trim() || attachments.length);
   const canSend =
-    !composerLocked && !commandWaiting && hasContent && !sendBlocked &&
+    !composerLocked &&
+    !commandWaiting &&
+    hasContent &&
+    !sendBlocked &&
     (task.trim().startsWith("/") || Boolean(selectedTarget));
 
   async function startTask(
@@ -821,7 +838,10 @@ export default function App() {
         setRunningChoice(body.model || "");
       }
       if (body.queue)
-        toast("Follow-up queued. It will run after earlier project tasks.", "ok");
+        toast(
+          "Follow-up queued. It will run after earlier project tasks.",
+          "ok",
+        );
       await refresh().catch(() => undefined);
     } catch (e) {
       if (submitTicket !== selection.current) {
@@ -885,8 +905,12 @@ export default function App() {
       if (sendBlocked) toast(sendBlocked, "err");
       return;
     }
-    const images = attachments.filter((a) => a.kind === "image").map((a) => a.path);
-    const texts = attachments.filter((a) => a.kind === "text").map((a) => a.path);
+    const images = attachments
+      .filter((a) => a.kind === "image")
+      .map((a) => a.path);
+    const texts = attachments
+      .filter((a) => a.kind === "text")
+      .map((a) => a.path);
     const text = (
       task.trim() +
       (texts.length ? `\n\nAttached paths: ${texts.join(", ")}` : "") +
@@ -933,7 +957,10 @@ export default function App() {
           setAttachments((prev) =>
             prev.some((a) => a.path === saved.path)
               ? prev
-              : [...prev, { path: saved.path, name: file.name, kind: "image", preview }],
+              : [
+                  ...prev,
+                  { path: saved.path, name: file.name, kind: "image", preview },
+                ],
           );
         } else {
           const text = await file.text();
@@ -1001,7 +1028,12 @@ export default function App() {
     }
   }
   const palette: PaletteItem[] = [
-    { id: "new", label: "New task", hint: "Ctrl+N", run: () => void newSession() },
+    {
+      id: "new",
+      label: "New task",
+      hint: "Ctrl+N",
+      run: () => void newSession(),
+    },
     {
       id: "model",
       label: "Choose a model",
@@ -1055,8 +1087,18 @@ export default function App() {
       hint: "Complete event records",
       run: () => exportSession("json"),
     },
-    { id: "stop", label: "Stop the agent", hint: "Ctrl+.", run: () => void stop() },
-    { id: "settings", label: "Settings", hint: "Ctrl+,", run: () => openSettings() },
+    {
+      id: "stop",
+      label: "Stop the agent",
+      hint: "Ctrl+.",
+      run: () => void stop(),
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      hint: "Ctrl+,",
+      run: () => openSettings(),
+    },
     {
       id: "theme",
       label: "Toggle light / dark appearance",
@@ -1073,7 +1115,12 @@ export default function App() {
           .then(reloadConfig)
           .catch((e) => toast(String(e), "err")),
     },
-    { id: "help", label: "Keyboard shortcuts", hint: "?", run: () => setOverlay("help") },
+    {
+      id: "help",
+      label: "Keyboard shortcuts",
+      hint: "?",
+      run: () => setOverlay("help"),
+    },
   ];
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1603,7 +1650,9 @@ export default function App() {
                           <button
                             type="button"
                             className="ghost fork-action"
-                            disabled={busy || submitting || switching || forking}
+                            disabled={
+                              busy || submitting || switching || forking
+                            }
                             onClick={() =>
                               void (async () => {
                                 setForking(true);
@@ -1642,7 +1691,9 @@ export default function App() {
                   return stranded ? (
                     <div key={i}>
                       {node}
-                      <ActivityTimeline activity={transcript.activity[item.taskId!]} />
+                      <ActivityTimeline
+                        activity={transcript.activity[item.taskId!]}
+                      />
                     </div>
                   ) : (
                     node

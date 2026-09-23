@@ -16,15 +16,15 @@ export const MAX_IMAGES = 6;
 
 export const TEXT_ACCEPT =
   "text/*,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.toml,.yaml,.yml,.css,.html,.svg,.go,.java,.c,.h,.cpp,.sh";
-export const IMAGE_ACCEPT = ".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp";
+export const IMAGE_ACCEPT =
+  ".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp";
 
 export function isImageFile(file: { name: string; type: string }): boolean {
   return file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
 }
 
 export type Check =
-  | { ok: true; kind: "image" | "text" }
-  | { ok: false; error: string };
+  { ok: true; kind: "image" | "text" } | { ok: false; error: string };
 
 export function checkAttachment(
   file: { name: string; type: string; size: number },
@@ -42,9 +42,15 @@ export function checkAttachment(
     )
       return { ok: false, error: `${file.name}: use PNG, JPEG, or WebP.` };
     if (file.size > MAX_IMAGE_BYTES)
-      return { ok: false, error: `${file.name}: images must be smaller than 4 MB.` };
+      return {
+        ok: false,
+        error: `${file.name}: images must be smaller than 4 MB.`,
+      };
     if (options.images >= MAX_IMAGES)
-      return { ok: false, error: `Attach at most ${MAX_IMAGES} images per message.` };
+      return {
+        ok: false,
+        error: `Attach at most ${MAX_IMAGES} images per message.`,
+      };
     return { ok: true, kind: "image" };
   }
   if (file.size > MAX_TEXT_BYTES)
@@ -57,7 +63,10 @@ export function checkAttachment(
     !file.type.startsWith("text/") &&
     !/json|javascript|typescript|xml|yaml|toml|x-sh/.test(file.type)
   )
-    return { ok: false, error: `${file.name}: attach a text, source, or image file.` };
+    return {
+      ok: false,
+      error: `${file.name}: attach a text, source, or image file.`,
+    };
   return { ok: true, kind: "text" };
 }
 

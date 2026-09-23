@@ -96,10 +96,24 @@ export function installFakeBackend(options: FakeOptions = {}) {
         version: "codex-cli 0.155.0",
         binary: "codex",
         fix: null,
-        account: { email: "dev@example.com", plan: "Pro", auth_mode: "chatgpt" },
+        account: {
+          email: "dev@example.com",
+          plan: "Pro",
+          auth_mode: "chatgpt",
+        },
         models: [
-          { id: "gpt-6-astra", label: "GPT-6-Astra", is_default: true, vision: true },
-          { id: "gpt-6-luna", label: "GPT-6-Luna", is_default: false, vision: true },
+          {
+            id: "gpt-6-astra",
+            label: "GPT-6-Astra",
+            is_default: true,
+            vision: true,
+          },
+          {
+            id: "gpt-6-luna",
+            label: "GPT-6-Luna",
+            is_default: false,
+            vision: true,
+          },
         ],
         accepts_images: true,
         asks_approval: true,
@@ -300,7 +314,12 @@ export function installFakeBackend(options: FakeOptions = {}) {
     return rows;
   }
 
-  function emit(sessionId: string, taskId: string, type: string, payload: Json) {
+  function emit(
+    sessionId: string,
+    taskId: string,
+    type: string,
+    payload: Json,
+  ) {
     state.cursor += 1;
     state.events.push({
       id: state.cursor,
@@ -331,7 +350,10 @@ export function installFakeBackend(options: FakeOptions = {}) {
           inference: local ? "local" : "cloud",
         },
       ],
-      ["tool.started", { tool: "read_file", call_id: "c1", arguments: { path: "src/app.ts" } }],
+      [
+        "tool.started",
+        { tool: "read_file", call_id: "c1", arguments: { path: "src/app.ts" } },
+      ],
       [
         "tool.completed",
         {
@@ -359,7 +381,13 @@ export function installFakeBackend(options: FakeOptions = {}) {
       ],
       [
         "checkpoint.updated",
-        { task_id: tid, workspace, changes: 1, paths: ["src/app.ts"], restored: false },
+        {
+          task_id: tid,
+          workspace,
+          changes: 1,
+          paths: ["src/app.ts"],
+          restored: false,
+        },
       ],
       [
         "tool.started",
@@ -384,7 +412,10 @@ export function installFakeBackend(options: FakeOptions = {}) {
       ],
       [
         "model.delta",
-        { text: "Fixed `add` in src/app.ts and ran the tests.", message_id: "m1" },
+        {
+          text: "Fixed `add` in src/app.ts and ran the tests.",
+          message_id: "m1",
+        },
       ],
     ];
     let index = 0;
@@ -484,7 +515,11 @@ export function installFakeBackend(options: FakeOptions = {}) {
       };
     if (path === "/api/accounts")
       return { vendors: state.vendors, config: {}, local_engine: state.local };
-    if ((m = path.match(/^\/api\/accounts\/([a-z]+)\/(connect|login|refresh|disconnect|cancel-login)$/))) {
+    if (
+      (m = path.match(
+        /^\/api\/accounts\/([a-z]+)\/(connect|login|refresh|disconnect|cancel-login)$/,
+      ))
+    ) {
       const [, vendor, action] = m;
       const v = state.vendors[vendor];
       if (!v) throw new Error(`Unknown vendor ${vendor}`);
@@ -494,7 +529,8 @@ export function installFakeBackend(options: FakeOptions = {}) {
       }
       if (action === "login") {
         const login = state.login;
-        if (!login || login.vendor !== vendor) return { running: false, lines: [], done: null };
+        if (!login || login.vendor !== vendor)
+          return { running: false, lines: [], done: null };
         login.polls += 1;
         const lines = [
           "Opening https://claude.ai/oauth/authorize?client=cli in your browser",
@@ -506,12 +542,31 @@ export function installFakeBackend(options: FakeOptions = {}) {
             availability: "ready",
             availability_label: "Ready",
             detail: "Signed in with Claude Max",
-            account: { email: "dev@example.com", plan: "Max", auth_mode: "claude.ai" },
-            models: [{ id: "default", label: "Default", is_default: true, vision: true }],
+            account: {
+              email: "dev@example.com",
+              plan: "Max",
+              auth_mode: "claude.ai",
+            },
+            models: [
+              {
+                id: "default",
+                label: "Default",
+                is_default: true,
+                vision: true,
+              },
+            ],
           });
-          return { running: false, lines, done: { ok: true, detail: "Signed in" } };
+          return {
+            running: false,
+            lines,
+            done: { ok: true, detail: "Signed in" },
+          };
         }
-        return { running: true, lines: lines.slice(0, login.polls), done: null };
+        return {
+          running: true,
+          lines: lines.slice(0, login.polls),
+          done: null,
+        };
       }
       if (action === "refresh") return v;
       if (action === "cancel-login") {
@@ -526,7 +581,11 @@ export function installFakeBackend(options: FakeOptions = {}) {
           availability_label: "Sign in",
           models: [],
         });
-        return { ok: true, ran: v.logout_command, note: `Signed out of ${v.label}` };
+        return {
+          ok: true,
+          ran: v.logout_command,
+          note: `Signed out of ${v.label}`,
+        };
       }
     }
     if (path === "/api/local-models") return state.local;
@@ -548,7 +607,9 @@ export function installFakeBackend(options: FakeOptions = {}) {
       return { ok: true };
     }
     if (path === "/api/local-models/import-ollama") {
-      const found = state.local.ollama_store.models.find((x: Json) => x.tag === body.tag);
+      const found = state.local.ollama_store.models.find(
+        (x: Json) => x.tag === body.tag,
+      );
       found.already_added = true;
       state.local.models.push({
         ...state.local.models[0],
@@ -561,11 +622,15 @@ export function installFakeBackend(options: FakeOptions = {}) {
       return { ok: true, local_engine: state.local };
     }
     if (path === "/api/local-models/remove") {
-      state.local.models = state.local.models.filter((x: Json) => x.path !== body.path);
+      state.local.models = state.local.models.filter(
+        (x: Json) => x.path !== body.path,
+      );
       return { ok: true, deleted_weights: false };
     }
-    if (path === "/api/local-models/add") return { ok: true, local_engine: state.local };
-    if (path === "/api/sessions" && method === "GET") return { sessions: state.sessions };
+    if (path === "/api/local-models/add")
+      return { ok: true, local_engine: state.local };
+    if (path === "/api/sessions" && method === "GET")
+      return { sessions: state.sessions };
     if (path === "/api/sessions" && method === "POST") {
       const id = `s${state.sessions.length + 1}`;
       state.sessions.unshift({
@@ -583,13 +648,21 @@ export function installFakeBackend(options: FakeOptions = {}) {
       session.target = body.target_id;
       return { ok: true };
     }
-    if ((m = path.match(/^\/api\/sessions\/([^/]+)\/activate$/))) return sessionDetail(m[1]);
-    if ((m = path.match(/^\/api\/sessions\/([^/]+)$/))) return sessionDetail(m[1]);
+    if ((m = path.match(/^\/api\/sessions\/([^/]+)\/activate$/)))
+      return sessionDetail(m[1]);
+    if ((m = path.match(/^\/api\/sessions\/([^/]+)$/)))
+      return sessionDetail(m[1]);
     if (path === "/api/projects")
-      return { projects: [{ id: "p1", path: workspace, name: "demo", last_opened: now() }] };
+      return {
+        projects: [
+          { id: "p1", path: workspace, name: "demo", last_opened: now() },
+        ],
+      };
     if (path === "/api/jobs/current") {
       const sid = q.get("session_id");
-      const job = [...state.jobs].reverse().find((j: Json) => j.session_id === sid);
+      const job = [...state.jobs]
+        .reverse()
+        .find((j: Json) => j.session_id === sid);
       return { job: job || null };
     }
     if (path === "/api/jobs" && method === "GET") return { jobs: state.jobs };
@@ -604,9 +677,15 @@ export function installFakeBackend(options: FakeOptions = {}) {
         // string carrying the JSON body.
         throw new Error(
           JSON.stringify({
-            error: "Consent required before sending local content to a cloud provider",
+            error:
+              "Consent required before sending local content to a cloud provider",
             needs_consent: true,
-            handoff: { from: "local:llamacpp", to: target.provider, excerpt_chars: 2400, images: 0 },
+            handoff: {
+              from: "local:llamacpp",
+              to: target.provider,
+              excerpt_chars: 2400,
+              images: 0,
+            },
           }),
         );
       state.lastRoute[sid] = cloud ? "cloud" : "local";
@@ -683,10 +762,16 @@ export function installFakeBackend(options: FakeOptions = {}) {
       };
     }
     if (path === "/api/workspace/attach-image")
-      return { path: `.shadow/attachments/${body.filename}`, mime: "image/png", bytes: 68, kind: "image" };
+      return {
+        path: `.shadow/attachments/${body.filename}`,
+        mime: "image/png",
+        bytes: 68,
+        kind: "image",
+      };
     if (path === "/api/workspace/attach")
       return { path: `.shadow/attachments/${body.filename}`, kind: "text" };
-    if (path === "/api/doctor") return { ok: true, version: "0.28.0-test", checks: [], suggestions: [] };
+    if (path === "/api/doctor")
+      return { ok: true, version: "0.28.0-test", checks: [], suggestions: [] };
     throw new Error(`Fake backend has no route for ${method} ${path}`);
   }
 
@@ -698,14 +783,17 @@ export function installFakeBackend(options: FakeOptions = {}) {
     async invoke(command: string, args?: Record<string, unknown>) {
       log.push({ method: "INVOKE", path: command, body: args });
       if (command === "open_external") return null;
-      if (command === "pick_local_model" || command === "pick_directory") return null;
+      if (command === "pick_local_model" || command === "pick_directory")
+        return null;
       if (command === "export_session") return null;
       return null;
     },
     async listen(event: string, handler: (payload: unknown) => void) {
       (listeners[event] ||= []).push(handler);
       return () => {
-        listeners[event] = (listeners[event] || []).filter((fn) => fn !== handler);
+        listeners[event] = (listeners[event] || []).filter(
+          (fn) => fn !== handler,
+        );
       };
     },
   };

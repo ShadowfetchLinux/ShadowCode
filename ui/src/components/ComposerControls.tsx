@@ -3,21 +3,25 @@ import { Globe, ShieldCheck, WifiOff } from "lucide-react";
 
 export type PermissionMode = "ask" | "allow_edits";
 
-const MODES: { id: PermissionMode; label: string; short: string; hint: string }[] =
-  [
-    {
-      id: "ask",
-      label: "Ask before actions",
-      short: "Ask first",
-      hint: "File edits and shell commands wait for your approval.",
-    },
-    {
-      id: "allow_edits",
-      label: "Allow project edits",
-      short: "Edits allowed",
-      hint: "File edits inside this project run without asking. Shell commands still ask.",
-    },
-  ];
+const MODES: {
+  id: PermissionMode;
+  label: string;
+  short: string;
+  hint: string;
+}[] = [
+  {
+    id: "ask",
+    label: "Ask before actions",
+    short: "Ask first",
+    hint: "File edits and shell commands wait for your approval.",
+  },
+  {
+    id: "allow_edits",
+    label: "Allow project edits",
+    short: "Edits allowed",
+    hint: "File edits inside this project run without asking. Shell commands still ask.",
+  },
+];
 
 /** Compact permission control bound to config permissions.mode. */
 export function PermissionControl({
@@ -68,7 +72,9 @@ export function PermissionControl({
         aria-expanded={open}
         aria-controls={`${uid}-menu`}
         aria-label={`Permissions: ${readOnly ? "read only" : current.label}`}
-        title={vendorNote || (readOnly ? "This project is read only" : current.hint)}
+        title={
+          vendorNote || (readOnly ? "This project is read only" : current.hint)
+        }
         onClick={() => setOpen((v) => !v)}
       >
         <ShieldCheck size={14} aria-hidden="true" />

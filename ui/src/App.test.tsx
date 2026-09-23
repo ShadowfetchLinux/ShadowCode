@@ -24,14 +24,19 @@ afterEach(() => {
   delete window.__SHADOW_TEST_TRANSPORT__;
 });
 
-const trigger = () => screen.getByRole("button", { name: /Model for this task/ });
-const send = () => screen.getByRole("button", { name: /Send task|Queue follow-up/ });
-const prompt = () => screen.getByRole("textbox", { name: "Message ShadowCode" });
+const trigger = () =>
+  screen.getByRole("button", { name: /Model for this task/ });
+const send = () =>
+  screen.getByRole("button", { name: /Send task|Queue follow-up/ });
+const prompt = () =>
+  screen.getByRole("textbox", { name: "Message ShadowCode" });
 
 async function boot() {
   render(<App />);
   await screen.findByRole("textbox", { name: "Message ShadowCode" });
-  await waitFor(() => expect(trigger().textContent).toContain("Choose a model"));
+  await waitFor(() =>
+    expect(trigger().textContent).toContain("Choose a model"),
+  );
 }
 
 async function choose(name: RegExp) {
@@ -69,18 +74,33 @@ it("runs a task and shows the event-derived timeline and summary", async () => {
   await choose(/qwen3:14b · This computer/);
   fireEvent.change(prompt(), { target: { value: "Fix the add function" } });
   fireEvent.click(send());
-  const summary = await screen.findByRole("region", { name: "Task summary" }, { timeout: 3000 });
+  const summary = await screen.findByRole(
+    "region",
+    { name: "Task summary" },
+    { timeout: 3000 },
+  );
   expect(within(summary).getByText("src/app.ts")).toBeTruthy();
   expect(within(summary).getByText("npm test")).toBeTruthy();
   expect(within(summary).getByText("exit 0")).toBeTruthy();
   await waitFor(() => expect(within(summary).getByText("+1")).toBeTruthy());
   const timeline = screen.getAllByLabelText("Agent activity").at(-1)!;
-  for (const label of ["Reading project", "Editing files", "Running tests", "Finished"])
+  for (const label of [
+    "Reading project",
+    "Editing files",
+    "Running tests",
+    "Finished",
+  ])
     expect(within(timeline).getByText(label)).toBeTruthy();
   expect(screen.getByText(/Using .*This computer/)).toBeTruthy();
-  fireEvent.click(within(summary).getByRole("button", { name: "Review changes" }));
-  expect(await screen.findByRole("complementary", { name: "Drawer" })).toBeTruthy();
-  const post = fake.log.find((r) => r.path === "/api/jobs" && r.method === "POST");
+  fireEvent.click(
+    within(summary).getByRole("button", { name: "Review changes" }),
+  );
+  expect(
+    await screen.findByRole("complementary", { name: "Drawer" }),
+  ).toBeTruthy();
+  const post = fake.log.find(
+    (r) => r.path === "/api/jobs" && r.method === "POST",
+  );
   expect(post?.body).toMatchObject({ model: "local:gguf:qwen", web: false });
 });
 
@@ -89,20 +109,31 @@ it("asks before sending local conversation content to a cloud provider", async (
   await choose(/qwen3:14b · This computer/);
   fireEvent.change(prompt(), { target: { value: "First on this computer" } });
   fireEvent.click(send());
-  await screen.findByRole("region", { name: "Task summary" }, { timeout: 3000 });
+  await screen.findByRole(
+    "region",
+    { name: "Task summary" },
+    { timeout: 3000 },
+  );
   await choose(/Codex · GPT-6-Astra/);
   fireEvent.change(prompt(), { target: { value: "Continue in the cloud" } });
   await waitFor(() => expect(send()).toHaveProperty("disabled", false));
   fireEvent.click(send());
-  const dialog = await screen.findByRole("dialog", { name: "Send to a cloud provider?" });
-  expect(within(dialog).getByText(/Send to Codex · GPT-6-Astra\?/)).toBeTruthy();
+  const dialog = await screen.findByRole("dialog", {
+    name: "Send to a cloud provider?",
+  });
+  expect(
+    within(dialog).getByText(/Send to Codex · GPT-6-Astra\?/),
+  ).toBeTruthy();
   expect(within(dialog).getByText(/2,400 characters/)).toBeTruthy();
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   expect(prompt()).toHaveProperty("value", "Continue in the cloud");
-  const posts = () => fake.log.filter((r) => r.path === "/api/jobs" && r.method === "POST");
+  const posts = () =>
+    fake.log.filter((r) => r.path === "/api/jobs" && r.method === "POST");
   expect(posts().every((r) => !r.body.handoff_consent)).toBe(true);
   fireEvent.click(send());
-  const again = await screen.findByRole("dialog", { name: "Send to a cloud provider?" });
+  const again = await screen.findByRole("dialog", {
+    name: "Send to a cloud provider?",
+  });
   fireEvent.click(within(again).getByRole("button", { name: "Send" }));
   await waitFor(() =>
     expect(posts().at(-1)?.body).toMatchObject({
@@ -122,16 +153,22 @@ it("accepts images only for vision rows and re-checks at send time", async () =>
   await act(async () => {
     fireEvent.change(input, { target: { files: [png] } });
   });
-  expect(await screen.findByText(/qwen3:14b · This computer does not accept images/)).toBeTruthy();
+  expect(
+    await screen.findByText(/qwen3:14b · This computer does not accept images/),
+  ).toBeTruthy();
   expect(screen.queryByRole("list", { name: "Attachments" })).toBeNull();
   await choose(/Codex · GPT-6-Astra/);
   await act(async () => {
     fireEvent.change(input, { target: { files: [png] } });
   });
-  expect(await screen.findByRole("button", { name: "Remove shot.png" })).toBeTruthy();
+  expect(
+    await screen.findByRole("button", { name: "Remove shot.png" }),
+  ).toBeTruthy();
   await choose(/qwen3:14b · This computer/);
   expect(
-    screen.getByText(/does not accept images. Remove the image or choose a model marked Vision/),
+    screen.getByText(
+      /does not accept images. Remove the image or choose a model marked Vision/,
+    ),
   ).toBeTruthy();
   expect(send()).toHaveProperty("disabled", true);
 });

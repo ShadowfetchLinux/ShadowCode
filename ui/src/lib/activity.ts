@@ -162,7 +162,17 @@ export function isVerificationCommand(command: string): boolean {
   for (let i = 0; i < words.length - 1; i++) {
     const [a, b] = [words[i], words[i + 1]];
     if (
-      ["cargo", "go", "dotnet", "mvn", "gradle", "./gradlew", "swift", "zig", "mix"].includes(a) &&
+      [
+        "cargo",
+        "go",
+        "dotnet",
+        "mvn",
+        "gradle",
+        "./gradlew",
+        "swift",
+        "zig",
+        "mix",
+      ].includes(a) &&
       ["test", "build", "check", "clippy", "vet", "fmt", "lint"].includes(b)
     )
       return true;
@@ -171,11 +181,15 @@ export function isVerificationCommand(command: string): boolean {
       const rest = words.slice(i + 1);
       const run = rest.indexOf("run");
       const script = run >= 0 ? rest[run + 1] || "" : b;
-      if (/^(test|build|lint|typecheck|check|e2e)(:|$)/.test(script)) return true;
+      if (/^(test|build|lint|typecheck|check|e2e)(:|$)/.test(script))
+        return true;
     }
     if (a === "make" && /^(test|check|build|lint)$/.test(b)) return true;
     if (a === "python" || a === "python3") {
-      if (b === "-m" && ["pytest", "unittest", "mypy"].includes(words[i + 2] || ""))
+      if (
+        b === "-m" &&
+        ["pytest", "unittest", "mypy"].includes(words[i + 2] || "")
+      )
         return true;
     }
   }
@@ -185,7 +199,9 @@ export function isVerificationCommand(command: string): boolean {
 function commandOf(args: Record<string, unknown> | undefined): string {
   if (!args) return "";
   const value =
-    args.command ?? args.cmd ?? (args.input as Record<string, unknown> | undefined)?.command;
+    args.command ??
+    args.cmd ??
+    (args.input as Record<string, unknown> | undefined)?.command;
   if (Array.isArray(value)) return value.map(String).join(" ");
   return typeof value === "string" ? value : "";
 }
@@ -312,9 +328,7 @@ export function verificationLine(
     : `${verification.commands.length} check${verification.commands.length === 1 ? "" : "s"} passed`;
 }
 
-export function parseVerification(
-  value: unknown,
-): Verification | undefined {
+export function parseVerification(value: unknown): Verification | undefined {
   if (!value || typeof value !== "object") return undefined;
   const v = value as Record<string, unknown>;
   const commands = Array.isArray(v.commands)
@@ -339,10 +353,10 @@ export function parseVerification(
   return {
     status: String(v.status || (commands.length ? "ran" : "not_run")),
     commands,
-    presentedAs: typeof v.presented_as === "string" ? v.presented_as : undefined,
+    presentedAs:
+      typeof v.presented_as === "string" ? v.presented_as : undefined,
     note: typeof v.note === "string" ? v.note : undefined,
-    vendor:
-      typeof v.vendor_agent === "string" ? v.vendor_agent : undefined,
+    vendor: typeof v.vendor_agent === "string" ? v.vendor_agent : undefined,
   };
 }
 

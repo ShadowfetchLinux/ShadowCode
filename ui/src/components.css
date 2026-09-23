@@ -555,6 +555,9 @@ div.activity-step {
   gap: 6px;
   margin: 0 0 4px;
   font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--text-2);
 }
 .task-summary-block ul {

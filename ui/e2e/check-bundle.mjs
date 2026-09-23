@@ -13,7 +13,13 @@ delete env.VITE_SHADOW_TEST_TRANSPORT;
 try {
   execFileSync(
     process.execPath,
-    [join(ui, "node_modules/vite/bin/vite.js"), "build", "--outDir", out, "--emptyOutDir"],
+    [
+      join(ui, "node_modules/vite/bin/vite.js"),
+      "build",
+      "--outDir",
+      out,
+      "--emptyOutDir",
+    ],
     { cwd: ui, env, stdio: ["ignore", "ignore", "inherit"] },
   );
   const forbidden = [
@@ -26,13 +32,18 @@ try {
   const hits = [];
   for (const name of readdirSync(assets).filter((n) => n.endsWith(".js"))) {
     const text = readFileSync(join(assets, name), "utf8");
-    for (const word of forbidden) if (text.includes(word)) hits.push(`${name}: ${word}`);
+    for (const word of forbidden)
+      if (text.includes(word)) hits.push(`${name}: ${word}`);
   }
   if (hits.length) {
-    console.error(`Production bundle contains test transport code:\n${hits.join("\n")}`);
+    console.error(
+      `Production bundle contains test transport code:\n${hits.join("\n")}`,
+    );
     process.exit(1);
   }
-  console.log("Production bundle check: no test transport or fake engine code.");
+  console.log(
+    "Production bundle check: no test transport or fake engine code.",
+  );
 } finally {
   rmSync(out, { recursive: true, force: true });
 }

@@ -26,7 +26,10 @@ const row = (over: Partial<PickerTarget>): PickerTarget => ({
 describe("usage labels", () => {
   it("uses the backend label and never invents numbers", () => {
     expect(
-      usageLabel({ state: "ok", label: "Shared plan usage · 2% left · resets Fri" }),
+      usageLabel({
+        state: "ok",
+        label: "Shared plan usage · 2% left · resets Fri",
+      }),
     ).toBe("Shared plan usage · 2% left · resets Fri");
     expect(usageLabel({ state: "unavailable", label: "" })).toBe(UNKNOWN_USAGE);
     expect(usageLabel(null)).toBe(UNKNOWN_USAGE);
@@ -35,7 +38,11 @@ describe("usage labels", () => {
 
   it("computes the age of a stale snapshot at render time", () => {
     expect(
-      usageLabel({ state: "stale", label: "", last_refresh: now - 5 * 60 }, "cloud", now),
+      usageLabel(
+        { state: "stale", label: "", last_refresh: now - 5 * 60 },
+        "cloud",
+        now,
+      ),
     ).toBe("Last checked 5m ago");
     expect(
       usageLabel(
@@ -153,12 +160,18 @@ describe("row actions", () => {
           reason: "Install the Codex CLI",
         }),
       ),
-    ).toMatchObject({ kind: "setup", hint: "Install the Codex CLI", local: false });
+    ).toMatchObject({
+      kind: "setup",
+      hint: "Install the Codex CLI",
+      local: false,
+    });
     expect(
       rowAction(row({ availability: "unavailable", reason: "Offline mode" })),
     ).toEqual({ kind: "explain", reason: "Offline mode" });
     expect(
-      availabilityLabel(row({ availability: "sign_in", availability_label: "" })),
+      availabilityLabel(
+        row({ availability: "sign_in", availability_label: "" }),
+      ),
     ).toBe("Sign in");
   });
 });

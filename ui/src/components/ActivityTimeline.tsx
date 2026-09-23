@@ -42,8 +42,7 @@ export function ActivityTimeline({
 function StepIcon({ state }: { state: TimelineStep["state"] }) {
   if (state === "active")
     return <LoaderCircle size={14} className="spin" aria-hidden="true" />;
-  if (state === "failed")
-    return <CircleAlert size={14} aria-hidden="true" />;
+  if (state === "failed") return <CircleAlert size={14} aria-hidden="true" />;
   return <Check size={14} aria-hidden="true" />;
 }
 
@@ -80,7 +79,10 @@ function Step({
       <summary>{head}</summary>
       <ol className="activity-calls">
         {step.calls.map((call, index) => (
-          <li key={`${call.callId}-${index}`} className={call.ok === false ? "bad" : ""}>
+          <li
+            key={`${call.callId}-${index}`}
+            className={call.ok === false ? "bad" : ""}
+          >
             <code>{call.command || call.path || call.label}</code>
             <span className="dim">
               {call.live
@@ -104,7 +106,11 @@ function Step({
         <ul className="activity-sources" aria-label="Web sources">
           {sources.map((source) => (
             <li key={source.url}>
-              <a href={source.final_url || source.url} target="_blank" rel="noreferrer">
+              <a
+                href={source.final_url || source.url}
+                target="_blank"
+                rel="noreferrer"
+              >
                 {source.title || source.final_url || source.url}
               </a>
               {source.status != null && (

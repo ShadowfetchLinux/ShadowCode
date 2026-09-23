@@ -53,7 +53,10 @@ const cursor: PickerTarget = {
   reason: "Not signed in",
   vision: false,
   tools: true,
-  usage: { state: "unavailable", label: "Usage unavailable · Open provider usage" },
+  usage: {
+    state: "unavailable",
+    label: "Usage unavailable · Open provider usage",
+  },
 };
 const grok: PickerTarget = {
   ...cursor,
@@ -75,7 +78,10 @@ const qwen: PickerTarget = {
   availability_label: "Ready",
   vision: false,
   tools: true,
-  usage: { state: "local", label: "Runs on this computer · No subscription quota" },
+  usage: {
+    state: "local",
+    label: "Runs on this computer · No subscription quota",
+  },
 };
 const gptoss: PickerTarget = {
   ...qwen,
@@ -119,7 +125,8 @@ function Harness({
   );
 }
 
-const trigger = () => screen.getByRole("button", { name: /Model for this task/ });
+const trigger = () =>
+  screen.getByRole("button", { name: /Model for this task/ });
 const search = () => screen.getByRole("combobox", { name: "Search models" });
 const key = (k: string) => fireEvent.keyDown(search(), { key: k });
 const activeOption = () => {
@@ -133,10 +140,16 @@ it("shows 'Choose a model' until a row is chosen and groups both sources", () =>
   fireEvent.click(trigger());
   const subs = screen.getByRole("group", { name: "Subscriptions" });
   const local = screen.getByRole("group", { name: "On this computer" });
-  expect(within(subs).getByRole("option", { name: /Codex · GPT-6-Astra/ })).toBeTruthy();
+  expect(
+    within(subs).getByRole("option", { name: /Codex · GPT-6-Astra/ }),
+  ).toBeTruthy();
   // featured:false still lands in Subscriptions.
-  expect(within(subs).getByRole("option", { name: /Grok · Default/ })).toBeTruthy();
-  expect(within(local).getByRole("option", { name: /qwen3:14b · This computer/ })).toBeTruthy();
+  expect(
+    within(subs).getByRole("option", { name: /Grok · Default/ }),
+  ).toBeTruthy();
+  expect(
+    within(local).getByRole("option", { name: /qwen3:14b · This computer/ }),
+  ).toBeTruthy();
   // Each row: Local/Cloud, availability, usage.
   const text = (name: RegExp) =>
     screen.getByRole("option", { name }).textContent || "";
@@ -177,7 +190,7 @@ it("selects with the keyboard and restores focus to the trigger", async () => {
   expect(onSelect).toHaveBeenCalledWith("local:gguf:1");
   expect(screen.queryByRole("listbox")).toBeNull();
   await waitFor(() => expect(document.activeElement).toBe(trigger()));
-  expect(trigger().textContent).toContain("This computer");
+  expect(trigger().textContent).toMatch(/^Local/);
   expect(trigger().textContent).toContain("qwen3:14b · This computer");
 });
 
@@ -204,7 +217,9 @@ it("routes non-ready rows to their fix instead of disabling them", () => {
   fireEvent.click(trigger());
   // Unavailable → the reason is shown.
   fireEvent.click(screen.getByRole("option", { name: /Grok · Default/ }));
-  expect(screen.getAllByText(/Offline mode: cloud rows are off/).length).toBeGreaterThan(0);
+  expect(
+    screen.getAllByText(/Offline mode: cloud rows are off/).length,
+  ).toBeGreaterThan(0);
   // Setup required → the setup hint, then the place that fixes it.
   const setup = screen.getByRole("option", { name: /gpt-oss:20b/ });
   fireEvent.click(setup);
@@ -212,7 +227,9 @@ it("routes non-ready rows to their fix instead of disabling them", () => {
     screen.getAllByText(/unknown model architecture: gptoss/).length,
   ).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "Open Local models" }));
-  expect(onSetup).toHaveBeenCalledWith(expect.objectContaining({ id: "local:gguf:2" }));
+  expect(onSetup).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "local:gguf:2" }),
+  );
 });
 
 it("opens usage details from the keyboard with windows and reset times", () => {
@@ -223,7 +240,9 @@ it("opens usage details from the keyboard with windows and reset times", () => {
   expect(details.textContent).toContain("Weekly · 2% left · resets in 2h");
   expect(details.textContent).toContain("Last checked 2m ago");
   expect(
-    within(details as HTMLElement).getByRole("link", { name: "Open Codex usage" }),
+    within(details as HTMLElement).getByRole("link", {
+      name: "Open Codex usage",
+    }),
   ).toBeTruthy();
   expect(activeOption()?.getAttribute("aria-describedby")).toContain("details");
   key("ArrowLeft");
@@ -241,7 +260,9 @@ it("collapses a vendor with many models and expands on request", () => {
   render(<Harness targets={many} />);
   fireEvent.click(trigger());
   expect(screen.getAllByRole("option", { name: /^Cursor/ })).toHaveLength(1);
-  const more = screen.getByRole("option", { name: "Show all 40 Cursor models" });
+  const more = screen.getByRole("option", {
+    name: "Show all 40 Cursor models",
+  });
   fireEvent.click(more);
   expect(screen.getAllByRole("option", { name: /^Cursor/ })).toHaveLength(40);
 });

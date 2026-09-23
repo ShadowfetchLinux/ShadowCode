@@ -26,8 +26,13 @@ const send = (page: Page) => page.getByRole("button", { name: "Send task" });
 const fakeLog = (page: Page) =>
   page.evaluate(
     () =>
-      (window as unknown as { __SHADOW_FAKE__: { log: { method: string; path: string; body: any }[] } })
-        .__SHADOW_FAKE__.log,
+      (
+        window as unknown as {
+          __SHADOW_FAKE__: {
+            log: { method: string; path: string; body: any }[];
+          };
+        }
+      ).__SHADOW_FAKE__.log,
   );
 
 async function chooseBySearch(page: Page, text: string) {
@@ -43,7 +48,9 @@ async function runLocalTask(page: Page, text: string) {
   await chooseBySearch(page, "qwen");
   await prompt(page).fill(text);
   await send(page).click();
-  await expect(page.getByRole("region", { name: "Task summary" }).last()).toBeVisible({
+  await expect(
+    page.getByRole("region", { name: "Task summary" }).last(),
+  ).toBeVisible({
     timeout: 15000,
   });
 }
@@ -53,8 +60,12 @@ test("picks a subscription row with the keyboard", async ({ page }) => {
   await prompt(page).fill("Explain the build");
   await expect(send(page)).toBeDisabled();
   await trigger(page).click();
-  await expect(page.getByRole("group", { name: "Subscriptions" })).toBeVisible();
-  await expect(page.getByRole("group", { name: "On this computer" })).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Subscriptions" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "On this computer" }),
+  ).toBeVisible();
   const search = page.getByRole("combobox", { name: "Search models" });
   // Details for the active row open with the right arrow.
   await search.press("ArrowRight");
@@ -81,26 +92,35 @@ test("picks a subscription row with the keyboard", async ({ page }) => {
   await expect(trigger(page)).toContainText("Codex · GPT-6-Astra");
 });
 
-test("picks a local row; web and permission controls follow the row", async ({ page }) => {
-  await expect(page.getByRole("button", { name: "Web lookups for this task" })).toHaveCount(0);
+test("picks a local row; web and permission controls follow the row", async ({
+  page,
+}) => {
+  await expect(
+    page.getByRole("button", { name: "Web lookups for this task" }),
+  ).toHaveCount(0);
   await chooseBySearch(page, "qwen");
   await expect(trigger(page)).toContainText("qwen3:14b · This computer");
   const web = page.getByRole("button", { name: "Web lookups for this task" });
   await expect(web).toHaveAttribute("aria-pressed", "false");
   await web.click();
   await expect(web).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: /Permissions: Ask before actions/ }).click();
+  await page
+    .getByRole("button", { name: /Permissions: Ask before actions/ })
+    .click();
   await page.getByRole("radio", { name: /Allow project edits/ }).click();
   await expect(
     page.getByRole("button", { name: /Permissions: Allow project edits/ }),
   ).toBeVisible();
   const log = await fakeLog(page);
   expect(
-    log.find((r) => r.path === "/api/config" && r.method === "PUT")?.body.values,
+    log.find((r) => r.path === "/api/config" && r.method === "PUT")?.body
+      .values,
   ).toEqual({ permissions: { mode: "allow_edits" } });
 });
 
-test("runs a task with streamed events and reviews the changes", async ({ page }) => {
+test("runs a task with streamed events and reviews the changes", async ({
+  page,
+}) => {
   await chooseBySearch(page, "qwen");
   await prompt(page).fill("Fix the add function");
   await send(page).click();
@@ -114,7 +134,12 @@ test("runs a task with streamed events and reviews the changes", async ({ page }
   await expect(summary).toContainText("npm test");
   await expect(summary).toContainText("exit 0");
   const timeline = page.locator(".msg-summary .activity-timeline");
-  for (const step of ["Reading project", "Editing files", "Running tests", "Finished"])
+  for (const step of [
+    "Reading project",
+    "Editing files",
+    "Running tests",
+    "Finished",
+  ])
     await expect(timeline.getByText(step, { exact: true })).toBeVisible();
   // Each step expands to the real tool call and its output.
   await timeline.getByText("Running tests", { exact: true }).click();
@@ -124,38 +149,55 @@ test("runs a task with streamed events and reviews the changes", async ({ page }
   await expect(drawer).toBeVisible();
   await drawer.getByText("src/app.ts").first().click();
   await expect(drawer).toContainText("export const add = (a, b) => a + b;");
-  await page.screenshot({ path: "test-results/task-complete.png", fullPage: true });
+  await page.screenshot({
+    path: "test-results/task-complete.png",
+    fullPage: true,
+  });
 });
 
-test("asks for consent before sending local context to a cloud row", async ({ page }) => {
+test("asks for consent before sending local context to a cloud row", async ({
+  page,
+}) => {
   await runLocalTask(page, "Start on this computer");
   await trigger(page).click();
   await page.getByRole("option", { name: /Codex · GPT-6-Astra/ }).click();
   await prompt(page).fill("Continue in the cloud");
   await send(page).click();
-  const dialog = page.getByRole("dialog", { name: "Send to a cloud provider?" });
+  const dialog = page.getByRole("dialog", {
+    name: "Send to a cloud provider?",
+  });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("Send to Codex · GPT-6-Astra?");
   await expect(dialog).toContainText("2,400 characters");
   await expect(
-    new AxeBuilder({ page }).include('[role="dialog"]').withTags(["wcag2a", "wcag2aa"]).analyze(),
+    new AxeBuilder({ page })
+      .include('[role="dialog"]')
+      .withTags(["wcag2a", "wcag2aa"])
+      .analyze(),
   ).resolves.toMatchObject({ violations: [] });
   await dialog.getByRole("button", { name: "Send" }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Task summary" })).toHaveCount(2, {
-    timeout: 15000,
-  });
+  await expect(page.getByRole("region", { name: "Task summary" })).toHaveCount(
+    2,
+    {
+      timeout: 15000,
+    },
+  );
   const posts = (await fakeLog(page)).filter(
     (r) => r.path === "/api/jobs" && r.method === "POST",
   );
-  expect(posts.map((r) => [r.body.model, Boolean(r.body.handoff_consent)])).toEqual([
+  expect(
+    posts.map((r) => [r.body.model, Boolean(r.body.handoff_consent)]),
+  ).toEqual([
     ["local:gguf:qwen", false],
     ["cli:codex:gpt-6-astra", false],
     ["cli:codex:gpt-6-astra", true],
   ]);
 });
 
-test("a Sign in row opens Accounts and Connect streams the official login", async ({ page }) => {
+test("a Sign in row opens Accounts and Connect streams the official login", async ({
+  page,
+}) => {
   await trigger(page).click();
   await page.getByRole("option", { name: /Claude Code · Default/ }).click();
   const settings = page.getByRole("dialog", { name: "Settings" });
@@ -164,7 +206,9 @@ test("a Sign in row opens Accounts and Connect streams the official login", asyn
   const connect = claude.getByRole("button", { name: "Connect" });
   await expect(connect).toBeFocused();
   await connect.click();
-  await expect(claude.getByRole("link", { name: /claude\.ai\/oauth/ })).toBeVisible();
+  await expect(
+    claude.getByRole("link", { name: /claude\.ai\/oauth/ }),
+  ).toBeVisible();
   await expect(claude.locator("code.device-code")).toHaveText("WXYZ-1234");
   await expect(claude.getByText("Signed in.")).toBeVisible({ timeout: 10000 });
   await expect(claude.getByText("Ready", { exact: true })).toBeVisible();
@@ -188,13 +232,21 @@ test("loads a local model from Settings", async ({ page }) => {
   const gptoss = settings.getByRole("article", { name: "gpt-oss:20b" });
   await expect(gptoss).toContainText("unknown model architecture: gptoss");
   await expect(
-    new AxeBuilder({ page }).include('[role="dialog"]').withTags(["wcag2a", "wcag2aa"]).analyze(),
+    new AxeBuilder({ page })
+      .include('[role="dialog"]')
+      .withTags(["wcag2a", "wcag2aa"])
+      .analyze(),
   ).resolves.toMatchObject({ violations: [] });
 });
 
-test("light and dark themes pass accessibility checks, picker open", async ({ page }) => {
+test("light and dark themes pass accessibility checks, picker open", async ({
+  page,
+}) => {
   for (const theme of ["light", "dark"]) {
-    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+    await page.evaluate(
+      (t) => (document.documentElement.dataset.theme = t),
+      theme,
+    );
     await trigger(page).click();
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
@@ -225,7 +277,9 @@ test("settings sections are accessible and trap focus", async ({ page }) => {
   }
   await dialog.locator("button").last().focus();
   await page.keyboard.press("Tab");
-  expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  expect(
+    await dialog.evaluate((el) => el.contains(document.activeElement)),
+  ).toBe(true);
   // Global shortcuts stay inactive behind a dialog.
   await page.keyboard.press("Control+b");
   await expect(page.locator(".sidebar")).toBeVisible();
@@ -239,7 +293,9 @@ test("the window works at its 520 px minimum width", async ({ page }) => {
   await expect(prompt(page)).toBeVisible();
   await expect(trigger(page)).toBeVisible();
   expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
   ).toBe(true);
   await trigger(page).click();
   const menu = page.locator(".unified-picker-menu");

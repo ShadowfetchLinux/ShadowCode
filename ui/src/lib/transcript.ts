@@ -333,18 +333,20 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   if (event.type === "routing.selected" || event.type === "routing.fallback") {
     if (p.model_id && p.model_name && p.provider)
       routing = p as unknown as RoutingDecision;
-    const selected = [
+    const name = String(
       p.model_name || p.model_id || p.fallback || "configured model",
-      p.provider,
-      p.purpose,
-    ]
-      .filter(Boolean)
-      .map(String)
-      .join(" · ");
+    );
+    // With `inference` the row name says enough; older records also name
+    // the provider and purpose.
+    const selected = p.inference
+      ? name
+      : [name, p.provider, p.purpose].filter(Boolean).map(String).join(" · ");
     const warning = event.type === "routing.fallback";
     const where =
       p.inference === "local"
-        ? " · This computer"
+        ? name.includes("This computer")
+          ? ""
+          : " · This computer"
         : p.inference === "cloud"
           ? " · Cloud"
           : "";
@@ -484,7 +486,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       const at = a.calls.findIndex(
         (call) =>
           call.live &&
-          (p.call_id ? call.callId === String(p.call_id) : call.tool === p.tool),
+          (p.call_id
+            ? call.callId === String(p.call_id)
+            : call.tool === p.tool),
       );
       const previousCall = at >= 0 ? a.calls[at] : undefined;
       const step =
@@ -492,7 +496,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       const path =
         (card.kind === "tool" && card.path) || previousCall?.path || undefined;
       const call = {
-        callId: String(p.call_id || previousCall?.callId || `call-${a.calls.length}`),
+        callId: String(
+          p.call_id || previousCall?.callId || `call-${a.calls.length}`,
+        ),
         tool: String(p.tool),
         step,
         label: String(p.headline || previousCall?.label || p.tool),
@@ -577,7 +583,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       ...a,
       finishedAt: event.ts,
       verification: verification || a.verification,
-      calls: a.calls.map((call) => (call.live ? { ...call, live: false } : call)),
+      calls: a.calls.map((call) =>
+        call.live ? { ...call, live: false } : call,
+      ),
       approvalsPending: 0,
       finished: {
         success: Boolean(p.success),

@@ -762,7 +762,8 @@ export const api = {
     ),
   historyPage: (id: string, before: number) =>
     get<HistoryPage>(`/api/sessions/${id}/events?view=window&before=${before}`),
-  session: (id: string) => get<SessionDetail>(`/api/sessions/${id}?view=window`),
+  session: (id: string) =>
+    get<SessionDetail>(`/api/sessions/${id}?view=window`),
   activateSession: (id: string) =>
     send<SessionDetail>(`/api/sessions/${id}/activate?view=window`, "POST", {}),
   currentJob: (id: string) =>

@@ -41,8 +41,7 @@ export function ConsentDialog({
         <li>Your new message</li>
         {chars > 0 && (
           <li>
-            A summary of this conversation ({chars.toLocaleString()}{" "}
-            characters)
+            A summary of this conversation ({chars.toLocaleString()} characters)
           </li>
         )}
         {images > 0 && (

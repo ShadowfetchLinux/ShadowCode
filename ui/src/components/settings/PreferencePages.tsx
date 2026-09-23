@@ -28,7 +28,9 @@ export function PermissionsPage({
   );
   const [readOnly, setReadOnly] = useState(originalLevel === "read_only");
   const [netMode, setNetMode] = useState(String(network.mode || "online"));
-  const [shellNetwork, setShellNetwork] = useState(Boolean(permissions.network));
+  const [shellNetwork, setShellNetwork] = useState(
+    Boolean(permissions.network),
+  );
   const [dangerous, setDangerous] = useState(
     permissions.require_approval_for_dangerous !== false,
   );
@@ -61,7 +63,8 @@ export function PermissionsPage({
             <strong>Allow project edits</strong>
             <small>
               File edits inside the project run without asking. Shell commands,
-              changes outside the project and destructive Git commands still ask.
+              changes outside the project and destructive Git commands still
+              ask.
             </small>
           </span>
         </label>
@@ -86,9 +89,21 @@ export function PermissionsPage({
       <fieldset className="mode-options">
         <legend>Network</legend>
         {[
-          ["online", "Online", "Cloud subscriptions and web tools for local models are available."],
-          ["web_off", "Web tools off", "Local models cannot fetch web pages. Subscriptions still work."],
-          ["offline", "Offline", "Only models on this computer run. Account and usage checks stop."],
+          [
+            "online",
+            "Online",
+            "Cloud subscriptions and web tools for local models are available.",
+          ],
+          [
+            "web_off",
+            "Web tools off",
+            "Local models cannot fetch web pages. Subscriptions still work.",
+          ],
+          [
+            "offline",
+            "Offline",
+            "Only models on this computer run. Account and usage checks stop.",
+          ],
         ].map(([id, label, hint]) => (
           <label className="mode-option" key={id}>
             <input

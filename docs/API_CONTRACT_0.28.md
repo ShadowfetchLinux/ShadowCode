@@ -80,7 +80,15 @@ matching setup hint, `unavailable` shows `reason`.
   opens the browser or prints a URL. Progress lines arrive as events
   `account.login {vendor, line}`; completion as `account.login.done {vendor, ok, detail}`.
   Antigravity returns `unsupported` with the hint to run `agy` once.
-- `POST /api/accounts/{vendor}/disconnect` → `{ ok, ran: string[], note }`; runs the
+- `GET /api/accounts/{vendor}/login` → `{ running: boolean, lines: string[], done: { ok, detail } | null }`
+  (added by the UI branch): the redacted output lines of the current or last
+  Connect for that vendor. The window re-reads it when `shadowcode:events`
+  wakes it (the Tauri wake-up carries no event body) and every 1.5 s while a
+  login runs. `connect` may also return the first `lines` it already has.
+  Without this route the Accounts page still shows "Finish signing in on the
+  page the vendor opened" and Refresh confirms the result.
+- `POST /api/accounts/{vendor}/disconnect` body `{confirm: true}` (sent only after
+  the UI showed `shared_cli_note`) → `{ ok, ran: string[], note }`; runs the
   official logout command (never touches credential files), clears cached
   usage/models, re-probes.
 - `POST /api/accounts/{vendor}/refresh` → `VendorStatus` (forced, bounded by backoff).
@@ -132,10 +140,34 @@ matching setup hint, `unavailable` shows `reason`.
   `handoff_consent: boolean` (required when the previous turn of the session ran
   on a different provider, or when local content/attachments would go to a cloud route).
   Without consent the backend answers `409 {error, needs_consent: true, handoff: {from, to, excerpt_chars, images}}`.
+  The desktop IPC has no HTTP status, so the same body may arrive either as the
+  successful value of the call or as the error string (JSON text, optionally
+  after a prefix); the UI treats both as a consent request and creates nothing
+  until it resends with `handoff_consent: true`.
+- `GET /api/sessions/{id}.execution_target` may already carry the workspace
+  default for a conversation that has none of its own; the UI otherwise falls
+  back to the last target chosen in that project (local cache) and never to
+  `config.model`.
+- `POST /api/onboarding` is sent without `provider`/`model` (the backend keeps
+  its model configuration): `{ workspace, permission_level: "workspace",
+  permission_mode: "ask" | "allow_edits", theme: "system" }`. The UI also
+  writes `permissions.mode` with `PUT /api/config`.
+- `/model` is handled by the window (opens the picker); it is never sent to
+  `POST /api/commands/run`. A command result with `overlay: "model" | "picker"`
+  also opens the picker.
 - Events added: `vendor.session {vendor, session_id}`, `agent.handoff {from, to, excerpt_chars}`,
   `usage.updated {vendor, usage}`, `limit.reached {vendor, usage}` (job pauses;
   user picks another model), `checkpoint.restored {task_id, paths}`,
   `web.source {url, final_url, title, status}` (also embedded in `tool.completed.sources`).
+- Events the UI also reads (optional): `routing.selected.inference`
+  ("cloud" | "local", shown as "· Cloud" / "· This computer"),
+  `model.switched {provider, from, to, resumed}`, `approval.requested` /
+  `approval.resolved` (Waiting for approval step), `checkpoint.updated.paths`,
+  `files.changed.paths` and `verification.summary {status, commands[{command,
+  exit_code, success, timed_out}], presented_as, note, vendor_agent}` (summary
+  card). The activity timeline classifies `tool.started/completed` by tool
+  name: native names and vendor names such as `codex.command_execution`,
+  `codex.file_change`, `cursor.read`, `Bash`, `Edit`.
 
 ## Config
 

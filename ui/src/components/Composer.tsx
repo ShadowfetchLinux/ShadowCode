@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   ArrowUp,
   FileCode2,
@@ -15,7 +21,11 @@ import {
   type Attachment,
 } from "../lib/attachments";
 
-export type SlashCommand = { name: string; description: string; arg_spec: string };
+export type SlashCommand = {
+  name: string;
+  description: string;
+  arg_spec: string;
+};
 
 /** Message field, attachments, the model picker and Send/Stop. Everything that
  * decides whether a message may be sent is computed by the caller. */
@@ -97,7 +107,8 @@ export function Composer({
       onDrop={(e) => {
         e.preventDefault();
         setDragging(false);
-        if (e.dataTransfer.files.length) onAttach(Array.from(e.dataTransfer.files));
+        if (e.dataTransfer.files.length)
+          onAttach(Array.from(e.dataTransfer.files));
       }}
     >
       {slashOpen && (
@@ -196,7 +207,11 @@ export function Composer({
               setSlashOpen(false);
               return;
             }
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing
+            ) {
               e.preventDefault();
               onSubmit();
             }
@@ -223,7 +238,9 @@ export function Composer({
             ref={fileRef}
             type="file"
             multiple
-            accept={canAttachImages ? `${IMAGE_ACCEPT},${TEXT_ACCEPT}` : TEXT_ACCEPT}
+            accept={
+              canAttachImages ? `${IMAGE_ACCEPT},${TEXT_ACCEPT}` : TEXT_ACCEPT
+            }
             hidden
             onChange={(e) => {
               if (e.target.files) onAttach(Array.from(e.target.files));

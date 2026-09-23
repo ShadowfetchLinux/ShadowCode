@@ -82,9 +82,7 @@ export function Help({
           </div>
         ))}
       </div>
-      <p className="hint">
-        ShadowCode {version}
-      </p>
+      <p className="hint">ShadowCode {version}</p>
       <div className="row end">
         <button type="button" className="ghost" onClick={onClose}>
           Close

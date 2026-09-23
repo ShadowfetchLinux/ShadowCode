@@ -1236,8 +1236,14 @@ kbd {
    Flagship Upgrade: 20-Minute Fast-Track Guide Modal
    ========================================================================== */
 @keyframes modalPop {
-  0% { opacity: 0; transform: scale(0.96) translateY(6px); }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
+  0% {
+    opacity: 0;
+    transform: scale(0.96) translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 
 /* Mode Cards */
@@ -1263,8 +1269,14 @@ kbd {
    ========================================================================== */
 @media (max-width: 760px) {
   @keyframes modalSlideUp {
-    0% { opacity: 0; transform: translateY(40px); }
-    100% { opacity: 1; transform: translateY(0); }
+    0% {
+      opacity: 0;
+      transform: translateY(40px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 }
 
@@ -1276,11 +1288,18 @@ kbd {
    Debug & Polish: Micro-animations & Visual Premium Feel
    ========================================================================== */
 @keyframes subtlePulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
-  50% { box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  }
 }
 .submit-btn:not(:disabled):not(.stop) {
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition:
+    background 0.15s ease,
+    transform 0.1s ease;
 }
 .submit-btn:not(:disabled):not(.stop):hover {
   transform: scale(1.05);
@@ -1289,7 +1308,9 @@ kbd {
   transform: scale(0.95);
 }
 .op-card {
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 .op-card header {
   transition: background 0.12s ease;
@@ -1299,12 +1320,22 @@ kbd {
   background: var(--surface-3);
 }
 @keyframes thinkingPulse {
-  0%, 100% { border-color: rgba(147, 51, 234, 0.4); }
-  50% { border-color: rgba(147, 51, 234, 0.6); }
+  0%,
+  100% {
+    border-color: rgba(147, 51, 234, 0.4);
+  }
+  50% {
+    border-color: rgba(147, 51, 234, 0.6);
+  }
 }
 @keyframes thinkingPulseDark {
-  0%, 100% { border-color: rgba(147, 51, 234, 0.45); }
-  50% { border-color: rgba(147, 51, 234, 0.7); }
+  0%,
+  100% {
+    border-color: rgba(147, 51, 234, 0.45);
+  }
+  50% {
+    border-color: rgba(147, 51, 234, 0.7);
+  }
 }
 
 /* Composer focus glow enhancement */
@@ -1372,8 +1403,14 @@ kbd {
 
 /* --- Welcome Banner -------------------------------------------- */
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(14px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* --- Mode Tabs ------------------------------------------------- */
@@ -1385,10 +1422,14 @@ kbd {
   transition: box-shadow 0.2s;
 }
 .composer:focus-within {
-  box-shadow: 0 0 0 2px var(--accent-soft), 0 4px 24px #0002;
+  box-shadow:
+    0 0 0 2px var(--accent-soft),
+    0 4px 24px #0002;
 }
 .submit-btn {
-  transition: transform 0.12s, background 0.15s;
+  transition:
+    transform 0.12s,
+    background 0.15s;
 }
 .submit-btn:not(:disabled):hover {
   transform: scale(1.07);

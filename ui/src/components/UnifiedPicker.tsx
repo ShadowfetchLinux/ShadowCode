@@ -33,7 +33,13 @@ import {
 
 type Item =
   | { kind: "row"; key: string; target: PickerTarget }
-  | { kind: "more"; key: string; vendor: string; label: string; hidden: number };
+  | {
+      kind: "more";
+      key: string;
+      vendor: string;
+      label: string;
+      hidden: number;
+    };
 
 type Group = { id: string; title: string; items: Item[]; empty: string };
 
@@ -86,9 +92,11 @@ export function UnifiedPicker({
         selected: value,
         searching: Boolean(query.trim()),
       }).flatMap((section) => [
-        ...section.rows.map(
-          (target): Item => ({ kind: "row", key: target.id, target }),
-        ),
+        ...section.rows.map((target): Item => ({
+          kind: "row",
+          key: target.id,
+          target,
+        })),
         ...(section.hidden
           ? [
               {
@@ -228,7 +236,11 @@ export function UnifiedPicker({
 
   // Keep the detail pane on the row the keyboard is on once it is open.
   useEffect(() => {
-    if (details && activeItem?.kind === "row" && activeItem.target.id !== details)
+    if (
+      details &&
+      activeItem?.kind === "row" &&
+      activeItem.target.id !== details
+    )
       setDetails(activeItem.target.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
@@ -252,7 +264,7 @@ export function UnifiedPicker({
           <span
             className={`inference-badge ${isLocal(selected) ? "local" : "cloud"}`}
           >
-            {isLocal(selected) ? "This computer" : "Cloud"}
+            {isLocal(selected) ? "Local" : "Cloud"}
           </span>
         )}
         <span className="unified-picker-current">
@@ -334,7 +346,8 @@ export function UnifiedPicker({
                         onClick={() => activate(item)}
                       >
                         <ChevronRight size={13} aria-hidden="true" />
-                        Show all {item.hidden + countShown(items, item.vendor)}{" "}
+                        Show all {item.hidden +
+                          countShown(items, item.vendor)}{" "}
                         {item.label} models
                       </div>
                     );
@@ -445,9 +458,7 @@ function Row({
       id={id}
       role="option"
       aria-selected={selected}
-      aria-describedby={
-        detailsOpen ? `${id}-meta ${detailsId}` : `${id}-meta`
-      }
+      aria-describedby={detailsOpen ? `${id}-meta ${detailsId}` : `${id}-meta`}
       className={`unified-picker-row ${ready ? "" : "is-blocked"} ${selected ? "is-selected" : ""} ${active ? "is-active" : ""}`}
       onMouseDown={(e) => e.preventDefault()}
       onMouseMove={onHover}
@@ -529,17 +540,29 @@ function Details({
       )}
       <div className="row">
         {target.usage?.provider_usage_url && (
-          <a href={target.usage.provider_usage_url} target="_blank" rel="noreferrer">
+          <a
+            href={target.usage.provider_usage_url}
+            target="_blank"
+            rel="noreferrer"
+          >
             Open {vendorLabel(target)} usage
           </a>
         )}
         {action.kind === "connect" && (
-          <button type="button" className="mini" onClick={() => onConnect(action.vendor)}>
+          <button
+            type="button"
+            className="mini"
+            onClick={() => onConnect(action.vendor)}
+          >
             Sign in to {vendorLabel(target)}
           </button>
         )}
         {action.kind === "setup" && (
-          <button type="button" className="mini" onClick={() => onSetup(target)}>
+          <button
+            type="button"
+            className="mini"
+            onClick={() => onSetup(target)}
+          >
             {action.local ? "Open Local models" : "Open Accounts"}
           </button>
         )}

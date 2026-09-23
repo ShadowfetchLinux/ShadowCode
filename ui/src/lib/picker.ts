@@ -28,7 +28,8 @@ export type UsageSnapshot = {
   provider_usage_url?: string | null;
 };
 
-export type Availability = "ready" | "sign_in" | "setup_required" | "unavailable";
+export type Availability =
+  "ready" | "sign_in" | "setup_required" | "unavailable";
 
 export type LocalDetail = {
   path?: string;
@@ -65,7 +66,8 @@ export const LOCAL_USAGE = "Runs on this computer · No subscription quota";
 export const isLocal = (target: PickerTarget) =>
   target.inference === "local" || target.group === "local";
 
-export const isReady = (target: PickerTarget) => target.availability === "ready";
+export const isReady = (target: PickerTarget) =>
+  target.availability === "ready";
 
 /** "cli:cursor" → "cursor"; local rows share the "local" key. */
 export function vendorKey(target: PickerTarget): string {

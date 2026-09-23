@@ -47,10 +47,15 @@ export function LocalModelsPage({
     void load();
   }, [load]);
 
-  async function run(key: string, action: () => Promise<unknown>, done?: string) {
+  async function run(
+    key: string,
+    action: () => Promise<unknown>,
+    done?: string,
+  ) {
     setPending(key);
     try {
-      const result = (await action()) as { local_engine?: LocalCatalog } | undefined;
+      const result = (await action()) as
+        { local_engine?: LocalCatalog } | undefined;
       if (result && typeof result === "object" && result.local_engine)
         setCatalog(result.local_engine);
       else await load();
@@ -108,7 +113,11 @@ export function LocalModelsPage({
           <div className="kv local-runtime">
             <div>
               <span>Runtime</span>
-              <code className={runtime?.state === "ready" ? "health-ok" : "health-bad"}>
+              <code
+                className={
+                  runtime?.state === "ready" ? "health-ok" : "health-bad"
+                }
+              >
                 {runtime?.state === "ready"
                   ? `Ready · ${runtime.backend === "vulkan" ? "Vulkan" : runtime.backend === "cpu" ? "CPU" : runtime.backend || "unknown backend"}${runtime.version ? ` · ${runtime.version}` : ""}`
                   : runtime?.state === "setup_required"
@@ -148,7 +157,13 @@ export function LocalModelsPage({
               type="button"
               className="ghost"
               disabled={Boolean(pending)}
-              onClick={() => void run("unload", () => api.unloadLocalModel(), "Model unloaded")}
+              onClick={() =>
+                void run(
+                  "unload",
+                  () => api.unloadLocalModel(),
+                  "Model unloaded",
+                )
+              }
             >
               {pending === "unload" ? "Unloading…" : `Unload ${loaded.name}`}
             </button>
@@ -166,10 +181,18 @@ export function LocalModelsPage({
               vram={hardware?.vram_bytes || null}
               ram={hardware?.ram_bytes || null}
               onLoad={() =>
-                void run(`load:${model.id}`, () => api.loadLocalModel(model.id), `${model.name} loaded`)
+                void run(
+                  `load:${model.id}`,
+                  () => api.loadLocalModel(model.id),
+                  `${model.name} loaded`,
+                )
               }
               onUnload={() =>
-                void run("unload", () => api.unloadLocalModel(), "Model unloaded")
+                void run(
+                  "unload",
+                  () => api.unloadLocalModel(),
+                  "Model unloaded",
+                )
               }
               onRemove={() =>
                 void run(
@@ -191,10 +214,18 @@ export function LocalModelsPage({
             />
           </div>
           <div className="chip-row">
-            <button type="button" className="ghost" onClick={() => void choose(false)}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void choose(false)}
+            >
               Choose file…
             </button>
-            <button type="button" className="ghost" onClick={() => void choose(true)}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void choose(true)}
+            >
               Choose folder…
             </button>
             <button
@@ -202,9 +233,11 @@ export function LocalModelsPage({
               className="primary"
               disabled={!path.trim() || Boolean(pending)}
               onClick={() =>
-                void run("add", () => api.addLocalModel(path.trim()), "Added").then(() =>
-                  setPath(""),
-                )
+                void run(
+                  "add",
+                  () => api.addLocalModel(path.trim()),
+                  "Added",
+                ).then(() => setPath(""))
               }
             >
               {pending === "add" ? "Adding…" : "Add"}
@@ -215,15 +248,18 @@ export function LocalModelsPage({
               <h4>Found in Ollama</h4>
               {!ollama.available ? (
                 <p className="hint">
-                  No Ollama model store found{ollama.path ? ` at ${ollama.path}` : ""}.
+                  No Ollama model store found
+                  {ollama.path ? ` at ${ollama.path}` : ""}.
                 </p>
               ) : ollama.models.length === 0 ? (
-                <p className="hint">The Ollama store at {ollama.path} has no models.</p>
+                <p className="hint">
+                  The Ollama store at {ollama.path} has no models.
+                </p>
               ) : (
                 <>
                   <p className="hint">
-                    Importing uses the existing files in {ollama.path}; nothing is
-                    copied or changed there.
+                    Importing uses the existing files in {ollama.path}; nothing
+                    is copied or changed there.
                   </p>
                   <ul className="ollama-list">
                     {ollama.models.map((m) => (
@@ -246,10 +282,16 @@ export function LocalModelsPage({
                             className="mini"
                             disabled={Boolean(pending)}
                             onClick={() =>
-                              void run(`import:${m.tag}`, () => api.importOllama(m.tag), `${m.tag} imported`)
+                              void run(
+                                `import:${m.tag}`,
+                                () => api.importOllama(m.tag),
+                                `${m.tag} imported`,
+                              )
                             }
                           >
-                            {pending === `import:${m.tag}` ? "Importing…" : "Import"}
+                            {pending === `import:${m.tag}`
+                              ? "Importing…"
+                              : "Import"}
                           </button>
                         ) : (
                           <span className="dim">Not supported</span>
@@ -323,7 +365,9 @@ function ModelRow({
           {memory.projector_bytes
             ? `, vision projector ${formatBytes(memory.projector_bytes)}`
             : ""}
-          ) at {(memory.context_tokens || model.context_tokens).toLocaleString()} tokens
+          ) at{" "}
+          {(memory.context_tokens || model.context_tokens).toLocaleString()}{" "}
+          tokens
           {" · "}
           {vram ? `GPU ${formatBytes(vram)}` : "no GPU memory reported"}
           {ram ? ` · RAM ${formatBytes(ram)}` : ""}
@@ -333,14 +377,21 @@ function ModelRow({
       {model.last_error && <p className="health-bad">{model.last_error}</p>}
       <div className="row">
         {loaded ? (
-          <button type="button" className="ghost" disabled={Boolean(pending)} onClick={onUnload}>
+          <button
+            type="button"
+            className="ghost"
+            disabled={Boolean(pending)}
+            onClick={onUnload}
+          >
             Unload
           </button>
         ) : (
           <button
             type="button"
             className="ghost"
-            disabled={Boolean(pending) || !model.compatible || model.fits === "no"}
+            disabled={
+              Boolean(pending) || !model.compatible || model.fits === "no"
+            }
             title={
               !model.compatible
                 ? model.reason

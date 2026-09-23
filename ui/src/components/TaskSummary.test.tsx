@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { TaskSummary } from "./TaskSummary";
 import { WelcomeBanner } from "./WelcomeBanner";
@@ -27,7 +33,12 @@ it("lists changed files with diff counts, checks with exit codes and duration", 
     path === "src/app.ts" ? { add: 3, del: 1 } : null,
   );
   render(
-    <TaskSummary activity={base} onReview={onReview} diffStat={diffStat} onRewind={vi.fn()} />,
+    <TaskSummary
+      activity={base}
+      onReview={onReview}
+      diffStat={diffStat}
+      onRewind={vi.fn()}
+    />,
   );
   expect(screen.getByText("Finished")).toBeTruthy();
   expect(screen.getByText(/1m 15s/)).toBeTruthy();
@@ -66,13 +77,19 @@ it("states vendor-owned checks and unverified claims honestly", () => {
     <TaskSummary
       activity={{
         ...base,
-        verification: { status: "not_run", commands: [], presentedAs: "unverified" },
+        verification: {
+          status: "not_run",
+          commands: [],
+          presentedAs: "unverified",
+        },
       }}
       onReview={vi.fn()}
     />,
   );
   expect(screen.getByText("No test or build command was run.")).toBeTruthy();
-  expect(screen.getByText(/claims results that no recorded check confirms/)).toBeTruthy();
+  expect(
+    screen.getByText(/claims results that no recorded check confirms/),
+  ).toBeTruthy();
 });
 
 it("welcome state offers at most three suggestions", () => {

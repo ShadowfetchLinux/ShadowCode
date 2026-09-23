@@ -1,9 +1,6 @@
 import { useEffect, useState } from "react";
 import { FileDiff, FlaskConical, Timer } from "lucide-react";
-import {
-  formatDuration,
-  type TaskActivity,
-} from "../lib/activity";
+import { formatDuration, type TaskActivity } from "../lib/activity";
 
 export type DiffStat = { add: number; del: number } | null;
 
