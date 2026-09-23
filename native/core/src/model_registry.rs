@@ -131,7 +131,9 @@ pub fn resolve(store: &Store, id: &str, default: &ModelConfig) -> Result<ModelCo
         validate(&model)?;
         return Ok(model);
     }
-    if crate::cli_agent::is_cli_provider(&default.provider) && (id == default.default || id == default.name) {
+    if crate::cli_agent::is_cli_provider(&default.provider)
+        && (id == default.default || id == default.name)
+    {
         validate(default)?;
         return Ok(default.clone());
     }

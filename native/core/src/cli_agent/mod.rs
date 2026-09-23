@@ -23,14 +23,11 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub mod acp;
-#[cfg(unix)]
 pub mod acp_probe;
 pub mod antigravity;
-#[cfg(unix)]
 pub mod catalog;
 pub mod claude;
 pub mod codex;
-#[cfg(unix)]
 pub mod codex_probe;
 pub mod discovery;
 pub mod doctor;

@@ -58,7 +58,19 @@ fn sanitized_command(
         .env_clear()
         .env("NO_COLOR", "1")
         .env("TERM", "dumb");
-    for name in ["HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+    for name in [
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+    ] {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);
         }
@@ -81,7 +93,11 @@ fn sanitized_command(
     command
 }
 
-async fn run_short(binary: &Path, args: &[&str], path_env: Option<&OsStr>) -> Option<(bool, String)> {
+async fn run_short(
+    binary: &Path,
+    args: &[&str],
+    path_env: Option<&OsStr>,
+) -> Option<(bool, String)> {
     run_short_in(binary, args, path_env, None).await
 }
 
@@ -122,7 +138,11 @@ pub async fn codex_login_status(binary: &Path, path_env: Option<&OsStr>) -> Logi
     codex_login_status_in(binary, path_env, None).await
 }
 
-async fn codex_login_status_in(binary: &Path, path_env: Option<&OsStr>, home: Option<&Path>) -> LoginState {
+async fn codex_login_status_in(
+    binary: &Path,
+    path_env: Option<&OsStr>,
+    home: Option<&Path>,
+) -> LoginState {
     match run_short_in(binary, &["login", "status"], path_env, home).await {
         Some((true, _)) => LoginState::LoggedIn,
         Some((false, text)) => {
@@ -142,7 +162,11 @@ pub async fn claude_login_state(binary: &Path, path_env: Option<&OsStr>) -> Logi
     claude_login_state_in(binary, path_env, None).await
 }
 
-async fn claude_login_state_in(binary: &Path, path_env: Option<&OsStr>, home: Option<&Path>) -> LoginState {
+async fn claude_login_state_in(
+    binary: &Path,
+    path_env: Option<&OsStr>,
+    home: Option<&Path>,
+) -> LoginState {
     match run_short_in(binary, &["auth", "status", "--json"], path_env, home).await {
         Some((_, text)) => {
             // The CLI pretty-prints the JSON over several lines.
@@ -186,12 +210,18 @@ pub async fn version(binary: &Path, path_env: Option<&OsStr>) -> Option<String> 
 }
 
 /// Login state without touching credential contents.
-pub async fn login_state(vendor: Vendor, binary: &Path, home: &Path, path_env: Option<&OsStr>) -> LoginState {
+pub async fn login_state(
+    vendor: Vendor,
+    binary: &Path,
+    home: &Path,
+    path_env: Option<&OsStr>,
+) -> LoginState {
     // A credential marker file is never proof of a live login; every vendor
     // is asked through its own documented status command. The marker only
     // short-circuits the obvious "never signed in" case for Codex/Grok so the
     // CLI is not started needlessly.
-    if matches!(vendor, Vendor::Codex | Vendor::Grok) && !marker_present(&auth_marker(vendor, home)) {
+    if matches!(vendor, Vendor::Codex | Vendor::Grok) && !marker_present(&auth_marker(vendor, home))
+    {
         // Codex may also hold a login through the app-server keyring; ask it.
         if vendor == Vendor::Grok {
             return LoginState::NotLoggedIn;
@@ -223,10 +253,13 @@ pub async fn login_state(vendor: Vendor, binary: &Path, home: &Path, path_env: O
         Vendor::Antigravity => match run_short(binary, &["models"], path_env).await {
             Some((ok, text)) => {
                 let lower = text.to_ascii_lowercase();
-                if ok && (text.contains('\t') || lower.contains("gemini") || lower.contains("claude"))
+                if ok
+                    && (text.contains('\t') || lower.contains("gemini") || lower.contains("claude"))
                 {
                     LoginState::LoggedIn
-                } else if lower.contains("login") || lower.contains("auth") || lower.contains("sign in")
+                } else if lower.contains("login")
+                    || lower.contains("auth")
+                    || lower.contains("sign in")
                 {
                     LoginState::NotLoggedIn
                 } else if ok {
@@ -267,9 +300,7 @@ pub async fn check_vendor(
     };
     let version = version(&binary, path_env).await;
     let login = login_state(vendor, &binary, home, path_env).await;
-    let version_text = version
-        .clone()
-        .unwrap_or_else(|| "version unknown".into());
+    let version_text = version.clone().unwrap_or_else(|| "version unknown".into());
     match login {
         LoginState::LoggedIn => json!({
             "id": id, "status": "pass", "label": label, "state": "ready",

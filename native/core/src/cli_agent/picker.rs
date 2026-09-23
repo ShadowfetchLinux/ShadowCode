@@ -1,11 +1,13 @@
 //! Unified execution-target catalog. Rows are keyed by stable IDs
 //! (`provider`, `account`, `model`, `route`), never by display name.
-use super::{usage::UsageSnapshot, CliAgentsConfig, Vendor};
+use super::{usage::UsageSnapshot, Vendor};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const GROUP_SUBSCRIPTIONS: &str = "subscriptions";
 pub const GROUP_LOCAL: &str = "local";
+pub const ROUTE_VENDOR: &str = "vendor_cli";
+pub const ROUTE_LOCAL: &str = "local_llamacpp";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -119,7 +121,7 @@ pub fn vendor_target(
         provider: vendor.provider(),
         account: format!("account:{}", vendor.id()),
         model: model.to_owned(),
-        route: "vendor_cli".into(),
+        route: ROUTE_VENDOR.into(),
         group: GROUP_SUBSCRIPTIONS.into(),
         name,
         subtitle: "Cloud · subscription".into(),
@@ -133,95 +135,6 @@ pub fn vendor_target(
         is_default: auto || model == "default",
         usage,
     }
-}
-
-pub fn local_target(
-    id: &str,
-    provider: &str,
-    model: &str,
-    name: &str,
-    availability: Availability,
-    reason: &str,
-    vision: bool,
-    tools: bool,
-) -> PickerTarget {
-    PickerTarget {
-        id: id.to_owned(),
-        provider: provider.to_owned(),
-        account: "this-computer".into(),
-        model: model.to_owned(),
-        route: if provider == "llamacpp" {
-            "local_llamacpp".into()
-        } else {
-            "local_compat".into()
-        },
-        group: GROUP_LOCAL.into(),
-        name: format!("{name} · This computer"),
-        subtitle: "Runs on this computer · No subscription quota".into(),
-        inference: "local".into(),
-        availability,
-        availability_label: availability.label().into(),
-        reason: reason.to_owned(),
-        featured: true,
-        vision,
-        tools,
-        is_default: false,
-        usage: UsageSnapshot::local(),
-    }
-}
-
-/// Fallback subscription rows from Doctor only (no pretend model catalog).
-pub fn doctor_rows(config: &CliAgentsConfig, doctor: &Value) -> Vec<PickerTarget> {
-    let mut rows = Vec::new();
-    for vendor in Vendor::ALL {
-        if !config.vendor_enabled(vendor) {
-            continue;
-        }
-        let state = doctor
-            .get(vendor.id())
-            .and_then(|v| v["state"].as_str())
-            .unwrap_or("unavailable");
-        let detail = doctor
-            .get(vendor.id())
-            .and_then(|v| v["detail"].as_str())
-            .unwrap_or("");
-        let availability = Availability::from_doctor(state);
-        let model = if vendor.supports_auto_model() {
-            "auto"
-        } else {
-            "default"
-        };
-        if vendor.featured() || availability == Availability::Ready {
-            rows.push(vendor_target(
-                vendor,
-                model,
-                if vendor.supports_auto_model() {
-                    "Auto"
-                } else {
-                    "Default"
-                },
-                availability,
-                detail,
-                UsageSnapshot::unavailable(vendor.product_label()),
-                vendor.accepts_images(),
-            ));
-        }
-    }
-    rows
-}
-
-pub fn merge_discovered(
-    base: Vec<PickerTarget>,
-    discovered: Vec<PickerTarget>,
-) -> Vec<PickerTarget> {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for row in discovered.into_iter().chain(base) {
-        if seen.insert(row.id.clone()) {
-            out.push(row);
-        }
-    }
-    out
 }
 
 #[cfg(test)]

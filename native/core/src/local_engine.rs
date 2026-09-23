@@ -7,7 +7,8 @@ use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    fs, io::Read,
+    fs,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -33,7 +34,10 @@ impl LocalEngineConfig {
         Ok(config)
     }
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.directories.len() <= 32, "Too many local model directories");
+        ensure!(
+            self.directories.len() <= 32,
+            "Too many local model directories"
+        );
         ensure!(self.files.len() <= 64, "Too many local model files");
         if self.llama_binary.len() > 1024 || self.llama_binary.contains(['\n', '\0']) {
             bail!("local_engine.llama_binary is not a usable path");
@@ -81,7 +85,9 @@ pub fn inspect_gguf(path: &Path, ram_bytes: u64) -> Result<GgufEntry> {
         .unwrap_or("local-model");
     let lower = stem.to_ascii_lowercase();
     let vision = has_mmproj(path);
-    let tools = !["chat-only", "instruct-only"].iter().any(|n| lower.contains(n));
+    let tools = !["chat-only", "instruct-only"]
+        .iter()
+        .any(|n| lower.contains(n));
     let overhead = 512 * 1024 * 1024;
     let context_cache = 512 * 1024 * 1024;
     let approx = bytes.saturating_add(overhead).saturating_add(context_cache);
@@ -272,7 +278,10 @@ fn read_meminfo() -> u64 {
     };
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("MemTotal:") {
-            let kb = rest.split_whitespace().next().and_then(|n| n.parse::<u64>().ok());
+            let kb = rest
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse::<u64>().ok());
             return kb.unwrap_or(0).saturating_mul(1024);
         }
     }
@@ -281,7 +290,10 @@ fn read_meminfo() -> u64 {
 
 fn read_nvidia() -> (Option<String>, Option<u64>) {
     let Some(output) = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()
     else {

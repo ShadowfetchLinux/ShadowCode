@@ -133,7 +133,8 @@ impl UsageSnapshot {
         let mut pool_snapshot = rate_limits.get("rateLimits").cloned();
         let mut pool_id = None;
         let mut dedicated = false;
-        if let (Some(model), Some(pools)) = (model, rate_limits["rateLimitsByLimitId"].as_object()) {
+        if let (Some(model), Some(pools)) = (model, rate_limits["rateLimitsByLimitId"].as_object())
+        {
             for (id, snapshot) in pools {
                 if snapshot["normalModelSlug"].as_str() == Some(model) {
                     pool_snapshot = Some(snapshot.clone());
@@ -179,7 +180,10 @@ impl UsageSnapshot {
             });
         }
         let credits = snapshot["credits"].as_object().map(|c| UsageCredits {
-            has_credits: c.get("hasCredits").and_then(Value::as_bool).unwrap_or(false),
+            has_credits: c
+                .get("hasCredits")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             unlimited: c.get("unlimited").and_then(Value::as_bool).unwrap_or(false),
             balance: c.get("balance").and_then(Value::as_str).map(str::to_owned),
         });
@@ -196,7 +200,10 @@ impl UsageSnapshot {
             return snap;
         }
         let primary = &windows[0];
-        let mut label = format!("{:.0}% remaining · {}", primary.remaining_percent, primary.label);
+        let mut label = format!(
+            "{:.0}% remaining · {}",
+            primary.remaining_percent, primary.label
+        );
         if !dedicated {
             label.push_str(" · Shared plan usage");
         }
@@ -208,10 +215,7 @@ impl UsageSnapshot {
             detail.push(format!("ChatGPT plan: {plan}"));
         }
         for window in &windows {
-            let mut line = format!(
-                "{}: {:.0}% used",
-                window.label, window.used_percent
-            );
+            let mut line = format!("{}: {:.0}% used", window.label, window.used_percent);
             if let Some(reset) = window.resets_at {
                 line.push_str(&format!(" · resets in {}", format_until(reset, now)));
             }
@@ -271,7 +275,9 @@ fn usage_url(provider: &str) -> Option<String> {
             "Codex" | "cli:codex" => "https://chatgpt.com/#settings",
             "Claude Code" | "cli:claude" => "https://claude.ai/settings/usage",
             "Cursor" | "cli:cursor" => "https://cursor.com/dashboard",
-            "Antigravity" | "cli:antigravity" => "https://antigravity.google/docs/cli/commands/usage/",
+            "Antigravity" | "cli:antigravity" => {
+                "https://antigravity.google/docs/cli/commands/usage/"
+            }
             "Grok" | "cli:grok" => "https://grok.com/",
             _ => return None,
         }
@@ -359,7 +365,9 @@ mod tests {
         assert_eq!(snap.state, STATE_UNAVAILABLE);
         assert!(snap.remaining_percent.is_none());
         assert!(snap.windows.is_empty());
-        assert!(snap.label.starts_with("Usage unavailable · Open Cursor usage"));
+        assert!(snap
+            .label
+            .starts_with("Usage unavailable · Open Cursor usage"));
         assert!(!snap.label.contains('%'));
         assert!(!snap.label.to_lowercase().contains("unlimited"));
         let local = UsageSnapshot::local();

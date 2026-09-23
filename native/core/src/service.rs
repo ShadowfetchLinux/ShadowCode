@@ -861,59 +861,28 @@ impl Service {
                 self.register(&cfg.model)?;
                 let mut models = model_registry::catalog(&store, &cfg.model)?;
                 for vendor in crate::cli_agent::catalog_models(&cfg.cli_agents) {
-                    if !models.iter().any(|row| row["id"] == vendor["id"] || row["provider"] == vendor["provider"]) {
+                    if !models.iter().any(|row| {
+                        row["id"] == vendor["id"] || row["provider"] == vendor["provider"]
+                    }) {
                         models.push(vendor);
                     }
                 }
-                let cli_agents = crate::cli_agent::doctor::status(&cfg.cli_agents).await;
-                let picker = crate::cli_agent::discovery::picker_targets(&cfg.cli_agents).await?;
-                let local = crate::local_engine::catalog(&cfg.local_engine);
+                let picker = self.picker_catalog(&cfg, q("refresh") == "1").await?;
                 return Ok(json!({
                     "models":models,
-                    "cli_agents":cli_agents,
+                    "cli_agents":picker["vendors"],
                     "picker":picker["targets"],
-                    "local_engine":local
+                    "local_engine":picker["local_engine"]
                 }));
             }
             ("GET", "/api/picker") => {
                 let cfg = self.config()?;
-                let mut picker = crate::cli_agent::discovery::picker_targets(&cfg.cli_agents).await?;
-                let local = crate::local_engine::catalog(&cfg.local_engine);
-                let llama_ready = local["llama"]["state"] == "ready";
-                let mut targets = picker["targets"].as_array().cloned().unwrap_or_default();
-                for model in local["models"].as_array().into_iter().flatten() {
-                    let availability = if llama_ready && model["compatible"] == true {
-                        "ready"
-                    } else {
-                        "setup_required"
-                    };
-                    targets.push(json!({
-                        "id": model["id"],
-                        "provider": "llamacpp",
-                        "account": "this-computer",
-                        "model": model["name"],
-                        "route": "local_llamacpp",
-                        "group": "local",
-                        "name": format!("{} · This computer", model["name"].as_str().unwrap_or("GGUF")),
-                        "subtitle": "Runs on this computer · No subscription quota",
-                        "inference": "local",
-                        "availability": availability,
-                        "availability_label": if availability == "ready" { "Ready" } else { "Setup required" },
-                        "reason": model["detail"],
-                        "featured": true,
-                        "vision": model["vision"],
-                        "tools": model["tools"],
-                        "usage": crate::cli_agent::usage::UsageSnapshot::local(),
-                    }));
-                }
-                picker["targets"] = json!(targets);
-                picker["local_engine"] = local;
-                return Ok(picker);
+                return self.picker_catalog(&cfg, q("refresh") == "1").await;
             }
             ("GET", "/api/accounts") => {
                 let cfg = self.config()?;
                 return Ok(json!({
-                    "vendors": crate::cli_agent::doctor::status(&cfg.cli_agents).await,
+                    "vendors": self.engine.vendors().status_json(&cfg.cli_agents, q("refresh") == "1").await,
                     "config": cfg.cli_agents,
                     "local_engine": crate::local_engine::catalog(&cfg.local_engine),
                 }));
@@ -921,7 +890,7 @@ impl Service {
             ("GET", "/api/cli-agents") => {
                 let cfg = self.config()?;
                 return Ok(json!({
-                    "vendors": crate::cli_agent::doctor::status(&cfg.cli_agents).await,
+                    "vendors": self.engine.vendors().status_json(&cfg.cli_agents, q("refresh") == "1").await,
                     "config": cfg.cli_agents
                 }));
             }
@@ -945,7 +914,9 @@ impl Service {
                 next.validate()?;
                 Config::patch(self.engine.paths(), json!({"local_engine": next}))?;
                 let cfg = self.config()?;
-                return Ok(json!({"ok":true,"local_engine":crate::local_engine::catalog(&cfg.local_engine)}));
+                return Ok(
+                    json!({"ok":true,"local_engine":crate::local_engine::catalog(&cfg.local_engine)}),
+                );
             }
             ("POST", "/api/local-models/remove") => {
                 let path = text("path");
@@ -955,7 +926,9 @@ impl Service {
                 next.files.retain(|p| p != path);
                 next.directories.retain(|p| p != path);
                 Config::patch(self.engine.paths(), json!({"local_engine": next}))?;
-                return Ok(json!({"ok":true,"deleted_weights":false,"detail":"Catalog entry removed. Original weights were not deleted."}));
+                return Ok(
+                    json!({"ok":true,"deleted_weights":false,"detail":"Catalog entry removed. Original weights were not deleted."}),
+                );
             }
             ("POST", "/api/models/test") => {
                 let cfg = self.config()?;
@@ -1683,14 +1656,60 @@ impl Service {
             reservation,
         })
     }
+    /// The composer picker: subscription rows from the vendor catalog and
+    /// local GGUF rows from the local catalog, in one list.
+    async fn picker_catalog(&self, cfg: &Config, force: bool) -> Result<Value> {
+        let vendors = self.engine.vendors();
+        let mut targets: Vec<Value> = vendors
+            .picker_rows(&cfg.cli_agents, force)
+            .await
+            .iter()
+            .map(crate::cli_agent::picker::PickerTarget::to_json)
+            .collect();
+        let local = crate::local_engine::catalog(&cfg.local_engine);
+        let llama_ready = local["llama"]["state"] == "ready";
+        for model in local["models"].as_array().into_iter().flatten() {
+            let availability = if llama_ready && model["compatible"] == true {
+                "ready"
+            } else {
+                "setup_required"
+            };
+            targets.push(json!({
+                "id": model["id"],
+                "provider": "llamacpp",
+                "account": "this-computer",
+                "model": model["name"],
+                "route": crate::cli_agent::picker::ROUTE_LOCAL,
+                "group": crate::cli_agent::picker::GROUP_LOCAL,
+                "name": format!("{} · This computer", model["name"].as_str().unwrap_or("GGUF")),
+                "subtitle": "Runs on this computer · No subscription quota",
+                "inference": "local",
+                "availability": availability,
+                "availability_label": if availability == "ready" { "Ready" } else { "Setup required" },
+                "reason": model["detail"],
+                "featured": true,
+                "vision": model["vision"],
+                "tools": model["tools"],
+                "is_default": false,
+                "usage": crate::cli_agent::usage::UsageSnapshot::local(),
+            }));
+        }
+        Ok(json!({
+            "targets": targets,
+            "vendors": vendors.status_json(&cfg.cli_agents, false).await,
+            "local_engine": local,
+            "generated_at": crate::now(),
+        }))
+    }
     fn model_from_body(&self, body: &Value, fallback: &ModelConfig) -> ModelConfig {
         let provider = body["provider"]
             .as_str()
             .filter(|v| !v.is_empty())
             .unwrap_or(&fallback.provider);
-        if let Some(vendor) = crate::cli_agent::Vendor::from_provider(provider)
-            .or_else(|| crate::cli_agent::resolve_vendor(provider).and_then(|m| crate::cli_agent::Vendor::from_provider(&m.provider)))
-        {
+        if let Some(vendor) = crate::cli_agent::Vendor::from_provider(provider).or_else(|| {
+            crate::cli_agent::resolve_vendor(provider)
+                .and_then(|m| crate::cli_agent::Vendor::from_provider(&m.provider))
+        }) {
             let name = body["name"]
                 .as_str()
                 .filter(|v| !v.is_empty() && *v != vendor.provider() && *v != vendor.label())

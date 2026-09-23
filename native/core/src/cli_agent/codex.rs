@@ -100,7 +100,8 @@ impl CodexAppServerAdapter {
                 bail!("Codex app-server rejected the handshake: {text}");
             }
             if Some(id) == self.thread_start_id {
-                if self.options.as_ref().is_some_and(|o| o.resume.is_some()) && !self.resume_failed {
+                if self.options.as_ref().is_some_and(|o| o.resume.is_some()) && !self.resume_failed
+                {
                     // The stored thread is gone (archived, deleted, other
                     // machine). Start a fresh thread; the caller adds the
                     // handoff context for the model.
@@ -110,10 +111,15 @@ impl CodexAppServerAdapter {
                     }
                     let thread_id = self.id();
                     self.thread_start_id = Some(thread_id);
-                    let mut params = json!({"approvalPolicy":"on-request","approvalsReviewer":"user"});
+                    let mut params =
+                        json!({"approvalPolicy":"on-request","approvalsReviewer":"user"});
                     if let Some(options) = &self.options {
                         params["cwd"] = json!(options.workspace);
-                        params["sandbox"] = json!(if options.read_only { "read-only" } else { "workspace-write" });
+                        params["sandbox"] = json!(if options.read_only {
+                            "read-only"
+                        } else {
+                            "workspace-write"
+                        });
                         if !options.model.is_empty() && options.model != "default" {
                             params["model"] = json!(options.model);
                         }
@@ -132,7 +138,9 @@ impl CodexAppServerAdapter {
                     "Codex could not start the turn: {text}"
                 ))));
             }
-            return Ok(Step::update(Update::Warning(format!("Codex error: {text}"))));
+            return Ok(Step::update(Update::Warning(format!(
+                "Codex error: {text}"
+            ))));
         }
         let result = &message["result"];
         if Some(id) == self.init_id {
@@ -208,7 +216,7 @@ impl CodexAppServerAdapter {
                     "failed" => Step::update(Update::TurnFailed(
                         params["turn"]["error"]["message"]
                             .as_str()
-                            .map(|m| redact(m))
+                            .map(redact)
                             .unwrap_or_else(|| "Codex turn failed".into()),
                     )),
                     "interrupted" => Step::update(Update::TurnCompleted {
@@ -223,7 +231,10 @@ impl CodexAppServerAdapter {
             }
             "thread/tokenUsage/updated" => {
                 let total = &params["tokenUsage"]["total"];
-                match (total["inputTokens"].as_u64(), total["outputTokens"].as_u64()) {
+                match (
+                    total["inputTokens"].as_u64(),
+                    total["outputTokens"].as_u64(),
+                ) {
                     (Some(input), Some(output)) => Step::update(Update::Usage { input, output }),
                     _ => Step::default(),
                 }
@@ -231,7 +242,7 @@ impl CodexAppServerAdapter {
             "error" => {
                 let message = params["error"]["message"]
                     .as_str()
-                    .map(|m| redact(m))
+                    .map(redact)
                     .unwrap_or_else(|| "Codex reported an error".into());
                 if params["willRetry"].as_bool() == Some(true) {
                     Step::update(Update::Warning(format!("Codex will retry: {message}")))
@@ -316,7 +327,9 @@ impl CodexAppServerAdapter {
                     item["tool"].as_str().unwrap_or("?")
                 ),
                 success: item["status"].as_str() == Some("completed") && item["error"].is_null(),
-                output: redact_value(json!({"status":item["status"],"error":item["error"],"result":clip(&item["result"].to_string(), OUTPUT_PREVIEW)})),
+                output: redact_value(
+                    json!({"status":item["status"],"error":item["error"],"result":clip(&item["result"].to_string(), OUTPUT_PREVIEW)}),
+                ),
             }),
             "webSearch" => Step::update(Update::ToolCompleted {
                 id,
@@ -327,7 +340,9 @@ impl CodexAppServerAdapter {
             "dynamicToolCall" => Step::update(Update::ToolCompleted {
                 id,
                 name: format!("codex.tool:{}", item["tool"].as_str().unwrap_or("?")),
-                success: item["success"].as_bool().unwrap_or(item["status"].as_str() == Some("completed")),
+                success: item["success"]
+                    .as_bool()
+                    .unwrap_or(item["status"].as_str() == Some("completed")),
                 output: redact_value(json!({"status":item["status"]})),
             }),
             _ => Step::default(),
@@ -449,7 +464,9 @@ fn item_started(item: &Value) -> Step {
         "fileChange" => Step::update(Update::ToolStarted {
             id,
             name: "codex.file_change".into(),
-            detail: redact_value(json!({"paths":item["changes"].as_array().into_iter().flatten().filter_map(|c| c["path"].as_str()).collect::<Vec<_>>()})),
+            detail: redact_value(
+                json!({"paths":item["changes"].as_array().into_iter().flatten().filter_map(|c| c["path"].as_str()).collect::<Vec<_>>()}),
+            ),
         }),
         "mcpToolCall" => Step::update(Update::ToolStarted {
             id,
@@ -523,7 +540,9 @@ impl CliAdapter for CodexAppServerAdapter {
         let method = message["method"].as_str();
         let id = message.get("id").filter(|id| !id.is_null());
         match (method, id) {
-            (Some(method), Some(id)) => Ok(self.handle_server_request(id, method, &message["params"])),
+            (Some(method), Some(id)) => {
+                Ok(self.handle_server_request(id, method, &message["params"]))
+            }
             (Some(method), None) => Ok(self.handle_notification(method, &message["params"])),
             (None, Some(id)) => match id.as_u64() {
                 Some(id) => self.handle_response(id, &message),
@@ -550,7 +569,11 @@ impl CliAdapter for CodexAppServerAdapter {
                 if approve {
                     rpc_result(&id, json!({"permissions":{},"scope":"turn"}))
                 } else {
-                    rpc_error(&id, -32000, "User denied the permission request in ShadowCode")
+                    rpc_error(
+                        &id,
+                        -32000,
+                        "User denied the permission request in ShadowCode",
+                    )
                 }
             }
             _ => rpc_result(
@@ -682,7 +705,9 @@ impl CliAdapter for CodexExecAdapter {
                     name: "codex.command_execution".into(),
                     success: item["exit_code"].as_i64().unwrap_or(0) == 0
                         && item["status"].as_str() != Some("failed"),
-                    output: redact_value(json!({"command":item["command"],"exit_code":item["exit_code"],"output":item["aggregated_output"].as_str().map(|o| clip(o, OUTPUT_PREVIEW))})),
+                    output: redact_value(
+                        json!({"command":item["command"],"exit_code":item["exit_code"],"output":item["aggregated_output"].as_str().map(|o| clip(o, OUTPUT_PREVIEW))}),
+                    ),
                 }),
                 "file_change" => {
                     let paths: Vec<String> = item["changes"]
@@ -713,9 +738,10 @@ impl CliAdapter for CodexExecAdapter {
                 self.completed = true;
                 let usage = &event["usage"];
                 let mut step = Step::default();
-                if let (Some(input), Some(output)) =
-                    (usage["input_tokens"].as_u64(), usage["output_tokens"].as_u64())
-                {
+                if let (Some(input), Some(output)) = (
+                    usage["input_tokens"].as_u64(),
+                    usage["output_tokens"].as_u64(),
+                ) {
                     step.updates.push(Update::Usage { input, output });
                 }
                 step.updates.push(Update::TurnCompleted {

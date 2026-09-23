@@ -146,6 +146,7 @@ struct Inner {
     closing: AtomicBool,
     background: Arc<BackgroundManager>,
     local_llama: tokio::sync::Mutex<Option<crate::local_runtime::LoadedServer>>,
+    vendors: Arc<crate::cli_agent::catalog::VendorCatalog>,
     _profile_lock: Arc<crate::paths::ProfileLock>,
 }
 #[derive(Clone)]
@@ -171,8 +172,13 @@ impl Engine {
             closing: AtomicBool::new(false),
             background,
             local_llama: tokio::sync::Mutex::new(None),
+            vendors: Arc::new(crate::cli_agent::catalog::VendorCatalog::new()),
             _profile_lock: profile_lock,
         })))
+    }
+    /// Subscription runtimes: availability, models, usage (cached, bounded).
+    pub fn vendors(&self) -> Arc<crate::cli_agent::catalog::VendorCatalog> {
+        self.0.vendors.clone()
     }
     pub fn store(&self) -> Arc<Store> {
         self.0.store.clone()
@@ -189,7 +195,11 @@ impl Engine {
     pub fn background(&self) -> &Arc<BackgroundManager> {
         &self.0.background
     }
-    pub async fn prepare_model_client(&self, config: &Config, model: &ModelConfig) -> Result<ModelConfig> {
+    pub async fn prepare_model_client(
+        &self,
+        config: &Config,
+        model: &ModelConfig,
+    ) -> Result<ModelConfig> {
         if model.provider != "llamacpp" {
             return Ok(model.clone());
         }
@@ -1025,8 +1035,7 @@ impl Engine {
             binary,
             workspace: running.workspace.path.clone(),
             model: running.config.model.name.clone(),
-            read_only: running.config.permissions.level
-                == crate::config::PermissionLevel::ReadOnly,
+            read_only: running.config.permissions.level == crate::config::PermissionLevel::ReadOnly,
             resume,
         };
         #[cfg(unix)]
@@ -1051,7 +1060,9 @@ impl Engine {
             bail!("Vendor CLI backends require a Unix host")
         };
         if let Some(native) = &outcome.native_session {
-            self.0.store.set_session_meta(&job.session_id, &native_key, native)?;
+            self.0
+                .store
+                .set_session_meta(&job.session_id, &native_key, native)?;
         }
         let (text, usage) = (outcome.text, outcome.usage);
         {

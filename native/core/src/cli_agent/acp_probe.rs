@@ -80,7 +80,11 @@ pub fn models_from_state(state: &Value) -> (Vec<AcpModel>, Option<String>) {
             continue;
         }
         let auto = model_id == "default[]" || model_id == "default" || model_id == "auto";
-        let id = if auto { "auto".to_owned() } else { model_id.to_owned() };
+        let id = if auto {
+            "auto".to_owned()
+        } else {
+            model_id.to_owned()
+        };
         if !seen.insert(id.clone()) {
             continue;
         }
@@ -112,10 +116,21 @@ pub async fn probe(
 ) -> Result<AcpProbe> {
     tokio::time::timeout(deadline, probe_inner(binary, args, workspace, path_env))
         .await
-        .map_err(|_| anyhow::anyhow!("{} did not finish the ACP handshake within {}s", binary.display(), deadline.as_secs()))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "{} did not finish the ACP handshake within {}s",
+                binary.display(),
+                deadline.as_secs()
+            )
+        })?
 }
 
-async fn probe_inner(binary: &Path, args: &[&str], workspace: &Path, path_env: Option<&OsStr>) -> Result<AcpProbe> {
+async fn probe_inner(
+    binary: &Path,
+    args: &[&str],
+    workspace: &Path,
+    path_env: Option<&OsStr>,
+) -> Result<AcpProbe> {
     let mut child = sanitized(binary, args, workspace, path_env)
         .spawn()
         .with_context(|| format!("Could not start {}", binary.display()))?;
@@ -166,16 +181,13 @@ async fn probe_inner(binary: &Path, args: &[&str], workspace: &Path, path_env: O
         if !pending.remove(&id) {
             continue;
         }
-        let error = message
-            .get("error")
-            .filter(|e| !e.is_null())
-            .map(|e| {
-                e["data"]["message"]
-                    .as_str()
-                    .or_else(|| e["message"].as_str())
-                    .unwrap_or("unknown error")
-                    .to_owned()
-            });
+        let error = message.get("error").filter(|e| !e.is_null()).map(|e| {
+            e["data"]["message"]
+                .as_str()
+                .or_else(|| e["message"].as_str())
+                .unwrap_or("unknown error")
+                .to_owned()
+        });
         let result = &message["result"];
         match id {
             1 => {
@@ -331,6 +343,9 @@ mod tests {
         assert_eq!(models.len(), 2);
         assert!(models[0].current);
         assert_eq!(models[1].id, "grok-4.6");
-        assert_eq!(parse_grok_models("Not logged in. Run `grok login`.").0, Some(false));
+        assert_eq!(
+            parse_grok_models("Not logged in. Run `grok login`.").0,
+            Some(false)
+        );
     }
 }

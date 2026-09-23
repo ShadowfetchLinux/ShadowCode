@@ -64,14 +64,12 @@ impl ClaudeAdapter {
         let mut step = Step::default();
         for block in Self::content_blocks(message) {
             match block["type"].as_str().unwrap_or("") {
-                "text" => {
-                    // Text already streamed via stream_event deltas is not
-                    // emitted twice; without --include-partial-messages the
-                    // complete message is the only copy.
-                    if !self.streamed_text {
-                        if let Some(text) = block["text"].as_str().filter(|t| !t.is_empty()) {
-                            step.updates.push(Update::Text(redact(text)));
-                        }
+                // Text already streamed via stream_event deltas is not
+                // emitted twice; without --include-partial-messages the
+                // complete message is the only copy.
+                "text" if !self.streamed_text => {
+                    if let Some(text) = block["text"].as_str().filter(|t| !t.is_empty()) {
+                        step.updates.push(Update::Text(redact(text)));
                     }
                 }
                 "tool_use" => {
@@ -348,8 +346,10 @@ impl CliAdapter for ClaudeAdapter {
                     // emitted when nothing was streamed for this turn.
                     let text = message["result"]
                         .as_str()
-                        .filter(|t| !t.is_empty() && !self.streamed_text && self.tool_names.is_empty())
-                        .map(|t| redact(t));
+                        .filter(|t| {
+                            !t.is_empty() && !self.streamed_text && self.tool_names.is_empty()
+                        })
+                        .map(redact);
                     step.updates.push(Update::TurnCompleted {
                         text,
                         interrupted: false,

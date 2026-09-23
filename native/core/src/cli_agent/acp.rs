@@ -133,7 +133,11 @@ impl AcpAdapter {
     fn new_session_request(&mut self) -> String {
         let id = self.id();
         self.session_new_id = Some(id);
-        request(id, "session/new", json!({"cwd": self.cwd(), "mcpServers": []}))
+        request(
+            id,
+            "session/new",
+            json!({"cwd": self.cwd(), "mcpServers": []}),
+        )
     }
     /// Steps after a session exists: plan mode for read-only tasks, an exact
     /// model id when the picker chose one, then the queued prompt.
@@ -204,7 +208,10 @@ impl AcpAdapter {
                 return Ok(Step::update(Update::TurnFailed(format!(
                     "{} does not accept model `{}` ({text}). Pick the model again from the list.",
                     self.vendor.product_label(),
-                    self.options.as_ref().map(|o| o.model.as_str()).unwrap_or("")
+                    self.options
+                        .as_ref()
+                        .map(|o| o.model.as_str())
+                        .unwrap_or("")
                 ))));
             }
             if Some(id) == self.init_id || Some(id) == self.session_new_id {
@@ -325,7 +332,9 @@ impl AcpAdapter {
                 let mut step = Step::update(Update::ToolStarted {
                     id: id.clone(),
                     name: name.clone(),
-                    detail: redact_value(json!({"title":update["title"],"locations":update["locations"],"input":update["rawInput"]})),
+                    detail: redact_value(
+                        json!({"title":update["title"],"locations":update["locations"],"input":update["rawInput"]}),
+                    ),
                 });
                 // Some agents report a tool as already finished in its first
                 // notification.
@@ -350,7 +359,10 @@ impl AcpAdapter {
                 }
             }
             "usage_update" => {
-                match (update["inputTokens"].as_u64(), update["outputTokens"].as_u64()) {
+                match (
+                    update["inputTokens"].as_u64(),
+                    update["outputTokens"].as_u64(),
+                ) {
                     (Some(input), Some(output)) => Step::update(Update::Usage { input, output }),
                     _ => Step::default(),
                 }
@@ -413,7 +425,11 @@ impl AcpAdapter {
         }
         if allow.is_none() && reject.is_none() {
             return Step {
-                send: vec![error(id, -32602, "No usable permission options were offered")],
+                send: vec![error(
+                    id,
+                    -32602,
+                    "No usable permission options were offered",
+                )],
                 updates: vec![Update::Warning(
                     "Permission request offered no allow/reject options; declined".into(),
                 )],
@@ -441,7 +457,9 @@ impl AcpAdapter {
                 "{} requests permission: {title}",
                 self.vendor.label()
             )),
-            arguments: redact_value(json!({"tool_call_id":tool["toolCallId"],"title":title,"input":tool["rawInput"],"locations":tool["locations"]})),
+            arguments: redact_value(
+                json!({"tool_call_id":tool["toolCallId"],"title":title,"input":tool["rawInput"],"locations":tool["locations"]}),
+            ),
         }))
     }
 }
@@ -459,7 +477,10 @@ impl CliAdapter for AcpAdapter {
             Vendor::Cursor => args.push("acp".into()),
             _ => {
                 args.push("agent".into());
-                if !options.model.is_empty() && options.model != "default" && options.model != "auto" {
+                if !options.model.is_empty()
+                    && options.model != "default"
+                    && options.model != "auto"
+                {
                     args.push("--model".into());
                     args.push(options.model.clone());
                 }
@@ -561,9 +582,16 @@ impl CliAdapter for AcpAdapter {
         };
         let id: Value = serde_json::from_str(request_id)
             .unwrap_or_else(|_| Value::String(request_id.to_owned()));
-        let choice = if approve { pending.allow } else { pending.reject };
+        let choice = if approve {
+            pending.allow
+        } else {
+            pending.reject
+        };
         Ok(vec![match choice {
-            Some(option) => result(&id, json!({"outcome":{"outcome":"selected","optionId":option}})),
+            Some(option) => result(
+                &id,
+                json!({"outcome":{"outcome":"selected","optionId":option}}),
+            ),
             // The agent offered no option matching the decision; a cancelled
             // outcome is the protocol's safe refusal.
             None => result(&id, json!({"outcome":{"outcome":"cancelled"}})),
@@ -571,10 +599,9 @@ impl CliAdapter for AcpAdapter {
     }
     fn interrupt(&mut self) -> Vec<String> {
         match &self.session_id {
-            Some(session) if self.prompt_active => vec![notification(
-                "session/cancel",
-                json!({"sessionId":session}),
-            )],
+            Some(session) if self.prompt_active => {
+                vec![notification("session/cancel", json!({"sessionId":session}))]
+            }
             _ => Vec::new(),
         }
     }

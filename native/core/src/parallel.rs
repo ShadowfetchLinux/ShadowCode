@@ -407,5 +407,7 @@ pub fn cleanup(source: &Path, root: &Path) -> Result<Value> {
         save(&plan, root)?;
     }
     fs::remove_file(plan_file(source, root)?)?;
-    Ok(json!({"ok":true,"cleaned":removed.len(),"retained_branches":removed,"missing_checkouts":missing,"plan_id":plan.id}))
+    Ok(
+        json!({"ok":true,"cleaned":removed.len(),"retained_branches":removed,"missing_checkouts":missing,"plan_id":plan.id}),
+    )
 }

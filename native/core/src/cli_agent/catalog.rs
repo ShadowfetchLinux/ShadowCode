@@ -81,7 +81,10 @@ impl VendorStatus {
         Self {
             vendor,
             availability: Availability::SetupRequired,
-            detail: format!("Not installed: `{configured}` was not found on PATH. {}", vendor.install_hint()),
+            detail: format!(
+                "Not installed: `{configured}` was not found on PATH. {}",
+                vendor.install_hint()
+            ),
             version: None,
             binary: None,
             account: None,
@@ -99,7 +102,8 @@ impl VendorStatus {
     fn disabled(vendor: Vendor, now: f64) -> Self {
         let mut status = Self::setup_required(vendor, vendor.binary(), now);
         status.availability = Availability::Unavailable;
-        status.detail = "Disabled in Settings › Advanced; ShadowCode will not start this runtime".into();
+        status.detail =
+            "Disabled in Settings › Advanced; ShadowCode will not start this runtime".into();
         status
     }
     /// Usage for one model row of this vendor.
@@ -108,7 +112,10 @@ impl VendorStatus {
         let snap = match (&self.usage_raw, self.vendor) {
             (Some(raw), Vendor::Codex) => {
                 let model = if model.is_empty() || model == "default" || model == "auto" {
-                    self.models.iter().find(|m| m.is_default).map(|m| m.id.as_str())
+                    self.models
+                        .iter()
+                        .find(|m| m.is_default)
+                        .map(|m| m.id.as_str())
                 } else {
                     Some(model)
                 };
@@ -187,12 +194,17 @@ impl VendorCatalog {
     }
 
     /// Refresh one vendor unless a recent probe exists (or backoff applies).
-    pub async fn refresh(&self, vendor: Vendor, config: &CliAgentsConfig, force: bool) -> VendorStatus {
+    pub async fn refresh(
+        &self,
+        vendor: Vendor,
+        config: &CliAgentsConfig,
+        force: bool,
+    ) -> VendorStatus {
         let now = crate::now();
         if let Some(existing) = self.entries.lock().await.get(&vendor) {
             let fresh = now - existing.fetched_at < MIN_REFRESH_SECS;
             let backing_off = existing.next_allowed > now;
-            if (!force && fresh) || (backing_off && !force) {
+            if !force && (fresh || backing_off) {
                 return existing.clone();
             }
         }
@@ -201,7 +213,8 @@ impl VendorCatalog {
         if status.error.is_some() {
             let failures = previous.as_ref().map(|p| p.failures + 1).unwrap_or(1);
             status.failures = failures;
-            status.next_allowed = now + (30.0 * 2f64.powi(failures.min(7) as i32)).min(MAX_BACKOFF_SECS);
+            status.next_allowed =
+                now + (30.0 * 2f64.powi(failures.min(7) as i32)).min(MAX_BACKOFF_SECS);
             // Keep the last known usage/models so stale data stays visible.
             if let Some(previous) = previous {
                 if status.usage_raw.is_none() {
@@ -357,9 +370,8 @@ async fn probe_codex(binary: &Path, status: &mut VendorStatus) {
                 if probe.subscription_login() {
                     status.usage_raw = probe.rate_limits.clone();
                     if status.usage_raw.is_none() {
-                        status.usage_note = Some(
-                            "Codex did not report rate limits for this login".into(),
-                        );
+                        status.usage_note =
+                            Some("Codex did not report rate limits for this login".into());
                     }
                 } else {
                     status.usage_note = Some(
@@ -388,7 +400,8 @@ async fn probe_codex(binary: &Path, status: &mut VendorStatus) {
             match state {
                 doctor::LoginState::LoggedIn => {
                     status.availability = Availability::Ready;
-                    status.detail = format!("{} (app-server unavailable: {error})", ready_detail(status));
+                    status.detail =
+                        format!("{} (app-server unavailable: {error})", ready_detail(status));
                 }
                 doctor::LoginState::NotLoggedIn => {
                     status.availability = Availability::SignIn;
@@ -514,7 +527,10 @@ async fn probe_acp_vendor(binary: &Path, args: &[&str], status: &mut VendorStatu
                 } else {
                     status.availability = Availability::Unavailable;
                     status.error = Some(error.to_owned());
-                    status.detail = format!("{} could not open a session: {error}", vendor.product_label());
+                    status.detail = format!(
+                        "{} could not open a session: {error}",
+                        vendor.product_label()
+                    );
                 }
             } else {
                 status.availability = Availability::Unavailable;
@@ -531,10 +547,23 @@ async fn probe_acp_vendor(binary: &Path, args: &[&str], status: &mut VendorStatu
                 if let Some((logged_in, models)) = doctor::grok_models(binary, None).await {
                     status.models = models
                         .into_iter()
-                        .map(|m| VendorModel { id: m.id, label: m.label, is_default: m.current, vision: false })
+                        .map(|m| VendorModel {
+                            id: m.id,
+                            label: m.label,
+                            is_default: m.current,
+                            vision: false,
+                        })
                         .collect();
-                    status.availability = if logged_in { Availability::Ready } else { Availability::SignIn };
-                    status.detail = if logged_in { ready_detail(status) } else { "Installed but not signed in".into() };
+                    status.availability = if logged_in {
+                        Availability::Ready
+                    } else {
+                        Availability::SignIn
+                    };
+                    status.detail = if logged_in {
+                        ready_detail(status)
+                    } else {
+                        "Installed but not signed in".into()
+                    };
                     status.error = None;
                 }
             }
@@ -569,16 +598,25 @@ async fn probe_antigravity(binary: &Path, status: &mut VendorStatus) {
                 status.models = models
                     .into_iter()
                     .enumerate()
-                    .map(|(i, m)| VendorModel { id: m.id, label: m.label, is_default: i == 0, vision: false })
+                    .map(|(i, m)| VendorModel {
+                        id: m.id,
+                        label: m.label,
+                        is_default: i == 0,
+                        vision: false,
+                    })
                     .collect();
                 status.detail = ready_detail(status);
-            } else if lower.contains("login") || lower.contains("sign in") || lower.contains("auth") {
+            } else if lower.contains("login") || lower.contains("sign in") || lower.contains("auth")
+            {
                 status.availability = Availability::SignIn;
                 status.detail = "Installed but not signed in".into();
             } else {
                 status.availability = Availability::Unavailable;
                 status.error = Some("`agy models` returned no models".into());
-                status.detail = format!("Antigravity did not list models: {}", super::clip(&text, 200));
+                status.detail = format!(
+                    "Antigravity did not list models: {}",
+                    super::clip(&text, 200)
+                );
             }
         }
         None => {
@@ -599,8 +637,18 @@ mod tests {
         let mut status = VendorStatus::setup_required(Vendor::Codex, "codex", now);
         status.availability = Availability::Ready;
         status.models = vec![
-            VendorModel { id: "gpt-6-astra".into(), label: "GPT-6-Astra".into(), is_default: true, vision: true },
-            VendorModel { id: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into(), is_default: false, vision: true },
+            VendorModel {
+                id: "gpt-6-astra".into(),
+                label: "GPT-6-Astra".into(),
+                is_default: true,
+                vision: true,
+            },
+            VendorModel {
+                id: "gpt-5.6-luna".into(),
+                label: "GPT-5.6-Luna".into(),
+                is_default: false,
+                vision: true,
+            },
         ];
         status.usage_raw = Some(json!({
             "rateLimits": {"limitId":"codex","primary":{"usedPercent":40,"windowDurationMins":10080},"planType":"pro"},
@@ -609,8 +657,14 @@ mod tests {
                 "base_model_inference": {"limitId":"base_model_inference","limitName":"gpt-reserve","normalModelSlug":"gpt-5.6-luna","primary":{"usedPercent":5,"windowDurationMins":10080}}
             }
         }));
-        assert_eq!(status.usage_for("default", now).remaining_percent, Some(60.0));
-        assert_eq!(status.usage_for("gpt-5.6-luna", now).remaining_percent, Some(95.0));
+        assert_eq!(
+            status.usage_for("default", now).remaining_percent,
+            Some(60.0)
+        );
+        assert_eq!(
+            status.usage_for("gpt-5.6-luna", now).remaining_percent,
+            Some(95.0)
+        );
         assert!(status.usage_for("gpt-6-astra", now).pool_shared);
         let cursor = VendorStatus::setup_required(Vendor::Cursor, "cursor-agent", now);
         assert_eq!(cursor.usage_for("auto", now).state, "unavailable");

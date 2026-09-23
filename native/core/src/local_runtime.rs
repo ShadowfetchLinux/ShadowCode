@@ -7,7 +7,10 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tokio::{process::{Child, Command}, time::sleep};
+use tokio::{
+    process::{Child, Command},
+    time::sleep,
+};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -34,7 +37,11 @@ pub async fn ensure_loaded(
     binary: &Path,
     model: &Path,
 ) -> Result<String> {
-    ensure!(binary.is_file(), "llama.cpp binary is missing: {}", binary.display());
+    ensure!(
+        binary.is_file(),
+        "llama.cpp binary is missing: {}",
+        binary.display()
+    );
     ensure!(model.is_file(), "GGUF file is missing: {}", model.display());
     if let Some(current) = slot.as_ref() {
         if current.matches(binary, model) {

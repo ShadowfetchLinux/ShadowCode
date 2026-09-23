@@ -114,10 +114,19 @@ fn rpc(id: u64, method: &str, params: Value) -> String {
 /// Run the probe with an overall deadline. A missing or broken app-server is
 /// an `Err`; a healthy server that reports "not logged in" is `Ok` with an
 /// empty account.
-pub async fn probe(binary: &Path, path_env: Option<&OsStr>, deadline: Duration) -> Result<CodexProbe> {
+pub async fn probe(
+    binary: &Path,
+    path_env: Option<&OsStr>,
+    deadline: Duration,
+) -> Result<CodexProbe> {
     tokio::time::timeout(deadline, probe_inner(binary, path_env))
         .await
-        .map_err(|_| anyhow::anyhow!("codex app-server did not answer within {}s", deadline.as_secs()))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "codex app-server did not answer within {}s",
+                deadline.as_secs()
+            )
+        })?
 }
 
 async fn probe_inner(binary: &Path, path_env: Option<&OsStr>) -> Result<CodexProbe> {
@@ -169,12 +178,10 @@ async fn probe_inner(binary: &Path, path_env: Option<&OsStr>) -> Result<CodexPro
         if !pending.remove(&id) {
             continue;
         }
-        let error = message.get("error").filter(|e| !e.is_null()).map(|e| {
-            e["message"]
-                .as_str()
-                .unwrap_or("unknown error")
-                .to_owned()
-        });
+        let error = message
+            .get("error")
+            .filter(|e| !e.is_null())
+            .map(|e| e["message"].as_str().unwrap_or("unknown error").to_owned());
         match id {
             1 => {
                 if let Some(error) = error {
@@ -289,7 +296,8 @@ mod tests {
         probe.account = Some(json!({"account":{"type":"apiKey"}}));
         assert!(probe.logged_in());
         assert!(!probe.subscription_login());
-        probe.account = Some(json!({"account":{"type":"chatgpt","email":"a@b.c","planType":"pro"}}));
+        probe.account =
+            Some(json!({"account":{"type":"chatgpt","email":"a@b.c","planType":"pro"}}));
         assert!(probe.subscription_login());
         assert_eq!(probe.plan_type().as_deref(), Some("pro"));
     }

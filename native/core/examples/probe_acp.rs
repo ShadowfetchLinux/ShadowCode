@@ -13,7 +13,14 @@ async fn main() -> anyhow::Result<()> {
     let binary = shadowcode_core::cli_agent::resolve_binary(bin)
         .ok_or_else(|| anyhow::anyhow!("{bin} is not on PATH"))?;
     let workspace = std::env::temp_dir();
-    let probe = shadowcode_core::cli_agent::acp_probe::probe(&binary, args, &workspace, None, Duration::from_secs(40)).await?;
+    let probe = shadowcode_core::cli_agent::acp_probe::probe(
+        &binary,
+        args,
+        &workspace,
+        None,
+        Duration::from_secs(40),
+    )
+    .await?;
     println!(
         "protocol={:?} agent_version={:?} auth_methods={:?} authenticated={:?} session={} error={:?} images={} load_session={} modes={:?} current={:?}",
         probe.protocol_version, probe.agent_version, probe.auth_methods, probe.authenticated, probe.session_started, probe.session_error, probe.accepts_images, probe.load_session, probe.modes, probe.current_model

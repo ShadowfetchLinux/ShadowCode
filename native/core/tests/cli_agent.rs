@@ -5,12 +5,7 @@ use shadowcode_core::cli_agent::{
     adapter_for, catalog_models, doctor, resolve_vendor, vendor_model, CliAdapter, CliAgentsConfig,
     LaunchOptions, Update, Vendor, MAX_MALFORMED_LINES,
 };
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::Path,
-    time::Duration,
-};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 fn launch(root: &Path) -> LaunchOptions {
@@ -52,7 +47,10 @@ fn vendor_catalog_and_config_validation() {
     assert!(models.iter().all(|m| m["metadata"]["vendor_agent"] == true));
     assert_eq!(resolve_vendor("cli:codex").unwrap().provider, "cli:codex");
     assert_eq!(resolve_vendor("cli:cursor:auto").unwrap().name, "auto");
-    assert_eq!(resolve_vendor("cli:antigravity").unwrap().provider, "cli:antigravity");
+    assert_eq!(
+        resolve_vendor("cli:antigravity").unwrap().provider,
+        "cli:antigravity"
+    );
     assert_eq!(vendor_model(Vendor::Grok, None).api_key_env, "UNUSED");
     let mut bad = config.clone();
     bad.codex_binary.clear();
@@ -60,8 +58,10 @@ fn vendor_catalog_and_config_validation() {
     bad = CliAgentsConfig::default();
     bad.approval_timeout_sec = 1;
     assert!(bad.validate().is_err());
-    let mut off = CliAgentsConfig::default();
-    off.claude_enabled = false;
+    let off = CliAgentsConfig {
+        claude_enabled: false,
+        ..Default::default()
+    };
     assert!(!off.vendor_enabled(Vendor::Claude));
     assert!(off.vendor_enabled(Vendor::Codex));
     assert!(off.vendor_enabled(Vendor::Cursor));
@@ -111,8 +111,12 @@ fn codex_app_server_streams_tools_and_approves() {
     assert!(send.iter().any(|l| l.contains("initialized")));
     assert!(send.iter().any(|l| l.contains("thread/start")));
     assert!(send.iter().any(|l| l.contains("turn/start")));
-    assert!(updates.iter().any(|u| matches!(u, Update::Text(t) if t == "Hello ")));
-    assert!(updates.iter().any(|u| matches!(u, Update::Text(t) if t == "world")));
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::Text(t) if t == "Hello ")));
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::Text(t) if t == "world")));
     assert!(updates.iter().any(
         |u| matches!(u, Update::ToolStarted { name, .. } if name == "codex.command_execution")
     ));
@@ -158,7 +162,10 @@ fn codex_app_server_streams_tools_and_approves() {
     );
     assert!(matches!(
         done.last(),
-        Some(Update::TurnCompleted { interrupted: false, .. })
+        Some(Update::TurnCompleted {
+            interrupted: false,
+            ..
+        })
     ));
 }
 
@@ -169,7 +176,10 @@ fn codex_refuses_to_refresh_vendor_tokens() {
         .on_line(&rpc(7, "account/chatgptAuthTokens/refresh", json!({})))
         .unwrap();
     assert!(step.send[0].contains("does not hold or refresh"));
-    assert!(step.updates.iter().any(|u| matches!(u, Update::Warning(t) if t.contains("login"))));
+    assert!(step
+        .updates
+        .iter()
+        .any(|u| matches!(u, Update::Warning(t) if t.contains("login"))));
 }
 
 #[test]
@@ -191,8 +201,16 @@ fn codex_exec_fallback_maps_jsonl() {
             r#"{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":2}}"#,
         ],
     );
-    assert!(updates.iter().any(|u| matches!(u, Update::Text(t) if t == "done")));
-    assert!(updates.iter().any(|u| matches!(u, Update::Usage { input: 3, output: 2 })));
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::Text(t) if t == "done")));
+    assert!(updates.iter().any(|u| matches!(
+        u,
+        Update::Usage {
+            input: 3,
+            output: 2
+        }
+    )));
     assert!(adapter.one_shot());
     assert!(adapter.approve("x", true).is_err());
 }
@@ -233,10 +251,14 @@ fn grok_acp_permission_round_trip_and_cancel() {
             }),
         ))
         .unwrap();
-    let prompt = step.updates.iter().find_map(|u| match u {
-        Update::Approval(p) => Some(p.clone()),
-        _ => None,
-    }).unwrap();
+    let prompt = step
+        .updates
+        .iter()
+        .find_map(|u| match u {
+            Update::Approval(p) => Some(p.clone()),
+            _ => None,
+        })
+        .unwrap();
     assert_eq!(prompt.kind, "command");
     let allow = adapter.approve(&prompt.request_id, true).unwrap();
     assert!(allow[0].contains("\"optionId\":\"allow\""));
@@ -283,7 +305,10 @@ fn grok_acp_permission_round_trip_and_cancel() {
         .unwrap();
     assert!(matches!(
         stop.updates[0],
-        Update::TurnCompleted { interrupted: true, .. }
+        Update::TurnCompleted {
+            interrupted: true,
+            ..
+        }
     ));
 }
 
@@ -313,12 +338,19 @@ fn claude_stream_json_approval_and_interrupt() {
             r#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Edit","input":{"file_path":"a.rs"}}}"#,
         ],
     );
-    assert!(updates.iter().any(|u| matches!(u, Update::Text(t) if t == "Hi")));
-    assert!(updates.iter().any(|u| matches!(u, Update::ToolStarted { name, .. } if name == "claude.Edit")));
-    let approval = updates.iter().find_map(|u| match u {
-        Update::Approval(p) => Some(p.clone()),
-        _ => None,
-    }).unwrap();
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::Text(t) if t == "Hi")));
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::ToolStarted { name, .. } if name == "claude.Edit")));
+    let approval = updates
+        .iter()
+        .find_map(|u| match u {
+            Update::Approval(p) => Some(p.clone()),
+            _ => None,
+        })
+        .unwrap();
     assert_eq!(approval.kind, "file_change");
     let allow = adapter.approve(&approval.request_id, true).unwrap();
     assert!(allow[0].contains("\"behavior\":\"allow\""));
@@ -335,37 +367,45 @@ fn claude_stream_json_approval_and_interrupt() {
     assert!(interrupt[0].contains("interrupt"));
     let (_, done) = feed(
         &mut *adapter,
-        &[r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"wrote"}]}}"#,
-          r#"{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":2},"result":"ignored"}"#],
+        &[
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"wrote"}]}}"#,
+            r#"{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":2},"result":"ignored"}"#,
+        ],
     );
-    assert!(done.iter().any(|u| matches!(u, Update::FilesChanged { paths, .. } if paths == &["a.rs".to_string()])));
-    assert!(done.iter().any(|u| matches!(u, Update::TurnCompleted { interrupted: false, .. })));
+    assert!(done.iter().any(
+        |u| matches!(u, Update::FilesChanged { paths, .. } if paths == &["a.rs".to_string()])
+    ));
+    assert!(done.iter().any(|u| matches!(
+        u,
+        Update::TurnCompleted {
+            interrupted: false,
+            ..
+        }
+    )));
 }
 
 #[test]
 fn malformed_lines_are_warnings_not_fatals() {
     for vendor in Vendor::ALL {
         for fallback in [false, vendor == Vendor::Codex] {
-        if vendor != Vendor::Codex && fallback {
-            continue;
-        }
-        let mut adapter = adapter_for(vendor, fallback);
-        for line in ["", "not-json", "[]", "123", "{\"no\":\"method\"}"] {
-            let step = adapter.on_line(line).unwrap();
-            if line.is_empty() {
-                assert!(step.updates.is_empty());
-            } else {
-                assert!(
-                    step.updates
-                        .iter()
-                        .any(|u| matches!(u, Update::Warning(_))),
-                    "{vendor:?} fallback={fallback} {line}"
-                );
+            if vendor != Vendor::Codex && fallback {
+                continue;
+            }
+            let mut adapter = adapter_for(vendor, fallback);
+            for line in ["", "not-json", "[]", "123", "{\"no\":\"method\"}"] {
+                let step = adapter.on_line(line).unwrap();
+                if line.is_empty() {
+                    assert!(step.updates.is_empty());
+                } else {
+                    assert!(
+                        step.updates.iter().any(|u| matches!(u, Update::Warning(_))),
+                        "{vendor:?} fallback={fallback} {line}"
+                    );
+                }
             }
         }
-        }
     }
-    assert!(MAX_MALFORMED_LINES >= 8);
+    const { assert!(MAX_MALFORMED_LINES >= 8) };
 }
 
 #[tokio::test]
@@ -457,9 +497,11 @@ async fn fake_binary_spawn_approval_and_cancel() {
     let approvals = ApprovalHub::default();
     let cancel = CancellationToken::new();
     let steer = shadowcode_core::steering::SteerControl::default();
-    let mut config = CliAgentsConfig::default();
-    config.approval_timeout_sec = 15;
-    config.stall_timeout_sec = 30;
+    let config = CliAgentsConfig {
+        approval_timeout_sec: 15,
+        stall_timeout_sec: 30,
+        ..Default::default()
+    };
     let hub = approvals.clone();
     let approve = tokio::spawn(async move {
         for _ in 0..80 {
@@ -616,15 +658,27 @@ fn cursor_acp_command_and_cancel() {
     let (send, updates) = feed(
         &mut *adapter,
         &[
-            &rpc_result(1, json!({"protocolVersion":1,"authMethods":[{"id":"cursor_login"}]})),
+            &rpc_result(
+                1,
+                json!({"protocolVersion":1,"authMethods":[{"id":"cursor_login"}]}),
+            ),
             &rpc_result(2, json!({})),
-            &rpc_result(3, json!({"sessionId":"cur-1","modes":{"availableModes":[{"id":"agent"},{"id":"plan"}]}})),
+            &rpc_result(
+                3,
+                json!({"sessionId":"cur-1","modes":{"availableModes":[{"id":"agent"},{"id":"plan"}]}}),
+            ),
         ],
     );
-    assert!(send.iter().any(|l| l.contains("\"authenticate\"") && l.contains("cursor_login")));
-    assert!(send.iter().any(|l| l.contains("session/set_model") && l.contains("gpt-5.5[context=272k")));
+    assert!(send
+        .iter()
+        .any(|l| l.contains("\"authenticate\"") && l.contains("cursor_login")));
+    assert!(send
+        .iter()
+        .any(|l| l.contains("session/set_model") && l.contains("gpt-5.5[context=272k")));
     assert!(send.iter().any(|l| l.contains("session/prompt")));
-    assert!(updates.iter().any(|u| matches!(u, Update::NativeSession { id } if id == "cur-1")));
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::NativeSession { id } if id == "cur-1")));
     let interrupt = adapter.interrupt();
     assert!(interrupt[0].contains("session/cancel"));
     let prompt_id = send
@@ -638,7 +692,10 @@ fn cursor_acp_command_and_cancel() {
         .unwrap();
     assert!(matches!(
         stop.updates[0],
-        Update::TurnCompleted { interrupted: true, .. }
+        Update::TurnCompleted {
+            interrupted: true,
+            ..
+        }
     ));
 }
 
@@ -656,11 +713,18 @@ fn antigravity_documented_stream_json_protocol() {
     assert_eq!(bin, "agy");
     // `--print=` must be last so no later flag is swallowed as the prompt.
     assert_eq!(args.last().map(String::as_str), Some("--print="));
-    assert!(args.windows(2).any(|w| w == ["--output-format", "stream-json"]));
-    assert!(args.windows(2).any(|w| w == ["--input-format", "stream-json"]));
+    assert!(args
+        .windows(2)
+        .any(|w| w == ["--output-format", "stream-json"]));
+    assert!(args
+        .windows(2)
+        .any(|w| w == ["--input-format", "stream-json"]));
     assert!(args.windows(2).any(|w| w == ["--mode", "plan"]));
     assert!(args.windows(2).any(|w| w == ["--conversation", "conv-9"]));
-    assert!(adapter.prompt("hi", &[sample_image()]).is_err(), "images are refused");
+    assert!(
+        adapter.prompt("hi", &[sample_image()]).is_err(),
+        "images are refused"
+    );
     adapter.prompt("Reply OK", &[]).unwrap();
     let first = adapter.on_start(&launch(root.path()));
     assert!(first[0].contains("\"event\":\"user\""));
@@ -678,21 +742,50 @@ fn antigravity_documented_stream_json_protocol() {
             r#"{"event":"result","result":{"conversation_id":"0114b7b4","status":"SUCCESS","response":"OK\n","duration_seconds":2.2,"num_turns":1,"usage":{"input_tokens":11903,"output_tokens":22,"thinking_tokens":21,"cache_read_tokens":0,"total_tokens":11925}}}"#,
         ],
     );
-    assert!(updates.iter().any(|u| matches!(u, Update::NativeSession { id } if id == "0114b7b4")));
-    assert!(updates.iter().any(|u| matches!(u, Update::ToolStarted { name, .. } if name == "antigravity.write_to_file")));
-    assert!(updates.iter().any(|u| matches!(u, Update::ToolCompleted { success: true, .. })));
-    assert!(updates.iter().any(|u| matches!(u, Update::FilesChanged { paths, .. } if paths == &vec!["a.rs".to_string()])));
-    assert!(updates.iter().any(|u| matches!(u, Update::Text(t) if t == "OK")));
-    assert!(updates.iter().any(|u| matches!(u, Update::Usage { input: 11903, output: 22 })));
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::NativeSession { id } if id == "0114b7b4")));
+    assert!(updates.iter().any(
+        |u| matches!(u, Update::ToolStarted { name, .. } if name == "antigravity.write_to_file")
+    ));
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::ToolCompleted { success: true, .. })));
+    assert!(updates.iter().any(
+        |u| matches!(u, Update::FilesChanged { paths, .. } if paths == &vec!["a.rs".to_string()])
+    ));
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::Text(t) if t == "OK")));
+    assert!(updates.iter().any(|u| matches!(
+        u,
+        Update::Usage {
+            input: 11903,
+            output: 22
+        }
+    )));
     // Streamed text is not repeated from the result frame.
-    assert!(updates.iter().any(|u| matches!(u, Update::TurnCompleted { text: None, interrupted: false })));
+    assert!(updates.iter().any(|u| matches!(
+        u,
+        Update::TurnCompleted {
+            text: None,
+            interrupted: false
+        }
+    )));
     assert_eq!(adapter.native_session().as_deref(), Some("0114b7b4"));
-    assert!(adapter.interrupt().is_empty(), "no documented interrupt frame");
+    assert!(
+        adapter.interrupt().is_empty(),
+        "no documented interrupt frame"
+    );
     let (_, failed) = feed(
         &mut *adapter,
-        &[r#"{"event":"result","result":{"conversation_id":"0114b7b4","status":"ERROR","error":"quota"}}"#],
+        &[
+            r#"{"event":"result","result":{"conversation_id":"0114b7b4","status":"ERROR","error":"quota"}}"#,
+        ],
     );
-    assert!(failed.iter().any(|u| matches!(u, Update::TurnFailed(e) if e.contains("quota"))));
+    assert!(failed
+        .iter()
+        .any(|u| matches!(u, Update::TurnFailed(e) if e.contains("quota"))));
 }
 
 #[test]

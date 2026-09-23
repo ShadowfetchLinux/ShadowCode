@@ -67,8 +67,10 @@ impl AntigravityAdapter {
                 let info = &update["tool_info"];
                 let id = format!("agy-step-{index}");
                 let mut step = Step::default();
-                if !self.tool_steps.contains_key(&index) {
-                    self.tool_steps.insert(index, name.clone());
+                if let std::collections::hash_map::Entry::Vacant(slot) =
+                    self.tool_steps.entry(index)
+                {
+                    slot.insert(name.clone());
                     step.updates.push(Update::ToolStarted {
                         id: id.clone(),
                         name: name.clone(),
@@ -111,9 +113,8 @@ impl AntigravityAdapter {
         if let Some(id) = result["conversation_id"].as_str() {
             if self.conversation_id.as_deref() != Some(id) {
                 self.conversation_id = Some(id.to_owned());
-                step.updates.push(Update::NativeSession {
-                    id: id.to_owned(),
-                });
+                step.updates
+                    .push(Update::NativeSession { id: id.to_owned() });
             }
         }
         let usage = &result["usage"];
@@ -136,7 +137,7 @@ impl AntigravityAdapter {
                 let text = result["response"]
                     .as_str()
                     .filter(|t| !t.is_empty() && !self.streamed_text)
-                    .map(|t| redact(t));
+                    .map(redact);
                 step.updates.push(Update::TurnCompleted {
                     text,
                     interrupted: false,
@@ -153,14 +154,23 @@ impl AntigravityAdapter {
 /// parameters. Unknown tool shapes yield nothing rather than a guess.
 fn edited_paths(tool_name: &str, parameters: &Value) -> Option<Vec<String>> {
     let lower = tool_name.to_ascii_lowercase();
-    let mutating = ["write", "edit", "replace", "create", "delete", "move", "rename", "patch"]
-        .iter()
-        .any(|needle| lower.contains(needle));
+    let mutating = [
+        "write", "edit", "replace", "create", "delete", "move", "rename", "patch",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
     if !mutating {
         return None;
     }
     let mut paths = Vec::new();
-    for key in ["file_path", "path", "TargetFile", "AbsolutePath", "target_file", "filePath"] {
+    for key in [
+        "file_path",
+        "path",
+        "TargetFile",
+        "AbsolutePath",
+        "target_file",
+        "filePath",
+    ] {
         if let Some(path) = parameters[key].as_str() {
             if !path.is_empty() {
                 paths.push(path.to_owned());
@@ -249,9 +259,8 @@ impl CliAdapter for AntigravityAdapter {
                 if let Some(id) = message["conversation_id"].as_str() {
                     if self.conversation_id.as_deref() != Some(id) {
                         self.conversation_id = Some(id.to_owned());
-                        step.updates.push(Update::NativeSession {
-                            id: id.to_owned(),
-                        });
+                        step.updates
+                            .push(Update::NativeSession { id: id.to_owned() });
                     }
                 }
                 step

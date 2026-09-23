@@ -195,8 +195,8 @@ impl<R: Read> Reader<R> {
         let fixed = match elem {
             0 | 1 | 7 => Some(1u64),
             2 | 3 => Some(2),
-            4 | 5 | 6 => Some(4),
-            10 | 11 | 12 => Some(8),
+            4..=6 => Some(4),
+            10..=12 => Some(8),
             8 | 9 => None,
             other => bail!("Unknown GGUF array element type {other}"),
         };
@@ -318,9 +318,10 @@ pub fn estimate_memory(
         .saturating_mul(2);
     let kv_cache_bytes = per_token.saturating_mul(context_tokens);
     // Activations and scratch buffers scale with the batch and embedding size.
-    let compute_bytes = (embedding.saturating_mul(2048).saturating_mul(4))
-        .max(256 * 1024 * 1024)
-        .min(2 * 1024 * 1024 * 1024);
+    let compute_bytes = embedding
+        .saturating_mul(2048)
+        .saturating_mul(4)
+        .clamp(256 * 1024 * 1024, 2 * 1024 * 1024 * 1024);
     let overhead_bytes: u64 = 512 * 1024 * 1024
         + if projector_bytes > 0 {
             // Image encoding buffers.
@@ -487,6 +488,9 @@ mod tests {
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&[0u8; 32]);
         std::fs::write(&v1, bytes).unwrap();
-        assert!(read_header(&v1).unwrap_err().to_string().contains("version 1"));
+        assert!(read_header(&v1)
+            .unwrap_err()
+            .to_string()
+            .contains("version 1"));
     }
 }

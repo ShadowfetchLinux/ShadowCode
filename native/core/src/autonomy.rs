@@ -656,10 +656,30 @@ pub fn bugfix_policy(task: &str) -> Option<&'static str> {
     let is_hint = |word: &str| {
         matches!(
             word,
-            "bug" | "bugs" | "bugfix" | "fix" | "fixes" | "fixed" | "fixing" | "hotfix"
-                | "broken" | "breaks" | "fail" | "fails" | "failed" | "failing" | "failure"
-                | "failures" | "crash" | "crashes" | "crashed" | "crashing" | "incorrect"
-                | "incorrectly" | "defect" | "defects"
+            "bug"
+                | "bugs"
+                | "bugfix"
+                | "fix"
+                | "fixes"
+                | "fixed"
+                | "fixing"
+                | "hotfix"
+                | "broken"
+                | "breaks"
+                | "fail"
+                | "fails"
+                | "failed"
+                | "failing"
+                | "failure"
+                | "failures"
+                | "crash"
+                | "crashes"
+                | "crashed"
+                | "crashing"
+                | "incorrect"
+                | "incorrectly"
+                | "defect"
+                | "defects"
         ) || word.starts_with("regress")
     };
     let mut words = task

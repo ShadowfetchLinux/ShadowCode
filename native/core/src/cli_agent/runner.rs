@@ -130,9 +130,15 @@ pub async fn run(request: Request<'_>) -> Result<RunOutcome> {
 
 fn looks_like_missing_app_server(error: &anyhow::Error) -> bool {
     let text = format!("{error:#}").to_ascii_lowercase();
-    ["unknown", "unrecognized", "not found", "no such", "invalid command"]
-        .iter()
-        .any(|needle| text.contains(needle))
+    [
+        "unknown",
+        "unrecognized",
+        "not found",
+        "no such",
+        "invalid command",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 /// `codex app-server` is used when help mentions it; otherwise exec fallback.
@@ -213,7 +219,10 @@ async fn run_once(
             interrupted_turn = true;
         }
         let remaining = stall.saturating_sub(last_line.elapsed());
-        let read = tokio::time::timeout(remaining.min(Duration::from_millis(250)), read_line(&mut reader));
+        let read = tokio::time::timeout(
+            remaining.min(Duration::from_millis(250)),
+            read_line(&mut reader),
+        );
         match read.await {
             Ok(Ok(None)) => {
                 flush_text(request, &message_id, &mut pending_text)?;
@@ -266,9 +275,7 @@ async fn run_once(
                             } else {
                                 malformed = 0;
                             }
-                            request
-                                .events
-                                .emit("agent.warning", json!({"text":text}))?;
+                            request.events.emit("agent.warning", json!({"text":text}))?;
                         }
                         other => {
                             malformed = 0;
@@ -403,10 +410,7 @@ fn spawn_vendor(program: &str, args: &[String], workspace: &Path) -> Result<Chil
 }
 
 fn ensure_workspace(workspace: &Path) -> Result<()> {
-    anyhow::ensure!(
-        workspace.is_dir(),
-        "Vendor CLI workspace does not exist"
-    );
+    anyhow::ensure!(workspace.is_dir(), "Vendor CLI workspace does not exist");
     Ok(())
 }
 
@@ -527,9 +531,7 @@ async fn apply_update(
             send_lines(stdin, &adapter.approve(&prompt.request_id, approved)?).await?;
         }
         Update::Warning(text) => {
-            request
-                .events
-                .emit("agent.warning", json!({"text":text}))?;
+            request.events.emit("agent.warning", json!({"text":text}))?;
         }
         Update::Usage {
             input,
