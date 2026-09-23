@@ -29,7 +29,7 @@ pub const SEARCH_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const USER_AGENT: &str = concat!(
     "Mozilla/5.0 (X11; Linux x86_64) ShadowCode/",
     env!("CARGO_PKG_VERSION"),
-    " (web_fetch; +https://github.com/shadowcode)"
+    " (web_fetch)"
 );
 const ALLOWED_TYPES: &[&str] = &[
     "text/html",
@@ -352,6 +352,18 @@ pub async fn fetch_raw(
     policy: &WebPolicy,
     cancel: &CancellationToken,
 ) -> Result<RawResponse> {
+    fetch_raw_with(url, None, policy, cancel).await
+}
+
+/// Like [`fetch_raw`]; with `form`, the first request is a POST of that
+/// `application/x-www-form-urlencoded` body (used for the search form).
+/// Redirect hops are always plain GETs, so the body never follows a redirect.
+pub async fn fetch_raw_with(
+    url: &str,
+    form: Option<String>,
+    policy: &WebPolicy,
+    cancel: &CancellationToken,
+) -> Result<RawResponse> {
     let url = url.trim();
     ensure!(
         !url.is_empty() && url.len() <= MAX_URL_BYTES,
@@ -359,7 +371,7 @@ pub async fn fetch_raw(
     );
     let start = Url::parse(url).with_context(|| format!("Invalid URL: {url}"))?;
     let deadline = Instant::now() + policy.total_timeout;
-    let work = fetch_hops(start, policy, deadline);
+    let work = fetch_hops(start, form, policy, deadline);
     tokio::select! {
         _ = cancel.cancelled() => bail!("Web request cancelled"),
         result = tokio::time::timeout(policy.total_timeout, work) => {
@@ -368,7 +380,12 @@ pub async fn fetch_raw(
     }
 }
 
-async fn fetch_hops(start: Url, policy: &WebPolicy, deadline: Instant) -> Result<RawResponse> {
+async fn fetch_hops(
+    start: Url,
+    mut form: Option<String>,
+    policy: &WebPolicy,
+    deadline: Instant,
+) -> Result<RawResponse> {
     let original = start.to_string();
     let mut current = start;
     let mut redirects = Vec::new();
@@ -388,8 +405,17 @@ async fn fetch_hops(start: Url, policy: &WebPolicy, deadline: Instant) -> Result
             builder = builder.resolve_to_addrs(&target.host, &target.addrs);
         }
         let client = builder.build()?;
-        let response = client
-            .get(current.clone())
+        let request = match form.take() {
+            Some(body) => client
+                .post(current.clone())
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .body(body),
+            None => client.get(current.clone()),
+        };
+        let response = request
             .header(
                 reqwest::header::ACCEPT,
                 "text/html,application/xhtml+xml,text/plain;q=0.9,text/markdown;q=0.9,application/json;q=0.8",
@@ -1253,7 +1279,15 @@ pub async fn search_with_endpoint(
         (1..=MAX_SEARCH_RESULTS).contains(&max_results),
         "max_results must be between 1 and {MAX_SEARCH_RESULTS}"
     );
+    // The results page is the endpoint with ?q=; it is requested the way its
+    // own form submits it (POST), which the endpoint serves more reliably
+    // than a scripted GET.
     let url = search_url(endpoint, query)?;
+    let form = {
+        let mut body = Url::parse("http://form.invalid/")?;
+        body.query_pairs_mut().append_pair("q", query);
+        body.query().unwrap_or_default().to_owned()
+    };
     let mut result = SearchResult {
         query: query.to_owned(),
         results: Vec::new(),
@@ -1263,7 +1297,7 @@ pub async fn search_with_endpoint(
         blocked: false,
         reason: None,
     };
-    let raw = match fetch_raw(url.as_str(), policy, cancel).await {
+    let raw = match fetch_raw_with(endpoint, Some(form), policy, cancel).await {
         Ok(raw) => raw,
         Err(error) => {
             if cancel.is_cancelled() {

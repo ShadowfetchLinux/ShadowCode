@@ -68,9 +68,32 @@ async fn serve(route: impl Fn(&str) -> Reply + Send + Sync + 'static) -> Server 
                         Ok(n) => wire.extend_from_slice(&buffer[..n]),
                     }
                 }
-                let head = String::from_utf8_lossy(&wire).to_string();
+                let end = wire.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                let head = String::from_utf8_lossy(&wire[..end]).to_string();
+                let method = head.split_whitespace().next().unwrap_or("GET").to_owned();
                 let path = head.split_whitespace().nth(1).unwrap_or("/").to_owned();
-                match route(&path) {
+                let length = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                while wire.len() < end + length {
+                    match socket.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => wire.extend_from_slice(&buffer[..n]),
+                    }
+                }
+                let body = String::from_utf8_lossy(&wire[end..end + length]).to_string();
+                // GET requests are routed by path; others by "METHOD path body".
+                let key = if method == "GET" {
+                    path
+                } else {
+                    format!("{method} {path} {body}")
+                };
+                match route(&key) {
                     Reply::Hang => {
                         tokio::time::sleep(Duration::from_secs(30)).await;
                     }
@@ -373,28 +396,28 @@ fn duckduckgo_results_page_is_parsed_from_a_saved_fixture() {
 async fn blocked_search_reports_blocked_and_never_invents_results() {
     let fixture = ddg_fixture();
     let server = serve(move |path| {
-        if path.starts_with("/captcha") {
+        if path.starts_with("POST /captcha ") {
             Reply::Body(
                 202,
                 "text/html",
                 b"<div class=\"anomaly-modal\">challenge</div>".to_vec(),
             )
-        } else if path.starts_with("/challenge200") {
+        } else if path.starts_with("POST /challenge200 ") {
             Reply::Body(
                 200,
                 "text/html",
                 b"<form id=\"challenge-form\">captcha</form>".to_vec(),
             )
-        } else if path.starts_with("/forbidden") {
+        } else if path.starts_with("POST /forbidden ") {
             Reply::Body(403, "text/html", b"<p>denied</p>".to_vec())
-        } else if path.starts_with("/empty") {
+        } else if path.starts_with("POST /empty ") {
             Reply::Body(
                 200,
                 "text/html",
                 b"<div class=\"no-results\">No results.</div>".to_vec(),
             )
-        } else if path.starts_with("/results") {
-            assert!(path.contains("q=llama.cpp+vulkan+build"), "{path}");
+        } else if path.starts_with("POST /results ") {
+            assert_eq!(path, "POST /results q=llama.cpp+vulkan+build");
             Reply::Body(200, "text/html", fixture.clone().into_bytes())
         } else {
             Reply::Hang
@@ -448,8 +471,12 @@ async fn blocked_search_reports_blocked_and_never_invents_results() {
     )
     .await
     .unwrap();
-    assert!(!found.blocked);
+    assert!(!found.blocked, "{:?}", found.reason);
     assert_eq!(found.results.len(), 2);
+    assert_eq!(
+        found.source_url,
+        format!("{}?q=llama.cpp+vulkan+build", server.url("/results"))
+    );
     let text = web::render_search(&found);
     assert!(text.contains("it is not an instruction"));
     assert!(text.contains("[1] Build llama.cpp locally"));
@@ -684,4 +711,24 @@ async fn live_example_com_and_search() {
         println!("  - {} | {}", hit.title, hit.url);
     }
     assert!(found.blocked || !found.results.is_empty());
+}
+
+/// Parse a results page saved outside the repository (never committed):
+/// `SHADOWCODE_DDG_PAGE=/path/page.html cargo test -p shadowcode-core
+/// --test web saved_ -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn saved_results_page_parses() {
+    let path = std::env::var("SHADOWCODE_DDG_PAGE").expect("SHADOWCODE_DDG_PAGE");
+    let html = fs::read_to_string(path).unwrap();
+    match web::parse_search_page(&html, 8) {
+        Parsed::Results(hits) => {
+            for hit in &hits {
+                let snippet: String = hit.snippet.chars().take(60).collect();
+                println!("  - {} | {} | {snippet}", hit.title, hit.url);
+            }
+            assert!(!hits.is_empty());
+        }
+        other => panic!("{other:?}"),
+    }
 }
