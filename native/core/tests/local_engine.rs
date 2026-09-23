@@ -976,3 +976,335 @@ async fn native_agent_turns_use_the_local_server_with_its_key_and_capabilities()
     assert_eq!(loaded["loaded"]["name"], "coder");
     assert_eq!(loaded["loaded"]["context_tokens"], 16384);
 }
+
+// ---------------------------------------------------------------------------
+// Live run on this computer's GPU. Ignored by default; run with
+//   SHADOWCODE_LIVE_LLAMA=1 SHADOWCODE_LLAMA_SERVER=/path/to/llama-server \
+//   cargo test -p shadowcode-core --test local_engine live_ -- --ignored --nocapture
+// It imports qwen3:14b and gemma-4 from the Ollama store by reference (read
+// only), runs a real native agent task on Qwen3 (edit + test via exec, auto
+// approved in this harness), a vision task on Gemma 4 with a generated PNG,
+// and measures generation speed. HTTP(S)_PROXY point at a dead port to show
+// local inference needs no network.
+// ---------------------------------------------------------------------------
+
+fn write_png(path: &Path, rgb: [u8; 3]) {
+    let script = format!(
+        "import struct, zlib, sys\nw=h=64\nrow=b'\\x00'+bytes([{},{},{}])*w\nraw=row*h\ndef chunk(t,d):\n    return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)\nopen(sys.argv[1],'wb').write(b'\\x89PNG\\r\\n\\x1a\\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b''))\n",
+        rgb[0], rgb[1], rgb[2]
+    );
+    let status = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+async fn live_job(
+    service: &Service,
+    project: &Path,
+    task: &str,
+    model: &str,
+    images: Value,
+) -> Value {
+    let started = Instant::now();
+    let job = call(
+        service,
+        "POST",
+        "/api/jobs",
+        json!({"workspace": project, "task": task, "model": model, "images": images}),
+    )
+    .await
+    .unwrap();
+    let id = job["id"].as_str().unwrap().to_owned();
+    let deadline = Instant::now() + Duration::from_secs(900);
+    let done = loop {
+        let job = call(service, "GET", &format!("/api/jobs/{id}"), Value::Null)
+            .await
+            .unwrap();
+        if matches!(
+            job["status"].as_str(),
+            Some("completed" | "failed" | "cancelled")
+        ) {
+            break job;
+        }
+        assert!(Instant::now() < deadline, "live job timed out: {job}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    let events = call(
+        service,
+        "GET",
+        &format!(
+            "/api/events?session_id={}&limit=2000",
+            done["session_id"].as_str().unwrap()
+        ),
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    let tools: Vec<String> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "tool.completed" && e["task_id"] == done["task_id"])
+        .map(|e| {
+            format!(
+                "{}{}",
+                e["payload"]["tool"].as_str().unwrap_or("?"),
+                if e["payload"]["success"] == true {
+                    ""
+                } else {
+                    "(failed)"
+                }
+            )
+        })
+        .collect();
+    println!(
+        "LIVE job model={} status={} steps={} secs={:.1} usage={} tools={:?}\nLIVE summary: {}",
+        done["model"],
+        done["status"],
+        done["steps"],
+        started.elapsed().as_secs_f64(),
+        done["usage"],
+        tools,
+        done["summary"]
+    );
+    done
+}
+
+/// Generation speed straight from llama-server's own timings.
+async fn live_speed(spec: shadowcode_core::local_runtime::LaunchSpec) {
+    let runtime = shadowcode_core::local_runtime::LocalRuntime::new();
+    let started = Instant::now();
+    let (loaded, lease) = runtime
+        .acquire(spec, &CancellationToken::new())
+        .await
+        .unwrap();
+    println!(
+        "LIVE load name={} secs={:.1} backend={} ctx={} vision={} cpu_fallback={}",
+        loaded.name,
+        started.elapsed().as_secs_f64(),
+        loaded.backend,
+        loaded.ctx,
+        loaded.vision,
+        loaded.cpu_fallback
+    );
+    let client = shadowcode_core::local_runtime::loopback_client(Duration::from_secs(300)).unwrap();
+    for thinking_off in [true, false] {
+        let mut body = json!({
+            "messages":[{"role":"user","content":"Write a short paragraph about the history of the Rust programming language."}],
+            "max_tokens": 256,
+            "stream": false
+        });
+        if thinking_off {
+            body["chat_template_kwargs"] = json!({"enable_thinking": false});
+        }
+        let response: Value = client
+            .post(format!("{}/chat/completions", loaded.endpoint))
+            .bearer_auth(&loaded.api_key)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let message = &response["choices"][0]["message"];
+        println!(
+            "LIVE speed name={} enable_thinking_false={} predicted_per_second={} prompt_per_second={} content_chars={} reasoning_chars={}",
+            loaded.name,
+            thinking_off,
+            response["timings"]["predicted_per_second"],
+            response["timings"]["prompt_per_second"],
+            message["content"].as_str().map_or(0, str::len),
+            message["reasoning_content"].as_str().map_or(0, str::len),
+        );
+    }
+    drop(lease);
+    runtime.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "runs real models on this computer's GPU"]
+async fn live_qwen3_agent_and_gemma4_vision_from_the_ollama_store() {
+    if std::env::var_os("SHADOWCODE_LIVE_LLAMA").is_none() {
+        eprintln!("set SHADOWCODE_LIVE_LLAMA=1 to run");
+        return;
+    }
+    let server = PathBuf::from(
+        std::env::var_os("SHADOWCODE_LLAMA_SERVER").expect("SHADOWCODE_LLAMA_SERVER"),
+    );
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("calc.py"),
+        "def add(a, b):\n    \"\"\"Return the sum of a and b.\"\"\"\n    return a - b\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("test_calc.py"),
+        "import unittest\n\nfrom calc import add\n\n\nclass AddTest(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+    )
+    .unwrap();
+    write_png(&project.join("square.png"), [220, 20, 20]);
+    let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
+    Config::patch(
+        &paths,
+        json!({
+            "model":{"provider":"local","endpoint":"http://127.0.0.1:9/v1","name":"unused","context_limit":16384},
+            "permissions":{"approve_shell":false},
+            "trusted_workspaces":[project.clone()],
+            "local_engine":{"llama_binary": server.display().to_string()}
+        }),
+    )
+    .unwrap();
+    let service = Service::open(paths.clone(), Some(project.clone())).unwrap();
+    for tag in ["qwen3:14b", "huihui_ai/gemma-4-abliterated:12b"] {
+        call(
+            &service,
+            "POST",
+            "/api/local-models/import-ollama",
+            json!({ "tag": tag }),
+        )
+        .await
+        .unwrap();
+    }
+    let error = call(
+        &service,
+        "POST",
+        "/api/local-models/import-ollama",
+        json!({"tag":"gpt-oss:20b"}),
+    )
+    .await
+    .unwrap_err();
+    println!("LIVE gpt-oss import refused: {error}");
+    let catalog = call(&service, "GET", "/api/local-models", Value::Null)
+        .await
+        .unwrap();
+    println!(
+        "LIVE hardware={} runtime={}",
+        catalog["hardware"], catalog["runtime"]
+    );
+    for model in catalog["models"].as_array().unwrap() {
+        println!(
+            "LIVE model name={} arch={} ctx={} fits={} vision={} tools={} availability={} reason={}",
+            model["name"],
+            model["architecture"],
+            model["context_tokens"],
+            model["fits"],
+            model["vision"],
+            model["tools"],
+            model["availability"],
+            model["reason"]
+        );
+    }
+    for store_model in catalog["ollama_store"]["models"].as_array().unwrap() {
+        println!(
+            "LIVE store tag={} compatible={} added={} reason={}",
+            store_model["tag"],
+            store_model["compatible"],
+            store_model["already_added"],
+            store_model["reason"]
+        );
+    }
+    let find = |name: &str| {
+        catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    let qwen = find("qwen3:14b");
+    let gemma = find("huihui_ai/gemma-4-abliterated:12b");
+
+    // Local inference must not need the network: every proxy is dead from
+    // here on (the Ollama store import above is file-only anyway).
+    for key in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "ALL_PROXY",
+    ] {
+        std::env::set_var(key, "http://127.0.0.1:9");
+    }
+
+    // Qwen3 14B: fix a failing test with real tool calls.
+    let done = live_job(
+        &service,
+        &project,
+        "test_calc.py fails. Fix the bug in calc.py, then run `python3 -m unittest -v` with the exec tool to confirm the test passes.",
+        qwen["id"].as_str().unwrap(),
+        json!([]),
+    )
+    .await;
+    let fixed = fs::read_to_string(project.join("calc.py")).unwrap();
+    let verify = std::process::Command::new("python3")
+        .args(["-m", "unittest", "-q"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    println!(
+        "LIVE qwen status={} calc.py now:\n{}\nLIVE independent unittest exit={} {}",
+        done["status"],
+        fixed,
+        verify.status,
+        String::from_utf8_lossy(&verify.stderr).trim()
+    );
+    let loaded = call(&service, "GET", "/api/local-models", Value::Null)
+        .await
+        .unwrap()["loaded"]
+        .clone();
+    println!("LIVE loaded after qwen job: {loaded}");
+
+    // Gemma 4 12B: attached image and view_image.
+    let attached = live_job(
+        &service,
+        &project,
+        "What is the main colour of this image? Answer with one word.",
+        gemma["id"].as_str().unwrap(),
+        json!(["square.png"]),
+    )
+    .await;
+    let viewed = live_job(
+        &service,
+        &project,
+        "Use the view_image tool to look at square.png, then tell me its main colour in one word.",
+        gemma["id"].as_str().unwrap(),
+        json!([]),
+    )
+    .await;
+    let loaded = call(&service, "GET", "/api/local-models", Value::Null)
+        .await
+        .unwrap()["loaded"]
+        .clone();
+    println!("LIVE loaded after gemma jobs: {loaded}");
+    call(&service, "POST", "/api/local-models/unload", json!({}))
+        .await
+        .unwrap();
+
+    // Raw speed with the same runtime and argv.
+    for entry in [&qwen, &gemma] {
+        live_speed(shadowcode_core::local_runtime::LaunchSpec {
+            id: entry["id"].as_str().unwrap().into(),
+            name: entry["name"].as_str().unwrap().into(),
+            binary: server.clone(),
+            model: entry["path"].as_str().unwrap().into(),
+            mmproj: entry["mmproj"].as_str().map(PathBuf::from),
+            ctx: entry["context_tokens"].as_u64().unwrap(),
+            gpu: shadowcode_core::local_runtime::GpuMode::All,
+            backend: "vulkan".into(),
+        })
+        .await;
+    }
+    assert_eq!(done["status"], "completed", "{done}");
+    assert!(verify.status.success(), "the fix must make the test pass");
+    assert_eq!(attached["status"], "completed", "{attached}");
+    assert_eq!(viewed["status"], "completed", "{viewed}");
+    drop(service);
+}

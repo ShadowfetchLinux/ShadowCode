@@ -485,6 +485,35 @@ mod tests {
     }
 
     #[test]
+    fn managed_llamacpp_never_infers_vision_from_a_name() {
+        assert!(!model_supports_vision("llamacpp", "gemma-4-vision-llava"));
+        assert!(ensure_vision_or_bail("llamacpp", "gemma4", 1).is_err());
+    }
+
+    #[test]
+    fn view_image_validates_and_refers_to_the_project_file() {
+        let root = tempdir().unwrap();
+        let ws_path = root.path().join("project");
+        std::fs::create_dir_all(ws_path.join("shots")).unwrap();
+        std::fs::write(ws_path.join("shots/ok.png"), png_bytes()).unwrap();
+        std::fs::write(ws_path.join("fake.png"), b"not a png").unwrap();
+        std::fs::write(root.path().join("outside.png"), png_bytes()).unwrap();
+        let ws = Workspace::open(&ws_path).unwrap();
+        let out = view_image(&ws, &json!({"path":"shots/ok.png"})).unwrap();
+        let image = viewed_image(&out).unwrap();
+        assert_eq!(image.path, "shots/ok.png");
+        assert_eq!(image.mime, "image/png");
+        let message = viewed_images_message(&[image]);
+        assert_eq!(message["role"], "user");
+        assert_eq!(message["_shadow_images"][0]["path"], "shots/ok.png");
+        assert!(view_image(&ws, &json!({"path":"fake.png"})).is_err());
+        assert!(view_image(&ws, &json!({"path":"../outside.png"})).is_err());
+        assert!(view_image(&ws, &json!({"path":"notes.txt"})).is_err());
+        assert!(view_image(&ws, &json!({"path":"missing.png"})).is_err());
+        assert!(viewed_image(&json!({"attached":false})).is_none());
+    }
+
+    #[test]
     fn caps_image_count() {
         let paths: Vec<_> = (0..5).map(|i| format!("shot{i}.png")).collect();
         let root = tempdir().unwrap();
