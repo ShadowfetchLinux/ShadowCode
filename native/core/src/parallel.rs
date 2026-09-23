@@ -238,6 +238,13 @@ pub fn mark_worker_status(source: &Path, root: &Path, id: &str, status: &str) ->
     Ok(json!({"ok":true,"worker":id,"status":status}))
 }
 fn clean(worker: &WorkerSlot) -> Result<bool> {
+    ensure!(
+        worker.worktree_path.is_dir(),
+        "Worker {} checkout is missing at {}; its branch {} is retained",
+        worker.item.id,
+        worker.worktree_path.display(),
+        worker.branch
+    );
     Ok(git(
         &worker.worktree_path,
         &[
@@ -351,7 +358,10 @@ pub fn cleanup(source: &Path, root: &Path) -> Result<Value> {
         return Ok(json!({"ok":true,"cleaned":0}));
     };
     // Preflight every checkout before removing any. Keep every branch so commits
-    // cannot disappear even after a clean working tree is removed.
+    // cannot disappear even after a clean working tree is removed. A checkout
+    // deleted outside ShadowCode has nothing left to preserve: its Git record is
+    // pruned so the plan does not become impossible to clean up.
+    let mut missing = Vec::new();
     for worker in &plan.workers {
         if worker.status == "removed" {
             continue;
@@ -361,6 +371,10 @@ pub fn cleanup(source: &Path, root: &Path) -> Result<Value> {
             "Worker {} is still running",
             worker.item.id
         );
+        if !worker.worktree_path.is_dir() {
+            missing.push(worker.item.id.clone());
+            continue;
+        }
         ensure!(
             clean(worker)?,
             "Worker {} contains changes or ignored files; preserve them before cleanup",
@@ -374,20 +388,24 @@ pub fn cleanup(source: &Path, root: &Path) -> Result<Value> {
         if worker.status == "removed" {
             continue;
         }
-        git(
-            source,
-            &[
-                "worktree",
-                "remove",
-                worker
-                    .worktree_path
-                    .to_str()
-                    .context("Non-UTF-8 worktree path")?,
-            ],
-        )?;
+        if worker.worktree_path.is_dir() {
+            git(
+                source,
+                &[
+                    "worktree",
+                    "remove",
+                    worker
+                        .worktree_path
+                        .to_str()
+                        .context("Non-UTF-8 worktree path")?,
+                ],
+            )?;
+        } else {
+            git(source, &["worktree", "prune"])?;
+        }
         plan.workers[index].status = "removed".into();
         save(&plan, root)?;
     }
     fs::remove_file(plan_file(source, root)?)?;
-    Ok(json!({"ok":true,"cleaned":removed.len(),"retained_branches":removed,"plan_id":plan.id}))
+    Ok(json!({"ok":true,"cleaned":removed.len(),"retained_branches":removed,"missing_checkouts":missing,"plan_id":plan.id}))
 }

@@ -87,6 +87,36 @@ fn combined_worker_conflicts_are_detected_and_cleanup_preserves_all_work() {
     }
 }
 #[test]
+fn cleanup_recovers_from_a_checkout_deleted_outside_shadowcode() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let root = temp.path().join("workers");
+    init(&repo);
+    parallel::prepare(&repo, "first\nsecond", &root).unwrap();
+    let plan = parallel::active_plan(&repo, &root).unwrap().unwrap();
+    // Worker 1 commits work, then the user deletes the checkout directory by
+    // hand. Worker 2 stays intact and clean.
+    fs::write(plan.workers[0].worktree_path.join("same.txt"), "kept\n").unwrap();
+    git(&plan.workers[0].worktree_path, &["commit", "-qam", "kept"]);
+    parallel::mark_worker_status(&repo, &root, "w1", "finished").unwrap();
+    parallel::mark_worker_status(&repo, &root, "w2", "finished").unwrap();
+    fs::remove_dir_all(&plan.workers[0].worktree_path).unwrap();
+    // Verification names the missing checkout instead of a generic Git error.
+    let error = parallel::verify(&repo, &root).unwrap_err().to_string();
+    assert!(error.contains("w1") && error.contains("missing"), "{error}");
+    // Cleanup still completes, prunes the stale record and keeps every branch.
+    let result = parallel::cleanup(&repo, &root).unwrap();
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["missing_checkouts"], json!(["w1"]));
+    assert!(parallel::active_plan(&repo, &root).unwrap().is_none());
+    assert!(!plan.workers[1].worktree_path.exists());
+    assert!(git(&repo, &["show", &format!("{}:same.txt", plan.workers[0].branch)]).contains("kept"));
+    assert!(!git(&repo, &["worktree", "list", "--porcelain"]).contains("prunable"));
+    // The repository is free for a new plan.
+    parallel::prepare(&repo, "again", &root).unwrap();
+    parallel::cleanup(&repo, &root).unwrap();
+}
+#[test]
 fn index_is_private_confined_and_tracks_deletions_and_unicode() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
