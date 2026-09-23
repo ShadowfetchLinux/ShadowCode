@@ -1,6 +1,5 @@
-import { listen } from "@tauri-apps/api/event";
 import type { EventRow, Job } from "../api";
-import { isNative, request } from "./transport";
+import { listen, request } from "./transport";
 
 export interface JobStream {
   onopen: (() => void) | null;
@@ -148,10 +147,6 @@ export function nativeJobStream(after: number, deps: Dependencies): JobStream {
 }
 
 export function jobEvents(id: string, after: number): JobStream {
-  if (!isNative())
-    return new EventSource(
-      `/api/jobs/${id}/events?after=${after}`,
-    ) as unknown as JobStream;
   return nativeJobStream(after, {
     read: (cursor) =>
       request<Page>(`/api/jobs/${id}/events?after=${cursor}&limit=512`),

@@ -13,8 +13,8 @@ import {
   SquarePen,
 } from "lucide-react";
 import { api, type Job, type Project, type Session } from "../api";
-import type { DrawerTab } from "./Drawer";
 
+/** Projects and their recent conversations. */
 export function Sidebar({
   sessions,
   projects,
@@ -24,9 +24,7 @@ export function Sidebar({
   onSelect,
   onNew,
   onProject,
-  onPanel,
   onSettings,
-  onHome,
   onHide,
 }: {
   sessions: Session[];
@@ -37,9 +35,7 @@ export function Sidebar({
   onSelect: (id: string) => void;
   onNew: () => void;
   onProject: (path?: string) => void;
-  onPanel: (tab: DrawerTab) => void;
   onSettings: () => void;
-  onHome?: () => void;
   onHide: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -169,14 +165,7 @@ export function Sidebar({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <span>⌕</span>
       </label>
-      <nav className="sidebar-tools" aria-label="Workspace">
-        <button type="button" onClick={() => onHome?.()}>
-          <MessageSquare size={16} />
-          Home
-        </button>
-      </nav>
       <div className="sidebar-section-title">
         Recent / Projects
         <button

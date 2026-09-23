@@ -1,0 +1,227 @@
+import { useState } from "react";
+
+type Save = (values: Record<string, unknown>) => Promise<void>;
+
+const VENDOR_NAMES: Record<string, string> = {
+  codex: "Codex",
+  claude: "Claude Code",
+  cursor: "Cursor",
+  antigravity: "Antigravity",
+  grok: "Grok",
+};
+
+/** Settings › Permissions & network. Saves only the permissions and network
+ * groups. */
+export function PermissionsPage({
+  cfg,
+  onSave,
+}: {
+  cfg: Record<string, unknown>;
+  onSave: Save;
+}) {
+  const permissions = (cfg.permissions || {}) as Record<string, unknown>;
+  const network = (cfg.network || {}) as Record<string, unknown>;
+  const notes = (permissions.vendor_notes || {}) as Record<string, string>;
+  const originalLevel = String(permissions.level || "workspace");
+  const [mode, setMode] = useState(
+    permissions.mode === "allow_edits" ? "allow_edits" : "ask",
+  );
+  const [readOnly, setReadOnly] = useState(originalLevel === "read_only");
+  const [netMode, setNetMode] = useState(String(network.mode || "online"));
+  const [shellNetwork, setShellNetwork] = useState(Boolean(permissions.network));
+  const [dangerous, setDangerous] = useState(
+    permissions.require_approval_for_dangerous !== false,
+  );
+  const [saving, setSaving] = useState(false);
+  return (
+    <section className="settings-page">
+      <h3>Permissions & network</h3>
+      <fieldset className="mode-options">
+        <legend>When the agent acts in a project</legend>
+        <label className="mode-option">
+          <input
+            type="radio"
+            name="permission-mode"
+            checked={mode === "ask"}
+            onChange={() => setMode("ask")}
+          />
+          <span>
+            <strong>Ask before actions</strong>
+            <small>File edits and shell commands wait for your approval.</small>
+          </span>
+        </label>
+        <label className="mode-option">
+          <input
+            type="radio"
+            name="permission-mode"
+            checked={mode === "allow_edits"}
+            onChange={() => setMode("allow_edits")}
+          />
+          <span>
+            <strong>Allow project edits</strong>
+            <small>
+              File edits inside the project run without asking. Shell commands,
+              changes outside the project and destructive Git commands still ask.
+            </small>
+          </span>
+        </label>
+      </fieldset>
+      {Object.keys(notes).length > 0 && (
+        <div className="vendor-notes">
+          <h4>Subscriptions</h4>
+          <p className="hint">
+            Vendor tools enforce their own sandbox. This is how each one applies
+            the mode above:
+          </p>
+          <dl>
+            {Object.entries(notes).map(([id, note]) => (
+              <div key={id}>
+                <dt>{VENDOR_NAMES[id.replace(/^cli[-:]/, "")] || id}</dt>
+                <dd>{note}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+      <fieldset className="mode-options">
+        <legend>Network</legend>
+        {[
+          ["online", "Online", "Cloud subscriptions and web tools for local models are available."],
+          ["web_off", "Web tools off", "Local models cannot fetch web pages. Subscriptions still work."],
+          ["offline", "Offline", "Only models on this computer run. Account and usage checks stop."],
+        ].map(([id, label, hint]) => (
+          <label className="mode-option" key={id}>
+            <input
+              type="radio"
+              name="network-mode"
+              checked={netMode === id}
+              onChange={() => setNetMode(id)}
+            />
+            <span>
+              <strong>{label}</strong>
+              <small>{hint}</small>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <details className="advanced-options">
+        <summary>Advanced</summary>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={readOnly}
+            onChange={(e) => setReadOnly(e.target.checked)}
+          />{" "}
+          Read-only projects: the agent can inspect but never edit or run
+          commands
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={dangerous}
+            onChange={(e) => setDangerous(e.target.checked)}
+          />{" "}
+          Ask before destructive commands (rm -rf, git push --force). Privileged
+          commands such as sudo are always blocked.
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={shellNetwork}
+            onChange={(e) => setShellNetwork(e.target.checked)}
+          />{" "}
+          Let approved shell commands use the network
+        </label>
+      </details>
+      <div className="row end settings-foot">
+        <button
+          type="button"
+          className="primary"
+          disabled={saving}
+          onClick={() => {
+            setSaving(true);
+            void onSave({
+              permissions: {
+                mode,
+                level: readOnly
+                  ? "read_only"
+                  : originalLevel === "read_only"
+                    ? "workspace"
+                    : originalLevel,
+                network: shellNetwork,
+                require_approval_for_dangerous: dangerous,
+              },
+              network: { mode: netMode },
+            }).finally(() => setSaving(false));
+          }}
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** Settings › Appearance. Saves only the ui group. */
+export function AppearancePage({
+  cfg,
+  onSave,
+}: {
+  cfg: Record<string, unknown>;
+  onSave: Save;
+}) {
+  const ui = (cfg.ui || {}) as Record<string, unknown>;
+  const [theme, setTheme] = useState(String(ui.theme || "system"));
+  const [notify, setNotify] = useState(ui.notify !== false);
+  const [saving, setSaving] = useState(false);
+  return (
+    <section className="settings-page">
+      <h3>Appearance</h3>
+      <fieldset className="seg-field">
+        <legend>Theme</legend>
+        <div className="seg" role="radiogroup" aria-label="Theme">
+          {[
+            ["system", "System"],
+            ["light", "Light"],
+            ["dark", "Dark"],
+          ].map(([id, label]) => (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={theme === id}
+              key={id}
+              className={theme === id ? "on" : ""}
+              onClick={() => setTheme(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={notify}
+          onChange={(e) => setNotify(e.target.checked)}
+        />{" "}
+        Desktop notification when a task finishes while the window is in the
+        background
+      </label>
+      <div className="row end settings-foot">
+        <button
+          type="button"
+          className="primary"
+          disabled={saving}
+          onClick={() => {
+            setSaving(true);
+            void onSave({ ui: { theme, notify } }).finally(() =>
+              setSaving(false),
+            );
+          }}
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}

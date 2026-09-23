@@ -19,7 +19,6 @@ import {
   type Transcript,
 } from "../lib/transcript";
 import { jobEvents } from "../lib/jobEvents";
-import { isNative } from "../lib/transport";
 
 export const isActive = (job: Job | null) =>
   !!job && ["queued", "running", "paused", "cancelling"].includes(job.status);
@@ -135,22 +134,8 @@ export function useConversation(onComplete: () => void) {
           stage: done.status.toUpperCase(),
         };
       });
+      // The desktop shell sends finish notifications (it honours ui.notify).
       complete.current();
-      if (
-        !isNative() &&
-        document.hidden &&
-        typeof Notification !== "undefined" &&
-        Notification.permission === "granted"
-      ) {
-        try {
-          new Notification("ShadowCode · " + done.status, {
-            body: done.summary?.slice(0, 140),
-            icon: "/icon.svg",
-          });
-        } catch {
-          /* desktop may block notifications */
-        }
-      }
     }
     source.onopen = () => {
       if (!closed) {

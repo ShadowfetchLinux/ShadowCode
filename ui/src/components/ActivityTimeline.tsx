@@ -1,90 +1,119 @@
-import { Check, Circle, LoaderCircle } from "lucide-react";
+import { Check, CircleAlert, LoaderCircle } from "lucide-react";
+import {
+  deriveSteps,
+  type TaskActivity,
+  type TimelineStep,
+} from "../lib/activity";
 
-export type TimelineStep = {
-  id: string;
-  label: string;
-  state: "pending" | "active" | "done";
-  detail?: string;
-};
-
-export function deriveTimeline(args: {
-  busy: boolean;
-  stage?: string;
-  waitingApproval?: boolean;
-  finished?: boolean;
-  hasDiff?: boolean;
-  testSummary?: string;
-}): TimelineStep[] {
-  const stage = (args.stage || "").toLowerCase();
-  const reading = /understand|explor|read|search/.test(stage);
-  const editing = /edit|patch|write|apply/.test(stage) || Boolean(args.hasDiff);
-  const testing = /test|verify/.test(stage);
-  const waiting = Boolean(args.waitingApproval);
-  const finished = Boolean(args.finished) && !args.busy;
-  const active = waiting
-    ? "waiting"
-    : testing
-      ? "testing"
-      : editing
-        ? "editing"
-        : reading || args.busy
-          ? "reading"
-          : finished
-            ? "finished"
-            : "reading";
-  const order = ["reading", "editing", "testing", "waiting", "finished"] as const;
-  const labels = {
-    reading: "Reading project",
-    editing: "Editing files",
-    testing: "Running tests",
-    waiting: "Waiting for approval",
-    finished: "Finished",
-  };
-  const reached = order.indexOf(active);
-  return order.map((id, i) => ({
-    id,
-    label: labels[id],
-    state: finished && id === "finished"
-      ? "done"
-      : i < reached
-        ? "done"
-        : i === reached && args.busy
-          ? "active"
-          : i === reached && finished
-            ? "done"
-            : "pending",
-    detail: id === "testing" ? args.testSummary : undefined,
-  }));
+/** One compact timeline for a task. Every step is backed by recorded events
+ * and expands to the real tool calls and their output. */
+export function ActivityTimeline({
+  activity,
+  pendingApprovals = 0,
+  elapsed,
+}: {
+  activity: TaskActivity | undefined;
+  pendingApprovals?: number;
+  elapsed?: string;
+}) {
+  const steps = deriveSteps(activity, pendingApprovals);
+  if (!steps.length)
+    return (
+      <div className="activity-timeline" aria-label="Agent activity">
+        <div className="activity-step is-active">
+          <LoaderCircle size={14} className="spin" aria-hidden="true" />
+          <span>Working</span>
+          {elapsed && <small>{elapsed}</small>}
+        </div>
+      </div>
+    );
+  return (
+    <div className="activity-timeline" aria-label="Agent activity">
+      {steps.map((step) => (
+        <Step key={step.id} step={step} activity={activity!} />
+      ))}
+      {elapsed && !activity?.finished && (
+        <small className="activity-elapsed">{elapsed}</small>
+      )}
+    </div>
+  );
 }
 
-export function ActivityTimeline({
-  steps,
-  output,
+function StepIcon({ state }: { state: TimelineStep["state"] }) {
+  if (state === "active")
+    return <LoaderCircle size={14} className="spin" aria-hidden="true" />;
+  if (state === "failed")
+    return <CircleAlert size={14} aria-hidden="true" />;
+  return <Check size={14} aria-hidden="true" />;
+}
+
+function Step({
+  step,
+  activity,
 }: {
-  steps: TimelineStep[];
-  output?: string;
+  step: TimelineStep;
+  activity: TaskActivity;
 }) {
+  const sources = step.id === "web" ? activity.sources : [];
+  const expandable = step.calls.length > 0 || sources.length > 0;
+  const head = (
+    <>
+      <StepIcon state={step.state} />
+      <span>{step.label}</span>
+      {step.calls.length > 1 && (
+        <small className="dim">{step.calls.length} actions</small>
+      )}
+      {step.detail && <small>{step.detail}</small>}
+      <span className="sr-only">
+        {step.state === "active"
+          ? "in progress"
+          : step.state === "failed"
+            ? "with problems"
+            : "done"}
+      </span>
+    </>
+  );
+  if (!expandable)
+    return <div className={`activity-step is-${step.state}`}>{head}</div>;
   return (
-    <div className="activity-timeline" role="status" aria-label="Agent activity">
-      {steps.map((step) => (
-        <div key={step.id} className={`activity-step is-${step.state}`}>
-          {step.state === "done" ? (
-            <Check size={14} />
-          ) : step.state === "active" ? (
-            <LoaderCircle size={14} className="spin" />
-          ) : (
-            <Circle size={12} />
-          )}
-          <span>{step.label}</span>
-          {step.detail ? <small>{step.detail}</small> : null}
-        </div>
-      ))}
-      {output ? (
-        <details className="activity-output">
-          <summary>Show tool output</summary>
-          <pre>{output}</pre>
-        </details>
-      ) : null}
-    </div>
+    <details className={`activity-step is-${step.state}`}>
+      <summary>{head}</summary>
+      <ol className="activity-calls">
+        {step.calls.map((call, index) => (
+          <li key={`${call.callId}-${index}`} className={call.ok === false ? "bad" : ""}>
+            <code>{call.command || call.path || call.label}</code>
+            <span className="dim">
+              {call.live
+                ? "running"
+                : call.ok === false
+                  ? "failed"
+                  : call.tool.includes(".")
+                    ? call.tool
+                    : "done"}
+            </span>
+            {call.output && (
+              <pre>
+                {call.output.slice(0, 4000)}
+                {call.output.length > 4000 ? "\n… (truncated)" : ""}
+              </pre>
+            )}
+          </li>
+        ))}
+      </ol>
+      {sources.length > 0 && (
+        <ul className="activity-sources" aria-label="Web sources">
+          {sources.map((source) => (
+            <li key={source.url}>
+              <a href={source.final_url || source.url} target="_blank" rel="noreferrer">
+                {source.title || source.final_url || source.url}
+              </a>
+              {source.status != null && (
+                <span className="dim"> · {String(source.status)}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
 }
