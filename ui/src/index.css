@@ -18,6 +18,8 @@ body {
   font-feature-settings:
     "liga" 1,
     "kern" 1;
+  /* Radios and checkboxes use the brand accent, not the engine's blue. */
+  accent-color: var(--accent);
 }
 button,
 input,
@@ -1382,14 +1384,25 @@ button.mini.primary-mini {
 }
 
 /* Quiet, consistent controls for branching and advanced workspace tools. */
-.fork-action {
-  margin-top: 0.5rem;
+/* Quiet until the answer is hovered or the button has keyboard focus. */
+button.fork-action {
+  margin-top: 2px;
+  padding: 2px 8px;
+  min-height: 0;
   font-size: 12px;
   color: var(--text-2);
+  background: none;
+  opacity: 0;
 }
+.msg-agent:hover .fork-action,
 .fork-action:hover,
 .fork-action:focus-visible {
   opacity: 1;
+}
+@media (hover: none) {
+  button.fork-action {
+    opacity: 1;
+  }
 }
 .advanced-tools {
   display: grid;

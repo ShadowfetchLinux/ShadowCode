@@ -45,6 +45,15 @@ export function isMutatingTool(tool: string): boolean {
   return MUTATING.has(tool);
 }
 
+const FILE_TOOLS = new Set([
+  "write_file",
+  "edit_file",
+  "apply_patch",
+  "delete_file",
+  "create_directory",
+  "move_file",
+]);
+
 const BACKGROUND_LABELS = new Map([
   ["background_start", "Start background process"],
   ["background_list", "List background processes"],
@@ -149,26 +158,38 @@ export function ApprovalCard({
   approval: Approval;
   onDecide: (id: string, decision: "approve" | "deny") => void;
 }) {
+  const tool = approval.tool || "";
+  // File tools report their tool name as the "command"; what they do is in
+  // the reason ("Write hello.txt").
+  const fileChange = FILE_TOOLS.has(tool);
+  const command =
+    approval.command && approval.command !== tool ? approval.command : "";
+  const main = fileChange ? approval.reason || command : command;
+  const detail = main === approval.reason ? "" : approval.reason;
   return (
     <div className="approval" data-approval-id={approval.id}>
       <div className="approval-head">
         <span className="approval-kind">
-          {BACKGROUND_LABELS.has(approval.tool || "")
+          {BACKGROUND_LABELS.has(tool)
             ? "Background process"
-            : approval.tool || "permission"}
+            : fileChange
+              ? "File change"
+              : tool === "exec"
+                ? "Command"
+                : tool || "Permission"}
         </span>
         <span className="approval-title">
-          {approval.tool === "background_stop"
+          {tool === "background_stop"
             ? "Allow ShadowCode to stop this process?"
-            : approval.tool === "background_start"
+            : tool === "background_start"
               ? "Allow ShadowCode to start this process?"
-              : "Allow ShadowCode to run this?"}
+              : fileChange
+                ? "Allow this change?"
+                : "Allow ShadowCode to run this?"}
         </span>
       </div>
-      <pre className="code">{approval.command || approval.reason}</pre>
-      {approval.command && approval.reason && (
-        <p className="hint">{approval.reason}</p>
-      )}
+      {main && <pre className="code">{main}</pre>}
+      {detail && <p className="hint">{detail}</p>}
       <div className="row approval-actions">
         <button
           type="button"

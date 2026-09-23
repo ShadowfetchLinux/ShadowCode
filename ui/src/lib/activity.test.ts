@@ -52,7 +52,7 @@ describe("activity timeline from real events", () => {
     expect(steps(events)).toEqual([
       ["Reading project", "done"],
       ["Editing files", "done"],
-      ["Running tests", "active"],
+      ["Running checks", "active"],
     ]);
     const done = [
       ...events,
@@ -76,7 +76,7 @@ describe("activity timeline from real events", () => {
     ).toEqual([
       ["Reading project", "done"],
       ["Editing files", "done"],
-      ["Running tests", "done"],
+      ["Running checks", "done"],
       ["Finished", "done"],
     ]);
     const activity = state.activity.t1;
@@ -152,7 +152,7 @@ describe("activity timeline from real events", () => {
       "Reading project",
       "Editing files",
       "Running commands",
-      "Running tests",
+      "Running checks",
       "Finished",
     ]);
     expect(derived.find((s) => s.id === "testing")?.detail).toBe(
@@ -209,9 +209,10 @@ describe("activity timeline from real events", () => {
       "https://docs.rs/x",
       "https://docs.rs/y",
     ]);
+    // Once answered, the waiting state leaves the timeline.
     expect(
-      deriveSteps(state.activity.t1).find((s) => s.id === "waiting")?.state,
-    ).toBe("done");
+      deriveSteps(state.activity.t1).find((s) => s.id === "waiting"),
+    ).toBeUndefined();
     expect(state.items.find((i) => i.kind === "divider")?.text).toBe(
       "Continued on Cursor · previous context summarized (1,200 characters)",
     );
@@ -224,6 +225,26 @@ describe("activity timeline from real events", () => {
         ev("agent.started", { task: "again" }, "t2"),
       ]).limit,
     ).toBeUndefined();
+  });
+
+  it("lists a command the harness counted as a check once, under checks", () => {
+    const events = [
+      ev("agent.started", { task: "x" }),
+      ev("tool.started", {
+        tool: "exec",
+        call_id: "c",
+        arguments: { command: "cat hello.txt" },
+      }),
+      ev("tool.completed", { tool: "exec", call_id: "c", success: true }),
+      ev("verification.summary", {
+        status: "last_command_succeeded",
+        commands: [{ command: "cat hello.txt", success: true, exit_code: 0 }],
+      }),
+      ev("agent.completed", { summary: "Done", success: true }),
+    ];
+    const derived = deriveSteps(replay(events).activity.t1);
+    expect(derived.map((s) => s.label)).toEqual(["Running checks", "Finished"]);
+    expect(derived[0].calls.map((c) => c.command)).toEqual(["cat hello.txt"]);
   });
 
   it("shows no invented steps without evidence", () => {

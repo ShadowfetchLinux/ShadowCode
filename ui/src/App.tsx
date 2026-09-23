@@ -403,7 +403,9 @@ export default function App() {
         latest.trusted ?? h.trusted,
         latest.permissions || h.permissions,
       );
-      if (prompt) setTrust(prompt);
+      // First run trusts the folder in onboarding; asking again behind it
+      // would show a second trust prompt once onboarding closes.
+      setTrust(onboard.completed ? prompt : null);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -594,7 +596,7 @@ export default function App() {
       return;
     }
     try {
-      const created = await api.createSession(workspace, "New task");
+      const created = await api.createSession(workspace);
       writeStore("shadow:selected", created.id);
       await openSession(created.id);
       promptRef.current?.focus();
@@ -1228,6 +1230,26 @@ export default function App() {
     });
     return map;
   }, [transcript.items]);
+  // A finished task reads top to bottom: what it did (timeline), what it
+  // says (answer), what changed (summary card).
+  const timelineBefore = useMemo(() => {
+    const summarized = new Set(
+      transcript.items.flatMap((item) =>
+        item.kind === "summary" ? [item.taskId] : [],
+      ),
+    );
+    const map: Record<string, number> = {};
+    transcript.items.forEach((item, index) => {
+      if (
+        item.kind === "agent" &&
+        item.taskId &&
+        summarized.has(item.taskId) &&
+        !(item.taskId in map)
+      )
+        map[item.taskId] = index;
+    });
+    return map;
+  }, [transcript.items]);
   const pendingNote =
     busy && modelChoice && runningChoice && modelChoice !== runningChoice
       ? "Applies to your next message"
@@ -1620,9 +1642,12 @@ export default function App() {
                     ) : item.kind === "summary" ? (
                       transcript.activity[item.taskId] ? (
                         <div key={i} className="msg-summary">
-                          <ActivityTimeline
-                            activity={transcript.activity[item.taskId]}
-                          />
+                          {!(item.taskId in timelineBefore) && (
+                            <ActivityTimeline
+                              activity={transcript.activity[item.taskId]}
+                              withSummary
+                            />
+                          )}
                           <TaskSummary
                             activity={transcript.activity[item.taskId]}
                             diffStat={diffStat}
@@ -1694,6 +1719,14 @@ export default function App() {
                       <ActivityTimeline
                         activity={transcript.activity[item.taskId!]}
                       />
+                    </div>
+                  ) : item.taskId && timelineBefore[item.taskId] === i ? (
+                    <div key={i} className="msg-with-activity">
+                      <ActivityTimeline
+                        activity={transcript.activity[item.taskId]}
+                        withSummary
+                      />
+                      {node}
                     </div>
                   ) : (
                     node

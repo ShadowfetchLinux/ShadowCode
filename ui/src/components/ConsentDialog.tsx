@@ -53,7 +53,6 @@ export function ConsentDialog({
           <li>Attachments: {attachments.join(", ")}</li>
         )}
       </ul>
-      {request.error && <p className="hint">{request.error}</p>}
       <div className="row end">
         <button type="button" className="ghost" onClick={onCancel}>
           Cancel

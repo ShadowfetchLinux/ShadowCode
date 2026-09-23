@@ -842,7 +842,7 @@ impl Service {
                     }
                     Ok(())
                 })?;
-                let session = store.create_session(&workspace, &cfg.model.default, "Welcome")?;
+                let session = store.create_session(&workspace, &cfg.model.default, "")?;
                 let sid = session["id"]
                     .as_str()
                     .context("Session missing ID")?

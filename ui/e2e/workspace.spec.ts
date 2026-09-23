@@ -99,7 +99,11 @@ test("picks a local row; web and permission controls follow the row", async ({
     page.getByRole("button", { name: "Web lookups for this task" }),
   ).toHaveCount(0);
   await chooseBySearch(page, "qwen");
-  await expect(trigger(page)).toContainText("qwen3:14b · This computer");
+  await expect(trigger(page)).toHaveAttribute(
+    "aria-label",
+    /qwen3:14b · This computer/,
+  );
+  await expect(trigger(page)).toHaveText("Localqwen3:14b");
   const web = page.getByRole("button", { name: "Web lookups for this task" });
   await expect(web).toHaveAttribute("aria-pressed", "false");
   await web.click();
@@ -134,15 +138,12 @@ test("runs a task with streamed events and reviews the changes", async ({
   await expect(summary).toContainText("npm test");
   await expect(summary).toContainText("exit 0");
   const timeline = page.locator(".msg-summary .activity-timeline");
-  for (const step of [
-    "Reading project",
-    "Editing files",
-    "Running tests",
-    "Finished",
-  ])
+  for (const step of ["Reading project", "Editing files", "Running checks"])
     await expect(timeline.getByText(step, { exact: true })).toBeVisible();
+  await expect(timeline.getByText("Finished", { exact: true })).toHaveCount(0);
+  await expect(summary).toContainText("Finished");
   // Each step expands to the real tool call and its output.
-  await timeline.getByText("Running tests", { exact: true }).click();
+  await timeline.getByText("Running checks", { exact: true }).click();
   await expect(timeline.getByText("Tests  4 passed (4)")).toBeVisible();
   await summary.getByRole("button", { name: "Review changes" }).click();
   const drawer = page.getByRole("complementary", { name: "Drawer" });

@@ -226,7 +226,7 @@ const LABELS: Record<StepId, string> = {
   reading: "Reading project",
   editing: "Editing files",
   commands: "Running commands",
-  testing: "Running tests",
+  testing: "Running checks",
   web: "Looking up the web",
   waiting: "Waiting for approval",
   finished: "Finished",
@@ -260,17 +260,15 @@ export function deriveSteps(
   const steps: TimelineStep[] = [];
   for (const id of ORDER) {
     if (id === "waiting") {
+      // A state, not work done: shown only while a request waits.
       const waiting = Math.max(pendingApprovals, activity.approvalsPending);
-      if (waiting > 0 || activity.approvalsSeen > 0)
+      if (waiting > 0 && !activity.finished)
         steps.push({
           id,
           label: LABELS[id],
-          state: waiting > 0 && !activity.finished ? "active" : "done",
+          state: "active",
           calls: [],
-          detail:
-            waiting > 0 && !activity.finished
-              ? `${waiting} request${waiting === 1 ? "" : "s"} waiting`
-              : undefined,
+          detail: `${waiting} request${waiting === 1 ? "" : "s"} waiting`,
         });
       continue;
     }
@@ -288,7 +286,20 @@ export function deriveSteps(
         });
       continue;
     }
-    const calls = activity.calls.filter((call) => call.step === id);
+    // A command the harness recorded as a check is listed once, under
+    // checks, not again under commands.
+    const checks = new Set(
+      (activity.verification?.commands || []).map((c) => c.command.trim()),
+    );
+    const isCheck = (call: ActivityCall) =>
+      call.step === "commands" &&
+      Boolean(call.command) &&
+      checks.has(call.command!.trim());
+    const calls = activity.calls.filter((call) =>
+      id === "testing"
+        ? call.step === id || isCheck(call)
+        : call.step === id && !isCheck(call),
+    );
     // Harness verification commands and web.source events are evidence even
     // without a matching tool call in this list.
     const evidence =

@@ -252,10 +252,12 @@ export function TrustDialog({
     <Dialog label="Trust folder" className="modal modal-sm" onClose={onCancel}>
       <h2>Trust this folder?</h2>
       <p className="hint">
-        <code>{req.path}</code> becomes the active workspace at permission level{" "}
-        <code>{String(req.permissions?.level || "workspace")}</code>
-        {req.permissions?.network ? " with network access" : ", network off"}.
-        Dangerous commands still ask first.
+        The agent may read <code>{req.path}</code> and change files inside it.{" "}
+        {req.permissions?.level === "read_only"
+          ? "This project is read only: nothing is changed."
+          : req.permissions?.mode === "allow_edits"
+            ? "File edits run without asking; commands wait for your approval."
+            : "File edits and commands wait for your approval."}
       </p>
       <div className="row end">
         <button type="button" className="ghost" onClick={onCancel}>

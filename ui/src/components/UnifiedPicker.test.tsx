@@ -191,7 +191,11 @@ it("selects with the keyboard and restores focus to the trigger", async () => {
   expect(screen.queryByRole("listbox")).toBeNull();
   await waitFor(() => expect(document.activeElement).toBe(trigger()));
   expect(trigger().textContent).toMatch(/^Local/);
-  expect(trigger().textContent).toContain("qwen3:14b · This computer");
+  // The Local badge replaces the " · This computer" suffix in the trigger.
+  expect(trigger().textContent).toBe("Localqwen3:14b");
+  expect(trigger().getAttribute("aria-label")).toContain(
+    "qwen3:14b · This computer",
+  );
 });
 
 it("filters by typing and closes with Escape", async () => {

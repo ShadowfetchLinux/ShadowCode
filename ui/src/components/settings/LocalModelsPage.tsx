@@ -354,7 +354,9 @@ function ModelRow({
           <span className="health-bad">Not compatible</span>
         )}
         {model.reason ? ` · ${model.reason}` : ""}
-        {model.architecture ? ` · ${model.architecture}` : ""}
+        {model.architecture && !model.reason?.includes(model.architecture)
+          ? ` · ${model.architecture}`
+          : ""}
         {` · ${formatBytes(model.bytes)}`}
       </p>
       {memory && (

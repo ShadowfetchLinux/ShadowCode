@@ -24,6 +24,7 @@ import {
   matchesQuery,
   recentTargets,
   rowAction,
+  shortName,
   usageDetailLines,
   usageLabel,
   vendorLabel,
@@ -268,7 +269,11 @@ export function UnifiedPicker({
           </span>
         )}
         <span className="unified-picker-current">
-          {selected?.name || (loading ? "Loading models…" : "Choose a model")}
+          {selected
+            ? shortName(selected)
+            : loading
+              ? "Loading models…"
+              : "Choose a model"}
         </span>
         <ChevronDown size={14} aria-hidden="true" />
       </button>

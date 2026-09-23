@@ -361,6 +361,17 @@ function FilesTab({
 
 // --- Changes: git status + per-hunk accept / reject --------------------------
 
+/** Git porcelain codes in words (tooltip of the short label). */
+const FILE_STATES: Record<string, string> = {
+  "??": "New file, not tracked by git yet",
+  M: "Modified",
+  A: "Added",
+  D: "Deleted",
+  R: "Renamed",
+  C: "Copied",
+  U: "Conflict",
+};
+
 function ChangesTab({
   path,
   busy,
@@ -426,6 +437,10 @@ function ChangesTab({
   useEffect(() => {
     setSelected(path);
   }, [path]);
+  // Opening the tab without a file shows the first change right away.
+  useEffect(() => {
+    if (!selected && git.files.length) setSelected(git.files[0].path);
+  }, [selected, git.files]);
   useEffect(() => {
     void loadHunks(selected);
   }, [selected, loadHunks, busy]);
@@ -466,8 +481,11 @@ function ChangesTab({
             className={`file ${selected === f.path ? "active" : ""}`}
             onClick={() => setSelected(f.path)}
           >
-            <span className={`file-label l-${f.label.toLowerCase()}`}>
-              {f.label}
+            <span
+              className="file-label"
+              title={FILE_STATES[f.label] || f.label}
+            >
+              {f.label === "??" ? "New" : f.label}
             </span>
             {f.path}
           </button>
