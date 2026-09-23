@@ -168,7 +168,9 @@ export function isVerificationCommand(command: string): boolean {
       return true;
     if (["npm", "pnpm", "yarn", "bun", "npx"].includes(a)) {
       if (["test", "t"].includes(b)) return true;
-      const script = b === "run" ? words[i + 2] || "" : b;
+      const rest = words.slice(i + 1);
+      const run = rest.indexOf("run");
+      const script = run >= 0 ? rest[run + 1] || "" : b;
       if (/^(test|build|lint|typecheck|check|e2e)(:|$)/.test(script)) return true;
     }
     if (a === "make" && /^(test|check|build|lint)$/.test(b)) return true;
