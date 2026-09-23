@@ -49,6 +49,28 @@ pub struct ModelClient {
     key: Option<String>,
     extra_body: Option<Value>,
 }
+/// Rewrite JSON-schema `"type": ["string", "null"]` lists as `anyOf`. Some
+/// GGUF chat templates (Gemma 4 under llama.cpp's Jinja engine) fail with
+/// "filter-mapping not implemented" on type lists; `anyOf` is equivalent.
+pub fn type_lists_to_any_of(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Array(types)) = map.get("type").cloned() {
+                map.remove("type");
+                map.insert(
+                    "anyOf".into(),
+                    Value::Array(types.into_iter().map(|t| json!({"type": t})).collect()),
+                );
+            }
+            for child in map.values_mut() {
+                type_lists_to_any_of(child);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(type_lists_to_any_of),
+        _ => {}
+    }
+}
+
 /// Loopback endpoints (local runtimes) must never go through an HTTP proxy.
 pub fn is_loopback_endpoint(endpoint: &str) -> bool {
     reqwest::Url::parse(endpoint)
@@ -190,7 +212,18 @@ impl ModelClient {
         } else {
             let mut body = json!({"model":self.config.name,"messages":messages,"stream":true,"stream_options":{"include_usage":true},"max_tokens":max_tokens});
             if !tools.is_empty() {
-                body["tools"] = json!(tools);
+                body["tools"] = if self.config.provider == "llamacpp" {
+                    json!(tools
+                        .iter()
+                        .map(|t| {
+                            let mut t = t.clone();
+                            type_lists_to_any_of(&mut t);
+                            t
+                        })
+                        .collect::<Vec<_>>())
+                } else {
+                    json!(tools)
+                };
                 body["tool_choice"] = json!("auto");
             }
             if let (Some(Value::Object(extra)), Some(object)) =
@@ -725,4 +758,26 @@ pub async fn detect() -> Vec<Value> {
             }
         }
     })).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_detection_and_llama_schema_rewrite() {
+        assert!(is_loopback_endpoint("http://127.0.0.1:8080/v1"));
+        assert!(is_loopback_endpoint("http://localhost:1234/v1"));
+        assert!(is_loopback_endpoint("http://[::1]:9/v1"));
+        assert!(!is_loopback_endpoint("https://api.openai.com/v1"));
+        assert!(!is_loopback_endpoint("http://192.168.1.2:11434"));
+        let mut schema = json!({"type":"object","properties":{"params":{"type":"array","items":{"type":["string","null"]}},"type":{"type":"string"}}});
+        type_lists_to_any_of(&mut schema);
+        assert_eq!(
+            schema["properties"]["params"]["items"],
+            json!({"anyOf":[{"type":"string"},{"type":"null"}]})
+        );
+        assert_eq!(schema["properties"]["type"], json!({"type":"string"}));
+        assert_eq!(schema["type"], "object");
+    }
 }

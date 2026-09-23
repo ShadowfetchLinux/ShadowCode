@@ -118,7 +118,8 @@ class Handler(BaseHTTPRequestHandler):
         has_image = "image_url" in wire
         log("requests.jsonl", {"auth": self.authorized(), "tools": [t["function"]["name"] for t in body.get("tools", [])],
                                "image": has_image, "kwargs": body.get("chat_template_kwargs"),
-                               "max_tokens": body.get("max_tokens"), "chars": len(wire)})
+                               "max_tokens": body.get("max_tokens"), "chars": len(wire),
+                               "type_list": '"type": [' in json.dumps(body.get("tools", []))})
         if not self.authorized():
             return self.reply(401, {"error": "Invalid API Key"})
         if len(wire) // 4 > ctx:
@@ -877,6 +878,7 @@ async fn native_agent_turns_use_the_local_server_with_its_key_and_capabilities()
         .iter()
         .any(|t| t == "view_image"));
     assert_eq!(seen[0]["kwargs"], json!({"enable_thinking": false}));
+    assert_eq!(seen[0]["type_list"], false, "type lists are sent as anyOf");
     assert!(seen[0]["max_tokens"].as_u64().unwrap() <= 4096);
 
     // Images on a non-vision row are refused before a job exists.
