@@ -563,6 +563,10 @@ div.activity-step {
 .task-summary.is-bad {
   border-color: var(--danger);
 }
+.task-summary.is-quiet {
+  padding: 8px 12px;
+  background: transparent;
+}
 .task-summary header {
   display: flex;
   align-items: center;

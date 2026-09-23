@@ -386,7 +386,8 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
         items[index] = {
           ...previous,
           live: false,
-          who: "Interrupted response",
+          // The partial text stays as it was; the summary card says the
+          // task was stopped, so no extra label is needed here.
         };
       }
     } else if (text) {
@@ -547,8 +548,11 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
         break;
       }
     }
+    // A task the user stopped is summarised by its card; the engine's
+    // "cancelled" text would only repeat that.
     if (
       text &&
+      !p.cancelled &&
       !(
         last?.kind === "agent" &&
         !last.live &&

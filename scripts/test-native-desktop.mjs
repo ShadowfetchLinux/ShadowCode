@@ -410,7 +410,7 @@ try {
   await until("Runtime ready", async () => /Ready · CPU · 0\.0\.0-test/.test(await execute("return document.querySelector('.local-runtime').textContent")), 20000);
   await fill("#local-gguf", modelFile);
   await clickButton("Add");
-  await until("Local model listed", () => execute("return !!document.querySelector('article.local-model[aria-label=\"coder-test-1b\"]')"), 15000);
+  await until("Local model listed", () => execute("return !!document.querySelector('article.local-model[aria-label=\"Coder Test 1B\"]')"), 15000);
   const catalog = await api("GET", "/api/local-models");
   const localEntry = catalog.models.find((m) => m.path === modelFile);
   assert.ok(localEntry?.compatible, `Synthetic GGUF is compatible: ${JSON.stringify(localEntry)}`);
@@ -498,7 +498,7 @@ try {
   await screenshot("accounts");
   await accessibility("accounts");
   await clickButton("Local models", "//nav[@aria-label='Settings sections']");
-  await until("Local models page", () => execute("return !!document.querySelector('article.local-model[aria-label=\"coder-test-1b\"]')"));
+  await until("Local models page", () => execute("return !!document.querySelector('article.local-model[aria-label=\"Coder Test 1B\"]')"));
   assert.match(await execute("return document.querySelector('.settings-body').innerText"), /Hardware/);
   await screenshot("settings-local-models");
   await clickButton("Permissions & network", "//nav[@aria-label='Settings sections']");

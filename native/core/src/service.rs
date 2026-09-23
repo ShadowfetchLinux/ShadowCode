@@ -789,20 +789,12 @@ impl Service {
                 return routing::view(&store, &cfg);
             }
             ("GET", "/api/onboarding") => {
+                // Onboarding asks only for a folder and a permission mode; the
+                // model picker is the first model choice, so nothing here
+                // probes local servers or vendor CLIs.
                 let cfg = self.config()?;
-                let providers = self.detected(false).await;
-                let default = if cfg.model.provider != "mock" {
-                    cfg.model.provider.as_str()
-                } else if providers
-                    .iter()
-                    .any(|p| p["provider"] == "ollama" && p["running"] == true)
-                {
-                    "ollama"
-                } else {
-                    "mock"
-                };
                 return Ok(
-                    json!({"completed":cfg.onboarding["completed"].as_bool().unwrap_or(false),"suggested_workspace":self.workspace()?,"providers":models::presets(),"detected":providers,"levels":["read_only","workspace","elevated"],"defaults":{"provider":default,"permission_level":"workspace","theme":"light"}}),
+                    json!({"completed":cfg.onboarding["completed"].as_bool().unwrap_or(false),"suggested_workspace":self.workspace()?,"levels":["read_only","workspace","elevated"],"defaults":{"permission_level":"workspace","permission_mode":"ask","theme":"system"}}),
                 );
             }
             ("POST", "/api/onboarding") => {

@@ -48,9 +48,27 @@ export function TaskSummary({
     : activity.finished?.success
       ? "Finished"
       : "Finished with problems";
+  const stopped = Boolean(activity.finished?.cancelled);
+  // A stop the user asked for is not a failure. With nothing changed and no
+  // checks run, one quiet line says so.
+  if (stopped && changed.length === 0 && !verification?.commands.length) {
+    return (
+      <section className="task-summary is-quiet" aria-label="Task summary">
+        <header>
+          <strong>Stopped</strong>
+          {duration && (
+            <span className="dim">
+              <Timer size={12} aria-hidden="true" /> {duration}
+            </span>
+          )}
+          <span className="dim">No files were changed.</span>
+        </header>
+      </section>
+    );
+  }
   return (
     <section
-      className={`task-summary ${activity.finished?.success ? "" : "is-bad"}`}
+      className={`task-summary ${activity.finished?.success || stopped ? "" : "is-bad"}`}
       aria-label="Task summary"
     >
       <header>

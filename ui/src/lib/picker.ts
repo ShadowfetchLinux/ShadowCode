@@ -110,10 +110,12 @@ export function relativeTime(seconds: number, now = Date.now() / 1000): string {
 export function resetTime(seconds: number, now = Date.now() / 1000): string {
   const delta = seconds - now;
   if (delta <= 0) return "resets now";
-  if (delta < 3600) return `resets in ${Math.max(1, Math.round(delta / 60))}m`;
-  if (delta < 86400) {
-    const hours = Math.floor(delta / 3600);
-    const minutes = Math.round((delta % 3600) / 60);
+  // Round to whole minutes first so 2h 59m 50s reads "3h", never "2h 60m".
+  const total = Math.max(1, Math.round(delta / 60));
+  if (total < 60) return `resets in ${total}m`;
+  if (total < 24 * 60) {
+    const hours = Math.floor(total / 60);
+    const minutes = total % 60;
     return `resets in ${hours}h${minutes ? ` ${minutes}m` : ""}`;
   }
   const date = new Date(seconds * 1000);
@@ -145,12 +147,27 @@ export function usageLabel(
 /** Expandable detail lines: backend detail first, then windows with reset
  * times, plan/pool/credits and the refresh age — only fields that were
  * reported. */
+function planLine(plan: string): string {
+  return `${plan.charAt(0).toUpperCase()}${plan.slice(1)} plan`;
+}
+
 export function usageDetailLines(
   usage: UsageSnapshot | null | undefined,
   now = Date.now() / 1000,
 ): string[] {
   if (!usage || usage.state === "local") return [];
-  const lines = [...(usage.detail || [])];
+  // With structured windows, build every line here so reset times stay live
+  // and nothing is repeated. Otherwise the engine's lines carry the reason.
+  if (!usage.windows?.length) {
+    const lines = [...(usage.detail || [])];
+    if (usage.plan && !lines.some((l) => l.includes(usage.plan as string)))
+      lines.unshift(planLine(usage.plan));
+    if (usage.last_refresh)
+      lines.push(`Last checked ${relativeTime(usage.last_refresh, now)}`);
+    return lines;
+  }
+  const lines: string[] = [];
+  if (usage.plan) lines.push(planLine(usage.plan));
   for (const window of usage.windows || []) {
     const parts = [window.label];
     if (window.remaining_percent != null)
@@ -161,17 +178,14 @@ export function usageDetailLines(
     const line = parts.join(" · ");
     if (!lines.includes(line)) lines.push(line);
   }
-  if (usage.plan && !lines.some((l) => l.includes(usage.plan as string)))
-    lines.push(`Plan: ${usage.plan}`);
   if (usage.pool)
     lines.push(
       `${usage.pool_shared ? "Shared pool" : "Pool"}: ${usage.pool}${usage.pool_shared ? " (shared with other models of this plan)" : ""}`,
     );
-  if (usage.credits) {
-    if (usage.credits.unlimited) lines.push("Credits: unlimited");
-    else if (usage.credits.balance != null)
-      lines.push(`Credits: ${usage.credits.balance}`);
-  }
+  // Credits only when the provider says the account has some.
+  if (usage.credits?.unlimited) lines.push("Credits: unlimited");
+  else if (usage.credits?.has_credits && usage.credits.balance != null)
+    lines.push(`Credits: ${usage.credits.balance}`);
   if (usage.last_refresh)
     lines.push(`Last checked ${relativeTime(usage.last_refresh, now)}`);
   return lines;

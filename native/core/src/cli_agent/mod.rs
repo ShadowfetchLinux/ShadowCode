@@ -153,13 +153,13 @@ impl Vendor {
     }
     pub fn login_hint(self) -> &'static str {
         match self {
-            Vendor::Codex => "Run `codex login` in a terminal, then re-run Doctor.",
-            Vendor::Claude => "Run `claude auth login` in a terminal, then re-run Doctor.",
-            Vendor::Cursor => "Run `cursor-agent login` in a terminal, then re-run Doctor.",
+            Vendor::Codex => "Choose Connect to sign in on OpenAI's page (or run `codex login`).",
+            Vendor::Claude => "Choose Connect to sign in on Anthropic's page (or run `claude auth login`).",
+            Vendor::Cursor => "Choose Connect to sign in on Cursor's page (or run `cursor-agent login`).",
             Vendor::Antigravity => {
-                "Sign in with the official Antigravity CLI (`agy`), then re-run Doctor. ShadowCode does not collect Google passwords."
+                "Run `agy` once in a terminal; it opens Google's sign-in page. ShadowCode never collects passwords."
             }
-            Vendor::Grok => "Run `grok login` in a terminal, then re-run Doctor.",
+            Vendor::Grok => "Choose Connect to sign in on the Grok page (or run `grok login`).",
         }
     }
     pub fn login_command(self) -> &'static [&'static str] {

@@ -67,8 +67,11 @@ export function useConversation(onComplete: () => void) {
       const state = replay(detail.events);
       if (active && !isActive(active)) {
         state.stage = active.status.toUpperCase();
+        // A stopped job already shows "Stopped" in its summary card; its
+        // cancellation message is not something that needs attention.
         if (
           active.summary &&
+          active.status !== "cancelled" &&
           !state.items.some(
             (item) => item.kind === "agent" && item.text === active.summary,
           )
@@ -120,6 +123,7 @@ export function useConversation(onComplete: () => void) {
         const items = [...s.items];
         if (
           done.summary &&
+          done.status !== "cancelled" &&
           !items.some((i) => i.kind === "agent" && i.text === done.summary)
         )
           items.push({

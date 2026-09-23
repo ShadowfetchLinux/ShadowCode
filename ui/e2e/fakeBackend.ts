@@ -42,7 +42,11 @@ export function installFakeBackend(options: FakeOptions = {}) {
     ...unknownUsage,
     state: "ok",
     label: "Shared plan usage · 2% left · resets in 3h",
-    detail: ["ChatGPT Pro"],
+    detail: [
+      "ChatGPT plan: pro",
+      "Weekly: 98% used · resets in 3h",
+      "Shared pool: codex (all models on this account)",
+    ],
     plan: "pro",
     pool: "codex",
     pool_shared: true,

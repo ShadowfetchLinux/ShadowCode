@@ -227,7 +227,7 @@ describe("durable transcript", () => {
     ]);
     expect(state.items[1]).toMatchObject({ messageId: "reply", live: false });
   });
-  it("keeps interrupted partial responses visibly incomplete", () => {
+  it("keeps a stopped partial response without an alarming label", () => {
     const state = replay([
       event(1, "model.stream", { text: "Partial", message_id: "reply" }),
       event(2, "model.stream_end", { message_id: "reply", complete: false }),
@@ -240,8 +240,8 @@ describe("durable transcript", () => {
     expect(state.items[0]).toMatchObject({
       text: "Partial",
       live: false,
-      who: "Interrupted response",
     });
+    expect(state.items[0]).not.toHaveProperty("who");
     expect(state.stage).toBe("CANCELLED");
   });
   it("retains native tool paths and structured output for review cards", () => {

@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type DiffHunk, type FileEntry, type Session } from "../api";
 import { Empty } from "./cards";
@@ -66,7 +67,7 @@ export function Drawer({
           title="Close (Esc)"
           onClick={onClose}
         >
-          ×
+          <X size={16} aria-hidden="true" />
         </button>
       </div>
       <div className="drawer-body">

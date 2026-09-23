@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.28.1: Polish
+
+- **Settings › Accounts is shorter.** Each card is headed by the product name
+  (for example *Codex*), shows the version once, and puts the signed-in email
+  and plan on one line. Ready accounts no longer repeat the status text or the
+  usage reason. With
+  reported rate-limit windows, the usage list is built from the structured
+  snapshot, so reset times stay current and nothing appears twice. Credits
+  appear only when the vendor says the account has some. Sign-in hints read
+  "Choose Connect to sign in on <vendor>'s page", with the official command as
+  the alternative.
+- **Reset times round correctly.** A window resetting in 2 h 59 min 50 s reads
+  "resets in 3h", not "2h 60m".
+- **Stopped tasks are quiet.** A task you stop that changed nothing shows one
+  line ("Stopped · 2s · No files were changed.") instead of a red card. A
+  partial reply is kept without an "Interrupted response" label, and no
+  "Needs attention: Model request cancelled" note is added.
+- **A newly added local model always appears in the picker.** Overlapping
+  picker refreshes could let an older, slower answer replace a newer one; only
+  the newest answer is applied now.
+- **Local model names come from the model.** File-based GGUF rows use the
+  file's `general.name`, plus the quantization from the file name when there is
+  one (for example *Qwen3 14B · Q4_K_M*). Files without a name keep the file
+  name; Ollama imports keep their tag.
+- **Layout fixes.** Notifications appear at the top centre, clear of the
+  composer and the drawer's close button. The Settings navigation no longer
+  wraps "Permissions & network". The drawer close button is a 32 px icon
+  button.
+- **Onboarding no longer probes providers.** `GET /api/onboarding` returns the
+  folder and permission defaults only; it no longer starts local-server or
+  vendor checks the window never shows.
+
 ## 0.28.0: One picker, real backends
 
 - **One composer picker, filled from `GET /api/picker`.** It has

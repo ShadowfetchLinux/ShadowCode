@@ -205,6 +205,7 @@ impl VendorStatus {
         json!({
             "id": format!("cli-{}", self.vendor.id()),
             "label": format!("{} ({} CLI)", self.vendor.product_label(), self.vendor.binary()),
+            "product": self.vendor.product_label(),
             "state": state,
             "status": status,
             "availability": self.availability,
@@ -658,10 +659,7 @@ async fn probe_codex(binary: &Path, status: &mut VendorStatus) {
                 status.detail = ready_detail(status);
             } else {
                 status.availability = Availability::SignIn;
-                status.detail = format!(
-                    "Installed ({}) but not signed in",
-                    status.version.as_deref().unwrap_or("version unknown")
-                );
+                status.detail = "Installed, not signed in".to_owned();
             }
             for (method, error) in probe.errors {
                 status.detail.push_str(&format!(" · {method}: {error}"));
@@ -681,7 +679,7 @@ async fn probe_codex(binary: &Path, status: &mut VendorStatus) {
                 }
                 doctor::LoginState::NotLoggedIn => {
                     status.availability = Availability::SignIn;
-                    status.detail = "Installed but not signed in".into();
+                    status.detail = "Installed, not signed in".into();
                 }
                 doctor::LoginState::Unknown => {
                     status.availability = Availability::Unavailable;
@@ -717,10 +715,7 @@ async fn probe_claude(binary: &Path, status: &mut VendorStatus) {
         }
         doctor::LoginState::NotLoggedIn => {
             status.availability = Availability::SignIn;
-            status.detail = format!(
-                "Installed ({}) but not signed in",
-                status.version.as_deref().unwrap_or("version unknown")
-            );
+            status.detail = "Installed, not signed in".to_owned();
         }
         doctor::LoginState::Unknown => {
             status.availability = Availability::Unavailable;
@@ -820,7 +815,7 @@ async fn probe_acp_vendor(binary: &Path, args: &[&str], status: &mut VendorStatu
                 let lower = error.to_ascii_lowercase();
                 if lower.contains("login") || lower.contains("auth") || lower.contains("sign") {
                     status.availability = Availability::SignIn;
-                    status.detail = format!("Installed but not signed in ({error})");
+                    status.detail = format!("Installed, not signed in ({error})");
                 } else {
                     status.availability = Availability::Unavailable;
                     status.error = Some(error.to_owned());
@@ -859,7 +854,7 @@ async fn probe_acp_vendor(binary: &Path, args: &[&str], status: &mut VendorStatu
                     status.detail = if logged_in {
                         ready_detail(status)
                     } else {
-                        "Installed but not signed in".into()
+                        "Installed, not signed in".into()
                     };
                     status.error = None;
                 }
@@ -923,7 +918,7 @@ async fn probe_antigravity(binary: &Path, status: &mut VendorStatus) {
             } else if lower.contains("login") || lower.contains("sign in") || lower.contains("auth")
             {
                 status.availability = Availability::SignIn;
-                status.detail = "Installed but not signed in".into();
+                status.detail = "Installed, not signed in".into();
             } else {
                 status.availability = Availability::Unavailable;
                 status.error = Some("`agy models` returned no models".into());

@@ -650,6 +650,8 @@ button.mini.primary-mini {
 }
 .drawer-close {
   margin-left: auto;
+  height: 32px;
+  min-width: 32px;
 }
 .drawer-body {
   flex: 1;
@@ -1208,7 +1210,7 @@ button.mini.primary-mini {
 
 .settings {
   display: grid;
-  grid-template-columns: 150px 1fr;
+  grid-template-columns: 184px 1fr;
   padding: 0;
   overflow: hidden;
   height: min(86vh, 700px);
@@ -1226,6 +1228,7 @@ button.mini.primary-mini {
 }
 .settings-nav button {
   text-align: left;
+  white-space: nowrap;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
   color: var(--text-2);
@@ -1258,14 +1261,18 @@ button.mini.primary-mini {
 
 /* ---------- toasts / boot ---------- */
 .toasts {
+  /* Top centre, under the header: never over the composer, Send, or the
+     drawer's close button. */
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 62px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   z-index: 40;
-  max-width: 380px;
+  width: max-content;
+  max-width: min(380px, calc(100vw - 32px));
   pointer-events: none;
 }
 .toast button {

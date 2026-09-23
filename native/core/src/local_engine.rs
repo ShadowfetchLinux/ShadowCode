@@ -845,6 +845,33 @@ pub fn plan_context(
     )
 }
 
+/// The name a file-based model shows in the picker: the model's own
+/// `general.name` (plus the quantization from the file name, so two
+/// quantizations of one model stay distinguishable), else the file stem.
+fn display_name(header: &GgufHeader, path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("local-model");
+    let Some(name) = header
+        .str("general.name")
+        .map(|n| n.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|n| !n.is_empty() && n.chars().count() <= 80)
+    else {
+        return stem.to_owned();
+    };
+    // Quantization tag from the file name, e.g. `Qwen3-14B-Q4_K_M.gguf`.
+    let quant =
+        regex::Regex::new(r"(?i)(?:^|[-._])(I?Q\d(?:_[0-9A-Z]{1,2}){0,2}|BF16|F16|F32)(?:$|[-.])")
+            .ok()
+            .and_then(|re| re.captures_iter(stem).last())
+            .map(|c| c[1].to_ascii_uppercase());
+    match quant {
+        Some(q) if !name.to_ascii_uppercase().contains(&q) => format!("{name} · {q}"),
+        _ => name,
+    }
+}
+
 /// How a catalog row was found.
 #[derive(Clone, Debug)]
 pub struct Candidate {
@@ -980,12 +1007,10 @@ pub fn inspect(candidate: &Candidate, budget: &Budget) -> Result<GgufEntry> {
     }
     Ok(GgufEntry {
         id: entry_id(path),
-        name: candidate.name.clone().unwrap_or_else(|| {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("local-model")
-                .to_owned()
-        }),
+        name: candidate
+            .name
+            .clone()
+            .unwrap_or_else(|| display_name(&header, path)),
         path: path.display().to_string(),
         bytes,
         source: candidate.source.into(),
@@ -1549,10 +1574,8 @@ mod tests {
     use crate::gguf::test_support::{write_gguf, V};
 
     fn model(path: &Path, arch: &str, template: Option<&str>) {
-        let mut kv = vec![
-            ("general.architecture", V::Str(arch)),
-            ("general.name", V::Str("Test")),
-        ];
+        // No general.name: rows fall back to the file name.
+        let mut kv = vec![("general.architecture", V::Str(arch))];
         let ctx_key = format!("{arch}.context_length");
         let emb_key = format!("{arch}.embedding_length");
         let blk_key = format!("{arch}.block_count");
@@ -1563,6 +1586,39 @@ mod tests {
             kv.push(("tokenizer.chat_template", V::Str(t)));
         }
         write_gguf(path, &kv, &["token_embd.weight", "output.weight"]);
+    }
+
+    #[test]
+    fn file_models_are_named_from_gguf_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let named = |path: &Path| {
+            write_gguf(
+                path,
+                &[
+                    ("general.architecture", V::Str("qwen3")),
+                    ("general.name", V::Str("  Qwen3   14B ")),
+                ],
+                &["token_embd.weight"],
+            )
+        };
+        let path = dir.path().join("qwen3-14b-instruct-Q4_K_M.gguf");
+        named(&path);
+        let header = header(&path).unwrap();
+        assert_eq!(display_name(&header, &path), "Qwen3 14B · Q4_K_M");
+        let plain = dir.path().join("weights.gguf");
+        named(&plain);
+        assert_eq!(
+            display_name(&super::header(&plain).unwrap(), &plain),
+            "Qwen3 14B"
+        );
+        let unnamed = dir.path().join("mystery-BF16.gguf");
+        write_gguf(
+            &unnamed,
+            &[("general.architecture", V::Str("llama"))],
+            &["token_embd.weight"],
+        );
+        let bare = super::header(&unnamed).unwrap();
+        assert_eq!(display_name(&bare, &unnamed), "mystery-BF16");
     }
 
     fn projector(path: &Path, width: u32) {

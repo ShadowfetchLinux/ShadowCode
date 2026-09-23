@@ -29,7 +29,7 @@ it("Accounts: status, usage windows, models and Connect for signed-out vendors",
   const codex = await screen.findByRole("article", { name: "Codex" });
   expect(within(codex).getByText("Ready")).toBeTruthy();
   expect(within(codex).getByText("codex-cli 0.155.0")).toBeTruthy();
-  expect(within(codex).getByText("dev@example.com · Pro")).toBeTruthy();
+  expect(within(codex).getByText("dev@example.com · Pro plan")).toBeTruthy();
   expect(within(codex).getByText(/Weekly · 2% left · resets in/)).toBeTruthy();
   expect(within(codex).getByText(/Last checked/)).toBeTruthy();
   expect(

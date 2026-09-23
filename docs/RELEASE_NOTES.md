@@ -1,3 +1,27 @@
+ShadowCode 0.28.1 is a polish release on top of 0.28.0. Settings, stopped
+tasks, notifications and local model names are cleaner; nothing about how
+models run or bill has changed. The 0.28.0 notes follow below.
+
+## Fixed in 0.28.1
+
+- **Accounts.** Each card shows the product name, its version once, and the
+  signed-in email with the plan on one line. Usage windows are listed once, with
+  reset times that stay current. Credits appear only when the vendor reports
+  some.
+- **Reset times** round to whole minutes ("resets in 3h", not "2h 60m").
+- **Stopped tasks** that changed nothing show a single quiet line instead of a
+  red card and without a "Needs attention" note. The partial reply is kept.
+- **Newly added local models** always appear in the picker right away.
+- **Local model names** come from the GGUF file's own name, plus its
+  quantization, for example *Qwen3 14B · Q4_K_M*.
+- **Notifications** appear at the top centre, clear of the composer and the
+  drawer. "Permissions & network" no longer wraps in Settings, and the drawer
+  close button is larger.
+- **First run** no longer checks local servers or vendor tools that the
+  onboarding screen does not use.
+
+## ShadowCode 0.28.0
+
 ShadowCode 0.28.0 is a Linux desktop coding agent with one window and one
 model picker. It runs your existing subscriptions through the vendors' official
 command-line tools, or GGUF models on your own hardware with a llama.cpp
@@ -79,9 +103,9 @@ runtime that ships with the app.
 
 ## Downloads
 
-- `ShadowCode_0.28.0_amd64.AppImage`
-- `ShadowCode_0.28.0_amd64.deb`
-- `ShadowCode_0.28.0_appimage-runtime-sources.tar.gz`
+- `ShadowCode_0.28.1_amd64.AppImage`
+- `ShadowCode_0.28.1_amd64.deb`
+- `ShadowCode_0.28.1_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
 Builds are for x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).

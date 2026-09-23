@@ -202,6 +202,7 @@ export default function App() {
   const stick = useRef(true);
   const browsingHistory = useRef(false);
   const pickerFetched = useRef(0);
+  const pickerSeq = useRef(0);
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastSeq.current;
@@ -256,13 +257,19 @@ export default function App() {
   const reloadPicker = useCallback(
     async (refresh = false) => {
       pickerFetched.current = Date.now();
+      // Requests can overlap (vendor checks are slow); only the newest one
+      // may replace the rows, or an older answer would hide a model that was
+      // just added.
+      const seq = ++pickerSeq.current;
       try {
         const result = await api.picker(refresh);
+        if (seq !== pickerSeq.current) return;
         setPickerTargets(Array.isArray(result.targets) ? result.targets : []);
       } catch (e) {
-        toast(`Could not load models: ${String(e)}`, "err");
+        if (seq === pickerSeq.current)
+          toast(`Could not load models: ${String(e)}`, "err");
       } finally {
-        setPickerLoaded(true);
+        if (seq === pickerSeq.current) setPickerLoaded(true);
       }
     },
     [toast],

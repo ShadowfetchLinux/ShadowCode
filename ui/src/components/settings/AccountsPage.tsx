@@ -219,7 +219,10 @@ export function AccountsPage({
         const status = vendors![key];
         const ready = status.state === "ready";
         const apiKey = /api.?key/i.test(status.account?.auth_mode || "");
-        const usageLines = usageDetailLines(status.usage);
+        // The account line already names the plan; don't repeat it below.
+        const usageLines = usageDetailLines(status.usage).filter(
+          (line) => !(status.account?.plan && / plan$/.test(line)),
+        );
         const models = status.models || [];
         const thisLogin = login?.vendor === key ? login : null;
         return (
@@ -232,17 +235,24 @@ export function AccountsPage({
             aria-labelledby={`account-${key}`}
           >
             <header>
-              <h4 id={`account-${key}`}>{status.label}</h4>
+              <h4 id={`account-${key}`}>{status.product || status.label}</h4>
               <span className={`avail avail-${status.availability}`}>
                 {status.availability_label}
               </span>
               {status.version && <span className="dim">{status.version}</span>}
             </header>
-            {status.detail && <p>{status.detail}</p>}
-            {status.account &&
+            {/* Ready rows: the header already shows state and version; the
+                account line says who is signed in. Other states explain why. */}
+            {!ready && status.detail && <p>{status.detail}</p>}
+            {ready &&
+              status.account &&
               (status.account.email || status.account.plan) && (
-                <p className="hint">
-                  {[status.account.email, status.account.plan]
+                <p>
+                  {[
+                    status.account.email,
+                    status.account.plan &&
+                      `${status.account.plan[0].toUpperCase()}${status.account.plan.slice(1)} plan`,
+                  ]
                     .filter(Boolean)
                     .join(" · ")}
                 </p>
@@ -254,8 +264,17 @@ export function AccountsPage({
             {status.error && <p className="health-bad">{status.error}</p>}
             {ready && (
               <div className="account-usage">
+                {/* With reported windows the list below says it all; the
+                    one-line summary is for rows without them. */}
                 <p>
-                  <strong>Usage:</strong> {usageLabel(status.usage, "cloud")}
+                  <strong>Usage</strong>
+                  {status.usage?.windows?.length
+                    ? ""
+                    : // The usage link sits right below; drop the label's
+                      // "· Open … usage" pointer to it.
+                      `: ${usageLabel(status.usage, "cloud")
+                        .replace(/ · Open .* usage$/, "")
+                        .replace(/^Usage unavailable/, "unavailable")}`}
                 </p>
                 {usageLines.length > 0 && (
                   <ul>
@@ -264,16 +283,17 @@ export function AccountsPage({
                     ))}
                   </ul>
                 )}
-                {status.usage_note && (
-                  <p className="hint">{status.usage_note}</p>
-                )}
+                {status.usage_note &&
+                  !usageLines.includes(status.usage_note) && (
+                    <p className="hint">{status.usage_note}</p>
+                  )}
                 {status.usage?.provider_usage_url && (
                   <a
                     href={status.usage.provider_usage_url}
                     target="_blank"
                     rel="noreferrer"
                   >
-                    Open {status.label} usage
+                    Open {status.product || status.label} usage
                   </a>
                 )}
               </div>

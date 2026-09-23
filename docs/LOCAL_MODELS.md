@@ -55,8 +55,12 @@ manifests wins.
 
 ## What ShadowCode reads from a GGUF
 
-Everything comes from the file's header. The file name is never used.
+Capabilities come from the file's header, never from the file name.
 
+- **Name.** The row is named after the model's own `general.name`, plus the
+  quantization from the file name when there is one (for example
+  *Qwen3 14B · Q4_K_M*). A file without a name shows its file name; Ollama
+  imports show their tag.
 - **Compatibility.** The architecture must appear in the runtime's
   `architectures.txt`, and the model must have a token embedding tensor.
 - **Tools.** The chat template must support tool calls. If it doesn't, the row

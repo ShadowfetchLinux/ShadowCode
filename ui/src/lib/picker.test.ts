@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resetTime,
   availabilityLabel,
   groupTargets,
   rowAction,
@@ -59,12 +60,13 @@ describe("usage labels", () => {
     );
   });
 
-  it("lists windows with reset times, pool and last check only when reported", () => {
+  it("builds live window lines from structured usage without repeating the engine text", () => {
     const lines = usageDetailLines(
       {
         state: "ok",
         label: "2% left",
-        detail: ["ChatGPT Pro"],
+        detail: ["ChatGPT plan: pro", "Weekly: 98% used · resets in 9h"],
+        plan: "pro",
         pool: "codex",
         pool_shared: true,
         windows: [
@@ -76,18 +78,42 @@ describe("usage labels", () => {
             resets_at: now + 3 * 3600,
           },
         ],
-        credits: null,
+        credits: { has_credits: false, unlimited: false, balance: "0" },
         last_refresh: now - 60,
       },
       now,
     );
-    expect(lines[0]).toBe("ChatGPT Pro");
+    expect(lines[0]).toBe("Pro plan");
     expect(lines).toContain("Weekly · 2% left · resets in 3h");
+    expect(lines.some((l) => l.includes("98% used"))).toBe(false);
     expect(lines.some((l) => l.startsWith("Shared pool: codex"))).toBe(true);
+    expect(lines.some((l) => l.startsWith("Credits"))).toBe(false);
     expect(lines).toContain("Last checked 1m ago");
     expect(usageDetailLines({ state: "unavailable", label: "" }, now)).toEqual(
       [],
     );
+  });
+  it("rounds reset times to whole minutes", () => {
+    expect(resetTime(now + 3 * 3600 - 10, now)).toBe("resets in 3h");
+    expect(resetTime(now + 3599, now)).toBe("resets in 1h");
+    expect(resetTime(now + 90 * 60 + 20, now)).toBe("resets in 1h 30m");
+    expect(resetTime(now + 20, now)).toBe("resets in 1m");
+  });
+  it("shows the engine's reason when no window is reported", () => {
+    expect(
+      usageDetailLines(
+        {
+          state: "unavailable",
+          label: "Usage unavailable",
+          detail: ["Codex did not report rate limits for this account"],
+          last_refresh: now - 60,
+        },
+        now,
+      ),
+    ).toEqual([
+      "Codex did not report rate limits for this account",
+      "Last checked 1m ago",
+    ]);
   });
 });
 

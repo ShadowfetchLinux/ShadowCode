@@ -11,6 +11,8 @@ export type VendorModel = {
 };
 
 export type VendorStatus = {
+  /** Product name without the CLI binary, e.g. "Claude Code". */
+  product?: string;
   id: string;
   label: string;
   state: "ready" | "not_logged_in" | "not_installed" | "unavailable" | string;
