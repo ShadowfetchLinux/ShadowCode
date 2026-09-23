@@ -1,3 +1,23 @@
+ShadowCode 0.24.0 adds vendor CLI agent backends. You can run Claude, Codex, or
+Grok subscriptions by spawning the official CLI. ShadowCode never reads or
+stores those OAuth tokens.
+
+- **Codex:** `codex app-server` JSON-RPC, falling back to `codex exec --json`
+  only when app-server is unavailable.
+- **Grok:** `grok agent stdio` (Agent Client Protocol).
+- **Claude:** headless stream-json. Anthropic forbids third-party use of
+  Pro/Max OAuth tokens directly (enforced 2026); the official binary with the
+  user's own login is currently tolerated but not guaranteed.
+- Doctor, picker, and Settings → Advanced knobs. Rewind does not apply to
+  vendor-agent tasks.
+
+Downloads: `ShadowCode_0.24.0_amd64.AppImage`, `ShadowCode_0.24.0_amd64.deb`,
+the AppImage runtime source archive, and `SHA256SUMS`. Binaries target x86_64,
+Ubuntu 24.04+ / glibc 2.39+. Git and model providers such as Ollama remain
+external. Vendor CLIs are optional and are never bundled.
+
+---
+
 ShadowCode 0.23.0 hardens the verification gate, live steering and parallel
 workspace recovery. The Rust/Tauri app embeds its interface and needs no Python
 or Node runtime.

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.24.0
+
+- Vendor CLI agent backends: spawn the official Claude, Codex, or Grok CLI in a
+  trusted workspace. ShadowCode never reads, stores, or proxies vendor OAuth
+  tokens. Login remains `claude auth login`, `codex login`, and `grok login`.
+- Codex uses `codex app-server` JSON-RPC, with `codex exec --json` only when
+  app-server is unavailable. Grok uses ACP (`grok agent stdio`). Claude uses
+  headless stream-json. Vendor tools and sandbox stay with the vendor; Pause
+  and Steer interrupt and follow up. Rewind does not apply.
+- Doctor reports not installed / not logged in / ready without printing
+  credentials. The model picker groups local vs vendor agents; knobs live in
+  Settings → Advanced, including a Claude adapter disable flag.
+- Anthropic policy note: third-party clients may not use Pro/Max OAuth tokens
+  directly (enforced 2026); driving the official `claude` binary with the
+  user's login is currently tolerated but not guaranteed.
+
 ## 0.23.0
 
 - Verification gate: the last test/build/lint command decides. A deliberately

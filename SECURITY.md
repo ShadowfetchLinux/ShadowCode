@@ -115,6 +115,14 @@ Protect the user account and filesystem accordingly. The configured model
 provider receives the task context sent by the harness. Cloud providers may
 therefore receive project content; local providers keep inference on the machine.
 
+Vendor CLI backends (Claude, Codex, Grok) spawn the official CLI after the user
+logs in with that vendor. ShadowCode holds no vendor credentials and never
+reads `~/.codex/auth.json`, `~/.grok/auth.json`, or Claude credential files.
+Anthropic forbids third-party clients from using Pro/Max OAuth tokens directly
+(enforced 2026); driving the official `claude` binary with the user's own login
+is currently tolerated but not guaranteed. See
+[vendor CLI backends](docs/NATIVE_CLI_BACKENDS.md).
+
 The UI renders Markdown without executing raw HTML. It does not automatically
 load remote images embedded in model responses. Only fragment links and
 absolute `http`/`https` URLs without embedded credentials stay clickable;

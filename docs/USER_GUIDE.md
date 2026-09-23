@@ -1,6 +1,6 @@
 # ShadowCode user guide
 
-This guide covers the supported 0.23 native release. The desktop, CLI, terminal
+This guide covers the supported 0.24 native release. The desktop, CLI, terminal
 interface, and integrations use the same Python-free Rust engine. See the
 [native desktop](NATIVE_DESKTOP.md), [native CLI](NATIVE_CLI.md), and
 [release gates](NATIVE_MIGRATION.md) guides for platform and integration details.
@@ -81,6 +81,13 @@ does stop its workers. Stop requests can wait for an in-flight model request or
 tool timeout before the worker exits.
 
 ## Models, settings, and goals
+
+The model selector groups **Local model (ShadowCode agent)** HTTP models and
+**Claude / Codex / Grok (vendor agent)** official CLIs. Vendor login stays with
+`claude auth login`, `codex login`, or `grok login`; ShadowCode never reads those
+credentials. Pause/Steer interrupts the vendor process and sends a follow-up.
+**Rewind does not apply** to vendor-agent tasks. Details:
+[vendor CLI backends](NATIVE_CLI_BACKENDS.md).
 
 The model selector accepts detected or configured models and a custom model ID.
 Settings covers provider connection, permissions, appearance, notifications,
