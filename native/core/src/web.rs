@@ -48,6 +48,8 @@ pub struct WebPolicy {
     /// Exact `host:port` entries allowed to bypass the port and private-address
     /// rules (for example a project dev server on `localhost:3000`).
     pub allow_local_dev: Vec<String>,
+    /// User-run SearXNG base URL (explicit allowance, may be local).
+    pub searxng_url: Option<String>,
     pub connect_timeout: Duration,
     pub total_timeout: Duration,
     pub max_body_bytes: usize,
@@ -57,6 +59,7 @@ impl Default for WebPolicy {
     fn default() -> Self {
         Self {
             allow_local_dev: Vec::new(),
+            searxng_url: None,
             connect_timeout: Duration::from_secs(5),
             total_timeout: Duration::from_secs(20),
             max_body_bytes: MAX_BODY_BYTES,
@@ -66,8 +69,20 @@ impl Default for WebPolicy {
 }
 impl WebPolicy {
     pub fn from_config(config: &crate::config::Config) -> Self {
+        let searxng = config.network.searxng_url.trim();
+        let mut allow_local_dev = config.network.allow_local_dev.clone();
+        let searxng_url = (!searxng.is_empty()).then(|| {
+            // The user named this server; it may live on this computer.
+            if let Ok(url) = Url::parse(searxng) {
+                if let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) {
+                    allow_local_dev.push(format!("{host}:{port}"));
+                }
+            }
+            searxng.to_owned()
+        });
         Self {
-            allow_local_dev: config.network.allow_local_dev.clone(),
+            allow_local_dev,
+            searxng_url,
             ..Self::default()
         }
     }
@@ -1249,14 +1264,134 @@ pub fn search_url(endpoint: &str, query: &str) -> Result<Url> {
     Ok(url)
 }
 
-/// Search the keyless DuckDuckGo HTML endpoint.
+/// Search: the user's SearXNG instance when configured, then the keyless
+/// DuckDuckGo HTML endpoint. DuckDuckGo often refuses automated clients with a
+/// bot check; that is reported as `blocked`, never worked around or invented.
 pub async fn search(
     query: &str,
     max_results: usize,
     policy: &WebPolicy,
     cancel: &CancellationToken,
 ) -> Result<SearchResult> {
-    search_with_endpoint(SEARCH_ENDPOINT, query, max_results, policy, cancel).await
+    let mut reasons = Vec::new();
+    if let Some(base) = &policy.searxng_url {
+        let result = searxng_search(base, query, max_results, policy, cancel).await?;
+        if !result.blocked {
+            return Ok(result);
+        }
+        reasons.push(format!(
+            "SearXNG: {}",
+            result.reason.as_deref().unwrap_or("unavailable")
+        ));
+    }
+    let mut result =
+        search_with_endpoint(SEARCH_ENDPOINT, query, max_results, policy, cancel).await?;
+    if result.blocked && !reasons.is_empty() {
+        reasons.push(format!(
+            "DuckDuckGo: {}",
+            result.reason.as_deref().unwrap_or("unavailable")
+        ));
+        result.reason = Some(reasons.join("; "));
+    }
+    Ok(result)
+}
+
+/// SearXNG JSON API: `GET {base}/search?q=…&format=json` (the instance must
+/// list `json` under `search.formats`). Failures return `blocked` with the
+/// reason.
+pub async fn searxng_search(
+    base: &str,
+    query: &str,
+    max_results: usize,
+    policy: &WebPolicy,
+    cancel: &CancellationToken,
+) -> Result<SearchResult> {
+    let query = query.trim();
+    ensure!(
+        !query.is_empty() && query.chars().count() <= MAX_QUERY_CHARS,
+        "query must contain between 1 and {MAX_QUERY_CHARS} characters"
+    );
+    let mut url =
+        Url::parse(base.trim_end_matches('/')).context("network.searxng_url is not a URL")?;
+    {
+        let path = format!("{}/search", url.path().trim_end_matches('/'));
+        url.set_path(&path);
+    }
+    url.query_pairs_mut()
+        .append_pair("q", query)
+        .append_pair("format", "json");
+    let mut result = SearchResult {
+        query: query.to_owned(),
+        results: Vec::new(),
+        source_url: url.to_string(),
+        final_url: url.to_string(),
+        status: None,
+        blocked: false,
+        reason: None,
+    };
+    let raw = match fetch_raw_with(url.as_str(), None, policy, cancel).await {
+        Ok(raw) => raw,
+        Err(error) => {
+            if cancel.is_cancelled() {
+                return Err(error);
+            }
+            result.blocked = true;
+            result.reason = Some(format!("{error:#}"));
+            return Ok(result);
+        }
+    };
+    result.final_url = raw.final_url.to_string();
+    result.status = Some(raw.status);
+    if raw.status != 200 {
+        result.blocked = true;
+        result.reason = Some(if raw.status == 403 {
+            "the instance answered HTTP 403 (enable `json` under search.formats in its settings.yml)".into()
+        } else {
+            format!("the instance answered HTTP {}", raw.status)
+        });
+        return Ok(result);
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(&raw.body) else {
+        result.blocked = true;
+        result.reason = Some("the instance did not return JSON".into());
+        return Ok(result);
+    };
+    result.results = parse_searxng(&value, max_results.clamp(1, MAX_SEARCH_RESULTS));
+    Ok(result)
+}
+
+/// Result list of a SearXNG JSON response (http(s) URLs only).
+pub fn parse_searxng(value: &Value, max_results: usize) -> Vec<SearchHit> {
+    value["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|hit| {
+            let url = hit["url"].as_str()?.trim();
+            let parsed = Url::parse(url).ok()?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return None;
+            }
+            Some(SearchHit {
+                title: hit["title"]
+                    .as_str()
+                    .unwrap_or(url)
+                    .trim()
+                    .chars()
+                    .take(300)
+                    .collect(),
+                url: url.to_owned(),
+                snippet: hit["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim()
+                    .chars()
+                    .take(500)
+                    .collect(),
+            })
+        })
+        .take(max_results)
+        .collect()
 }
 
 /// Same as [`search`] against another endpoint with the same page format

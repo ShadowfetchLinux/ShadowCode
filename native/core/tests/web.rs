@@ -763,3 +763,55 @@ fn saved_results_page_parses() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn searxng_json_results_are_parsed_and_filtered() {
+    let value = serde_json::json!({"results":[
+        {"url":"https://github.com/ggml-org/llama.cpp","title":"llama.cpp","content":"LLM inference in C/C++"},
+        {"url":"javascript:alert(1)","title":"bad","content":""},
+        {"url":"https://example.com/b","title":"B"}
+    ]});
+    let hits = shadowcode_core::web::parse_searxng(&value, 8);
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].title, "llama.cpp");
+    assert_eq!(hits[1].snippet, "");
+    assert_eq!(shadowcode_core::web::parse_searxng(&value, 1).len(), 1);
+}
+
+#[tokio::test]
+async fn configured_searxng_answers_first_and_its_failures_are_reported() {
+    let server = serve(|path| {
+        if path.starts_with("/search?q=llama") && path.contains("format=json") {
+            Reply::Body(
+                200,
+                "application/json",
+                br#"{"results":[{"url":"https://github.com/ggml-org/llama.cpp","title":"llama.cpp","content":"LLM inference"}]}"#.to_vec(),
+            )
+        } else {
+            Reply::Body(403, "text/plain", b"forbidden".to_vec())
+        }
+    })
+    .await;
+    let cancel = CancellationToken::new();
+    let policy = WebPolicy {
+        searxng_url: Some(server.url("")),
+        allow_local_dev: vec![server.allow()],
+        ..WebPolicy::default()
+    };
+    let found =
+        shadowcode_core::web::searxng_search(&server.url(""), "llama cpp", 5, &policy, &cancel)
+            .await
+            .unwrap();
+    assert!(!found.blocked, "{:?}", found.reason);
+    assert_eq!(
+        found.results[0].url,
+        "https://github.com/ggml-org/llama.cpp"
+    );
+    let refused =
+        shadowcode_core::web::searxng_search(&server.url(""), "other", 5, &policy, &cancel)
+            .await
+            .unwrap();
+    assert!(refused.blocked);
+    assert!(refused.reason.unwrap().contains("search.formats"));
+    assert!(refused.results.is_empty());
+}

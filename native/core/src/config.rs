@@ -170,9 +170,20 @@ pub struct NetworkConfig {
     /// Exact `host:port` entries (for example `localhost:3000`) that web tools
     /// may reach although they are local or use another port.
     pub allow_local_dev: Vec<String>,
+    /// Optional SearXNG instance the user runs (base URL). When set,
+    /// web_search asks it first (JSON API); DuckDuckGo's page is the fallback.
+    pub searxng_url: String,
 }
 impl NetworkConfig {
     pub fn validate(&self) -> Result<()> {
+        if !self.searxng_url.trim().is_empty() {
+            let url = reqwest::Url::parse(self.searxng_url.trim())
+                .context("network.searxng_url must be an http(s) URL")?;
+            ensure!(
+                matches!(url.scheme(), "http" | "https") && url.username().is_empty(),
+                "network.searxng_url must be an http(s) URL without credentials"
+            );
+        }
         ensure!(
             self.allow_local_dev.len() <= 32,
             "At most 32 local dev servers can be allowed"
