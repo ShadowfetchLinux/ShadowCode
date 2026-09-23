@@ -667,7 +667,7 @@ impl Service {
                     json!({"workspace":self.workspace()?,"model":cfg.model,"permissions":cfg.permissions,"onboarding":cfg.onboarding,"routing":cfg.routing,"trusted":cfg.is_trusted(&self.workspace()?)}),
                 );
             }
-            ("GET", "/api/config") => return Ok(json!(self.config()?)),
+            ("GET", "/api/config") => return config_view(&self.config()?),
             ("GET", "/api/background") => {
                 let tasks = self
                     .engine
@@ -714,6 +714,13 @@ impl Service {
                 if let Some(object) = values.as_object_mut() {
                     object.remove("api_key");
                 }
+                // Choosing a user-facing mode means shell asks again, unless
+                // the same request sets approve_shell explicitly.
+                if values.pointer("/permissions/mode").is_some()
+                    && values.pointer("/permissions/approve_shell").is_none()
+                {
+                    values["permissions"]["approve_shell"] = json!(true);
+                }
                 let cfg = Config::update(self.engine.paths(), |cfg| {
                     // Settings use the provider's model name as `default`. Give
                     // that configuration a stable identity before saving it.
@@ -754,7 +761,7 @@ impl Service {
                     Ok(())
                 })?;
                 self.register(&cfg.model)?;
-                return Ok(json!(cfg));
+                return config_view(&cfg);
             }
             ("GET", "/api/routing") => {
                 let cfg = self.config()?;
@@ -1118,6 +1125,7 @@ impl Service {
                             mode: "command".into(),
                             queue: body["queue"].as_bool().unwrap_or(false),
                             images: Vec::new(),
+                            web: false,
                         },
                         crate::engine::CommandRequest {
                             command,
@@ -1192,6 +1200,7 @@ impl Service {
                             mode: mode.into(),
                             queue: body["queue"].as_bool().unwrap_or(false),
                             images,
+                            web: body["web"].as_bool().unwrap_or(false),
                         },
                         purpose,
                         body.get("permission_limit")
@@ -1321,8 +1330,11 @@ impl Service {
                     "Invalid attachment name"
                 );
                 let path = format!(".shadow/attachments/{}-{name}", crate::id());
-                self.mutable_workspace()?
-                    .write(&path, text("text").as_bytes(), Some("missing"))?;
+                self.attachment_workspace()?.write(
+                    &path,
+                    text("text").as_bytes(),
+                    Some("missing"),
+                )?;
                 return Ok(json!({"path":path,"kind":"text"}));
             }
             ("POST", "/api/workspace/attach-image") => {
@@ -1331,7 +1343,7 @@ impl Service {
                     .and_then(|v| v.to_str())
                     .context("Invalid image filename")?;
                 let bytes = crate::vision::decode_data_base64(text("data_base64"))?;
-                let ws = self.mutable_workspace()?;
+                let ws = self.attachment_workspace()?;
                 let stored = crate::vision::store_attachment(&ws, name, &bytes)?;
                 return Ok(
                     json!({"path":stored.path,"mime":stored.mime,"bytes":stored.bytes,"kind":"image"}),
@@ -1725,7 +1737,11 @@ impl Service {
                     _reservation.path == ws.path,
                     "Project selection changed; activate this task before rewinding"
                 );
-                return Ok(json!({"ok":true,"restored":checkpoint::restore(&store,&ws,parts[3])?}));
+                let restored = checkpoint::restore(&store, &ws, parts[3])?;
+                let session_id = task["session_id"].as_str().unwrap_or_default();
+                self.engine
+                    .announce_restore(session_id, parts[3], &restored, true)?;
+                return Ok(json!({"ok":true,"restored":restored}));
             }
         }
         bail!(
@@ -1741,6 +1757,18 @@ impl Service {
             .map_err(|_| anyhow::anyhow!("Project lock poisoned"))?
             .session
             .clone())
+    }
+    /// Attachments are user input written as new, uniquely named files under
+    /// .shadow/attachments (size/format limits apply). Reading them is not a
+    /// project change, so read-only projects accept them; trust is required.
+    fn attachment_workspace(&self) -> Result<Workspace> {
+        let workspace = Workspace::open(&self.workspace()?)?;
+        let cfg = Config::load(self.engine.paths(), Some(&workspace.path))?;
+        ensure!(
+            cfg.is_trusted(&workspace.path),
+            "Trust this project before attaching files"
+        );
+        Ok(workspace)
     }
     fn mutable_workspace(&self) -> Result<ManualWorkspace> {
         self.mutable_workspace_at(&self.workspace()?)
@@ -2278,6 +2306,14 @@ impl Service {
         );
         Ok(json!({"ok":true,"action":action,"path":path}))
     }
+}
+/// GET/PUT /api/config response: the saved configuration plus what the
+/// permission modes mean for each vendor runtime.
+fn config_view(cfg: &Config) -> Result<Value> {
+    let mut value = json!(cfg);
+    value["permissions"]["vendor_notes"] = permissions::vendor_notes(cfg);
+    value["network"]["offline"] = json!(cfg.offline());
+    Ok(value)
 }
 fn active(job: &Value) -> bool {
     matches!(

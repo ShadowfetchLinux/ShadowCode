@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
         workspace:project.clone(),session_id:None,model:None,mode:"review".into(),queue:false,
         task:"Inspect billing.db using the native SQLite table/query tools. Discover its schema, then use SQL SUM to calculate total_cents for paid invoices only. Report the actual integer as total_cents=NUMBER. Do not use a shell or change any data/files.".into(),
         images: Vec::new(),
+        web: false,
         }).await?;
     let finished = tokio::time::timeout(Duration::from_secs(240), engine.wait(&job.id)).await;
     engine.shutdown().await?;

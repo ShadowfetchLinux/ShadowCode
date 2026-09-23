@@ -714,6 +714,7 @@ async fn abandoned_native_mcp_server_cancels_only_its_owned_jobs() {
             mode: "plan".into(),
             queue: false,
             images: Vec::new(),
+            web: false,
         })
         .await
         .unwrap();

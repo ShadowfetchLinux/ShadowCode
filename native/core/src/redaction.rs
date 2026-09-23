@@ -75,6 +75,16 @@ pub fn is_secret_path(path: &str) -> bool {
         .next()
         .unwrap_or(path)
         .to_ascii_lowercase();
+    // Stored attachments are named `<32-hex id>-<original name>`; judge the
+    // original name so an attached `.env` is still recognized.
+    let name = match name.split_once('-') {
+        Some((id, rest))
+            if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) && !rest.is_empty() =>
+        {
+            rest.to_owned()
+        }
+        _ => name,
+    };
     // Committed templates document variable names without values; refusing
     // them would hide the one file a model may legitimately need to read.
     if matches!(
@@ -231,6 +241,26 @@ mod tests {
         assert!(!is_secret_path(".env.template"));
         assert!(!is_secret_path("src/config.rs"));
         assert!(!is_secret_path("README.md"));
+        // Attachment storage prefix does not hide the original name.
+        assert!(is_secret_path(
+            ".shadow/attachments/0123456789abcdef0123456789abcdef-.env"
+        ));
+        assert!(!is_secret_path(
+            ".shadow/attachments/0123456789abcdef0123456789abcdef-notes.txt"
+        ));
+    }
+
+    #[test]
+    fn redact_value_reaches_nested_event_payloads() {
+        let token = format!("{}{}", "ghp_", "abcdefghijklmnopqrstuvwxyz012345");
+        let mut event = serde_json::json!({
+            "tool": "exec",
+            "output": {"stdout": format!("TOKEN={token}\n"), "exit_code": 0},
+            "arguments": {"command": format!("echo {token}")}
+        });
+        assert_eq!(redact_value(&mut event), 2);
+        assert!(!event.to_string().contains(&token));
+        assert_eq!(event["output"]["exit_code"], 0);
     }
 
     #[test]

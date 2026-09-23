@@ -45,6 +45,12 @@ impl Engine {
                 .context("Goal workspace missing")?,
         ))?;
         let config = Config::load(self.paths(), Some(&workspace.path))?;
+        // start_with_context enforces this for every milestone; refusing here
+        // keeps an untrusted goal from being marked running at all.
+        ensure!(
+            config.is_trusted(&workspace.path),
+            "Trust this project before running a goal"
+        );
         ensure!(
             config.model.provider != "mock",
             "Choose a model before running a goal"
@@ -175,6 +181,7 @@ impl Engine {
                         mode: milestone["mode"].as_str().unwrap_or("code").into(),
                         queue: true,
                         images: Vec::new(),
+                        web: false,
                     },
                     LaunchContext {
                         system_context: Some(context),

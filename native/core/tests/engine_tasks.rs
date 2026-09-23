@@ -26,7 +26,7 @@ fn setup(endpoint: &str) -> (tempfile::TempDir, Engine) {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("project")).unwrap();
     let paths = AppPaths::isolated(&root.path().join("profile")).unwrap();
-    Config::patch(&paths,json!({"model":{"provider":"local","endpoint":endpoint,"name":"fixture","context_limit":16384},"permissions":{"approve_shell":false},"agent":{"max_steps":12}})).unwrap();
+    Config::patch(&paths,json!({"model":{"provider":"local","endpoint":endpoint,"name":"fixture","context_limit":16384},"trusted_workspaces":[root.path().join("project")],"permissions":{"approve_shell":false},"agent":{"max_steps":12}})).unwrap();
     let engine = Engine::open(paths).unwrap();
     (root, engine)
 }
@@ -39,6 +39,7 @@ fn request(root: &Path, task: &str, session_id: Option<String>) -> StartRequest 
         mode: "code".into(),
         queue: false,
         images: Vec::new(),
+        web: false,
     }
 }
 async fn wait(engine: &Engine, id: &str) -> Job {
@@ -582,9 +583,15 @@ async fn concurrent_sessions_and_repeated_followups_survive_restart_without_dupl
     let (root, engine) = setup(&server.endpoint);
     let paths = engine.paths().clone();
     let mut jobs = Vec::new();
+    let projects: Vec<_> = (0..32)
+        .map(|index| root.path().join(format!("project-{index}")))
+        .collect();
+    for workspace in &projects {
+        fs::create_dir(workspace).unwrap();
+    }
+    Config::patch(&paths, json!({"trusted_workspaces": projects})).unwrap();
     for index in 0..32 {
         let workspace = root.path().join(format!("project-{index}"));
-        fs::create_dir(&workspace).unwrap();
         let mut req = request(root.path(), "small concurrent task", None);
         req.workspace = workspace;
         jobs.push(engine.start(req).await.unwrap());

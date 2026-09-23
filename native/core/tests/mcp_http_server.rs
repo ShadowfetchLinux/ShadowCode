@@ -353,6 +353,7 @@ async fn owned_tasks_survive_http_reconnect_and_shutdown_cancels_only_this_gatew
             mode: "review".into(),
             queue: false,
             images: Vec::new(),
+            web: false,
         })
         .await
         .unwrap();

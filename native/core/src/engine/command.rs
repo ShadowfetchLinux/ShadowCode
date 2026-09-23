@@ -73,7 +73,10 @@ impl Engine {
                 result.error = format!("Completion checks failed: {failure}");
             }
         }
-        events.emit("command.completed",json!({"command":command.command,"success":result.success,"stdout":result.output["stdout"],"stderr":result.output["stderr"],"exit_code":result.output["exit_code"],"timed_out":result.output["timed_out"],"truncated":result.output["truncated"],"error":result.error}))?;
+        // Durable transcript/export copy is redacted; `result` stays raw in memory.
+        let mut completed = json!({"command":command.command,"success":result.success,"stdout":result.output["stdout"],"stderr":result.output["stderr"],"exit_code":result.output["exit_code"],"timed_out":result.output["timed_out"],"truncated":result.output["truncated"],"error":result.error});
+        crate::redaction::redact_value(&mut completed);
+        events.emit("command.completed", completed)?;
         events.emit("verification.summary",json!({"status":if result.success{"verified"}else{"failed"},"commands":[{"command":command.command,"exit_code":result.output["exit_code"],"success":result.success}],"source":"native command; no model was called"}))?;
         running
             .record

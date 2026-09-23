@@ -66,6 +66,9 @@ pub struct StartRequest {
     /// Workspace-relative image attachment paths (png/jpeg/webp).
     #[serde(default)]
     pub images: Vec<String>,
+    /// Offer web_fetch/web_search for this task (still subject to network.mode).
+    #[serde(default)]
+    pub web: bool,
 }
 fn default_mode() -> String {
     "code".into()
@@ -80,6 +83,8 @@ pub struct Job {
     pub task: String,
     #[serde(default)]
     pub images: Vec<String>,
+    /// The task asked for web tools (see StartRequest::web).
+    pub web: bool,
     pub status: String,
     pub mode: String,
     pub model: String,
@@ -425,11 +430,17 @@ impl Engine {
         );
         let workspace = Arc::new(Workspace::open(&request.workspace)?);
         let mut config = Config::load(&self.0.paths, Some(&workspace.path))?;
-        let decision = if context.command.is_some() {
-            ensure!(
-                config.is_trusted(&workspace.path),
+        // Every entry point (desktop, CLI, goals, MCP, workflows) passes here.
+        ensure!(
+            config.is_trusted(&workspace.path),
+            "{}",
+            if context.command.is_some() {
                 "Trust this project before running a command task"
-            );
+            } else {
+                "Trust this project before starting a task"
+            }
+        );
+        let decision = if context.command.is_some() {
             ensure!(
                 config.permissions.level != PermissionLevel::ReadOnly,
                 "Project permissions are read-only"
@@ -450,6 +461,13 @@ impl Engine {
         if matches!(request.mode.as_str(), "plan" | "review") {
             config.permissions.level = PermissionLevel::ReadOnly;
         }
+        config.apply_runtime(request.web);
+        ensure!(
+            context.command.is_some()
+                || !config.offline()
+                || crate::config::runs_on_this_computer(&config.model),
+            "Offline mode: choose a model that runs on this computer"
+        );
         config.validate()?;
         ensure!(context.command.is_some()||config.model.provider!="mock","Choose a local or compatible model before starting a coding task. The offline preview does not execute tasks.");
         // Provider change / consent, decided before any job or task row exists.
@@ -535,6 +553,7 @@ impl Engine {
             task_id: crate::id(),
             task: request.task,
             images: request.images,
+            web: request.web,
             status: "queued".into(),
             mode: request.mode,
             model: if context.command.is_some() {
@@ -745,14 +764,44 @@ impl Engine {
         let ws = Workspace::open(&job.workspace)?;
         let restore = || checkpoint::restore(&self.0.store, &ws, &job.task_id);
         let restored = if let Some(active) = running {
-            active.steer.rewind(restore)?
+            // The running task receives the steering rewind note itself.
+            let paths = active.steer.rewind(restore)?;
+            self.announce_restore(&job.session_id, &job.task_id, &paths, false)?;
+            paths
         } else {
-            restore()?
+            let paths = restore()?;
+            self.announce_restore(&job.session_id, &job.task_id, &paths, true)?;
+            paths
         };
         Ok(
             json!({"ok":true,"job_id":id,"task_id":job.task_id,"session_id":job.session_id,"restored":restored,
             "note":"Checkpoint restored without wiping the session transcript."}),
         )
+    }
+    /// Record a checkpoint restore in the transcript (`checkpoint.restored`)
+    /// and, for finished tasks, in the session's message tape so the next
+    /// turn's context matches the files on disk.
+    pub fn announce_restore(
+        &self,
+        session_id: &str,
+        task_id: &str,
+        paths: &[String],
+        note_in_tape: bool,
+    ) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        if note_in_tape {
+            checkpoint::note_restore_in_tape(&self.0.store, session_id, paths)?;
+        }
+        let event = self.0.store.add_event(
+            "checkpoint.restored",
+            &json!({"task_id":task_id,"paths":paths}),
+            Some(session_id),
+            Some(task_id),
+        )?;
+        let _ = self.0.sender.send(event);
+        Ok(())
     }
     pub(crate) fn request_cancel(&self, id: &str) -> Result<()> {
         self.request_cancel_if(id, false)

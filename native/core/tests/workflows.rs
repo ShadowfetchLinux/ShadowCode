@@ -235,6 +235,7 @@ async fn queued_workflow_freezes_source_and_project_notes_are_loaded() {
             mode: "plan".into(),
             queue: false,
             images: Vec::new(),
+            web: false,
         })
         .await
         .unwrap();

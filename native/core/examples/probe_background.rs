@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
         workspace:project.clone(), session_id:None, model:None, mode:"code".into(), queue:false,
         task:"Start the existing server as a managed project background process named probe-server, with the exact command node server.mjs. Use background_start, then background_output to inspect its retained log until SERVER_READY appears. Report the actual marker following SERVER_READY and leave the server running. Do not use exec, change files or stop the server; the test harness will independently check its HTTP response and clean it up.".into(),
         images: Vec::new(),
+        web: false,
         }).await?;
     let mut approvals = 0;
     let finished = tokio::time::timeout(Duration::from_secs(300), async {

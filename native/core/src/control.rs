@@ -221,6 +221,100 @@ impl Client {
         }
     }
 }
+/// A socket younger than this may belong to an engine between bind and listen.
+const STALE_SOCKET_AGE: Duration = Duration::from_secs(10);
+
+fn engine_socket_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_suffix(".sock"))
+        .is_some_and(|stem| {
+            stem.len() == 32
+                && stem
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+}
+
+/// True only when nothing listens on the socket (ECONNREFUSED). A live
+/// engine accepts or reports a full backlog; both count as alive.
+fn socket_refuses(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    // SAFETY: sockaddr_un is plain old data; all-zero is a valid value.
+    let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if bytes.is_empty() || bytes.len() >= addr.sun_path.len() {
+        return false;
+    }
+    addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (dst, src) in addr.sun_path.iter_mut().zip(bytes) {
+        *dst = *src as libc::c_char;
+    }
+    // SAFETY: plain socket(2) call; the descriptor is closed below.
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_UNIX,
+            libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            0,
+        )
+    };
+    if fd < 0 {
+        return false;
+    }
+    // SAFETY: addr is a fully initialized sockaddr_un and the length matches.
+    let rc = unsafe {
+        libc::connect(
+            fd,
+            (&addr as *const libc::sockaddr_un).cast::<libc::sockaddr>(),
+            std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
+        )
+    };
+    let error = std::io::Error::last_os_error().raw_os_error();
+    // SAFETY: fd was returned by socket(2) above and is closed exactly once.
+    unsafe { libc::close(fd) };
+    rc != 0 && error == Some(libc::ECONNREFUSED)
+}
+
+/// Remove engine control sockets (`<32 hex>.sock`) in `directory` that belong
+/// to this user, are older than `min_age`, and refuse connections. Live
+/// engines answer and are never touched; `keep` (this engine's own path) is
+/// handled by the caller. Returns the removed paths.
+pub fn sweep_stale_sockets(directory: &Path, keep: &Path, min_age: Duration) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    let Ok(entries) = fs::read_dir(directory) else {
+        return removed;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten().take(4096) {
+        let path = entry.path();
+        if path == keep || !engine_socket_name(&path) {
+            continue;
+        }
+        let Ok(before) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let old_enough = before
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age >= min_age);
+        if !before.file_type().is_socket() || before.uid() != uid() || !old_enough {
+            continue;
+        }
+        if !socket_refuses(&path) {
+            continue;
+        }
+        // Remove only the exact file that was probed.
+        if fs::symlink_metadata(&path)
+            .is_ok_and(|now| now.dev() == before.dev() && now.ino() == before.ino())
+            && fs::remove_file(&path).is_ok()
+        {
+            removed.push(path);
+        }
+    }
+    removed
+}
+
 struct SocketLease {
     path: PathBuf,
     dev: u64,
@@ -264,6 +358,10 @@ impl Server {
         );
         let mode = mode.to_owned();
         let endpoint = Endpoint::for_paths(service.engine.paths())?;
+        if let Some(directory) = endpoint.path.parent() {
+            // Crashed or killed engines leave their socket files behind.
+            sweep_stale_sockets(directory, &endpoint.path, STALE_SOCKET_AGE);
+        }
         if let Ok(metadata) = fs::symlink_metadata(&endpoint.path) {
             ensure!(
                 metadata.file_type().is_socket() && metadata.uid() == uid(),
@@ -451,4 +549,42 @@ async fn send_bytes(stream: &mut UnixStream, bytes: &[u8]) -> Result<()> {
     .await
     .context("Local peer stopped reading")??;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener as StdListener;
+
+    #[test]
+    fn stale_sockets_are_swept_without_touching_live_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let dead = dir.path().join(format!("{}.sock", "a".repeat(32)));
+        let live = dir.path().join(format!("{}.sock", "b".repeat(32)));
+        let own = dir.path().join(format!("{}.sock", "c".repeat(32)));
+        let foreign_name = dir.path().join("other.sock");
+        let not_socket = dir.path().join(format!("{}.sock", "d".repeat(32)));
+        // Dropping a std listener leaves its file behind, like a killed engine.
+        drop(StdListener::bind(&dead).unwrap());
+        drop(StdListener::bind(&own).unwrap());
+        drop(StdListener::bind(&foreign_name).unwrap());
+        let _live = StdListener::bind(&live).unwrap();
+        fs::write(&not_socket, b"x").unwrap();
+
+        // Young sockets are left alone (an engine may be between bind and listen).
+        assert!(sweep_stale_sockets(dir.path(), &own, Duration::from_secs(3600)).is_empty());
+        assert!(dead.exists());
+
+        let removed = sweep_stale_sockets(dir.path(), &own, Duration::ZERO);
+        assert_eq!(removed, vec![dead.clone()]);
+        assert!(!dead.exists());
+        assert!(live.exists(), "a listening engine must never be removed");
+        assert!(
+            own.exists(),
+            "the caller's own endpoint is handled separately"
+        );
+        assert!(foreign_name.exists() && not_socket.exists());
+        assert!(socket_refuses(&own));
+        assert!(!socket_refuses(&live));
+    }
 }

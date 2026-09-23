@@ -113,6 +113,7 @@ fn request(service: &Service, mode: &str, queue: bool) -> StartRequest {
         mode: mode.into(),
         queue,
         images: Vec::new(),
+        web: false,
     }
 }
 async fn wait(service: &Service, job: &Job) -> Job {
