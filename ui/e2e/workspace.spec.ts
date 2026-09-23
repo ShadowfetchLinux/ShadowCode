@@ -137,7 +137,13 @@ test("runs a task with streamed events and reviews the changes", async ({
   await expect(summary).toContainText("+1");
   await expect(summary).toContainText("npm test");
   await expect(summary).toContainText("exit 0");
-  const timeline = page.locator(".msg-summary .activity-timeline");
+  // The finished timeline sits above the answer (or in the summary block
+  // when the task gave no answer text).
+  const timeline = page
+    .locator(
+      ".msg-with-activity .activity-timeline, .msg-summary .activity-timeline",
+    )
+    .last();
   for (const step of ["Reading project", "Editing files", "Running checks"])
     await expect(timeline.getByText(step, { exact: true })).toBeVisible();
   await expect(timeline.getByText("Finished", { exact: true })).toHaveCount(0);
