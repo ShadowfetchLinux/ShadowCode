@@ -6,11 +6,9 @@ import { api, type Job } from "../api";
 export function TaskSteerBar({
   job,
   onToast,
-  onAskHunk,
 }: {
   job: Job;
   onToast: (text: string, kind?: "ok" | "err" | "info") => void;
-  onAskHunk?: (prompt: string) => void;
 }) {
   const [steerOpen, setSteerOpen] = useState(false);
   const [instruction, setInstruction] = useState("");
@@ -62,7 +60,9 @@ export function TaskSteerBar({
         className="mini"
         disabled={busy || (!paused && job.status !== "running")}
         title={
-          paused ? "Add a steering instruction" : "Pause first, then steer"
+          paused
+            ? "Add a steering instruction for the next model turn"
+            : "Pause at the next safe boundary and add a steering instruction"
         }
         onClick={() => setSteerOpen((v) => !v)}
       >
@@ -85,18 +85,20 @@ export function TaskSteerBar({
           onSubmit={(e) => {
             e.preventDefault();
             if (!instruction.trim()) return;
-            void run("Steering saved", async () => {
-              if (!paused) await api.pauseJob(job.id);
-              await api.steerJob(
-                job.id,
-                instruction.trim(),
-                editPath.trim() || undefined,
-              );
-              setInstruction("");
-              setEditPath("");
-              setSteerOpen(false);
-              onAskHunk?.(instruction.trim());
-            });
+            void run(
+              "Steering saved. Resume the task to apply it.",
+              async () => {
+                if (!paused) await api.pauseJob(job.id);
+                await api.steerJob(
+                  job.id,
+                  instruction.trim(),
+                  editPath.trim() || undefined,
+                );
+                setInstruction("");
+                setEditPath("");
+                setSteerOpen(false);
+              },
+            );
           }}
         >
           <input
