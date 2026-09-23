@@ -597,15 +597,32 @@ fn collect_paths(value: &Value, files: &mut BTreeSet<String>) {
     }
 }
 
+fn command_failed(command: &Value) -> bool {
+    command["success"] == false || command["timed_out"] == true
+}
+
 pub fn classify_verification(model_text: &str, commands: &[Value], inspected: bool) -> Value {
     let claims = looks_like_success_claim(model_text);
     let any_cmd = !commands.is_empty();
-    let any_ok = commands.iter().any(|c| c["success"] == true);
-    let any_fail = commands
+    // The last verification-like command decides. A failing test that is
+    // deliberately observed first (bug-fix policy) must not block a later
+    // passing run from counting as verified; a failure after the last passing
+    // check, or a passing check that is not the final word, still blocks it.
+    let last_verification = commands
         .iter()
-        .any(|c| c["success"] == false || c["timed_out"] == true);
-    let evidence = commands.iter().any(looks_like_verification_command);
-    let level = if evidence && any_ok && !any_fail {
+        .rposition(looks_like_verification_command);
+    let evidence = last_verification.is_some();
+    let red_green = last_verification.is_some_and(|last| {
+        commands[..last]
+            .iter()
+            .any(|c| looks_like_verification_command(c) && command_failed(c))
+    });
+    let final_check_passed = last_verification.is_some_and(|last| {
+        commands[last]["success"] == true
+            && !command_failed(&commands[last])
+            && !commands[last + 1..].iter().any(command_failed)
+    });
+    let level = if final_check_passed {
         ClaimLevel::Verified
     } else if inspected || any_cmd {
         ClaimLevel::Observed
@@ -623,6 +640,7 @@ pub fn classify_verification(model_text: &str, commands: &[Value], inspected: bo
         "verified": level == ClaimLevel::Verified,
         "model_claimed_success": claims,
         "inspected_workspace": inspected,
+        "red_green": red_green && level == ClaimLevel::Verified,
         "commands": commands,
         "unverified_claim": claims && level != ClaimLevel::Verified,
         "note": if claims && level != ClaimLevel::Verified {
@@ -636,18 +654,21 @@ pub fn classify_verification(model_text: &str, commands: &[Value], inspected: bo
 /// When the user goal is a bug/fix, ask for a failing test first. Not applied
 /// to every prompt — only when the task text indicates a bug fix.
 pub fn bugfix_policy(task: &str) -> Option<&'static str> {
-    let lower = task.to_ascii_lowercase();
-    let hints = [
-        "bug",
-        "fix",
-        "regress",
-        "broken",
-        "fails",
-        "failure",
-        "crash",
-        "incorrect",
-    ];
-    if hints.iter().any(|h| lower.contains(h)) {
+    // Whole-word matching: "prefix", "fixture" and "debug" are not bug reports.
+    let is_hint = |word: &str| {
+        matches!(
+            word,
+            "bug" | "bugs" | "bugfix" | "fix" | "fixes" | "fixed" | "fixing" | "hotfix"
+                | "broken" | "breaks" | "fail" | "fails" | "failed" | "failing" | "failure"
+                | "failures" | "crash" | "crashes" | "crashed" | "crashing" | "incorrect"
+                | "incorrectly" | "defect" | "defects"
+        ) || word.starts_with("regress")
+    };
+    let mut words = task
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase);
+    if words.any(|word| is_hint(&word)) {
         Some(
             "Bug-fix policy: reproduce with a failing test or clear reproduction command before claiming a fix. Do not present the task as verified until that failing case and a subsequent passing check are observed in this task.",
         )
@@ -999,5 +1020,59 @@ mod tests {
         );
         assert_eq!(verified["claim"], "verified");
         assert_eq!(verified["verified"], true);
+    }
+
+    #[test]
+    fn failing_test_first_then_passing_run_is_verified() {
+        // The bug-fix policy asks for a red test before the fix. That earlier,
+        // deliberate failure must not block the final passing run.
+        let red_green = classify_verification(
+            "Fixed",
+            &[
+                json!({"command":"cargo test -p demo","success":false}),
+                json!({"command":"cargo test -p demo","success":true}),
+            ],
+            true,
+        );
+        assert_eq!(red_green["claim"], "verified");
+        assert_eq!(red_green["red_green"], true);
+        // A failure after the last passing check still blocks verification.
+        let regressed = classify_verification(
+            "All tests passed",
+            &[
+                json!({"command":"cargo test","success":true}),
+                json!({"command":"cargo test","success":false}),
+            ],
+            true,
+        );
+        assert_eq!(regressed["verified"], false);
+        assert_eq!(regressed["unverified_claim"], true);
+        // A later failing non-verification command also blocks it.
+        let later_failure = classify_verification(
+            "Done",
+            &[
+                json!({"command":"npm test","success":true}),
+                json!({"command":"node scripts/broken.js","success":false}),
+            ],
+            true,
+        );
+        assert_eq!(later_failure["verified"], false);
+        // A timed-out final check is not a passing check.
+        let timed_out = classify_verification(
+            "Done",
+            &[json!({"command":"pytest","success":true,"timed_out":true})],
+            true,
+        );
+        assert_eq!(timed_out["verified"], false);
+    }
+
+    #[test]
+    fn bugfix_policy_matches_whole_words_only() {
+        assert!(bugfix_policy("Fix the crash when saving").is_some());
+        assert!(bugfix_policy("Investigate a regression in the parser").is_some());
+        assert!(bugfix_policy("This test fails on Windows").is_some());
+        assert!(bugfix_policy("Add a prefix to generated filenames").is_none());
+        assert!(bugfix_policy("Create a pytest fixture for the database").is_none());
+        assert!(bugfix_policy("Add debug logging to the loader").is_none());
     }
 }
