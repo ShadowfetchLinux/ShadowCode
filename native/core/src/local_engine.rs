@@ -323,10 +323,11 @@ fn not_llama_cli(path: &Path) -> bool {
 
 /// Candidate `llama-server` binaries in preference order with their origin.
 ///
-/// Order: an explicitly configured path; the runtime bundled next to the
-/// executable when the managed directory is missing or older (by COMMIT
-/// `built=`); `~/.local/lib/shadowcode`; the bundle; then
-/// `SHADOWCODE_LLAMA_SERVER`. Never `llama-cli`, never a bare PATH lookup.
+/// Order: an explicitly configured path; `SHADOWCODE_LLAMA_SERVER` (an
+/// explicit override); the runtime bundled next to the executable when the
+/// managed directory is missing or older (by COMMIT `built=`);
+/// `~/.local/lib/shadowcode`; the bundle. Never `llama-cli`, never a bare
+/// PATH lookup.
 pub fn runtime_candidates_with(
     configured: &str,
     bundled: Option<PathBuf>,
@@ -337,6 +338,9 @@ pub fn runtime_candidates_with(
     let configured = configured.trim();
     if !configured.is_empty() {
         out.push((PathBuf::from(configured), "other"));
+    }
+    if let Some(env) = env_server {
+        out.push((env, "other"));
     }
     let bundle = bundled.filter(|d| d.join(MANAGED_SERVER).is_file());
     let managed = managed.filter(|d| d.join(MANAGED_SERVER).is_file());
@@ -364,9 +368,6 @@ pub fn runtime_candidates_with(
         if let Some(b) = &bundle {
             out.push((b.join(MANAGED_SERVER), "bundled"));
         }
-    }
-    if let Some(env) = env_server {
-        out.push((env, "other"));
     }
     out.retain(|(p, _)| p.is_file() && not_llama_cli(p));
     let mut seen = HashSet::new();
@@ -1733,7 +1734,8 @@ mod tests {
             Some(env.clone()),
         );
         let origins: Vec<_> = order.iter().map(|(_, o)| *o).collect();
-        assert_eq!(origins, ["bundled", "managed", "other"]);
+        // An explicit SHADOWCODE_LLAMA_SERVER override wins over installed runtimes.
+        assert_eq!(origins, ["other", "bundled", "managed"]);
         fs::write(managed.join("COMMIT"), "built=2026-09-24T00:00:00Z\n").unwrap();
         let order = runtime_candidates_with("", Some(bundle.clone()), Some(managed.clone()), None);
         assert_eq!(order[0].1, "managed");
