@@ -1019,15 +1019,18 @@ impl Engine {
         let images = crate::vision::cli_images(&running.workspace, &image_refs)?;
         let prompt = job.task.clone();
         let binary = cli.binary(vendor).to_owned();
+        let native_key = format!("native_session:{}", vendor.id());
+        let resume = self.0.store.session_meta(&job.session_id, &native_key)?;
         let options = crate::cli_agent::LaunchOptions {
             binary,
             workspace: running.workspace.path.clone(),
             model: running.config.model.name.clone(),
             read_only: running.config.permissions.level
                 == crate::config::PermissionLevel::ReadOnly,
+            resume,
         };
         #[cfg(unix)]
-        let (text, usage) = crate::cli_agent::runner::run(crate::cli_agent::runner::Request {
+        let outcome = crate::cli_agent::runner::run(crate::cli_agent::runner::Request {
             vendor,
             options,
             config: cli,
@@ -1043,10 +1046,14 @@ impl Engine {
         })
         .await?;
         #[cfg(not(unix))]
-        let (text, usage) = {
+        let outcome: crate::cli_agent::runner::RunOutcome = {
             let _ = (options, prompt, events);
             bail!("Vendor CLI backends require a Unix host")
         };
+        if let Some(native) = &outcome.native_session {
+            self.0.store.set_session_meta(&job.session_id, &native_key, native)?;
+        }
+        let (text, usage) = (outcome.text, outcome.usage);
         {
             let mut record = running
                 .record

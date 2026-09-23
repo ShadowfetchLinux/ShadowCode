@@ -50,7 +50,10 @@ pub struct AcpAdapter {
     next_id: u64,
     phase: Phase,
     init_id: Option<u64>,
+    auth_id: Option<u64>,
+    session_load_id: Option<u64>,
     session_new_id: Option<u64>,
+    set_model_id: Option<u64>,
     prompt_id: Option<u64>,
     session_id: Option<String>,
     pending_prompt: Option<(String, Vec<PromptImage>)>,
@@ -66,7 +69,10 @@ impl AcpAdapter {
             next_id: 0,
             phase: Phase::Starting,
             init_id: None,
+            auth_id: None,
+            session_load_id: None,
             session_new_id: None,
+            set_model_id: None,
             prompt_id: None,
             session_id: None,
             pending_prompt: None,
@@ -101,9 +107,106 @@ impl AcpAdapter {
             json!({"sessionId":session,"prompt":prompt}),
         )])
     }
+    fn cwd(&self) -> String {
+        self.options
+            .as_ref()
+            .map(|o| o.workspace.display().to_string())
+            .unwrap_or_default()
+    }
+    fn open_session_request(&mut self) -> String {
+        if let Some(resume) = self
+            .options
+            .as_ref()
+            .and_then(|o| o.resume.clone())
+            .filter(|r| !r.is_empty())
+        {
+            let id = self.id();
+            self.session_load_id = Some(id);
+            return request(
+                id,
+                "session/load",
+                json!({"sessionId": resume, "cwd": self.cwd(), "mcpServers": []}),
+            );
+        }
+        self.new_session_request()
+    }
+    fn new_session_request(&mut self) -> String {
+        let id = self.id();
+        self.session_new_id = Some(id);
+        request(id, "session/new", json!({"cwd": self.cwd(), "mcpServers": []}))
+    }
+    /// Steps after a session exists: plan mode for read-only tasks, an exact
+    /// model id when the picker chose one, then the queued prompt.
+    fn after_session(&mut self, session: &str, modes: &Value) -> Result<Step> {
+        let mut step = Step::update(Update::NativeSession {
+            id: session.to_owned(),
+        });
+        if let Some(options) = self.options.clone() {
+            if options.read_only
+                && modes["availableModes"]
+                    .as_array()
+                    .is_some_and(|modes| modes.iter().any(|m| m["id"] == "plan"))
+            {
+                let mode_id = self.id();
+                step.send.push(request(
+                    mode_id,
+                    "session/set_mode",
+                    json!({"sessionId":session,"modeId":"plan"}),
+                ));
+            }
+            // Cursor ignores `--model` in ACP mode for parameterised ids and
+            // only accepts the exact ids it listed in `session/new`.
+            if self.vendor == Vendor::Cursor
+                && !options.model.is_empty()
+                && options.model != "default"
+                && options.model != "auto"
+            {
+                let set_id = self.id();
+                self.set_model_id = Some(set_id);
+                step.send.push(request(
+                    set_id,
+                    "session/set_model",
+                    json!({"sessionId":session,"modelId":options.model}),
+                ));
+            }
+        }
+        if let Some((prompt, images)) = self.pending_prompt.take() {
+            step.send.extend(self.start_prompt(&prompt, &images)?);
+        }
+        Ok(step)
+    }
     fn handle_response(&mut self, id: u64, message: &Value) -> Result<Step> {
         if let Some(err) = message.get("error").filter(|e| !e.is_null()) {
-            let text = err["message"].as_str().unwrap_or("unknown error");
+            let text = err["data"]["message"]
+                .as_str()
+                .or_else(|| err["message"].as_str())
+                .unwrap_or("unknown error");
+            if Some(id) == self.session_load_id {
+                // The stored session is gone; start a new one and let the
+                // caller supply handoff context.
+                let line = self.new_session_request();
+                return Ok(Step {
+                    send: vec![line],
+                    updates: vec![Update::Warning(format!(
+                        "{} could not resume the previous session ({text}); starting a new one",
+                        self.vendor.product_label()
+                    ))],
+                });
+            }
+            if Some(id) == self.auth_id {
+                bail!(
+                    "{} rejected the login ({text}). Run `{} login` and try again.",
+                    self.vendor.product_label(),
+                    self.vendor.binary()
+                );
+            }
+            if Some(id) == self.set_model_id {
+                return Ok(Step::update(Update::TurnFailed(format!(
+                    "{} does not accept model `{}` ({text}). Pick the model again from the list.",
+                    self.vendor.product_label(),
+                    self.options.as_ref().map(|o| o.model.as_str()).unwrap_or("")
+                ))));
+            }
             if Some(id) == self.init_id || Some(id) == self.session_new_id {
                 bail!("{} rejected the ACP handshake: {text}", self.vendor.id());
             }
@@ -122,47 +225,55 @@ impl AcpAdapter {
         let res = &message["result"];
         if Some(id) == self.init_id {
             self.phase = Phase::Initialized;
-            let session_id = self.id();
-            self.session_new_id = Some(session_id);
-            let cwd = self
+            // Documented Cursor flow: `authenticate {methodId:"cursor_login"}`
+            // before a session, using the login the CLI already holds.
+            let methods: Vec<String> = res["authMethods"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m["id"].as_str().map(str::to_owned))
+                .collect();
+            if let Some(method) = methods
+                .iter()
+                .find(|m| m.as_str() == "cursor_login")
+                .cloned()
+            {
+                let auth_id = self.id();
+                self.auth_id = Some(auth_id);
+                return Ok(Step::send(request(
+                    auth_id,
+                    "authenticate",
+                    json!({"methodId": method}),
+                )));
+            }
+            return Ok(Step::send(self.open_session_request()));
+        }
+        if Some(id) == self.auth_id {
+            return Ok(Step::send(self.open_session_request()));
+        }
+        if Some(id) == self.session_load_id {
+            // `session/load` replays history through notifications and
+            // returns an empty result; the session id is the one we asked for.
+            let session = self
                 .options
                 .as_ref()
-                .map(|o| o.workspace.display().to_string())
+                .and_then(|o| o.resume.clone())
                 .unwrap_or_default();
-            return Ok(Step::send(request(
-                session_id,
-                "session/new",
-                json!({"cwd":cwd,"mcpServers":[]}),
-            )));
+            self.session_id = Some(session.clone());
+            self.phase = Phase::Session;
+            return self.after_session(&session, &res["modes"]);
         }
         if Some(id) == self.session_new_id {
             let Some(session) = res["sessionId"].as_str() else {
                 bail!("ACP session/new response has no sessionId")
             };
-            self.session_id = Some(session.to_owned());
+            let session = session.to_owned();
+            self.session_id = Some(session.clone());
             self.phase = Phase::Session;
-            let mut step = Step::default();
-            if let Some(options) = &self.options {
-                if options.read_only {
-                    // Plan/review tasks ask for the agent's plan mode when it
-                    // advertises one; agents without modes ignore this.
-                    if res["modes"]["availableModes"]
-                        .as_array()
-                        .is_some_and(|modes| modes.iter().any(|m| m["id"] == "plan"))
-                    {
-                        let mode_id = self.id();
-                        step.send.push(request(
-                            mode_id,
-                            "session/set_mode",
-                            json!({"sessionId":session,"modeId":"plan"}),
-                        ));
-                    }
-                }
-            }
-            if let Some((prompt, images)) = self.pending_prompt.take() {
-                step.send.extend(self.start_prompt(&prompt, &images)?);
-            }
-            return Ok(step);
+            return self.after_session(&session, &res["modes"]);
+        }
+        if Some(id) == self.set_model_id {
+            return Ok(Step::default());
         }
         if Some(id) == self.prompt_id {
             self.prompt_active = false;
@@ -340,20 +451,25 @@ impl CliAdapter for AcpAdapter {
     }
     fn command(&self, options: &LaunchOptions) -> (String, Vec<String>) {
         let mut args = Vec::new();
-        if !options.model.is_empty() && options.model != "default" {
-            args.push("--model".into());
-            args.push(options.model.clone());
-        }
         match self.vendor {
-            // Official Cursor ACP: `cursor-agent [--model …] acp`
-            // https://cursor.com/docs/cli/acp
+            // Official Cursor ACP: `cursor-agent acp`
+            // (https://cursor.com/docs/cli/acp). The model is selected per
+            // session with `session/set_model`; the `--model` flag would also
+            // rewrite the user's CLI default.
             Vendor::Cursor => args.push("acp".into()),
             _ => {
-                args.insert(0, "agent".into());
+                args.push("agent".into());
+                if !options.model.is_empty() && options.model != "default" && options.model != "auto" {
+                    args.push("--model".into());
+                    args.push(options.model.clone());
+                }
                 args.push("stdio".into());
             }
         }
         (options.binary.clone(), args)
+    }
+    fn native_session(&self) -> Option<String> {
+        self.session_id.clone()
     }
     fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {
         self.options = Some(options.clone());

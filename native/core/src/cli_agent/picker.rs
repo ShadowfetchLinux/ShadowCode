@@ -52,6 +52,8 @@ pub struct PickerTarget {
     pub featured: bool,
     pub vision: bool,
     pub tools: bool,
+    /// The runtime's own default model.
+    pub is_default: bool,
     pub usage: UsageSnapshot,
 }
 
@@ -73,6 +75,7 @@ impl PickerTarget {
             "featured": self.featured,
             "vision": self.vision,
             "tools": self.tools,
+            "is_default": self.is_default,
             "usage": self.usage,
         })
     }
@@ -101,9 +104,13 @@ pub fn vendor_target(
     } else {
         model.trim()
     };
-    let auto = model == "default" || model == "auto";
+    // "Auto" is a real router only where the runtime offers one (Cursor);
+    // everywhere else the runtime's own default model is called Default.
+    let auto = model == "auto" || (model == "default" && vendor.supports_auto_model());
     let name = if auto {
         format!("{} · Auto", vendor.product_label())
+    } else if model == "default" {
+        format!("{} · Default", vendor.product_label())
     } else {
         format!("{} · {model_label}", vendor.product_label())
     };
@@ -123,6 +130,7 @@ pub fn vendor_target(
         featured: vendor.featured(),
         vision,
         tools: true,
+        is_default: auto || model == "default",
         usage,
     }
 }
@@ -157,6 +165,7 @@ pub fn local_target(
         featured: true,
         vision,
         tools,
+        is_default: false,
         usage: UsageSnapshot::local(),
     }
 }

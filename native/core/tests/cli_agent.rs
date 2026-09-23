@@ -19,6 +19,7 @@ fn launch(root: &Path) -> LaunchOptions {
         workspace: root.to_path_buf(),
         model: "default".into(),
         read_only: false,
+        resume: None,
     }
 }
 
@@ -205,6 +206,7 @@ fn grok_acp_permission_round_trip_and_cancel() {
         workspace: root.path().to_path_buf(),
         model: "grok-4".into(),
         read_only: false,
+        resume: None,
     });
     assert_eq!(bin, "grok");
     assert_eq!(args, vec!["agent", "--model", "grok-4", "stdio"]);
@@ -270,8 +272,14 @@ fn grok_acp_permission_round_trip_and_cancel() {
     assert!(matches!(chunk.updates[0], Update::Text(ref t) if t == "hi"));
     let interrupt = adapter.interrupt();
     assert!(interrupt[0].contains("session/cancel"));
+    let prompt_id = send
+        .iter()
+        .find(|l| l.contains("session/prompt"))
+        .and_then(|l| serde_json::from_str::<Value>(l).ok())
+        .and_then(|v| v["id"].as_u64())
+        .unwrap();
     let stop = adapter
-        .on_line(&rpc_result(3, json!({"stopReason":"cancelled"})))
+        .on_line(&rpc_result(prompt_id, json!({"stopReason":"cancelled"})))
         .unwrap();
     assert!(matches!(
         stop.updates[0],
@@ -288,6 +296,7 @@ fn claude_stream_json_approval_and_interrupt() {
         workspace: root.path().to_path_buf(),
         model: "default".into(),
         read_only: true,
+        resume: None,
     });
     assert!(args.contains(&"--output-format".into()));
     assert!(args.contains(&"stream-json".into()));
@@ -367,11 +376,16 @@ async fn doctor_three_states_never_print_credentials() {
     fs::create_dir_all(home.join(".codex")).unwrap();
     fs::create_dir_all(home.join(".grok")).unwrap();
     fs::create_dir_all(&bin).unwrap();
+    // Fake CLIs answer their documented status commands from the fixture
+    // home; ShadowCode never reads the credential file itself.
     write_script(
         &bin.join("codex"),
-        "#!/bin/sh\necho 'codex 0.0.0-fake'\n",
+        "#!/bin/sh\nif [ \"$1\" = login ]; then if [ -f \"$HOME/.codex/auth.json\" ]; then echo 'Logged in using ChatGPT'; exit 0; else echo 'Not logged in'; exit 1; fi; fi\necho 'codex 0.0.0-fake'\n",
     );
-    write_script(&bin.join("grok"), "#!/bin/sh\necho 'grok 0.0.0-fake'\n");
+    write_script(
+        &bin.join("grok"),
+        "#!/bin/sh\nif [ \"$1\" = models ]; then if [ -f \"$HOME/.grok/auth.json\" ]; then echo 'You are logged in with grok.com.'; echo '  * grok-4.7 (default)'; exit 0; else echo 'Not logged in. Run `grok login`.'; exit 1; fi; fi\necho 'grok 0.0.0-fake'\n",
+    );
     write_script(
         &bin.join("claude"),
         "#!/bin/sh\nif [ \"$1\" = auth ]; then echo '{\"loggedIn\":false}'; else echo 'claude 0.0.0-fake'; fi\n",
@@ -466,6 +480,7 @@ async fn fake_binary_spawn_approval_and_cancel() {
                 workspace: workspace.clone(),
                 model: "default".into(),
                 read_only: false,
+                resume: None,
             },
             config: &config,
             prompt: "hello".into(),
@@ -483,7 +498,7 @@ async fn fake_binary_spawn_approval_and_cancel() {
     .expect("spawn approval run timed out")
     .unwrap();
     approve.await.unwrap();
-    assert!(result.0.contains("Hello from fake Codex"));
+    assert!(result.text.contains("Hello from fake Codex"));
     let mut kinds = Vec::new();
     while let Ok(event) = rx.try_recv() {
         if let Some(kind) = event["type"].as_str() {
@@ -511,6 +526,7 @@ async fn fake_binary_spawn_approval_and_cancel() {
                 workspace,
                 model: "default".into(),
                 read_only: false,
+                resume: None,
             },
             config: &config,
             prompt: "slow".into(),
@@ -588,23 +604,37 @@ fn cursor_acp_command_and_cancel() {
         workspace: root.path().to_path_buf(),
         model: "auto".into(),
         read_only: false,
+        resume: None,
     });
     assert_eq!(bin, "cursor-agent");
-    assert_eq!(args, vec!["--model", "auto", "acp"]);
-    adapter.on_start(&launch(root.path()));
+    assert_eq!(args, vec!["acp"]);
+    adapter.on_start(&LaunchOptions {
+        model: "gpt-5.5[context=272k,reasoning=medium,fast=false]".into(),
+        ..launch(root.path())
+    });
     adapter.prompt("hello", &[]).unwrap();
-    let (send, _) = feed(
+    let (send, updates) = feed(
         &mut *adapter,
         &[
-            &rpc_result(1, json!({"protocolVersion":1})),
-            &rpc_result(2, json!({"sessionId":"cur-1"})),
+            &rpc_result(1, json!({"protocolVersion":1,"authMethods":[{"id":"cursor_login"}]})),
+            &rpc_result(2, json!({})),
+            &rpc_result(3, json!({"sessionId":"cur-1","modes":{"availableModes":[{"id":"agent"},{"id":"plan"}]}})),
         ],
     );
+    assert!(send.iter().any(|l| l.contains("\"authenticate\"") && l.contains("cursor_login")));
+    assert!(send.iter().any(|l| l.contains("session/set_model") && l.contains("gpt-5.5[context=272k")));
     assert!(send.iter().any(|l| l.contains("session/prompt")));
+    assert!(updates.iter().any(|u| matches!(u, Update::NativeSession { id } if id == "cur-1")));
     let interrupt = adapter.interrupt();
     assert!(interrupt[0].contains("session/cancel"));
+    let prompt_id = send
+        .iter()
+        .find(|l| l.contains("session/prompt"))
+        .and_then(|l| serde_json::from_str::<Value>(l).ok())
+        .and_then(|v| v["id"].as_u64())
+        .unwrap();
     let stop = adapter
-        .on_line(&rpc_result(3, json!({"stopReason":"cancelled"})))
+        .on_line(&rpc_result(prompt_id, json!({"stopReason":"cancelled"})))
         .unwrap();
     assert!(matches!(
         stop.updates[0],
@@ -613,7 +643,7 @@ fn cursor_acp_command_and_cancel() {
 }
 
 #[test]
-fn antigravity_stream_json_tools_and_cancel() {
+fn antigravity_documented_stream_json_protocol() {
     let root = tempfile::tempdir().unwrap();
     let mut adapter = adapter_for(Vendor::Antigravity, false);
     let (bin, args) = adapter.command(&LaunchOptions {
@@ -621,39 +651,48 @@ fn antigravity_stream_json_tools_and_cancel() {
         workspace: root.path().to_path_buf(),
         model: "gemini-3.8-flash-high".into(),
         read_only: true,
+        resume: Some("conv-9".into()),
     });
     assert_eq!(bin, "agy");
-    assert!(args.contains(&"--print".into()));
-    assert!(args.contains(&"stream-json".into()));
-    assert!(args.contains(&"--mode".into()));
-    assert!(args.contains(&"plan".into()));
-    adapter.prompt("edit", &[]).unwrap();
-    adapter.on_start(&launch(root.path()));
+    // `--print=` must be last so no later flag is swallowed as the prompt.
+    assert_eq!(args.last().map(String::as_str), Some("--print="));
+    assert!(args.windows(2).any(|w| w == ["--output-format", "stream-json"]));
+    assert!(args.windows(2).any(|w| w == ["--input-format", "stream-json"]));
+    assert!(args.windows(2).any(|w| w == ["--mode", "plan"]));
+    assert!(args.windows(2).any(|w| w == ["--conversation", "conv-9"]));
+    assert!(adapter.prompt("hi", &[sample_image()]).is_err(), "images are refused");
+    adapter.prompt("Reply OK", &[]).unwrap();
+    let first = adapter.on_start(&launch(root.path()));
+    assert!(first[0].contains("\"event\":\"user\""));
+    assert!(first[0].contains("\"type\":\"text\""));
+    // Frames recorded from agy 1.2.9 plus a tool step.
     let (_, updates) = feed(
         &mut *adapter,
         &[
-            r#"{"type":"system","subtype":"init"}"#,
-            r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}"#,
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"a.rs"}}]}}"#,
-            r#"{"type":"control_request","request_id":"p1","request":{"subtype":"can_use_tool","tool_name":"Edit"}}"#,
+            r#"{"event":"init","conversation_id":"0114b7b4","init":{"model":"gemini-3.8-flash-low","cwd":"/tmp","tools":["run_command"]}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":0,"state":"DONE","step_type":"user_input"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"write_to_file","tool_info":{"name":"write_to_file","parameters":{"file_path":"a.rs"}}}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":1,"state":"DONE","step_type":"tool","tool_name":"write_to_file","tool_info":{"name":"write_to_file","parameters":{"file_path":"a.rs"},"output":"written"}}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"OK"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":2,"state":"DONE","step_type":"agent_response","text_delta":"\n","usage":{"input_tokens":11903,"output_tokens":22}}}"#,
+            r#"{"event":"result","result":{"conversation_id":"0114b7b4","status":"SUCCESS","response":"OK\n","duration_seconds":2.2,"num_turns":1,"usage":{"input_tokens":11903,"output_tokens":22,"thinking_tokens":21,"cache_read_tokens":0,"total_tokens":11925}}}"#,
         ],
     );
-    assert!(updates.iter().any(|u| matches!(u, Update::Text(t) if t == "Hi")));
-    let approval = updates
-        .iter()
-        .find_map(|u| match u {
-            Update::Approval(p) => Some(p.clone()),
-            _ => None,
-        })
-        .expect("antigravity permission");
-    let allow = adapter.approve(&approval.request_id, true).unwrap();
-    assert!(allow[0].contains("\"behavior\":\"allow\""));
-    assert!(!adapter.interrupt().is_empty());
-    let (_, done) = feed(
+    assert!(updates.iter().any(|u| matches!(u, Update::NativeSession { id } if id == "0114b7b4")));
+    assert!(updates.iter().any(|u| matches!(u, Update::ToolStarted { name, .. } if name == "antigravity.write_to_file")));
+    assert!(updates.iter().any(|u| matches!(u, Update::ToolCompleted { success: true, .. })));
+    assert!(updates.iter().any(|u| matches!(u, Update::FilesChanged { paths, .. } if paths == &vec!["a.rs".to_string()])));
+    assert!(updates.iter().any(|u| matches!(u, Update::Text(t) if t == "OK")));
+    assert!(updates.iter().any(|u| matches!(u, Update::Usage { input: 11903, output: 22 })));
+    // Streamed text is not repeated from the result frame.
+    assert!(updates.iter().any(|u| matches!(u, Update::TurnCompleted { text: None, interrupted: false })));
+    assert_eq!(adapter.native_session().as_deref(), Some("0114b7b4"));
+    assert!(adapter.interrupt().is_empty(), "no documented interrupt frame");
+    let (_, failed) = feed(
         &mut *adapter,
-        &[r#"{"type":"result","subtype":"cancelled","usage":{"input_tokens":1,"output_tokens":2},"result":"ok"}"#],
+        &[r#"{"event":"result","result":{"conversation_id":"0114b7b4","status":"ERROR","error":"quota"}}"#],
     );
-    assert!(done.iter().any(|u| matches!(u, Update::TurnCompleted { interrupted: true, .. })));
+    assert!(failed.iter().any(|u| matches!(u, Update::TurnFailed(e) if e.contains("quota"))));
 }
 
 #[test]

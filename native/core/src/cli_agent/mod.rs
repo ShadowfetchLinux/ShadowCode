@@ -23,9 +23,15 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub mod acp;
+#[cfg(unix)]
+pub mod acp_probe;
 pub mod antigravity;
+#[cfg(unix)]
+pub mod catalog;
 pub mod claude;
 pub mod codex;
+#[cfg(unix)]
+pub mod codex_probe;
 pub mod discovery;
 pub mod doctor;
 pub mod picker;
@@ -108,15 +114,43 @@ impl Vendor {
         Self::FEATURED.contains(&self)
     }
     /// Official interfaces that accept image bytes. Antigravity's stream-json
-    /// input is text content blocks only; we do not invent a vision payload.
+    /// input is text content blocks only, and Grok's ACP `initialize`
+    /// reports `promptCapabilities.image: false`; we do not invent a vision
+    /// payload for either. The catalog refines this per runtime handshake.
     pub fn accepts_images(self) -> bool {
-        matches!(
-            self,
-            Vendor::Codex | Vendor::Claude | Vendor::Cursor | Vendor::Grok
-        )
+        matches!(self, Vendor::Codex | Vendor::Claude | Vendor::Cursor)
     }
+    /// The runtime offers an automatic model choice of its own (Cursor
+    /// `default[]`). Codex has a default model but no "auto" router.
     pub fn supports_auto_model(self) -> bool {
-        matches!(self, Vendor::Cursor | Vendor::Codex)
+        matches!(self, Vendor::Cursor)
+    }
+    /// Approval prompts from this runtime reach ShadowCode. Antigravity's
+    /// print mode applies its own permission settings and never asks.
+    pub fn asks_approval(self) -> bool {
+        !matches!(self, Vendor::Antigravity)
+    }
+    pub fn logout_command(self) -> &'static [&'static str] {
+        match self {
+            Vendor::Codex => &["logout"],
+            Vendor::Claude => &["auth", "logout"],
+            Vendor::Cursor => &["logout"],
+            Vendor::Grok => &["logout"],
+            // `/logout` exists only inside the interactive CLI.
+            Vendor::Antigravity => &[],
+        }
+    }
+    /// Shown before Disconnect: the login is shared with the native CLI.
+    pub fn shared_cli_note(self) -> String {
+        match self {
+            Vendor::Antigravity => "Antigravity keeps its login in your OS keyring. Run `agy` and type /logout to sign out; ShadowCode cannot do it for you.".into(),
+            _ => format!(
+                "Disconnecting runs `{} {}`, which signs this account out of the {} CLI everywhere on this computer, not only in ShadowCode.",
+                self.binary(),
+                self.logout_command().join(" "),
+                self.product_label()
+            ),
+        }
     }
     pub fn login_hint(self) -> &'static str {
         match self {
@@ -134,7 +168,8 @@ impl Vendor {
             Vendor::Codex => &["login"],
             Vendor::Claude => &["auth", "login"],
             Vendor::Cursor => &["login"],
-            Vendor::Antigravity => &["help"],
+            // No login subcommand: starting the CLI opens the browser flow.
+            Vendor::Antigravity => &[],
             Vendor::Grok => &["login"],
         }
     }
@@ -214,6 +249,10 @@ pub enum Update {
     },
     /// The current turn failed; the run ends with this error.
     TurnFailed(String),
+    /// The vendor's own session identifier for this conversation, reported
+    /// once known so follow-ups can resume it. Kept separate from the
+    /// ShadowCode session id.
+    NativeSession { id: String },
 }
 
 /// Result of feeding one line into an adapter.
@@ -263,6 +302,9 @@ pub struct LaunchOptions {
     /// Plan/review tasks request the vendor's read-only or plan mode where the
     /// protocol offers one.
     pub read_only: bool,
+    /// Native session to resume (Codex thread id, ACP session id, Claude
+    /// session id, Antigravity conversation id). `None` starts a new one.
+    pub resume: Option<String>,
 }
 
 /// A pure protocol translator. It never touches processes or the network.
@@ -289,6 +331,10 @@ pub trait CliAdapter: Send {
     /// instead of terminating the process.
     fn one_shot(&self) -> bool {
         false
+    }
+    /// The vendor session id currently in use, once the protocol reported it.
+    fn native_session(&self) -> Option<String> {
+        None
     }
 }
 

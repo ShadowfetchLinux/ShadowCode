@@ -96,8 +96,17 @@ pub struct Request<'a> {
     pub steer: &'a SteerControl,
 }
 
+/// What a finished vendor run produced.
+#[derive(Clone, Debug, Default)]
+pub struct RunOutcome {
+    pub text: String,
+    pub usage: Usage,
+    /// Vendor session id to resume on the next turn of this conversation.
+    pub native_session: Option<String>,
+}
+
 /// Run the vendor CLI until the turn finishes, fails, or is cancelled.
-pub async fn run(request: Request<'_>) -> Result<(String, Usage)> {
+pub async fn run(request: Request<'_>) -> Result<RunOutcome> {
     let mut fallback = request.vendor == Vendor::Codex
         && !codex_app_server_available(&request.options.binary).await;
     let mut last_error = None;
@@ -164,7 +173,7 @@ async fn run_once(
     vendor: Vendor,
     codex_exec_fallback: bool,
     request: &Request<'_>,
-) -> Result<(String, Usage)> {
+) -> Result<RunOutcome> {
     ensure_ready(vendor, request)?;
     let mut adapter = adapter_for(vendor, codex_exec_fallback);
     let (program, args) = adapter.command(&request.options);
@@ -181,6 +190,7 @@ async fn run_once(
     send_lines(&mut stdin, &outgoing).await?;
     let mut collected = String::new();
     let mut usage = Usage::default();
+    let mut native_session: Option<String> = None;
     let mut malformed = 0usize;
     let mut last_line = Instant::now();
     let stall = Duration::from_secs(request.config.stall_timeout_sec.max(30));
@@ -269,6 +279,7 @@ async fn run_once(
                                 other,
                                 &mut collected,
                                 &mut usage,
+                                &mut native_session,
                                 &mut message_id,
                                 &mut pending_text,
                                 &mut finished,
@@ -331,7 +342,14 @@ async fn run_once(
             collected = text;
         }
     }
-    Ok((collected, usage))
+    if native_session.is_none() {
+        native_session = adapter.native_session();
+    }
+    Ok(RunOutcome {
+        text: collected,
+        usage,
+        native_session,
+    })
 }
 
 fn ensure_ready(vendor: Vendor, request: &Request<'_>) -> Result<()> {
@@ -456,6 +474,7 @@ async fn apply_update(
     update: Update,
     collected: &mut String,
     usage: &mut Usage,
+    native_session: &mut Option<String>,
     message_id: &mut String,
     pending_text: &mut String,
     finished: &mut bool,
@@ -540,6 +559,15 @@ async fn apply_update(
         Update::TurnFailed(error) => {
             flush_text(request, message_id, pending_text)?;
             bail!("{error}");
+        }
+        Update::NativeSession { id } => {
+            if native_session.as_deref() != Some(id.as_str()) {
+                *native_session = Some(id.clone());
+                request.events.emit(
+                    "vendor.session",
+                    json!({"vendor":vendor.id(),"session_id":id,"job_id":request.job_id}),
+                )?;
+            }
         }
     }
     Ok(())

@@ -1,18 +1,28 @@
-//! Antigravity CLI adapter (`agy`).
+//! Antigravity CLI adapter (`agy`), documented headless protocol
+//! (https://antigravity.google/docs/cli/headless/).
 //!
-//! Official print-mode stream-json
-//! (https://antigravity.google/docs/cli/headless/):
-//! `agy --print --output-format stream-json --input-format stream-json`
-//! reads one NDJSON user message per stdin line and emits NDJSON events.
-//! ShadowCode never treats the `antigravity` Electron app as this CLI, never
-//! reads Google cookies, and never maps a Gemini API key to this adapter.
+//! Command: `agy --output-format stream-json --input-format stream-json
+//! --print=` (the empty `--print=` form is required: `--print` followed by
+//! another flag would swallow that flag as the prompt). Each stdin line is
+//! `{"event":"user","message":{"content":[{"type":"text","text":…}]}}` and
+//! only text blocks are accepted, so images are refused up front. stdout is
+//! NDJSON: `init` (with `conversation_id`), `step_update` (`user_input`,
+//! `agent_response` with `text_delta`, `tool` with `tool_name`/`tool_info`,
+//! `checkpoint`), and one `result` per turn (`status` SUCCESS | ERROR |
+//! CANCELED | INTERRUPTED, `response`, `usage`). Frames were recorded from
+//! agy 1.2.9 on 2026-09-23.
+//!
+//! Antigravity applies its own permission settings
+//! (`~/.gemini/antigravity-cli/settings.json`): in print mode a tool it may
+//! not run is soft-denied and reported, not asked. ShadowCode therefore never
+//! receives approval prompts from this runtime and says so in the UI.
+//! Follow-ups resume the same conversation with `--conversation <id>`.
 use super::{
-    clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, PromptImage, Step,
-    Update, Vendor,
+    clip, redact, redact_value, CliAdapter, LaunchOptions, PromptImage, Step, Update, Vendor,
 };
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 const OUTPUT_PREVIEW: usize = 8000;
 
@@ -20,130 +30,144 @@ const OUTPUT_PREVIEW: usize = 8000;
 pub struct AntigravityAdapter {
     started: bool,
     pending_prompt: Option<String>,
-    pending_permissions: HashSet<String>,
-    tool_names: HashMap<String, String>,
-    tool_paths: HashMap<String, String>,
+    conversation_id: Option<String>,
+    /// step_index -> tool name for steps already reported as started.
+    tool_steps: HashMap<u64, String>,
     streamed_text: bool,
     turn_active: bool,
 }
 
 impl AntigravityAdapter {
     fn user_message(text: &str) -> String {
-        json!({"type":"user","message":{"role":"user","content":[{"type":"text","text":text}]}})
-            .to_string()
+        json!({"event":"user","message":{"content":[{"type":"text","text":text}]}}).to_string()
     }
-    fn content_blocks(message: &Value) -> Vec<Value> {
-        match &message["content"] {
-            Value::Array(blocks) => blocks.clone(),
-            Value::String(text) => vec![json!({"type":"text","text":text})],
-            _ => Vec::new(),
-        }
-    }
-    fn assistant(&mut self, message: &Value) -> Step {
-        let mut step = Step::default();
-        for block in Self::content_blocks(message) {
-            match block["type"].as_str().unwrap_or("") {
-                "text" => {
-                    if !self.streamed_text {
-                        if let Some(text) = block["text"].as_str().filter(|t| !t.is_empty()) {
-                            step.updates.push(Update::Text(redact(text)));
+    fn step_update(&mut self, update: &Value) -> Step {
+        let step_type = update["step_type"].as_str().unwrap_or("");
+        let state = update["state"].as_str().unwrap_or("");
+        let index = update["step_index"].as_u64().unwrap_or(0);
+        match step_type {
+            "agent_response" => {
+                let mut step = Step::default();
+                if let Some(delta) = update["text_delta"].as_str() {
+                    if !delta.is_empty() {
+                        self.streamed_text = true;
+                        step.updates.push(Update::Text(redact(delta)));
+                    }
+                }
+                step
+            }
+            "tool" => {
+                let name = format!(
+                    "antigravity.{}",
+                    update["tool_name"]
+                        .as_str()
+                        .or_else(|| update["tool_info"]["name"].as_str())
+                        .unwrap_or("tool")
+                );
+                let info = &update["tool_info"];
+                let id = format!("agy-step-{index}");
+                let mut step = Step::default();
+                if !self.tool_steps.contains_key(&index) {
+                    self.tool_steps.insert(index, name.clone());
+                    step.updates.push(Update::ToolStarted {
+                        id: id.clone(),
+                        name: name.clone(),
+                        detail: redact_value(json!({"parameters": info["parameters"]})),
+                    });
+                }
+                if state == "DONE" {
+                    let success = info["error"].is_null();
+                    let output = info["output"]
+                        .as_str()
+                        .map(|o| clip(o, OUTPUT_PREVIEW))
+                        .unwrap_or_default();
+                    step.updates.push(Update::ToolCompleted {
+                        id,
+                        name: name.clone(),
+                        success,
+                        output: redact_value(json!({
+                            "output": output,
+                            "error": info["error"],
+                            "duration_seconds": update["duration_seconds"],
+                        })),
+                    });
+                    if success {
+                        if let Some(paths) = edited_paths(&name, &info["parameters"]) {
+                            step.updates.push(Update::FilesChanged {
+                                paths,
+                                detail: json!({"tool": name}),
+                            });
                         }
                     }
                 }
-                "tool_use" => {
-                    let id = block["id"].as_str().unwrap_or("").to_owned();
-                    let name = format!(
-                        "antigravity.{}",
-                        block["name"].as_str().unwrap_or("tool")
-                    );
-                    if let Some(path) = block["input"]["file_path"]
-                        .as_str()
-                        .or_else(|| block["input"]["path"].as_str())
-                    {
-                        self.tool_paths.insert(id.clone(), path.to_owned());
-                    }
-                    self.tool_names.insert(id.clone(), name.clone());
-                    step.updates.push(Update::ToolStarted {
-                        id,
-                        name,
-                        detail: redact_value(json!({"input":block["input"]})),
-                    });
-                }
-                _ => {}
+                step
+            }
+            _ => Step::default(),
+        }
+    }
+    fn result(&mut self, result: &Value) -> Step {
+        self.turn_active = false;
+        let mut step = Step::default();
+        if let Some(id) = result["conversation_id"].as_str() {
+            if self.conversation_id.as_deref() != Some(id) {
+                self.conversation_id = Some(id.to_owned());
+                step.updates.push(Update::NativeSession {
+                    id: id.to_owned(),
+                });
+            }
+        }
+        let usage = &result["usage"];
+        if let (Some(input), Some(output)) = (
+            usage["input_tokens"].as_u64(),
+            usage["output_tokens"].as_u64(),
+        ) {
+            step.updates.push(Update::Usage { input, output });
+        }
+        match result["status"].as_str().unwrap_or("SUCCESS") {
+            "ERROR" => step.updates.push(Update::TurnFailed(format!(
+                "Antigravity error: {}",
+                redact(result["error"].as_str().unwrap_or("unknown error"))
+            ))),
+            "CANCELED" | "INTERRUPTED" => step.updates.push(Update::TurnCompleted {
+                text: None,
+                interrupted: true,
+            }),
+            _ => {
+                let text = result["response"]
+                    .as_str()
+                    .filter(|t| !t.is_empty() && !self.streamed_text)
+                    .map(|t| redact(t));
+                step.updates.push(Update::TurnCompleted {
+                    text,
+                    interrupted: false,
+                });
             }
         }
         self.streamed_text = false;
+        self.tool_steps.clear();
         step
     }
-    fn tool_results(&mut self, message: &Value) -> Step {
-        let mut step = Step::default();
-        for block in Self::content_blocks(message) {
-            if block["type"] != "tool_result" {
-                continue;
-            }
-            let id = block["tool_use_id"].as_str().unwrap_or("").to_owned();
-            let name = self
-                .tool_names
-                .get(&id)
-                .cloned()
-                .unwrap_or_else(|| "antigravity.tool".into());
-            let success = block["is_error"].as_bool() != Some(true);
-            let text = match &block["content"] {
-                Value::String(text) => text.clone(),
-                Value::Array(parts) => parts
-                    .iter()
-                    .filter_map(|p| p["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                _ => String::new(),
-            };
-            step.updates.push(Update::ToolCompleted {
-                id: id.clone(),
-                name: name.clone(),
-                success,
-                output: redact_value(json!({"output":clip(&text, OUTPUT_PREVIEW)})),
-            });
-            if success {
-                if let Some(path) = self.tool_paths.get(&id) {
-                    step.updates.push(Update::FilesChanged {
-                        paths: vec![path.clone()],
-                        detail: json!({"tool":name}),
-                    });
-                }
+}
+
+/// Paths a file-mutating Antigravity tool touched, taken from its own
+/// parameters. Unknown tool shapes yield nothing rather than a guess.
+fn edited_paths(tool_name: &str, parameters: &Value) -> Option<Vec<String>> {
+    let lower = tool_name.to_ascii_lowercase();
+    let mutating = ["write", "edit", "replace", "create", "delete", "move", "rename", "patch"]
+        .iter()
+        .any(|needle| lower.contains(needle));
+    if !mutating {
+        return None;
+    }
+    let mut paths = Vec::new();
+    for key in ["file_path", "path", "TargetFile", "AbsolutePath", "target_file", "filePath"] {
+        if let Some(path) = parameters[key].as_str() {
+            if !path.is_empty() {
+                paths.push(path.to_owned());
             }
         }
-        step
     }
-    fn permission(&mut self, message: &Value) -> Step {
-        let request_id = message["request_id"]
-            .as_str()
-            .or_else(|| message["id"].as_str())
-            .unwrap_or("agy-perm")
-            .to_owned();
-        self.pending_permissions.insert(request_id.clone());
-        let tool = message
-            .pointer("/request/tool_name")
-            .or_else(|| message.pointer("/tool_name"))
-            .and_then(Value::as_str)
-            .unwrap_or("tool");
-        let command = message
-            .pointer("/request/input/command")
-            .or_else(|| message.pointer("/input/command"))
-            .and_then(Value::as_str)
-            .unwrap_or(tool);
-        Step::update(Update::Approval(ApprovalPrompt {
-            request_id,
-            kind: if tool.eq_ignore_ascii_case("bash") || tool.contains("shell") {
-                "command".into()
-            } else {
-                "tool".into()
-            },
-            tool: format!("antigravity.{tool}"),
-            command: redact(command),
-            reason: redact("Antigravity requests permission"),
-            arguments: redact_value(message.clone()),
-        }))
-    }
+    (!paths.is_empty()).then_some(paths)
 }
 
 impl CliAdapter for AntigravityAdapter {
@@ -151,8 +175,7 @@ impl CliAdapter for AntigravityAdapter {
         Vendor::Antigravity
     }
     fn command(&self, options: &LaunchOptions) -> (String, Vec<String>) {
-        let mut args = vec![
-            "--print".into(),
+        let mut args: Vec<String> = vec![
             "--output-format".into(),
             "stream-json".into(),
             "--input-format".into(),
@@ -166,10 +189,17 @@ impl CliAdapter for AntigravityAdapter {
             args.push("--model".into());
             args.push(options.model.clone());
         }
+        if let Some(conversation) = options.resume.as_deref().filter(|c| !c.is_empty()) {
+            args.push("--conversation".into());
+            args.push(conversation.to_owned());
+        }
+        // Must be last and in `--print=` form so no later flag is taken as
+        // the prompt text.
+        args.push("--print=".into());
         (options.binary.clone(), args)
     }
     fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {
-        let _ = options;
+        self.conversation_id = options.resume.clone().filter(|c| !c.is_empty());
         self.started = true;
         match self.pending_prompt.take() {
             Some(prompt) => {
@@ -184,7 +214,7 @@ impl CliAdapter for AntigravityAdapter {
     }
     fn prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
         if !images.is_empty() {
-            bail!("Antigravity stream-json does not document image content blocks; images are not forwarded");
+            bail!("Antigravity's stream-json input accepts text blocks only; images are not forwarded");
         }
         if self.started {
             self.turn_active = true;
@@ -203,88 +233,54 @@ impl CliAdapter for AntigravityAdapter {
             Ok(value) => value,
             Err(_) => {
                 return Ok(Step::update(Update::Warning(format!(
-                    "Ignored a non-JSON line from antigravity: {}",
+                    "Ignored a non-JSON line from agy: {}",
                     clip(&redact(trimmed), 200)
                 ))))
             }
         };
         if !message.is_object() {
             return Ok(Step::update(Update::Warning(
-                "Ignored a non-object frame from antigravity".into(),
+                "Ignored a non-object frame from agy".into(),
             )));
         }
-        Ok(match message["type"].as_str().unwrap_or("") {
-            "system" | "keep_alive" => Step::default(),
-            "stream_event" => {
-                let event = &message["event"];
-                if event["type"] == "content_block_delta" && event["delta"]["type"] == "text_delta"
-                {
-                    match event["delta"]["text"].as_str() {
-                        Some(text) if !text.is_empty() => {
-                            self.streamed_text = true;
-                            Step::update(Update::Text(redact(text)))
-                        }
-                        _ => Step::default(),
-                    }
-                } else {
-                    Step::default()
-                }
-            }
-            "assistant" => self.assistant(&message["message"].clone()),
-            "user" => self.tool_results(&message["message"].clone()),
-            "control_request" | "permission_request" => self.permission(&message),
-            "result" => {
-                self.turn_active = false;
+        Ok(match message["event"].as_str().unwrap_or("") {
+            "init" => {
                 let mut step = Step::default();
-                if let (Some(input), Some(output)) = (
-                    message["usage"]["input_tokens"].as_u64(),
-                    message["usage"]["output_tokens"].as_u64(),
-                ) {
-                    step.updates.push(Update::Usage { input, output });
-                }
-                if message["is_error"].as_bool() == Some(true) {
-                    step.updates.push(Update::TurnFailed(format!(
-                        "Antigravity error: {}",
-                        redact(message["result"].as_str().unwrap_or("failed"))
-                    )));
-                } else {
-                    if !self.streamed_text {
-                        if let Some(text) = message["result"].as_str().filter(|t| !t.is_empty()) {
-                            step.updates.push(Update::Text(redact(text)));
-                        }
+                if let Some(id) = message["conversation_id"].as_str() {
+                    if self.conversation_id.as_deref() != Some(id) {
+                        self.conversation_id = Some(id.to_owned());
+                        step.updates.push(Update::NativeSession {
+                            id: id.to_owned(),
+                        });
                     }
-                    step.updates.push(Update::TurnCompleted {
-                        text: None,
-                        interrupted: message["subtype"].as_str() == Some("cancelled"),
-                    });
                 }
                 step
             }
-            _ => Step::update(Update::Warning(format!(
-                "Ignored an unrecognized frame from antigravity: {}",
-                clip(&redact(trimmed), 80)
-            ))),
+            "step_update" => {
+                let update = message["step_update"].clone();
+                self.step_update(&update)
+            }
+            "result" => {
+                let result = message["result"].clone();
+                self.result(&result)
+            }
+            "" => Step::update(Update::Warning(
+                "Ignored a frame without event from agy".into(),
+            )),
+            _ => Step::default(),
         })
     }
-    fn approve(&mut self, request_id: &str, approve: bool) -> Result<Vec<String>> {
-        if !self.pending_permissions.remove(request_id) {
-            bail!("Unknown Antigravity permission request {request_id}");
-        }
-        Ok(vec![json!({
-            "type":"control_response",
-            "request_id":request_id,
-            "response":{"behavior": if approve { "allow" } else { "deny" }}
-        })
-        .to_string()])
+    fn approve(&mut self, request_id: &str, _approve: bool) -> Result<Vec<String>> {
+        bail!(
+            "Antigravity print mode applies its own permission settings and does not ask ShadowCode (request {request_id})"
+        )
     }
     fn interrupt(&mut self) -> Vec<String> {
-        if self.turn_active {
-            vec![json!({"type":"control_request","request":{"subtype":"interrupt"}}).to_string()]
-        } else {
-            Vec::new()
-        }
+        // No documented interrupt frame; the runner stops the process on
+        // cancel. Pause is unsupported for this runtime.
+        Vec::new()
     }
-    fn one_shot(&self) -> bool {
-        true
+    fn native_session(&self) -> Option<String> {
+        self.conversation_id.clone()
     }
 }

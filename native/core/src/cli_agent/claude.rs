@@ -36,6 +36,7 @@ pub struct ClaudeAdapter {
     tool_paths: HashMap<String, String>,
     turn_active: bool,
     control_counter: u64,
+    session_id: Option<String>,
 }
 impl ClaudeAdapter {
     fn user_message(text: &str, images: &[PromptImage]) -> String {
@@ -219,10 +220,16 @@ impl CliAdapter for ClaudeAdapter {
             args.push("--model".into());
             args.push(options.model.clone());
         }
+        if let Some(session) = options.resume.as_deref().filter(|s| !s.is_empty()) {
+            // Documented: `--resume <session-id>` continues the stored
+            // conversation from any directory on this machine.
+            args.push("--resume".into());
+            args.push(session.to_owned());
+        }
         (options.binary.clone(), args)
     }
     fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {
-        let _ = options;
+        self.session_id = options.resume.clone().filter(|s| !s.is_empty());
         self.started = true;
         // stream-json input accepts the first user message immediately; the
         // `system/init` frame confirms the session started.
@@ -270,7 +277,13 @@ impl CliAdapter for ClaudeAdapter {
                 if message["subtype"] == "init" {
                     self.initialized = true;
                 }
-                Step::default()
+                match message["session_id"].as_str() {
+                    Some(id) if self.session_id.as_deref() != Some(id) => {
+                        self.session_id = Some(id.to_owned());
+                        Step::update(Update::NativeSession { id: id.to_owned() })
+                    }
+                    _ => Step::default(),
+                }
             }
             "stream_event" => {
                 let event = &message["event"];
@@ -364,6 +377,9 @@ impl CliAdapter for ClaudeAdapter {
             "response":{"subtype":"success","request_id":request_id,"response":response}
         })
         .to_string()])
+    }
+    fn native_session(&self) -> Option<String> {
+        self.session_id.clone()
     }
     fn interrupt(&mut self) -> Vec<String> {
         if !self.turn_active {

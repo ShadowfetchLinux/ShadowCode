@@ -12,6 +12,7 @@ pub mod context;
 pub mod control;
 pub mod engine;
 pub mod events;
+pub mod gguf;
 pub mod guardian;
 pub mod hooks;
 pub mod intelligence;

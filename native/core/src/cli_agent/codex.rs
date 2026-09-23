@@ -66,6 +66,7 @@ pub struct CodexAppServerAdapter {
     streamed_message_ids: std::collections::HashSet<String>,
     options: Option<LaunchOptions>,
     turn_active: bool,
+    resume_failed: bool,
 }
 impl CodexAppServerAdapter {
     fn id(&mut self) -> u64 {
@@ -95,7 +96,35 @@ impl CodexAppServerAdapter {
     fn handle_response(&mut self, id: u64, message: &Value) -> Result<Step> {
         if let Some(error) = message.get("error").filter(|e| !e.is_null()) {
             let text = error["message"].as_str().unwrap_or("unknown error");
-            if Some(id) == self.init_id || Some(id) == self.thread_start_id {
+            if Some(id) == self.init_id {
+                bail!("Codex app-server rejected the handshake: {text}");
+            }
+            if Some(id) == self.thread_start_id {
+                if self.options.as_ref().is_some_and(|o| o.resume.is_some()) && !self.resume_failed {
+                    // The stored thread is gone (archived, deleted, other
+                    // machine). Start a fresh thread; the caller adds the
+                    // handoff context for the model.
+                    self.resume_failed = true;
+                    if let Some(options) = self.options.as_mut() {
+                        options.resume = None;
+                    }
+                    let thread_id = self.id();
+                    self.thread_start_id = Some(thread_id);
+                    let mut params = json!({"approvalPolicy":"on-request","approvalsReviewer":"user"});
+                    if let Some(options) = &self.options {
+                        params["cwd"] = json!(options.workspace);
+                        params["sandbox"] = json!(if options.read_only { "read-only" } else { "workspace-write" });
+                        if !options.model.is_empty() && options.model != "default" {
+                            params["model"] = json!(options.model);
+                        }
+                    }
+                    return Ok(Step {
+                        send: vec![rpc_request(thread_id, "thread/start", params)],
+                        updates: vec![Update::Warning(format!(
+                            "Codex could not resume the previous thread ({text}); starting a new thread"
+                        ))],
+                    });
+                }
                 bail!("Codex app-server rejected the handshake: {text}");
             }
             if Some(id) == self.turn_start_id {
@@ -112,6 +141,7 @@ impl CodexAppServerAdapter {
             let thread_id = self.id();
             self.thread_start_id = Some(thread_id);
             let mut params = json!({"approvalPolicy":"on-request","approvalsReviewer":"user"});
+            let mut method = "thread/start";
             if let Some(options) = &self.options {
                 params["cwd"] = json!(options.workspace);
                 params["sandbox"] = json!(if options.read_only {
@@ -122,8 +152,15 @@ impl CodexAppServerAdapter {
                 if !options.model.is_empty() && options.model != "default" {
                     params["model"] = json!(options.model);
                 }
+                if let Some(thread) = options.resume.as_deref().filter(|t| !t.is_empty()) {
+                    // Documented resume: `thread/resume {threadId}` reopens the
+                    // stored Codex thread; a fresh turn continues it.
+                    params["threadId"] = json!(thread);
+                    params["excludeTurns"] = json!(true);
+                    method = "thread/resume";
+                }
             }
-            step.send.push(rpc_request(thread_id, "thread/start", params));
+            step.send.push(rpc_request(thread_id, method, params));
             return Ok(step);
         }
         if Some(id) == self.thread_start_id {
@@ -132,7 +169,9 @@ impl CodexAppServerAdapter {
             };
             self.thread_id = Some(thread.to_owned());
             self.phase = Phase::ThreadStarted;
-            let mut step = Step::default();
+            let mut step = Step::update(Update::NativeSession {
+                id: thread.to_owned(),
+            });
             if let Some((prompt, images)) = self.pending_prompt.take() {
                 step.send.extend(self.start_turn(&prompt, &images)?);
             }
@@ -520,6 +559,9 @@ impl CliAdapter for CodexAppServerAdapter {
             ),
         };
         Ok(vec![line])
+    }
+    fn native_session(&self) -> Option<String> {
+        self.thread_id.clone()
     }
     fn interrupt(&mut self) -> Vec<String> {
         let (Some(thread), Some(turn)) = (self.thread_id.clone(), self.turn_id.clone()) else {

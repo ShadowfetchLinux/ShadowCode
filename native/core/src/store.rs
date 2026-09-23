@@ -92,6 +92,39 @@ pub struct Store {
 }
 
 impl Store {
+    /// Small per-session key/value used for execution targets and vendor
+    /// session ids (`native_session:<vendor>`).
+    pub fn set_session_meta(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
+        let connection = self.lock()?;
+        connection.execute(
+            "INSERT INTO session_meta(session_id,key,value) VALUES(?,?,?) ON CONFLICT(session_id,key) DO UPDATE SET value=excluded.value",
+            params![session_id, key, value],
+        )?;
+        Ok(())
+    }
+    pub fn session_meta(&self, session_id: &str, key: &str) -> Result<Option<String>> {
+        let connection = self.lock()?;
+        let value = connection
+            .query_row(
+                "SELECT value FROM session_meta WHERE session_id=? AND key=?",
+                params![session_id, key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(value)
+    }
+    pub fn clear_session_meta_prefix(&self, key_prefix: &str) -> Result<usize> {
+        let connection = self.lock()?;
+        let pattern = format!("{}%", key_prefix.replace('%', "\\%"));
+        let count = connection.execute(
+            "DELETE FROM session_meta WHERE key LIKE ? ESCAPE '\\'",
+            params![pattern],
+        )?;
+        Ok(count)
+    }
+}
+
+impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;

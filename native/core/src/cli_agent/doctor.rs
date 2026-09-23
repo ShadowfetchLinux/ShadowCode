@@ -42,7 +42,12 @@ fn marker_present(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)
 }
 
-fn sanitized_command(binary: &Path, args: &[&str], path_env: Option<&OsStr>) -> tokio::process::Command {
+fn sanitized_command(
+    binary: &Path,
+    args: &[&str],
+    path_env: Option<&OsStr>,
+    home: Option<&Path>,
+) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(binary);
     command
         .args(args)
@@ -53,10 +58,15 @@ fn sanitized_command(binary: &Path, args: &[&str], path_env: Option<&OsStr>) -> 
         .env_clear()
         .env("NO_COLOR", "1")
         .env("TERM", "dumb");
-    for name in ["HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+    for name in ["HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);
         }
+    }
+    if let Some(home) = home {
+        // Tests point vendor CLIs at a fixture home; production passes the
+        // real one.
+        command.env("HOME", home);
     }
     match path_env {
         Some(path) => {
@@ -72,9 +82,18 @@ fn sanitized_command(binary: &Path, args: &[&str], path_env: Option<&OsStr>) -> 
 }
 
 async fn run_short(binary: &Path, args: &[&str], path_env: Option<&OsStr>) -> Option<(bool, String)> {
+    run_short_in(binary, args, path_env, None).await
+}
+
+async fn run_short_in(
+    binary: &Path,
+    args: &[&str],
+    path_env: Option<&OsStr>,
+    home: Option<&Path>,
+) -> Option<(bool, String)> {
     let output = tokio::time::timeout(
         Duration::from_secs(8),
-        sanitized_command(binary, args, path_env).output(),
+        sanitized_command(binary, args, path_env, home).output(),
     )
     .await
     .ok()?
@@ -86,6 +105,79 @@ async fn run_short(binary: &Path, args: &[&str], path_env: Option<&OsStr>) -> Op
     Some((output.status.success(), clip(&text, 4000).to_owned()))
 }
 
+/// Redacted, clipped text of a short read-only command (stdout, else stderr).
+pub async fn short_text(binary: &Path, args: &[&str], path_env: Option<&OsStr>) -> Option<String> {
+    let (_, text) = run_short(binary, args, path_env).await?;
+    Some(redact(&text))
+}
+
+/// `<binary> --help`, for feature detection of documented flags.
+pub async fn help_text(binary: &Path, path_env: Option<&OsStr>) -> Option<String> {
+    short_text(binary, &["--help"], path_env).await
+}
+
+/// Documented `codex login status`: exit 0 means signed in. The output is a
+/// sentence such as "Logged in using ChatGPT"; no credential is printed.
+pub async fn codex_login_status(binary: &Path, path_env: Option<&OsStr>) -> LoginState {
+    codex_login_status_in(binary, path_env, None).await
+}
+
+async fn codex_login_status_in(binary: &Path, path_env: Option<&OsStr>, home: Option<&Path>) -> LoginState {
+    match run_short_in(binary, &["login", "status"], path_env, home).await {
+        Some((true, _)) => LoginState::LoggedIn,
+        Some((false, text)) => {
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("not logged in") || lower.contains("not signed in") {
+                LoginState::NotLoggedIn
+            } else {
+                LoginState::Unknown
+            }
+        }
+        None => LoginState::Unknown,
+    }
+}
+
+/// `claude auth status --json` reports a boolean without secrets.
+pub async fn claude_login_state(binary: &Path, path_env: Option<&OsStr>) -> LoginState {
+    claude_login_state_in(binary, path_env, None).await
+}
+
+async fn claude_login_state_in(binary: &Path, path_env: Option<&OsStr>, home: Option<&Path>) -> LoginState {
+    match run_short_in(binary, &["auth", "status", "--json"], path_env, home).await {
+        Some((_, text)) => {
+            // The CLI pretty-prints the JSON over several lines.
+            let parsed: Option<Value> = serde_json::from_str(text.trim()).ok().or_else(|| {
+                text.lines()
+                    .find_map(|line| serde_json::from_str(line.trim()).ok())
+            });
+            match parsed.and_then(|v| v["loggedIn"].as_bool()) {
+                Some(true) => LoginState::LoggedIn,
+                Some(false) => LoginState::NotLoggedIn,
+                None => LoginState::Unknown,
+            }
+        }
+        None => LoginState::Unknown,
+    }
+}
+
+/// `grok models`: login line plus the model list.
+pub async fn grok_models(
+    binary: &Path,
+    path_env: Option<&OsStr>,
+) -> Option<(bool, Vec<super::acp_probe::AcpModel>)> {
+    grok_models_in(binary, path_env, None).await
+}
+
+async fn grok_models_in(
+    binary: &Path,
+    path_env: Option<&OsStr>,
+    home: Option<&Path>,
+) -> Option<(bool, Vec<super::acp_probe::AcpModel>)> {
+    let (ok, text) = run_short_in(binary, &["models"], path_env, home).await?;
+    let (logged_in, models) = super::acp_probe::parse_grok_models(&text);
+    Some((logged_in.unwrap_or(ok && !models.is_empty()), models))
+}
+
 /// Version string from `<binary> --version`, first line only, redacted.
 pub async fn version(binary: &Path, path_env: Option<&OsStr>) -> Option<String> {
     let (_, text) = run_short(binary, &["--version"], path_env).await?;
@@ -95,27 +187,24 @@ pub async fn version(binary: &Path, path_env: Option<&OsStr>) -> Option<String> 
 
 /// Login state without touching credential contents.
 pub async fn login_state(vendor: Vendor, binary: &Path, home: &Path, path_env: Option<&OsStr>) -> LoginState {
-    // Cursor/Antigravity login is reported by the official CLI. A nearby
-    // IDE config file is not proof of a subscription session.
-    if !matches!(vendor, Vendor::Cursor | Vendor::Antigravity)
-        && marker_present(&auth_marker(vendor, home))
-    {
-        return LoginState::LoggedIn;
+    // A credential marker file is never proof of a live login; every vendor
+    // is asked through its own documented status command. The marker only
+    // short-circuits the obvious "never signed in" case for Codex/Grok so the
+    // CLI is not started needlessly.
+    if matches!(vendor, Vendor::Codex | Vendor::Grok) && !marker_present(&auth_marker(vendor, home)) {
+        // Codex may also hold a login through the app-server keyring; ask it.
+        if vendor == Vendor::Grok {
+            return LoginState::NotLoggedIn;
+        }
     }
     match vendor {
         // Claude Code may keep credentials in the OS keychain instead of a
         // file; its status command reports a boolean without secrets.
-        Vendor::Claude => match run_short(binary, &["auth", "status", "--json"], path_env).await {
-            Some((_, text)) => {
-                let parsed: Option<Value> = text
-                    .lines()
-                    .find_map(|line| serde_json::from_str(line.trim()).ok());
-                match parsed.and_then(|v| v["loggedIn"].as_bool()) {
-                    Some(true) => LoginState::LoggedIn,
-                    Some(false) => LoginState::NotLoggedIn,
-                    None => LoginState::Unknown,
-                }
-            }
+        Vendor::Claude => claude_login_state_in(binary, path_env, Some(home)).await,
+        Vendor::Codex => codex_login_status_in(binary, path_env, Some(home)).await,
+        Vendor::Grok => match grok_models_in(binary, path_env, Some(home)).await {
+            Some((true, _)) => LoginState::LoggedIn,
+            Some((false, _)) => LoginState::NotLoggedIn,
             None => LoginState::Unknown,
         },
         Vendor::Cursor => match run_short(binary, &["status"], path_env).await {
@@ -148,7 +237,6 @@ pub async fn login_state(vendor: Vendor, binary: &Path, home: &Path, path_env: O
             }
             None => LoginState::Unknown,
         },
-        Vendor::Codex | Vendor::Grok => LoginState::NotLoggedIn,
     }
 }
 
