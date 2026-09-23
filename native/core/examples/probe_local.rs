@@ -48,5 +48,15 @@ fn main() {
                 p.has_vision_encoder()
             )),
         );
+        if std::env::var_os("PROBE_KEYS").is_some() {
+            let prefix = format!("{}.", header.architecture().unwrap_or(""));
+            for (key, value) in header
+                .metadata
+                .iter()
+                .filter(|(k, _)| k.starts_with(&prefix))
+            {
+                println!("    {key} = {value:?}");
+            }
+        }
     }
 }
