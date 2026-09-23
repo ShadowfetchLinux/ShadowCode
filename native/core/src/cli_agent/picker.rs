@@ -8,6 +8,8 @@ pub const GROUP_SUBSCRIPTIONS: &str = "subscriptions";
 pub const GROUP_LOCAL: &str = "local";
 pub const ROUTE_VENDOR: &str = "vendor_cli";
 pub const ROUTE_LOCAL: &str = "local_llamacpp";
+/// Subtitle for a vendor row whose CLI is signed in with an API key.
+pub const API_KEY_SUBTITLE: &str = "API key login · billed per token";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

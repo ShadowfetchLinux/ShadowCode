@@ -68,6 +68,23 @@ pub struct Decision {
     pub provider: String,
     pub context_limit: usize,
     pub fallback_reason: Option<String>,
+    /// `local` (this computer) or `cloud`; decides handoff consent.
+    pub inference: String,
+    /// `vendor_cli`, `local_llamacpp`, or `native_http`.
+    pub route: String,
+}
+
+/// Where a model configuration runs, for records and consent.
+pub fn route_of(model: &ModelConfig) -> (&'static str, &'static str) {
+    let local = crate::cli_agent::handoff::is_local(model);
+    let route = if crate::cli_agent::is_cli_provider(&model.provider) {
+        crate::cli_agent::picker::ROUTE_VENDOR
+    } else if model.provider == "llamacpp" {
+        crate::cli_agent::picker::ROUTE_LOCAL
+    } else {
+        "native_http"
+    };
+    (if local { "local" } else { "cloud" }, route)
 }
 pub fn select(
     store: &Store,
@@ -102,6 +119,20 @@ pub fn select(
                     model
                 }
                 result => {
+                    // A local route never silently becomes a cloud one.
+                    let requested_local = requested.starts_with("local:gguf:")
+                        || requested.starts_with("llamacpp:")
+                        || result
+                            .as_ref()
+                            .is_ok_and(crate::cli_agent::handoff::is_local);
+                    anyhow::ensure!(
+                        !requested_local || crate::cli_agent::handoff::is_local(&config.model),
+                        "The {role} route points to a model on this computer that is not available ({}); ShadowCode will not fall back to a cloud model. Choose another model.",
+                        match &result {
+                            Err(error) => error.to_string(),
+                            Ok(_) => "offline preview".into(),
+                        }
+                    );
                     decision.source = "fallback".into();
                     decision.fallback_reason = Some(match result {
                         Err(error) => error.to_string(),
@@ -117,6 +148,9 @@ pub fn select(
     decision.model_name = model.name.clone();
     decision.provider = model.provider.clone();
     decision.context_limit = model.context_limit;
+    let (inference, route) = route_of(&model);
+    decision.inference = inference.into();
+    decision.route = route.into();
     Ok((model, decision))
 }
 pub fn view(store: &Store, config: &Config) -> Result<Value> {
