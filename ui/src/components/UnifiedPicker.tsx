@@ -487,8 +487,11 @@ function Row({
           {isLocal(target) ? "Local" : "Cloud"} ·{" "}
           <span className={`avail avail-${target.availability}`}>
             {availabilityLabel(target)}
-          </span>{" "}
-          · {usageLabel(target.usage, target.inference)}
+          </span>
+          {/* Rows show allowance only when the provider reports one; the
+              "Usage unavailable" explanation stays in the details panel. */}
+          {target.usage?.state !== "unavailable" &&
+            ` · ${usageLabel(target.usage, target.inference)}`}
         </small>
       </span>
       <span className="unified-picker-meta">

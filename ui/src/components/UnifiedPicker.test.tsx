@@ -157,9 +157,9 @@ it("shows 'Choose a model' until a row is chosen and groups both sources", () =>
   expect(text(/qwen3/)).toMatch(
     /Local · Ready · Runs on this computer · No subscription quota/,
   );
-  expect(text(/Cursor/)).toMatch(
-    /Cloud · Sign in · Usage unavailable · Open provider usage/,
-  );
+  // Unknown usage is not repeated on every row; it stays in the details.
+  expect(text(/Cursor/)).toMatch(/Cloud · Sign in$/);
+  expect(text(/Cursor/)).not.toMatch(/%/);
   expect(text(/gpt-oss/)).toMatch(/Local · Setup required/);
   // Capability badges only when verified.
   expect(screen.getAllByText("Vision")).toHaveLength(1);

@@ -204,7 +204,7 @@ impl VendorStatus {
         };
         json!({
             "id": format!("cli-{}", self.vendor.id()),
-            "label": format!("{} via `{}` CLI", self.vendor.product_label(), self.vendor.binary()),
+            "label": format!("{} ({} CLI)", self.vendor.product_label(), self.vendor.binary()),
             "state": state,
             "status": status,
             "availability": self.availability,
