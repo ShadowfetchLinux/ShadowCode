@@ -82,7 +82,23 @@ the Vulkan module removed, the runtime falls back to the CPU.
 
 ## Tests run
 
-See the final numbers at the end of this report ("Final verification").
+| Check | Command | Result |
+| --- | --- | --- |
+| Rust format | `cargo +1.95.0 fmt --all --check` | clean |
+| Rust lint | `cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings` | clean |
+| Rust tests | `cargo +1.95.0 test --workspace --locked` | 444 passed, 0 failed, 3 ignored (live tests) |
+| UI types | `npm --prefix ui run typecheck` | clean |
+| UI unit | `npm --prefix ui test` | 87 passed (19 files) |
+| UI e2e | `npm --prefix ui run test:e2e` (vite preview, fake transport) | 9 passed; production bundle has no test transport |
+| Real window | `xvfb-run … node scripts/test-native-desktop.mjs` | passed, 13 checks, no serious/critical axe violations, no child processes after quit |
+| Packages | `node scripts/build-native.mjs` + `check-native-package.mjs` | AppImage and deb built and checked (runtime, relative links, notices, `llama-server --version` and `--list-devices` from the package) |
+| Installer | `bash scripts/test-install-appimage.sh` | passed |
+| Live vendors | `examples/live_vendor_turn` | Codex, Cursor, Antigravity, Grok turns; resume; consented Grok → Cursor handoff |
+| Live local | `tests/local_engine.rs` live test, `examples/live_local_web` | Qwen3 14B coding task and web fetch, Gemma 4 vision, offline |
+
+Two defects were found by live runs and fixed with regression tests: a
+resumed ACP session counted its replayed history as new output, and an
+explicit runtime override ranked below a stale installed CPU-only runtime.
 
 ## Genuine external limits
 
@@ -103,4 +119,14 @@ See the final numbers at the end of this report ("Final verification").
 
 ## Built application
 
-Filled in by the final verification below.
+- `target/release/bundle/appimage/ShadowCode_0.28.0_amd64.AppImage` (with
+  `SHA256SUMS` and the runtime sources archive) and
+  `target/release/bundle/deb/ShadowCode_0.28.0_amd64.deb`, also attached to
+  the GitHub release v0.28.0.
+- Installed on this machine with `scripts/install-appimage.sh`:
+  `~/Applications/ShadowCode-0.28.0-x86_64.AppImage` (the `ShadowCode.AppImage`
+  link), launchers `~/.local/bin/shadow` and `shadowcode`, the desktop entry
+  `shadow-agent.desktop`, and the Vulkan + CPU llama.cpp runtime in
+  `~/.local/lib/shadowcode`. The existing profile migrated to schema 25 with an
+  automatic backup; its 8 conversations were kept. A copy of the 0.27 app and
+  profile is in `~/.local/share/shadowcode-backups/pre-0.28-*`.
