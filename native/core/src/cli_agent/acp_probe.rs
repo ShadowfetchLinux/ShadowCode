@@ -57,6 +57,9 @@ fn sanitized(binary: &Path, args: &[&str], workspace: &Path, path_env: Option<&O
     if let Some(path) = path_env {
         command.env("PATH", path);
     }
+    // Same environment as a real run: an API key must not make a row look
+    // signed in when the task (which also drops it) would not be.
+    super::scrub_api_keys(&mut command);
     command
 }
 

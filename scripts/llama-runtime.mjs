@@ -107,6 +107,13 @@ export async function readManagedRuntime(checkout = root) {
     `The runtime was built from llama.cpp ${built.commit}, but tools/llama.cpp.pin pins ${pin.commit}. Rebuild it.`,
   );
   const vulkan = /vulkan/.test(built.backend || "");
+  // Release packages must carry the GPU module; a CPU-only runtime happens
+  // silently when glslc or the Vulkan headers were missing at build time.
+  if (!vulkan && process.env.SHADOWCODE_ALLOW_CPU_ONLY_RUNTIME !== "1") {
+    throw new Error(
+      `The llama.cpp runtime in ${directory} was built without the Vulkan module (backend=${built.backend || "unknown"}). Install glslc and libvulkan-dev and rebuild it, or set SHADOWCODE_ALLOW_CPU_ONLY_RUNTIME=1 to package a CPU-only runtime on purpose.`,
+    );
+  }
   if (vulkan) {
     assert.match(
       pin.spirv_headers_commit || "",

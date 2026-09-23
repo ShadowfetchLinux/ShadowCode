@@ -71,6 +71,11 @@ pub fn discover_with(env: Option<OsString>, home: Option<PathBuf>) -> Option<Sto
             origin: "default",
         });
     }
+    // The system service created by Ollama's Linux installer.
+    candidates.push(StoreRoot {
+        path: PathBuf::from("/usr/share/ollama/.ollama/models"),
+        origin: "system",
+    });
     let with_models = candidates.iter().find(|c| has_manifests(&c.path)).cloned();
     with_models.or_else(|| candidates.into_iter().next())
 }

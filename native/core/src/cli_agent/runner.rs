@@ -166,7 +166,7 @@ async fn run_exec_fallback(request: &Request<'_>, reason: &str) -> Result<RunOut
     let reason = clip(&redact(reason), 400);
     if request.approvals_required {
         bail!(
-            "Codex app-server could not start a session ({reason}). The `codex exec` fallback has no approval channel, so ShadowCode will not run it while \"Ask before actions\" is on. Update the Codex CLI, or change the permission mode for this project."
+            "Codex app-server could not start a session ({reason}). The `codex exec` fallback has no approval channel, so ShadowCode will not run it while shell commands require approval. Update the Codex CLI so its app-server starts."
         );
     }
     request.events.emit(

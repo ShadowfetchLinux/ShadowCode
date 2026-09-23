@@ -433,11 +433,11 @@ async fn exec_fallback_only_before_a_turn_and_never_under_approvals() {
     assert!(format!("{error:#}").contains("No such file"));
     assert!(run.fake.marker("exec_ran").is_none());
     assert_eq!(run.fake.marker("prompts.log").unwrap().lines().count(), 1);
-    // app-server rejects initialize under "Ask before actions": refused.
+    // app-server rejects initialize while shell commands require approval: refused.
     let refused = run_setup(json!({"reject_initialize":true}));
     let error = run_fake(&refused, false, true, None).await.unwrap_err();
     assert!(
-        format!("{error:#}").contains("Ask before actions"),
+        format!("{error:#}").contains("require approval"),
         "{error:#}"
     );
     assert!(refused.fake.marker("exec_ran").is_none());

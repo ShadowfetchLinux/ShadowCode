@@ -807,6 +807,15 @@ async fn probe_acp_vendor(binary: &Path, args: &[&str], status: &mut VendorStatu
                     }
                     status.detail = ready_detail(status);
                 }
+                if let Some(tier) = cursor_tier(vendor, binary).await {
+                    if let Some(account) = status.account.as_mut() {
+                        account.plan = Some(tier.clone());
+                    }
+                    status.usage_note = Some(format!(
+                        "Cursor reports the plan tier ({tier}) but not the remaining allowance"
+                    ));
+                    status.detail = ready_detail(status);
+                }
             } else if let Some(error) = login_error {
                 let lower = error.to_ascii_lowercase();
                 if lower.contains("login") || lower.contains("auth") || lower.contains("sign") {
@@ -857,6 +866,23 @@ async fn probe_acp_vendor(binary: &Path, args: &[&str], status: &mut VendorStatu
             }
         }
     }
+}
+
+/// `cursor-agent about` prints "Subscription Tier  <tier>"; display only,
+/// never turned into a remaining-allowance number.
+async fn cursor_tier(vendor: Vendor, binary: &Path) -> Option<String> {
+    if vendor != Vendor::Cursor {
+        return None;
+    }
+    let text = doctor::short_text(binary, &["about"], None).await?;
+    parse_cursor_tier(&text)
+}
+
+pub(crate) fn parse_cursor_tier(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("Subscription Tier"))
+        .map(|rest| rest.trim().to_owned())
+        .filter(|tier| !tier.is_empty() && tier.len() < 40)
 }
 
 /// `cursor-agent status` prints the signed-in email; used for display only.
@@ -959,5 +985,12 @@ mod tests {
         let doctor = cursor.to_doctor_json();
         assert_eq!(doctor["state"], "not_installed");
         assert_eq!(doctor["availability_label"], "Setup required");
+    }
+
+    #[test]
+    fn cursor_tier_is_read_from_about() {
+        let about = "About Cursor CLI\n\nCLI Version         2026.09.15\nModel               Auto\nSubscription Tier   Free\nOS                  linux (x64)\n";
+        assert_eq!(super::parse_cursor_tier(about).as_deref(), Some("Free"));
+        assert_eq!(super::parse_cursor_tier("no tier here"), None);
     }
 }

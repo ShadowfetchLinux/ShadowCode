@@ -3,6 +3,9 @@ use crate::tools::truncate;
 
 pub(super) struct GoalRun {
     pub session_id: String,
+    /// The picker target the goal runs on (conversation, else workspace
+    /// default), resolved once so every milestone uses the same route.
+    pub model: Option<crate::config::ModelConfig>,
     pub cancel: CancellationToken,
     pub finished: AtomicBool,
     done: Notify,
@@ -51,9 +54,29 @@ impl Engine {
             config.is_trusted(&workspace.path),
             "Trust this project before running a goal"
         );
+        // Goals run on the model picked in the composer: the conversation's
+        // execution target, else the project default. Never the config model.
+        let target = session_id
+            .map(str::to_owned)
+            .or_else(|| goal["session_id"].as_str().map(str::to_owned))
+            .map(|sid| self.0.store.session_meta(&sid, "execution_target"))
+            .transpose()?
+            .flatten()
+            .or(self
+                .0
+                .store
+                .native_meta(&format!("execution_target:{}", workspace.path.display()))?);
+        let model = match &target {
+            Some(id) => Some(crate::model_registry::resolve(
+                &self.0.store,
+                id,
+                &config.model,
+            )?),
+            None => None,
+        };
         ensure!(
-            config.model.provider != "mock",
-            "Choose a model before running a goal"
+            model.as_ref().unwrap_or(&config.model).provider != "mock",
+            "Choose a model in the composer before running a goal"
         );
         let sid = match session_id {
             Some(sid) => {
@@ -79,6 +102,7 @@ impl Engine {
         let goal = self.0.store.begin_goal(goal_id, &sid)?;
         let run = Arc::new(GoalRun {
             session_id: sid,
+            model,
             cancel: CancellationToken::new(),
             finished: AtomicBool::new(false),
             done: Notify::new(),
@@ -177,7 +201,7 @@ impl Engine {
                         ),
                         task,
                         session_id: Some(run.session_id.clone()),
-                        model: None,
+                        model: run.model.clone(),
                         mode: milestone["mode"].as_str().unwrap_or("code").into(),
                         queue: true,
                         images: Vec::new(),
