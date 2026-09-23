@@ -47,6 +47,22 @@ pub struct ModelClient {
     client: reqwest::Client,
     pub config: ModelConfig,
     key: Option<String>,
+    extra_body: Option<Value>,
+}
+/// Loopback endpoints (local runtimes) must never go through an HTTP proxy.
+pub fn is_loopback_endpoint(endpoint: &str) -> bool {
+    reqwest::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| {
+            url.host_str().map(|host| {
+                let host = host.trim_start_matches('[').trim_end_matches(']');
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            })
+        })
+        .unwrap_or(false)
 }
 impl ModelClient {
     pub fn new(config: ModelConfig, paths: &AppPaths) -> Result<Self> {
@@ -56,15 +72,40 @@ impl ModelClient {
         };
         validation.validate()?;
         let key = secret(paths, &config.api_key_env)?;
+        let endpoint = if config.endpoint.is_empty() {
+            preset(&config.provider)["endpoint"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned()
+        } else {
+            config.endpoint.clone()
+        };
+        let mut builder = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(600))
+            .redirect(reqwest::redirect::Policy::none());
+        if is_loopback_endpoint(&endpoint) {
+            builder = builder.no_proxy();
+        }
         Ok(Self {
-            client: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(600))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
+            client: builder.build()?,
             config,
             key,
+            extra_body: None,
         })
+    }
+    /// Per-launch bearer key held in memory (managed local runtime).
+    pub fn with_bearer(mut self, key: Option<String>) -> Self {
+        if key.is_some() {
+            self.key = key;
+        }
+        self
+    }
+    /// Extra top-level request fields for compatible servers (for example
+    /// `chat_template_kwargs` on llama.cpp).
+    pub fn with_extra_body(mut self, extra: Option<Value>) -> Self {
+        self.extra_body = extra.filter(Value::is_object);
+        self
     }
     pub fn endpoint(&self) -> String {
         let endpoint = if self.config.endpoint.is_empty() {
@@ -152,6 +193,13 @@ impl ModelClient {
                 body["tools"] = json!(tools);
                 body["tool_choice"] = json!("auto");
             }
+            if let (Some(Value::Object(extra)), Some(object)) =
+                (&self.extra_body, body.as_object_mut())
+            {
+                for (key, value) in extra {
+                    object.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+            }
             body
         }
     }
@@ -197,8 +245,25 @@ impl ModelClient {
         let status = response.status();
         if !status.is_success() {
             let code = status.as_u16();
+            // Local runtimes explain rejections (for example a prompt larger
+            // than the context window); show a bounded excerpt.
+            let detail = if is_loopback_endpoint(&url) {
+                let bytes = tokio::time::timeout(Duration::from_secs(5), response.bytes())
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_default();
+                let text = String::from_utf8_lossy(&bytes[..bytes.len().min(600)]).into_owned();
+                if text.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", text.trim())
+                }
+            } else {
+                String::new()
+            };
             bail!(
-                "Model provider returned HTTP {code}{}",
+                "Model provider returned HTTP {code}{}{detail}",
                 match code {
                     401 | 403 => "; check the API key",
                     404 => "; check the endpoint and model name",

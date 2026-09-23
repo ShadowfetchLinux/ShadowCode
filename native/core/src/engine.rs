@@ -145,7 +145,7 @@ struct Inner {
     slots: Semaphore,
     closing: AtomicBool,
     background: Arc<BackgroundManager>,
-    local_llama: tokio::sync::Mutex<Option<crate::local_runtime::LoadedServer>>,
+    local_llama: crate::local_runtime::LocalRuntime,
     vendors: Arc<crate::cli_agent::catalog::VendorCatalog>,
     _profile_lock: Arc<crate::paths::ProfileLock>,
 }
@@ -171,7 +171,7 @@ impl Engine {
             slots: Semaphore::new(4),
             closing: AtomicBool::new(false),
             background,
-            local_llama: tokio::sync::Mutex::new(None),
+            local_llama: crate::local_runtime::LocalRuntime::new(),
             vendors: Arc::new(crate::cli_agent::catalog::VendorCatalog::new()),
             _profile_lock: profile_lock,
         })))
@@ -195,28 +195,26 @@ impl Engine {
     pub fn background(&self) -> &Arc<BackgroundManager> {
         &self.0.background
     }
+    /// The managed local model slot (one llama-server at a time).
+    pub fn local_runtime(&self) -> &crate::local_runtime::LocalRuntime {
+        &self.0.local_llama
+    }
+    /// Managed local rows start (or reuse) llama-server and return a client
+    /// whose context limit equals the server's `--ctx-size`, with the
+    /// per-launch key in memory and a lease held for the caller's lifetime.
+    /// Everything else passes through unchanged.
     pub async fn prepare_model_client(
         &self,
         config: &Config,
         model: &ModelConfig,
-    ) -> Result<ModelConfig> {
-        if model.provider != "llamacpp" {
-            return Ok(model.clone());
+        cancel: &CancellationToken,
+    ) -> Result<crate::local_engine::PreparedModel> {
+        if !crate::local_engine::is_managed(model) {
+            return Ok(crate::local_engine::PreparedModel::passthrough(
+                model.clone(),
+            ));
         }
-        let entry = crate::local_engine::entry_for_id(&config.local_engine, &model.default)
-            .or_else(|| crate::local_engine::entry_for_id(&config.local_engine, &model.name))
-            .context("That local GGUF is not in the catalog. Add the file in Settings → Local models. Removing a catalog row never deletes the weights.")?;
-        let binary = crate::local_engine::resolve_llama_binary(&config.local_engine.llama_binary)
-            .context("Managed llama.cpp is not installed. Run scripts/build-llama.cpp.sh. ShadowCode does not start Ollama or LM Studio.")?;
-        let endpoint = {
-            let mut slot = self.0.local_llama.lock().await;
-            crate::local_runtime::ensure_loaded(&mut slot, &binary, Path::new(&entry.path)).await?
-        };
-        let mut next = model.clone();
-        next.endpoint = endpoint;
-        next.name = entry.name;
-        next.api_key_env = "UNUSED".into();
-        Ok(next)
+        crate::local_engine::prepare(&config.local_engine, model, &self.0.local_llama, cancel).await
     }
     pub fn delete_session(&self, id: &str) -> Result<bool> {
         let goals = self
@@ -760,7 +758,7 @@ impl Engine {
             job.cancel.cancel();
             self.0.approvals.deny_task(&job.snapshot()?.task_id);
         }
-        tokio::time::timeout(Duration::from_secs(15), async {
+        let drained = tokio::time::timeout(Duration::from_secs(15), async {
             self.0.background.wait_shutdown().await?;
             for goal in goals {
                 goal.wait().await;
@@ -797,9 +795,11 @@ impl Engine {
             }
             Ok::<(), anyhow::Error>(())
         })
-        .await
-        .context("Tasks are still shutting down; keep the app open until cleanup finishes")??;
-        crate::local_runtime::stop(&mut *self.0.local_llama.lock().await).await;
+        .await;
+        // Stop the local server even when other cleanup timed out or failed.
+        self.0.local_llama.stop().await;
+        drained
+            .context("Tasks are still shutting down; keep the app open until cleanup finishes")??;
         Ok(())
     }
     async fn drain(&self, workspace: PathBuf) {
@@ -1141,11 +1141,11 @@ impl Engine {
         events: TaskEvents,
         tools: &ToolExecutor,
     ) -> Result<(String, Value)> {
-        let model = ModelClient::new(
-            self.prepare_model_client(&running.config, &running.config.model)
-                .await?,
-            &self.0.paths,
-        )?;
+        // Held until this task returns: the local model lease lives in it.
+        let prepared = self
+            .prepare_model_client(&running.config, &running.config.model, &running.cancel)
+            .await?;
+        let model: ModelClient = prepared.client(&self.0.paths)?;
         let mut schemas: Vec<_> = tools
             .schemas()
             .into_iter()
@@ -1180,6 +1180,7 @@ impl Engine {
             schemas
                 .retain(|schema| CORE.contains(&schema["function"]["name"].as_str().unwrap_or("")));
         }
+        prepared.filter_schemas(&mut schemas);
         let mut messages = self
             .0
             .store
@@ -1228,11 +1229,7 @@ impl Engine {
         system.push_str(&context::capability_guidance(&running.config, &schemas));
         messages.insert(0, json!({"role":"system","content":system}));
         let image_refs = crate::vision::refs_from_paths(&running.workspace, &job.images)?;
-        crate::vision::ensure_vision_or_bail(
-            &running.config.model.provider,
-            &running.config.model.name,
-            image_refs.len(),
-        )?;
+        prepared.ensure_images(image_refs.len())?;
         messages.push(crate::vision::user_message(&job.task, &image_refs));
         if let Some(note) = autonomy::bugfix_policy(&job.task) {
             messages.push(json!({"role":"system","content":note}));
@@ -1654,6 +1651,7 @@ impl Engine {
             );
             // Parallelize adjacent safe observations only. Every mutation and
             // plan update is a barrier, preserving the model's requested order.
+            let mut viewed_images = Vec::new();
             let mut index = 0;
             while index < response.tool_calls.len() {
                 ensure!(
@@ -1715,6 +1713,9 @@ impl Engine {
                     if call.name == "exec" {
                         commands.push(json!({"command":call.arguments["command"],"success":result.success,"exit_code":result.output["exit_code"],"timed_out":result.output["timed_out"]}));
                     }
+                    if call.name == "view_image" && result.success && prepared.vision() {
+                        viewed_images.extend(crate::vision::viewed_image(&result.output));
+                    }
                     messages.push(
                         result.message(
                             &call.name,
@@ -1724,6 +1725,10 @@ impl Engine {
                     );
                     self.0.store.save_messages(&job.id, &messages)?;
                 }
+            }
+            if !viewed_images.is_empty() {
+                messages.push(crate::vision::viewed_images_message(&viewed_images));
+                self.0.store.save_messages(&job.id, &messages)?;
             }
         }
         bail!("Task reached its {}-step limit. Review the changes and continue with a focused follow-up.",running.config.agent.max_steps)

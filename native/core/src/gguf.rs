@@ -106,6 +106,32 @@ impl GgufHeader {
         self.chat_template()
             .is_some_and(|t| t.contains("tools") || t.contains("tool_call"))
     }
+    /// The chat template understands an `enable_thinking` switch (Qwen3 style).
+    pub fn template_has_thinking_switch(&self) -> bool {
+        self.chat_template()
+            .is_some_and(|t| t.contains("enable_thinking"))
+    }
+    /// Tokenizer-only files ship the vocabulary without any weights.
+    pub fn is_vocab_only(&self) -> bool {
+        self.n_tensors == 0 || self.bool("general.vocab_only") == Some(true)
+    }
+    /// Encoder-only or pooled embedding models cannot chat.
+    pub fn is_embedding_model(&self) -> bool {
+        const ENCODERS: &[&str] = &[
+            "bert",
+            "nomic-bert",
+            "nomic-bert-moe",
+            "jina-bert-v2",
+            "jina-bert-v3",
+            "neo-bert",
+            "modern-bert",
+            "eurobert",
+            "t5encoder",
+            "gemma-embedding",
+        ];
+        self.architecture().is_some_and(|a| ENCODERS.contains(&a))
+            || self.arch_u64("pooling_type").is_some_and(|v| v > 0)
+    }
 }
 
 struct Reader<R: Read> {
@@ -345,9 +371,10 @@ pub fn estimate_memory(
     }
 }
 
-#[cfg(test)]
-pub(crate) mod test_support {
-    //! Writes small synthetic GGUF files for tests.
+/// Synthetic GGUF writer for unit and integration tests. Nothing in the
+/// catalog, runtime, or readiness code calls it.
+#[doc(hidden)]
+pub mod test_support {
     use std::io::Write;
 
     pub enum V<'a> {
@@ -364,6 +391,16 @@ pub(crate) mod test_support {
     }
 
     pub fn write_gguf(path: &std::path::Path, kv: &[(&str, V<'_>)], tensors: &[&str]) {
+        write_gguf_padded(path, kv, tensors, 4096)
+    }
+
+    /// [`write_gguf`] with `padding` bytes of pretend weights after the header.
+    pub fn write_gguf_padded(
+        path: &std::path::Path,
+        kv: &[(&str, V<'_>)],
+        tensors: &[&str],
+        padding: usize,
+    ) {
         let mut out = Vec::new();
         out.extend_from_slice(b"GGUF");
         out.extend_from_slice(&3u32.to_le_bytes());
@@ -407,7 +444,7 @@ pub(crate) mod test_support {
             out.extend_from_slice(&0u64.to_le_bytes());
         }
         // Pretend weights so the file has a size.
-        out.extend_from_slice(&[0u8; 4096]);
+        out.resize(out.len() + padding, 0);
         std::fs::File::create(path)
             .unwrap()
             .write_all(&out)

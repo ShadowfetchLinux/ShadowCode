@@ -302,6 +302,11 @@ impl ToolExecutor {
             call.arguments.to_string().len() <= 8_000_000,
             "Tool arguments exceed the limit"
         );
+        if call.name == "view_image" {
+            // Read-only and confined to the workspace; advertised only to
+            // models whose runtime reports vision.
+            return crate::vision::view_image(&self.workspace, &call.arguments);
+        }
         let background_prompt = self.background_prompt(call)?;
         let decision = permissions::check(&self.config.permissions, &call.name, &call.arguments);
         #[cfg(unix)]
@@ -1113,6 +1118,11 @@ pub fn truncate(value: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &value[..end]
+}
+
+/// Offered only to models whose runtime accepts images.
+pub fn view_image_schema() -> Value {
+    json!({"type":"function","function":{"name":"view_image","description":"Look at a PNG, JPEG, or WebP image inside the project. The image is attached to your next message.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}})
 }
 
 pub fn schemas() -> Vec<Value> {

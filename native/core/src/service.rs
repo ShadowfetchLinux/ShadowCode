@@ -894,45 +894,93 @@ impl Service {
                     "config": cfg.cli_agents
                 }));
             }
+            ("GET", "/api/local-models") => {
+                let cfg = self.config()?;
+                let runtime = self.engine.clone();
+                return tokio::task::spawn_blocking(move || {
+                    crate::local_engine::catalog_with(
+                        &cfg.local_engine,
+                        Some(runtime.local_runtime()),
+                    )
+                })
+                .await
+                .context("Local model catalog stopped");
+            }
             ("POST", "/api/local-models/add") => {
                 let path = PathBuf::from(text("path"));
-                ensure!(path.is_absolute(), "Choose an absolute file or directory");
                 let cfg = self.config()?;
-                let mut next = cfg.local_engine.clone();
-                if path.is_dir() {
-                    let p = path.display().to_string();
-                    if !next.directories.iter().any(|d| d == &p) {
-                        next.directories.push(p);
-                    }
-                } else {
-                    crate::local_engine::inspect_gguf(&path, 0)?;
-                    let p = path.display().to_string();
-                    if !next.files.iter().any(|d| d == &p) {
-                        next.files.push(p);
-                    }
-                }
-                next.validate()?;
+                let next = crate::local_engine::add(&cfg.local_engine, &path)?;
                 Config::patch(self.engine.paths(), json!({"local_engine": next}))?;
                 let cfg = self.config()?;
                 return Ok(
-                    json!({"ok":true,"local_engine":crate::local_engine::catalog(&cfg.local_engine)}),
+                    json!({"ok":true,"local_engine":crate::local_engine::catalog_with(&cfg.local_engine, Some(self.engine.local_runtime()))}),
                 );
             }
             ("POST", "/api/local-models/remove") => {
-                let path = text("path");
-                ensure!(!path.is_empty(), "Missing catalog path");
+                let key = if text("id").is_empty() {
+                    text("path")
+                } else {
+                    text("id")
+                };
                 let cfg = self.config()?;
-                let mut next = cfg.local_engine.clone();
-                next.files.retain(|p| p != path);
-                next.directories.retain(|p| p != path);
+                let next = crate::local_engine::remove(&cfg.local_engine, key)?;
                 Config::patch(self.engine.paths(), json!({"local_engine": next}))?;
+                let cfg = self.config()?;
                 return Ok(
-                    json!({"ok":true,"deleted_weights":false,"detail":"Catalog entry removed. Original weights were not deleted."}),
+                    json!({"ok":true,"deleted_weights":false,"detail":"Catalog entry removed. Original weights were not deleted.","local_engine":crate::local_engine::catalog_with(&cfg.local_engine, Some(self.engine.local_runtime()))}),
                 );
+            }
+            ("POST", "/api/local-models/import-ollama") => {
+                let cfg = self.config()?;
+                let root = if text("root").is_empty() {
+                    crate::ollama_store::discover()
+                        .context("No Ollama model store was found on this computer")?
+                        .path
+                } else {
+                    let root = PathBuf::from(text("root"));
+                    ensure!(root.is_absolute(), "The Ollama store path must be absolute");
+                    root
+                };
+                let next =
+                    crate::local_engine::import_ollama(&cfg.local_engine, &root, text("tag"))?;
+                Config::patch(self.engine.paths(), json!({"local_engine": next}))?;
+                let cfg = self.config()?;
+                return Ok(
+                    json!({"ok":true,"local_engine":crate::local_engine::catalog_with(&cfg.local_engine, Some(self.engine.local_runtime()))}),
+                );
+            }
+            ("POST", "/api/local-models/load") => {
+                let cfg = self.config()?;
+                let id = text("id");
+                ensure!(
+                    id.starts_with("local:gguf:"),
+                    "Choose a local model to load"
+                );
+                crate::local_engine::entry_for_id(&cfg.local_engine, id)
+                    .context("That local model is not in the catalog")?;
+                let model = model_registry::resolve(&store, id, &cfg.model)?;
+                // Unload aborts a load in progress; the lease ends right away
+                // so the loaded model stays until another model is needed.
+                let prepared = self
+                    .engine
+                    .prepare_model_client(&cfg, &model, &CancellationToken::new())
+                    .await?;
+                drop(prepared);
+                return Ok(json!({"ok":true,"loaded":self.engine.local_runtime().loaded_json()}));
+            }
+            ("POST", "/api/local-models/unload") => {
+                let unloaded = self.engine.local_runtime().unload().await?;
+                return Ok(json!({"ok":true,"unloaded":unloaded}));
             }
             ("POST", "/api/models/test") => {
                 let cfg = self.config()?;
-                let model = self.model_from_body(body, &cfg.model);
+                let model = if text("id").starts_with("local:gguf:") {
+                    crate::local_engine::entry_for_id(&cfg.local_engine, text("id"))
+                        .context("That local model is not in the catalog")?;
+                    model_registry::resolve(&store, text("id"), &cfg.model)?
+                } else {
+                    self.model_from_body(body, &cfg.model)
+                };
                 ensure!(
                     model.provider != "mock",
                     "The offline preview is not a coding model"
@@ -959,9 +1007,15 @@ impl Service {
                     }));
                 }
                 let started = Instant::now();
-                let model = self.engine.prepare_model_client(&cfg, &model).await?;
-                let client = ModelClient::new(model.clone(), self.engine.paths())?;
                 let cancel = CancellationToken::new();
+                // Local rows: refuses to swap a model a running task holds;
+                // the lease in `prepared` lasts for this test.
+                let prepared = self
+                    .engine
+                    .prepare_model_client(&cfg, &model, &cancel)
+                    .await?;
+                let client: ModelClient = prepared.client(self.engine.paths())?;
+                let model = prepared.config.clone();
                 let result=tokio::time::timeout(Duration::from_secs(45),client.chat(&[json!({"role":"user","content":"Reply with one short sentence confirming you can respond."})],&[],cancel.clone(),|_|{})).await;
                 return Ok(match result {
                     Ok(Ok(reply)) => {
@@ -1143,6 +1197,15 @@ impl Service {
                     "reviewer" | "review" => "review",
                     _ => "code",
                 };
+                crate::local_engine::precheck_job(
+                    &cfg.local_engine,
+                    if text("model").is_empty() {
+                        &cfg.model.default
+                    } else {
+                        text("model")
+                    },
+                    body["images"].as_array().map_or(0, Vec::len),
+                )?;
                 let model = if text("model").is_empty() {
                     None
                 } else {
@@ -1666,34 +1729,14 @@ impl Service {
             .iter()
             .map(crate::cli_agent::picker::PickerTarget::to_json)
             .collect();
-        let local = crate::local_engine::catalog(&cfg.local_engine);
-        let llama_ready = local["llama"]["state"] == "ready";
-        for model in local["models"].as_array().into_iter().flatten() {
-            let availability = if llama_ready && model["compatible"] == true {
-                "ready"
-            } else {
-                "setup_required"
-            };
-            targets.push(json!({
-                "id": model["id"],
-                "provider": "llamacpp",
-                "account": "this-computer",
-                "model": model["name"],
-                "route": crate::cli_agent::picker::ROUTE_LOCAL,
-                "group": crate::cli_agent::picker::GROUP_LOCAL,
-                "name": format!("{} · This computer", model["name"].as_str().unwrap_or("GGUF")),
-                "subtitle": "Runs on this computer · No subscription quota",
-                "inference": "local",
-                "availability": availability,
-                "availability_label": if availability == "ready" { "Ready" } else { "Setup required" },
-                "reason": model["detail"],
-                "featured": true,
-                "vision": model["vision"],
-                "tools": model["tools"],
-                "is_default": false,
-                "usage": crate::cli_agent::usage::UsageSnapshot::local(),
-            }));
-        }
+        let local_cfg = cfg.local_engine.clone();
+        let engine = self.engine.clone();
+        let local = tokio::task::spawn_blocking(move || {
+            crate::local_engine::catalog_with(&local_cfg, Some(engine.local_runtime()))
+        })
+        .await
+        .context("Local model catalog stopped")?;
+        targets.extend(crate::local_engine::picker_rows(&local, &cfg.model.default));
         Ok(json!({
             "targets": targets,
             "vendors": vendors.status_json(&cfg.cli_agents, false).await,
