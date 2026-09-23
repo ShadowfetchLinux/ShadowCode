@@ -592,9 +592,12 @@ pub fn touch(root: &Path, relative_path: &str) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("symbol index lock poisoned"))?;
     let conn = open_db(root)?;
     let workspace = Workspace::open(root)?;
-    let full = root.join(workspace.relative(relative_path)?);
+    let rel = workspace.relative(relative_path)?;
+    let full = root.join(&rel);
     if !full.exists() {
-        conn.execute("DELETE FROM files WHERE path=?", [relative_path])?;
+        // Delete by the normalized key the index stores, not the caller's
+        // spelling ("./src/a.rs" must remove "src/a.rs").
+        conn.execute("DELETE FROM files WHERE path=?", [relative(root, &full)])?;
         return Ok(());
     }
     read_source(root, &full)?;
@@ -631,6 +634,28 @@ mod tests {
         assert!(callers["count"].as_u64().unwrap() >= 1);
         let defs = query_definitions(root.path(), "greet", 10).unwrap();
         assert!(!defs["definitions"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn touch_removes_deleted_files_by_normalized_path() {
+        let root = tempfile::tempdir().unwrap();
+        let src = root.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("gone.rs"), "pub fn vanish() {}\n").unwrap();
+        ensure_index(root.path(), &["src/gone.rs".into()], false).unwrap();
+        assert!(query_definitions(root.path(), "vanish", 4).unwrap()["ok"] == true);
+        fs::remove_file(src.join("gone.rs")).unwrap();
+        // A differently spelled path for the same file must still drop the record.
+        touch(root.path(), "./src/gone.rs").unwrap();
+        let conn = open_db(root.path()).unwrap();
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM symbols WHERE name='vanish'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
     }
 
     #[test]

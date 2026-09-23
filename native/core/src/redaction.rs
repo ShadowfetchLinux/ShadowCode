@@ -29,7 +29,8 @@ fn patterns() -> &'static [Regex] {
 
 /// High-entropy token heuristic: long base64/hex-like runs outside common words.
 fn high_entropy_tokens(text: &str) -> Vec<(usize, usize)> {
-    let re = Regex::new(r"[A-Za-z0-9+/_=-]{32,}").expect("entropy regex");
+    static ENTROPY: OnceLock<Regex> = OnceLock::new();
+    let re = ENTROPY.get_or_init(|| Regex::new(r"[A-Za-z0-9+/_=-]{32,}").expect("entropy regex"));
     re.find_iter(text)
         .filter(|m| {
             let s = m.as_str();
@@ -74,6 +75,14 @@ pub fn is_secret_path(path: &str) -> bool {
         .next()
         .unwrap_or(path)
         .to_ascii_lowercase();
+    // Committed templates document variable names without values; refusing
+    // them would hide the one file a model may legitimately need to read.
+    if matches!(
+        name.as_str(),
+        ".env.example" | ".env.sample" | ".env.template" | ".env.dist" | ".env.defaults"
+    ) {
+        return false;
+    }
     matches!(
         name.as_str(),
         ".env"
@@ -213,6 +222,13 @@ mod tests {
         assert!(is_secret_path(".env"));
         assert!(is_secret_path("app/.env.local"));
         assert!(is_secret_path("secrets.env"));
+        assert!(is_secret_path("deploy/key.pem"));
+        assert!(is_secret_path(".env.production"));
+        // Templates with placeholder names are readable; values in them still
+        // pass through redact_text like any other content.
+        assert!(!is_secret_path(".env.example"));
+        assert!(!is_secret_path("app/.env.sample"));
+        assert!(!is_secret_path(".env.template"));
         assert!(!is_secret_path("src/config.rs"));
         assert!(!is_secret_path("README.md"));
     }
