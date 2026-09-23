@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.23.0
+
+- Verification gate: the last test/build/lint command decides. A deliberately
+  observed failing test before a fix no longer prevents the final passing run
+  from counting as verified; `verification.summary` reports `red_green` when
+  that sequence was observed. A failure after the last passing check still
+  blocks it, and model prose never upgrades the claim level.
+- Bug-fix policy matches whole words; prompts about a "prefix", a "fixture" or
+  "debug logging" no longer receive the failing-test-first instruction.
+- Pausing a queued task is rejected before the steer control is flagged. A
+  rejected pause previously parked the task forever once it started running.
+- Parallel plan cleanup recovers when a worker checkout was deleted by hand:
+  the stale Git record is pruned, the worker is listed as missing, and every
+  branch is retained. Integration checks name the missing checkout.
+- `.env.example`, `.env.sample`, `.env.template`, `.env.dist` and
+  `.env.defaults` are readable; their contents still pass through redaction.
+- Symbol index touch removes deleted files by their normalized path.
+- Steering strip: one Steer action pauses at the next boundary and records the
+  instruction; the toast states the task stays paused until Resume. Removed an
+  unused prop.
+- User guide documents the verification gate and secret redaction; parallel
+  workspace docs describe missing-checkout recovery. Version bumped across
+  crates, desktop, UI, Python package, desktop entry and docs.
+
 ## 0.22.3
 
 - Preserve the caller directory and relative project/profile paths in AppImage

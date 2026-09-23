@@ -19,7 +19,10 @@ files and ignored files. It retains all worker branches and commits for later
 review or integration. The lead checkout stays intact. Trust, writable mode and
 idle-workspace reservations apply to mutating operations. Configured checkout
 filters and merge drivers cannot run through these operations; repositories
-requiring them may need manual handling.
+requiring them may need manual handling. A checkout deleted outside ShadowCode
+is named in the integration-check error; cleanup prunes its stale Git record,
+lists it under `missing_checkouts` and still retains its branch, so the plan can
+always be cleared and replaced.
 
 The feature is disabled outside Git and requires opening the repository root.
 Two prepared worktrees do not imply two models will fit in GPU memory.

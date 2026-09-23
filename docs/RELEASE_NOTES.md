@@ -1,5 +1,27 @@
-ShadowCode 0.22.3 improves native Linux coding workflows, project isolation and recovery.
-The Rust/Tauri app embeds its interface and needs no Python or Node runtime.
+ShadowCode 0.23.0 hardens the verification gate, live steering and parallel
+workspace recovery. The Rust/Tauri app embeds its interface and needs no Python
+or Node runtime.
+
+- **Honest verification:** a task is verified only when its last test, build,
+  lint or type-check command succeeded and nothing failed afterwards. The
+  failing-test-first flow requested for bug fixes now completes as verified;
+  model prose never does. Bug-fix wording is matched as whole words.
+- **Steering:** a rejected pause on a queued task can no longer park it at its
+  first boundary. One Steer action pauses and records the instruction; the task
+  stays paused until Resume.
+- **Parallel workspaces:** a checkout deleted outside ShadowCode is reported by
+  name and pruned during cleanup while its branch is retained.
+- **Secrets:** `.env.example`-style templates are readable; `.env`, `secrets.env`,
+  credential JSON and private keys remain refused, and tool output is redacted
+  before reaching the model.
+
+Downloads: `ShadowCode_0.23.0_amd64.AppImage`, `ShadowCode_0.23.0_amd64.deb`,
+the AppImage runtime source archive, and `SHA256SUMS`. Binaries target x86_64,
+Ubuntu 24.04+ / glibc 2.39+. Git and model providers such as Ollama remain external.
+
+---
+
+ShadowCode 0.22.3 improved native Linux coding workflows, project isolation and recovery.
 
 - **Conversation control:** fork from a response with completed tool context;
   later turns stay out of the fork and the original remains intact.

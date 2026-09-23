@@ -1,6 +1,6 @@
 # ShadowCode user guide
 
-This guide covers the supported 0.22 native release. The desktop, CLI, terminal
+This guide covers the supported 0.23 native release. The desktop, CLI, terminal
 interface, and integrations use the same Python-free Rust engine. See the
 [native desktop](NATIVE_DESKTOP.md), [native CLI](NATIVE_CLI.md), and
 [release gates](NATIVE_MIGRATION.md) guides for platform and integration details.
@@ -28,6 +28,20 @@ operation to inspect its output. File-changing operations offer review and
 checkpoint rewind. The plan above the composer reflects observed actions and
 verification; skipped steps were not needed for that task. A successful harness
 verdict does not establish correctness beyond the checks actually performed.
+
+A task is marked **verified** only from recorded command evidence: the last
+test, build, lint or type-check command in the task succeeded and nothing failed
+after it. Model prose such as "all tests pass" never counts; a completion that
+claims success without evidence is labelled unverified. Tasks worded as a bug
+fix, regression, crash or failure ask the model for a failing test first; the
+earlier red run does not block the final green run from counting.
+
+Secrets stay out of model context. Files named `.env`, `.env.*`, `secrets.env`,
+credential JSON and private keys are refused when the model asks to read them
+(`.env.example`-style templates are readable). Tokens, keys and other
+high-entropy strings in any tool output are replaced with `[redacted secret]`
+before the model sees them. This is pattern-based and narrow; it is not a
+guarantee that every secret is caught.
 
 **Pause task** requests a pause at the next safe boundary. A command already
 running finishes first. Add a steering instruction, then **Resume task** to
