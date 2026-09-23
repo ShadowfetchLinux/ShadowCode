@@ -39,88 +39,101 @@ the items below are what was missing, fake, or unreachable.
       SPIRV-Headers, `$ORIGIN` rpath, atomic install, `architectures.txt`.
 - [x] Live: Qwen3 14B tool calls at ~35 tok/s and Gemma 4 12B vision on Vulkan;
       CPU fallback verified with the Vulkan module removed.
-- [ ] Ship llama.cpp MIT notice with the runtime; bundle into AppImage and deb
+- [x] Ship llama.cpp MIT notice with the runtime; bundle into AppImage and deb
       with relative symlinks; package checks assert the runtime loads.
 
 ## 2. Local engine
 
 - [x] `gguf.rs`: header reader (architecture, context, template, tensors,
       projector detection) with memory estimate.
-- [ ] `local_engine.rs`: inspect via GGUF metadata; compatibility from
+- [x] `local_engine.rs`: inspect via GGUF metadata; compatibility from
       `architectures.txt` + token embedding tensor; projector pairing by exact
       stem or a single projector in the same folder; `tools` from the chat
       template; memory estimate vs VRAM/RAM; hardware from
       `llama-server --list-devices` (cached).
-- [ ] Ollama store import: manifest → model + projector blobs, verified, never
+- [x] Ollama store import: manifest → model + projector blobs, verified, never
       copied; unsupported architectures listed as incompatible with the reason.
-- [ ] `local_runtime.rs`: `--jinja`, `--mmproj`, context from metadata capped
-      by memory, `--api-key` per launch, `--no-webui`, stderr drain, cancel
+- [x] `local_runtime.rs`: `--jinja`, `--mmproj`, context from metadata capped
+      by memory, a per-launch key (`LLAMA_API_KEY`, not argv), `--no-webui`, stderr drain, cancel
       token, clean stop; one model at a time.
-- [ ] Load / unload / status endpoints and Settings controls.
-- [ ] Vision gate from the projector, not the file name; `view_image` tool.
+- [x] Load / unload / status endpoints and Settings controls.
+- [x] Vision gate from the projector, not the file name; `view_image` tool.
 
 ## 3. Vendor accounts (subscriptions)
 
 - [x] `codex_probe.rs`: account/read, rateLimits/read, model/list (live).
 - [x] `acp_probe.rs`: initialize/authenticate/session/new for Cursor and Grok
       (live), `grok models` parser.
-- [ ] Doctor: Codex via probe/`login status`; Grok via `grok models`; Cursor
+- [x] Doctor: Codex via probe/`login status`; Grok via `grok models`; Cursor
       via ACP authenticate; Claude via `auth status`; Antigravity via `models`.
       Never Ready because a binary or a file exists.
-- [ ] Discovery: Codex model/list; Cursor ACP models (exact ids); Grok ACP;
+- [x] Discovery: Codex model/list; Cursor ACP models (exact ids); Grok ACP;
       Antigravity `models`; Claude default + CLI-documented aliases.
-- [ ] Usage: multi-window snapshots (Codex pools, plan, reset, credits only
+- [x] Usage: multi-window snapshots (Codex pools, plan, reset, credits only
       when reported); stale/unavailable states; cache with backoff; persisted;
       cleared on disconnect; plan-limit pause.
-- [ ] Antigravity adapter rewritten to the documented `event` protocol.
-- [ ] Cursor adapter: authenticate, `session/set_model` with exact ids,
+- [x] Antigravity adapter rewritten to the documented `event` protocol.
+- [x] Cursor adapter: authenticate, `session/set_model` with exact ids,
       `session/load` resume. Grok rows: no images.
-- [ ] Codex adapter: per-turn token usage, `thread/resume`, limit-reached
+- [x] Codex adapter: per-turn token usage, `thread/resume`, limit-reached
       handling; exec fallback only before a turn starts.
-- [ ] Claude adapter: `--resume`, session id capture, alias models.
-- [ ] Native session ids persisted per conversation; explicit handoff when the
+- [x] Claude adapter: `--resume`, session id capture, alias models.
+- [x] Native session ids persisted per conversation; explicit handoff when the
       provider changes; consent before local content goes to a cloud route.
-- [ ] Accounts page: Connect (official login in the user's browser),
+- [x] Accounts page: Connect (official login in the user's browser),
       status, models, usage, Disconnect (with shared-CLI logout warning).
 
 ## 4. Native agent (local models)
 
-- [ ] Context window and server context are one number from the GGUF header.
-- [ ] `web_fetch` / `web_search` tools with URL validation, private-network
+- [x] Context window and server context are one number from the GGUF header.
+- [x] `web_fetch` / `web_search` tools with URL validation, private-network
       block, redirects, size and time limits; sources in the activity log.
-- [ ] Network mode: online / web tools off / offline (no quota refresh).
-- [ ] Two honest permission modes: Ask before actions / Allow project edits;
+- [x] Network mode: online / web tools off / offline (no quota refresh).
+- [x] Two honest permission modes: Ask before actions / Allow project edits;
       vendor mapping explained; read-only auto-denies vendor prompts.
-- [ ] Durable tool output redacted; trust gate for goals; checkpoint restore
+- [x] Durable tool output redacted; trust gate for goals; checkpoint restore
       writes a transcript event.
 
 ## 5. Interface
 
-- [ ] Composer picker fed from `/api/picker` (vendor + local rows), no
+- [x] Composer picker fed from `/api/picker` (vendor + local rows), no
       fallback labels, Send disabled without a target; selection stored per
       conversation server-side.
-- [ ] Quiet welcome with three suggestions; onboarding without a model step.
-- [ ] Activity timeline from real events; final summary card (files, tests).
-- [ ] Remove dead controls: ModeTabs, VendorAgentChip, ModelChooser,
+- [x] Quiet welcome with three suggestions; onboarding without a model step.
+- [x] Activity timeline from real events; final summary card (files, tests).
+- [x] Remove dead controls: ModeTabs, VendorAgentChip, ModelChooser,
       ThinkingCard, CustomModelDialog, OpenWeightHub, FlowGuide, hidden mode
       state; Skills/Goals/Background/Health move under Settings › Advanced.
-- [ ] Accounts and Local models pages as above; compact permissions and web
+- [x] Accounts and Local models pages as above; compact permissions and web
       indicators only when relevant.
 
 ## 6. Persistence
 
-- [ ] SQLite `user_version` 25: `execution_targets`, `usage_snapshots`,
-      `native_sessions`; backup before migration (existing mechanism).
+- [x] SQLite `user_version` 25 adds `usage_snapshots`; execution targets and
+      native session ids live in `session_meta` / `native_meta`; backup
+      before migration (existing mechanism, tested 24 -> 25).
 
 ## 7. Prove it
 
-- [ ] Rust: fmt, clippy `-D warnings`, unit + integration tests (fake
+- [x] Rust: fmt, clippy `-D warnings`, unit + integration tests (fake
       llama-server, fake vendor binaries for every protocol, usage mapping,
       picker composition, migration).
-- [ ] UI: typecheck, vitest, e2e.
-- [ ] Live on this machine: Codex probe, Cursor/Grok ACP, Antigravity
+- [x] UI: typecheck, vitest, e2e.
+- [x] Live on this machine: Codex probe, Cursor/Grok ACP, Antigravity
       models, local GPU inference + vision, web fetch, offline local run.
-- [ ] AppImage built, installed with `scripts/install-appimage.sh`, launched
+- [x] AppImage built, installed with `scripts/install-appimage.sh`, launched
       from the desktop entry, screenshots reviewed.
-- [ ] `docs/IMPLEMENTATION_REPORT.md`, README, user guide, CHANGELOG 0.28.0;
+- [x] `docs/IMPLEMENTATION_REPORT.md`, README, user guide, CHANGELOG 0.28.0;
       push to `origin/main`.
+
+## Deviations and follow-ups
+
+- The consent answer is a normal IPC value `{ok:false, status:409, …}`
+  because desktop IPC has no HTTP status codes.
+- For local targets the handoff arrives through the conversation's message
+  tape and is bounded by the native loop's compaction, not the 12 000
+  character cap used for vendor prompts.
+- DuckDuckGo refuses automated searches from this machine; `web_search`
+  reports that honestly. A user-run SearXNG (`network.searxng_url`) is the
+  supported alternative.
+- Claude Code live turns are unverified here (not signed in).

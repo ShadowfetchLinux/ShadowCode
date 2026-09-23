@@ -33,6 +33,7 @@ permissions:
 #   mode: online           # online | web_off (no web tools) | offline (local models only,
 #                          # no vendor status/usage checks, cloud jobs refused)
 #   allow_local_dev: []    # exact host:port entries web tools may reach, e.g. localhost:3000
+#   searxng_url: ""        # your own SearXNG base URL; web_search asks it before DuckDuckGo
 
 # Subscriptions (vendor CLIs). Settings › Advanced › Vendor tools edits these.
 # cli_agents:

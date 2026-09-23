@@ -187,8 +187,12 @@ Local models can use `web_fetch` and `web_search` when you turn on **Web** in
 the composer for that task. Vendor CLIs use their own web tools. Web access
 refuses loopback, private, link-local and metadata addresses, CGNAT, multicast
 and non-standard ports. It re-checks every redirect and caps time and size.
-`web_search` uses DuckDuckGo's HTML page. If that page blocks the request, the
-tool says no results were retrieved and never makes any up.
+`web_search` uses DuckDuckGo's HTML page. DuckDuckGo often answers automated
+requests with a bot check; the tool then says no results were retrieved and
+never makes any up. If you run your own [SearXNG](https://docs.searxng.org/)
+instance, set `network.searxng_url` (for example `http://localhost:8888`, with
+`json` enabled under `search.formats`) and `web_search` asks it first.
+`web_fetch` works independently of search.
 
 **Settings › Permissions & network** has three network modes:
 
