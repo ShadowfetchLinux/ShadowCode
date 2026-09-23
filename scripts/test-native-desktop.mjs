@@ -620,6 +620,25 @@ try {
   await delay(300);
   try { process.kill(-driver.pid, "SIGKILL"); } catch { /* exited */ }
   for (const record of await launches()) try { process.kill(record.pid, "SIGKILL"); } catch { /* exited */ }
+  await stopPrivateBusServices();
   driverLog.end();
   if (!process.env.SHADOW_KEEP_SCRATCH) await rm(scratch, { recursive: true, force: true });
+}
+
+// Services D-Bus activated on the test's private bus (for example
+// xdg-desktop-portal) outlive dbus-run-session and get reparented to init.
+// Stop every process of this user bound to that private bus, never the
+// desktop session's own bus under /run/user.
+async function stopPrivateBusServices() {
+  const bus = process.env.DBUS_SESSION_BUS_ADDRESS || "";
+  if (!bus || bus.includes("/run/user/")) return;
+  for (const entry of await readdir("/proc").catch(() => [])) {
+    const pid = Number(entry);
+    if (!Number.isInteger(pid) || pid === process.pid) continue;
+    const environ = await readFile(`/proc/${pid}/environ`, "latin1").catch(() => "");
+    if (!environ.split("\0").includes(`DBUS_SESSION_BUS_ADDRESS=${bus}`)) continue;
+    const comm = (await readFile(`/proc/${pid}/comm`, "utf8").catch(() => "")).trim();
+    if (["node", "dbus-daemon", "dbus-run-session", "xvfb-run", "Xvfb", "bash", "sh"].includes(comm)) continue;
+    try { process.kill(pid, "SIGTERM"); } catch { /* exited */ }
+  }
 }
