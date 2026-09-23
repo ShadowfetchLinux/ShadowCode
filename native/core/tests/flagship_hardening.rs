@@ -110,7 +110,8 @@ fn cleanup_recovers_from_a_checkout_deleted_outside_shadowcode() {
     assert_eq!(result["missing_checkouts"], json!(["w1"]));
     assert!(parallel::active_plan(&repo, &root).unwrap().is_none());
     assert!(!plan.workers[1].worktree_path.exists());
-    assert!(git(&repo, &["show", &format!("{}:same.txt", plan.workers[0].branch)]).contains("kept"));
+    let kept = format!("{}:same.txt", plan.workers[0].branch);
+    assert!(git(&repo, &["show", &kept]).contains("kept"));
     assert!(!git(&repo, &["worktree", "list", "--porcelain"]).contains("prunable"));
     // The repository is free for a new plan.
     parallel::prepare(&repo, "again", &root).unwrap();

@@ -608,9 +608,7 @@ pub fn classify_verification(model_text: &str, commands: &[Value], inspected: bo
     // deliberately observed first (bug-fix policy) must not block a later
     // passing run from counting as verified; a failure after the last passing
     // check, or a passing check that is not the final word, still blocks it.
-    let last_verification = commands
-        .iter()
-        .rposition(looks_like_verification_command);
+    let last_verification = commands.iter().rposition(looks_like_verification_command);
     let evidence = last_verification.is_some();
     let red_green = last_verification.is_some_and(|last| {
         commands[..last]
