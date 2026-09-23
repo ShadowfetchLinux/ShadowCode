@@ -19,6 +19,46 @@ export const SHORTCUTS: [string, string][] = [
   ["Esc", "Close overlay or drawer"],
 ];
 
+const SHORTCUT_GROUPS: { label: string; rows: [string, string][] }[] = [
+  {
+    label: "Task control",
+    rows: [
+      ["Enter", "Send task"],
+      ["Shift+Enter", "New line in composer"],
+      ["Ctrl+.", "Stop the agent"],
+      ["/", "Slash commands (in composer)"],
+    ],
+  },
+  {
+    label: "Navigation",
+    rows: [
+      ["Ctrl+K", "Command palette"],
+      ["Ctrl+B", "Toggle sidebar"],
+      ["Ctrl+P", "Open project…"],
+      ["Ctrl+N", "New session"],
+      ["Ctrl+L", "Focus composer"],
+      ["Esc", "Close overlay or drawer"],
+    ],
+  },
+  {
+    label: "Other",
+    rows: [
+      ["Ctrl+,", "Settings"],
+      ["Ctrl+Shift+E", "Export session as Markdown"],
+      ["?", "This cheat sheet"],
+    ],
+  },
+];
+
+const EXAMPLE_PROMPTS: string[] = [
+  "Build a REST endpoint that does X",
+  "Find and fix the bug where Y happens",
+  "Write unit tests for the auth module",
+  "Explain how the database layer works",
+  "Refactor this function to be cleaner",
+  "Review the git diff for issues",
+];
+
 export function Help({
   onClose,
   version,
@@ -28,16 +68,31 @@ export function Help({
 }) {
   return (
     <Dialog
-      label="Keyboard shortcuts"
-      className="modal modal-sm"
+      label="Help & Shortcuts"
+      className="modal modal-sm help-modal"
       onClose={onClose}
     >
-      <h2>Keyboard</h2>
-      <div className="help-grid">
-        {SHORTCUTS.map(([k, label]) => (
-          <div className="help-row" key={k}>
-            <span>{label}</span>
-            <span className="kbd">{k}</span>
+      <h2>Keyboard shortcuts</h2>
+      <div className="help-groups">
+        {SHORTCUT_GROUPS.map((group) => (
+          <div className="help-group" key={group.label}>
+            <div className="help-group-label">{group.label}</div>
+            <div className="help-grid">
+              {group.rows.map(([k, label]) => (
+                <div className="help-row" key={k}>
+                  <span>{label}</span>
+                  <span className="kbd">{k}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <h2 className="help-section-title">What can I ask?</h2>
+      <div className="help-examples">
+        {EXAMPLE_PROMPTS.map((p) => (
+          <div className="help-example" key={p}>
+            "{p}"
           </div>
         ))}
       </div>

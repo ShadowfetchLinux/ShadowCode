@@ -1,6 +1,31 @@
 # Changelog
 
+## 0.25.0 — "Supreme"
+
+- **Welcome Banner**: redesigned empty-state with 8 smart starter cards (Build a
+  feature, Fix a bug, Explain this codebase, Write tests, Review my changes,
+  Plan a refactor, Security audit, Optimize performance). Each card populates
+  the composer and sets the correct mode in one click.
+- **Mode Tabs**: replaced the cryptic "Build/Plan/Review/Test" dropdown with
+  accessible `role="tablist"` icon-tabs that show a hover description of exactly
+  what each mode does.
+- **Header declutter**: consolidated the "20-Min Flow" and "Open Weights" text
+  pills into clean icon-only buttons — less noise, same functionality.
+- **Context bar**: replaced the "Context X% · Ntokens" text in the status bar
+  with a compact 48 px visual fill-bar that shows remaining context at a glance
+  (turns danger-red above 80%). Full detail is available on hover.
+- **Status bar cleanup**: removed the model name from the status bar (visible in
+  the composer model picker) and moved the git branch inline for less clutter.
+- **CSS micro-polish**: composer ring glow on focus; send-button subtle
+  scale-up/down on hover/active; suggestion cards lift on hover; smooth
+  `fade-up` animation on the welcome banner; improved font rendering.
+- **Dark mode parity**: all new components (WelcomeBanner, ModeTabs, starter
+  cards, ctx-bar) have matching dark-mode tokens and no flash-of-wrong-colour.
+- **Mobile**: starter-grid collapses to 2-column below 540 px; mode tab labels
+  are hidden on very small screens (icons remain).
+
 ## 0.24.0
+
 
 - Vendor CLI agent backends: spawn the official Claude, Codex, or Grok CLI in a
   trusted workspace. ShadowCode never reads, stores, or proxies vendor OAuth

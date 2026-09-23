@@ -8,7 +8,6 @@ import {
 import {
   ArrowDown,
   ArrowUp,
-  ArrowUpRight,
   Check,
   ChevronRight,
   Code2,
@@ -26,7 +25,6 @@ import {
   Sparkles,
   Square,
   TerminalSquare,
-  TestTube2,
   X,
   Cpu,
 } from "lucide-react";
@@ -53,6 +51,8 @@ import { Markdown } from "./components/Markdown";
 import { Onboarding } from "./components/Onboarding";
 import { FlowGuide } from "./components/FlowGuide";
 import { OpenWeightHub } from "./components/OpenWeightHub";
+import { WelcomeBanner } from "./components/WelcomeBanner";
+import { ModeTabs } from "./components/ModeTabs";
 import {
   CustomModelDialog,
   Help,
@@ -1165,23 +1165,21 @@ export default function App() {
         <div className="top-right">
           <button
             type="button"
-            className="top-action flow-guide-btn"
-            aria-label="20-Minute Fast-Track Guide"
-            title="20-Minute Fast-Track Guide"
-            onClick={() => setOverlay("flow-guide")}
+            className="icon-btn"
+            aria-label="Open-Weight Models & Vendor CLIs"
+            title="Models & AI providers"
+            onClick={() => setOverlay("open-weights")}
           >
-            <Sparkles size={14} />
-            <span>20-Min Flow</span>
+            <Cpu size={17} />
           </button>
           <button
             type="button"
-            className="top-action open-weights-btn"
-            aria-label="Open-Weight Models Showcase"
-            title="Open-Weight Models Showcase"
-            onClick={() => setOverlay("open-weights")}
+            className="icon-btn"
+            aria-label="20-Minute Fast-Track Guide"
+            title="Fast-track guide (new to ShadowCode?)"
+            onClick={() => setOverlay("flow-guide")}
           >
-            <Cpu size={14} />
-            <span>Open Weights</span>
+            <Sparkles size={16} />
           </button>
           <button
             type="button"
@@ -1391,131 +1389,15 @@ export default function App() {
                 Opening task…
               </div>
             ) : empty && !conversation.history.viewing ? (
-              <div className="welcome">
-                <div className="welcome-symbol">
-                  <img src="/icon.svg" alt="" />
-                </div>
-                <div className="eyebrow">
-                  PILLAR FOR OPEN SOURCE & OPEN WEIGHTS · LINUX NATIVE
-                </div>
-                <h1>What are we building today?</h1>
-                <p>
-                  A focused, autonomous workspace powered by local open-weight
-                  models.
-                </p>
-
-                <div className="welcome-meta-bar">
-                  <button
-                    type="button"
-                    className="workspace-badge"
-                    title={workspace}
-                    onClick={() => setOverlay("project")}
-                  >
-                    <FolderOpen size={14} />
-                    <span>
-                      {workspace.split("/").pop() || "Choose a project"}
-                    </span>
-                    <ChevronRight size={13} />
-                  </button>
-
-                  <button
-                    type="button"
-                    className="model-hero-badge"
-                    title="Configure open-weight models"
-                    onClick={() => setOverlay("open-weights")}
-                  >
-                    <Cpu size={14} />
-                    <span>{model || "Choose Open-Weight Model"}</span>
-                    <span className="badge-tag">
-                      {isVendorProvider(
-                        selectedModel?.provider ||
-                          String(status?.model?.provider || ""),
-                      )
-                        ? VENDOR_GROUP
-                        : LOCAL_GROUP}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="guide-hero-badge"
-                    onClick={() => setOverlay("flow-guide")}
-                  >
-                    <Sparkles size={14} />
-                    <span>20-Min Fast-Track Flow</span>
-                  </button>
-                </div>
-
-                <div className="suggestions grid-3">
-                  {[
-                    {
-                      icon: Code2,
-                      title: "Build a feature",
-                      body: "Turn an idea into working code with verification",
-                      prompt: "Help me build ",
-                      mode: "coder",
-                    },
-                    {
-                      icon: ListChecks,
-                      title: "Plan milestones",
-                      body: "Non-destructive plan & architectural blueprint",
-                      prompt:
-                        "Create a detailed implementation plan and milestone roadmap for ",
-                      mode: "planner",
-                    },
-                    {
-                      icon: GitPullRequest,
-                      title: "Find & fix bugs",
-                      body: "Scan for edge cases and reliability issues",
-                      prompt:
-                        "Review this project for bugs and reliability issues. Explain your findings before changing files.",
-                      mode: "reviewer",
-                    },
-                    {
-                      icon: Sparkles,
-                      title: "Codebase tour",
-                      body: "Understand the architecture and entry points",
-                      prompt:
-                        "Explore this workspace and explain its architecture, key entry points, and how to run it in 3 bullet points.",
-                      mode: "reviewer",
-                    },
-                    {
-                      icon: TestTube2,
-                      title: "Generate tests",
-                      body: "Author unit tests and verify coverage",
-                      prompt:
-                        "Write automated tests for the core modules and verify they pass.",
-                      mode: "tester",
-                    },
-                    {
-                      icon: ShieldCheck,
-                      title: "Security audit",
-                      body: "Audit for vulnerabilities and exposed secrets",
-                      prompt:
-                        "Audit this workspace for security risks, unvalidated inputs, and exposed secrets.",
-                      mode: "reviewer",
-                    },
-                  ].map((s) => (
-                    <button
-                      type="button"
-                      className="suggestion"
-                      key={s.title}
-                      onClick={() => {
-                        setTask(s.prompt);
-                        setMode(s.mode);
-                        promptRef.current?.focus();
-                      }}
-                    >
-                      <s.icon size={18} />
-                      <strong>
-                        {s.title}
-                        <ArrowUpRight size={13} />
-                      </strong>
-                      <span>{s.body}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <WelcomeBanner
+                workspace={workspace}
+                model={model || status?.model.name || ""}
+                onSelect={(prompt, selectedMode) => {
+                  setTask(prompt);
+                  setMode(selectedMode);
+                  promptRef.current?.focus();
+                }}
+              />
             ) : (
               <>
                 {transcript.items.map((item, i) =>
@@ -1863,17 +1745,11 @@ export default function App() {
                 }
               />
               <span className="control-divider" />
-              <select
-                className="mode-select"
-                aria-label="Agent mode"
+              <ModeTabs
                 value={mode}
-                onChange={(e) => setMode(e.target.value)}
-              >
-                <option value="coder">Build</option>
-                <option value="planner">Plan</option>
-                <option value="reviewer">Review</option>
-                <option value="tester">Test</option>
-              </select>
+                onChange={setMode}
+                disabled={busy && !isNative()}
+              />
               <span className="grow" />
               <span className="composer-hint">
                 {commandWaiting
@@ -1935,7 +1811,7 @@ export default function App() {
         </div>
         <footer className="statusline" aria-live="polite">
           <span className={`status-dot ${busy ? "active" : ""}`} />
-          <span>
+          <span className="status-label">
             {busy
               ? job?.status === "paused"
                 ? "Paused"
@@ -1944,23 +1820,30 @@ export default function App() {
                 ? "Reconnecting"
                 : "Ready"}
           </span>
-          <span className="sep">/</span>
-          <span title={model}>{model}</span>
-          <span className="grow" />
-          <span title="Input tokens as a percentage of this task's model context limit">
-            Context {ctx}%
-          </span>
-          <span className="sep">·</span>
-          <span>{formatTokens(transcript.usage.total_tokens || 0)} tokens</span>
           {git.branch && (
-            <button
-              type="button"
-              title="Review git changes"
-              onClick={() => setPanel("changes")}
+            <>
+              <span className="sep">·</span>
+              <button
+                type="button"
+                title="Review git changes"
+                onClick={() => setPanel("changes")}
+              >
+                <GitBranch size={12} />
+                {git.branch}
+              </button>
+            </>
+          )}
+          <span className="grow" />
+          {ctx > 0 && (
+            <span
+              className={`ctx-bar${ctx >= 80 ? " ctx-warn" : ""}`}
+              title={`${ctx}% of context used · ${formatTokens(transcript.usage.total_tokens || 0)} tokens`}
             >
-              <GitBranch size={12} />
-              {git.branch}
-            </button>
+              <span
+                className="ctx-fill"
+                style={{ width: `${Math.min(ctx, 100)}%` }}
+              />
+            </span>
           )}
           <span className="version">
             {health?.version ? `v${health.version}` : "Connecting"}

@@ -67,6 +67,9 @@ body {
   background: var(--canvas);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "liga" 1, "kern" 1;
 }
 button,
 input,
@@ -1314,7 +1317,7 @@ button.mini.primary-mini {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 10px 0;
+  margin: 6px 0;
 }
 .help-row {
   display: flex;
@@ -1327,6 +1330,38 @@ button.mini.primary-mini {
 }
 .help-row:hover {
   background: var(--surface-2);
+}
+.help-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 6px;
+}
+.help-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+  padding-left: 6px;
+}
+.help-section-title {
+  font-size: 0.9rem;
+  margin: 18px 0 6px;
+}
+.help-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.help-example {
+  padding: 7px 10px;
+  background: var(--surface-2);
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text-2);
+  font-style: italic;
 }
 .palette {
   width: min(540px, 100%);
