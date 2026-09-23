@@ -222,6 +222,50 @@ fn suggested_package_test_keeps_the_package_argument() {
     );
 }
 #[test]
+fn verify_reports_git_errors_instead_of_calling_them_conflicts() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let root = temp.path().join("workers");
+    init(&repo);
+    parallel::prepare(&repo, "one\ntwo", &root).unwrap();
+    let plan = parallel::active_plan(&repo, &root).unwrap().unwrap();
+    for w in &plan.workers {
+        parallel::mark_worker_status(&repo, &root, &w.item.id, "finished").unwrap();
+    }
+    // A branch that vanishes before verification is a Git error, not a merge
+    // conflict. git branch -D refuses branches used by a worktree, so delete
+    // the ref directly.
+    git(
+        &repo,
+        &[
+            "update-ref",
+            "-d",
+            &format!("refs/heads/{}", plan.workers[0].branch),
+        ],
+    );
+    let error = parallel::verify(&repo, &root).unwrap_err();
+    assert!(
+        error.to_string().contains("is missing; restore it"),
+        "{error:#}"
+    );
+    let plan = parallel::active_plan(&repo, &root).unwrap().unwrap();
+    assert_eq!(plan.verify_status, "pending");
+    // Restoring the branch (as the error suggests) recovers verification.
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    git(
+        &repo,
+        &[
+            "update-ref",
+            &format!("refs/heads/{}", plan.workers[0].branch),
+            head.trim(),
+        ],
+    );
+    let result = parallel::verify(&repo, &root).unwrap();
+    assert_eq!(result["verify_status"], "clean");
+    parallel::cleanup(&repo, &root).unwrap();
+}
+
+#[test]
 fn configured_git_filter_is_never_executed_by_preparation() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");

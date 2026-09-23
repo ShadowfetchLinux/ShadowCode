@@ -267,6 +267,23 @@ pub fn verify(source: &Path, root: &Path) -> Result<Value> {
     let mut checked = Vec::new();
     let mut conflicts = Vec::new();
     for worker in &plan.workers {
+        // A missing worker branch is a Git error, not a merge conflict.
+        // merge-tree exits 1 for both on some Git versions, so resolve first.
+        ensure!(
+            raw_git(
+                source,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{}", worker.branch),
+                ],
+            )?
+            .status
+            .success(),
+            "Worker branch {} is missing; restore it before verification",
+            worker.branch
+        );
         ensure!(
             clean(worker)?,
             "Commit or preserve changes in {} before verification",
@@ -276,6 +293,13 @@ pub fn verify(source: &Path, root: &Path) -> Result<Value> {
             source,
             &["merge-tree", "--write-tree", &combined, &worker.branch],
         )?;
+        // Exit 1 records a genuine conflict. Any other failure (missing
+        // objects, corrupt repository) is an error, not a conflict report.
+        ensure!(
+            out.status.success() || out.status.code() == Some(1),
+            "Git merge check failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         if !out.status.success() {
             conflicts.push(json!({"worker":worker.item.id,"branch":worker.branch,
                 "detail":crate::tools::truncate(&format!("{}{}",String::from_utf8_lossy(&out.stdout),String::from_utf8_lossy(&out.stderr)),4000)}));
