@@ -39,3 +39,12 @@ contains exact upstream sources and distribution patches; the package checker
 verifies its hashes and links it to the runtime's compiled code. This supplements
 the application/system inventories; it does not replace their release source
 requirements.
+
+The managed llama.cpp runtime (`usr/lib/shadowcode` in both packages) is
+attributed to `llama.cpp@<commit>` and, for its Vulkan module,
+`SPIRV-Headers@<commit>`, the commits pinned in `tools/llama.cpp.pin`. Their
+texts under `llama.cpp-<short>/` and `SPIRV-Headers-<short>/` are the files
+`scripts/build-llama.cpp.sh` copies into the runtime's `NOTICES/`
+(`runtime` in `sources.json`); for the header-only libraries the license
+section of the header is copied verbatim (`extract`). Packaging refuses a
+runtime whose commit or notices differ from these pins.

@@ -227,6 +227,72 @@
       "file": "tree-sitter-typescript-0.23.2/LICENSE",
       "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/v0.23.2/LICENSE",
       "sha256": "34c20e121b26f8b4d49b71c284e41a15462154606519b75f94112ae8fa807630"
+    },
+    {
+      "packages": [
+        "llama.cpp@18f9f7bef960b76b693d8dcbb33cbbd6148c1631"
+      ],
+      "file": "llama.cpp-18f9f7b/llama.cpp-LICENSE",
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/18f9f7bef960b76b693d8dcbb33cbbd6148c1631/LICENSE",
+      "runtime": "NOTICES/llama.cpp-LICENSE",
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+    },
+    {
+      "packages": [
+        "llama.cpp@18f9f7bef960b76b693d8dcbb33cbbd6148c1631"
+      ],
+      "file": "llama.cpp-18f9f7b/nlohmann-json-LICENSE",
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/18f9f7bef960b76b693d8dcbb33cbbd6148c1631/licenses/LICENSE-jsonhpp",
+      "runtime": "NOTICES/nlohmann-json-LICENSE",
+      "sha256": "c0d068392ea65358b798b8c165103560f06e9e3b38c4ab4e2d8810a7b931af86"
+    },
+    {
+      "packages": [
+        "llama.cpp@18f9f7bef960b76b693d8dcbb33cbbd6148c1631"
+      ],
+      "file": "llama.cpp-18f9f7b/cpp-httplib-LICENSE",
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/18f9f7bef960b76b693d8dcbb33cbbd6148c1631/vendor/cpp-httplib/LICENSE",
+      "runtime": "NOTICES/cpp-httplib-LICENSE",
+      "sha256": "4b45cbe16d7b71b89ae6127e26e0d90a029198ca5e958ad8e3d0b8bbed364d8b"
+    },
+    {
+      "packages": [
+        "llama.cpp@18f9f7bef960b76b693d8dcbb33cbbd6148c1631"
+      ],
+      "file": "llama.cpp-18f9f7b/stb_image-LICENSE",
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/18f9f7bef960b76b693d8dcbb33cbbd6148c1631/vendor/stb/stb_image.h",
+      "extract": "license section at the end of the header",
+      "runtime": "NOTICES/stb_image-LICENSE",
+      "sha256": "36df9677aa6a2ae37a01c7aaa39c3206fa02a4e06bb5037ebe89e5828b931f31"
+    },
+    {
+      "packages": [
+        "llama.cpp@18f9f7bef960b76b693d8dcbb33cbbd6148c1631"
+      ],
+      "file": "llama.cpp-18f9f7b/miniaudio-LICENSE",
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/18f9f7bef960b76b693d8dcbb33cbbd6148c1631/vendor/miniaudio/miniaudio.h",
+      "extract": "license section at the end of the header",
+      "runtime": "NOTICES/miniaudio-LICENSE",
+      "sha256": "8ee059f719506d610d0e11e15a36d5c6fd9a55801931b80215f9d26ed019e0d1"
+    },
+    {
+      "packages": [
+        "llama.cpp@18f9f7bef960b76b693d8dcbb33cbbd6148c1631"
+      ],
+      "file": "llama.cpp-18f9f7b/subprocess.h-LICENSE",
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/18f9f7bef960b76b693d8dcbb33cbbd6148c1631/vendor/sheredom/subprocess.h",
+      "extract": "license comment at the start of the header",
+      "runtime": "NOTICES/subprocess.h-LICENSE",
+      "sha256": "b12b12dc89cfb209898f7e96d4e95502d39ae927446a71f89fc1d7354c4fcddd"
+    },
+    {
+      "packages": [
+        "SPIRV-Headers@2b7475f6d664efbad4d4315c94ecec9640831e5b"
+      ],
+      "file": "SPIRV-Headers-2b7475f/LICENSE",
+      "url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/2b7475f6d664efbad4d4315c94ecec9640831e5b/LICENSE",
+      "runtime": "NOTICES/SPIRV-Headers-LICENSE",
+      "sha256": "ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613"
     }
   ]
 }
