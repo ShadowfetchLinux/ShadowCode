@@ -60,7 +60,28 @@ async fn main() -> anyhow::Result<()> {
     // --command: one harmless shell command, so the runtime must ask for
     // permission; the approval is granted through the same API the window uses.
     let command = std::env::args().any(|a| a == "--command");
-    let prompts: &[&str] = if command {
+    // --web: the task gets web tools (native loop only). --image: a small red
+    // PNG is attached, with consent to upload it.
+    let web = std::env::args().any(|a| a == "--web");
+    let image = std::env::args().any(|a| a == "--image");
+    if image {
+        std::fs::write(
+            project.join("red.png"),
+            [
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+                0x44, 0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x08, 0x02, 0x00, 0x00,
+                0x00, 0x90, 0x91, 0x68, 0x36, 0x00, 0x00, 0x00, 0x17, 0x49, 0x44, 0x41, 0x54, 0x78,
+                0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x40, 0x12, 0x22, 0x4d, 0xf5, 0xa8, 0x86, 0x51, 0x0d,
+                0x43, 0x4a, 0x03, 0x00, 0x90, 0xf9, 0xff, 0x01, 0xf9, 0xe1, 0xfa, 0x78, 0x00, 0x00,
+                0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+            ],
+        )?;
+    }
+    let prompts: &[&str] = if web {
+        &["Use web_search to find the official website of the Tokio asynchronous Rust runtime, then reply with only its URL."]
+    } else if image {
+        &["What colour is the attached image? Reply with one word."]
+    } else if command {
         &["Run the shell command `date +%Y` in the project folder and reply with only its output."]
     } else if second {
         &[
@@ -72,7 +93,11 @@ async fn main() -> anyhow::Result<()> {
     };
     let mut session: Option<String> = None;
     for prompt in prompts {
-        let mut body = json!({"task": prompt, "model": target, "workspace": project});
+        let mut body = json!({"task": prompt, "model": target, "workspace": project, "web": web});
+        if image {
+            body["images"] = json!(["red.png"]);
+            body["handoff_consent"] = json!(true);
+        }
         if let Some(sid) = &session {
             body["session_id"] = json!(sid);
         }
