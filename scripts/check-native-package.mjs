@@ -81,7 +81,11 @@ async function verifyNotices(directory, includeSystem) {
     llama.notices.some((notice) => notice.file.endsWith("/llama.cpp-LICENSE")),
     "The llama.cpp MIT notice must be shipped",
   );
-  const files = [application.projectLicense];
+  assert.ok(
+    application.projectNotice?.file === "ShadowCode-NOTICE",
+    "ShadowCode's NOTICE must be shipped with its license",
+  );
+  const files = [application.projectLicense, application.projectNotice];
   for (const pkg of application.packages) {
     assert.ok(
       pkg.name && pkg.version && pkg.notices.length,

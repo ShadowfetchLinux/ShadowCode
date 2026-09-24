@@ -26,15 +26,15 @@ need Ollama, LM Studio or any other model server.
   ShadowCode's own tools can be rewound.
 
 Release history is in [CHANGELOG.md](CHANGELOG.md). What's new in this release:
-[0.31.0 release notes](docs/RELEASE_NOTES.md).
+[0.31.1 release notes](docs/RELEASE_NOTES.md).
 
 ## Install
 
 Releases target x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).
 Download from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest):
 
-- `ShadowCode_0.31.0_amd64.AppImage`
-- `ShadowCode_0.31.0_amd64.deb`
+- `ShadowCode_0.31.1_amd64.AppImage`
+- `ShadowCode_0.31.1_amd64.deb`
 - `SHA256SUMS`
 
 ### AppImage (recommended)
@@ -45,7 +45,7 @@ from a checkout of this repository:
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
 git clone https://github.com/Shadowfetchapps/ShadowCode.git
-./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.31.0_amd64.AppImage
+./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.31.1_amd64.AppImage
 ```
 
 [`scripts/install-appimage.sh`](scripts/install-appimage.sh):
@@ -65,14 +65,14 @@ git clone https://github.com/Shadowfetchapps/ShadowCode.git
   AppImages only after a successful install.
 
 To run the AppImage without installing it:
-`./ShadowCode_0.31.0_amd64.AppImage --appimage-extract-and-run`. FUSE is not
+`./ShadowCode_0.31.1_amd64.AppImage --appimage-extract-and-run`. FUSE is not
 required.
 
 ### Debian package
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-sudo apt install ./ShadowCode_0.31.0_amd64.deb
+sudo apt install ./ShadowCode_0.31.1_amd64.deb
 ```
 
 The deb installs `shadowcode` and the same llama.cpp runtime in
@@ -385,4 +385,11 @@ throwaway profile has no `secrets.env`.
   [MCP](docs/NATIVE_MCP.md).
 - Package notices: [licenses/native](licenses/native/README.md).
 
-[MIT](LICENSE) · Copyright 2026 Shadowfetch
+## License
+
+ShadowCode is licensed under the [Apache License 2.0](LICENSE) · Copyright
+2026 Shadowfetch. If you share a copy or a modified version, include the
+[NOTICE](NOTICE) file, which credits Shadowfetch as ShadowCode's original
+creator, and mark the files you changed. The license doesn't grant use of
+the ShadowCode name for other products. Releases up to 0.31.0 were
+published under the MIT License.

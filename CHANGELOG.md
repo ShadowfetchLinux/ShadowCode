@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.31.1: Apache License 2.0
+
+- **License changed from MIT to Apache-2.0.** A new `NOTICE` file credits
+  Shadowfetch as ShadowCode's original creator; copies and derivative works
+  must carry it (section 4(d)). The AppImage and deb ship it as
+  `ShadowCode-NOTICE` next to `ShadowCode-LICENSE`, and the package check
+  requires it. Releases up to 0.31.0 remain available under MIT.
+
 ## 0.31.0: Allowance, keep going on a local model, Compare
 
 - **Allowance.** A status-bar button and panel (`GET /api/allowance`) list

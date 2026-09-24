@@ -1,6 +1,12 @@
-ShadowCode 0.31.0 shows how much of every plan is left, keeps working on a
-model on your computer when a plan runs out, and can race 2 or 3 models on the
-same task so you keep the best result. The 0.30.2 notes follow below.
+ShadowCode 0.31.1 moves to the Apache License 2.0. Nothing else changes from
+0.31.0, whose notes follow below.
+
+## Changed in 0.31.1
+
+- **Apache License 2.0.** ShadowCode is now Apache-2.0 licensed instead of
+  MIT. A new NOTICE file credits Shadowfetch as the original creator, and
+  anyone sharing a copy or a modified version must include it. Releases up to
+  0.31.0 remain available under MIT.
 
 ## New in 0.31.0
 
@@ -175,9 +181,9 @@ runtime that ships with the app.
 
 ## Downloads
 
-- `ShadowCode_0.31.0_amd64.AppImage`
-- `ShadowCode_0.31.0_amd64.deb`
-- `ShadowCode_0.31.0_appimage-runtime-sources.tar.gz`
+- `ShadowCode_0.31.1_amd64.AppImage`
+- `ShadowCode_0.31.1_amd64.deb`
+- `ShadowCode_0.31.1_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
 Builds are for x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).

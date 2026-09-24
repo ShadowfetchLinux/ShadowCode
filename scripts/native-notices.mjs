@@ -249,12 +249,19 @@ export async function applicationNotices(destination, managedRuntime = null) {
     destination,
     "ShadowCode-LICENSE",
   );
+  // Apache-2.0 section 4(d): the NOTICE travels with every copy.
+  const projectNotice = await copyNotice(
+    path.join(root, "NOTICE"),
+    destination,
+    "ShadowCode-NOTICE",
+  );
   const manifest = {
     schema: 1,
     scope:
       "Resolved Cargo graph for the build target (including build/test dependencies), production npm dependency graph, Rust standard library, and the managed llama.cpp runtime in usr/lib/shadowcode. This deliberately includes dependencies eliminated by the linker or JavaScript bundler.",
     target,
     projectLicense,
+    projectNotice,
     packages,
   };
   await writeFile(
