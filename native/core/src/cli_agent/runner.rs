@@ -126,7 +126,7 @@ impl std::fmt::Display for LimitReached {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} plan limit reached: {}. Choose another model to continue; ShadowCode does not retry or buy more usage.",
+            "{} plan limit reached: {}. ShadowCode never retries on the same plan or buys more usage.",
             self.vendor.product_label(),
             self.detail
         )

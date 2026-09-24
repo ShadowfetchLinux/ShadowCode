@@ -1,4 +1,5 @@
 //! Native application engine shared by the desktop, CLI, and MCP transports.
+pub mod allowance;
 pub mod approvals;
 pub mod autonomy;
 pub mod background;

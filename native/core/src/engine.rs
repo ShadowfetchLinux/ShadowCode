@@ -161,6 +161,17 @@ struct Inner {
 }
 #[derive(Clone)]
 pub struct Engine(Arc<Inner>);
+
+/// Kept outside the job worker so the follow-up task's future is checked for
+/// `Send` without the worker's own opaque type in scope.
+fn spawn_limit_fallback(engine: Engine, record: Job) {
+    tokio::spawn(async move {
+        if let Err(error) = engine.continue_after_limit(record.clone()).await {
+            let _ = engine
+                .note_limit_fallback(&record, json!({"ok":false,"reason":format!("{error:#}")}));
+        }
+    });
+}
 impl Engine {
     pub fn open(paths: AppPaths) -> Result<Self> {
         let profile_lock = Arc::new(paths.lock()?);
@@ -974,6 +985,17 @@ impl Engine {
                     job.finished.store(true, Ordering::Release);
                     job.done.notify_waiters();
                 }
+                // A subscription ran out: keep going on a local model when
+                // the user chose that (limits.on_limit = "local").
+                let limited = job
+                    .record
+                    .lock()
+                    .ok()
+                    .filter(|r| r.status == "limit_reached" && r.mode != "command")
+                    .map(|r| r.clone());
+                if let Some(record) = limited {
+                    spawn_limit_fallback(self.clone(), record);
+                }
             }
             if let Ok(mut queues) = self.0.queues.lock() {
                 if let Ok(record) = job.record.lock() {
@@ -988,6 +1010,121 @@ impl Engine {
                 }
             }
         }
+    }
+    /// Record a `limit.fallback` event on the limited task and tell listeners.
+    fn note_limit_fallback(&self, job: &Job, payload: Value) -> Result<()> {
+        let event = self.0.store.add_event(
+            "limit.fallback",
+            &payload,
+            Some(&job.session_id),
+            Some(&job.task_id),
+        )?;
+        let _ = self.0.sender.send(event);
+        Ok(())
+    }
+    /// The local model to continue on: `limits.fallback_model`, else the
+    /// last local model used in this project, else the first ready local
+    /// model with tool support (then any ready one). `(id, name)`.
+    pub async fn local_fallback(
+        &self,
+        config: &Config,
+        workspace: &Path,
+    ) -> Result<Option<(String, String)>> {
+        let local_cfg = config.local_engine.clone();
+        let engine = self.clone();
+        let catalog = tokio::task::spawn_blocking(move || {
+            crate::local_engine::catalog_with(&local_cfg, Some(engine.local_runtime()))
+        })
+        .await?;
+        let ready: Vec<&Value> = catalog["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|m| m["availability"] == "ready")
+            .collect();
+        let find = |id: &str| {
+            ready
+                .iter()
+                .find(|m| m["id"] == id)
+                .map(|m| (id.to_owned(), m["name"].as_str().unwrap_or(id).to_owned()))
+        };
+        let preferred = config.limits["fallback_model"].as_str().unwrap_or("");
+        if let Some(hit) = (!preferred.is_empty()).then(|| find(preferred)).flatten() {
+            return Ok(Some(hit));
+        }
+        if let Some(last) = self
+            .0
+            .store
+            .native_meta(&format!("last_local_target:{}", workspace.display()))?
+        {
+            if let Some(hit) = find(&last) {
+                return Ok(Some(hit));
+            }
+        }
+        Ok(ready
+            .iter()
+            .find(|m| m["tools"] == true)
+            .or_else(|| ready.first())
+            .and_then(|m| {
+                let id = m["id"].as_str()?;
+                Some((id.to_owned(), m["name"].as_str().unwrap_or(id).to_owned()))
+            }))
+    }
+    /// Continue a conversation whose subscription hit its plan limit on a
+    /// local model, when `limits.on_limit` is "local" (the default).
+    async fn continue_after_limit(&self, job: Job) -> Result<()> {
+        let config = Config::load(&self.0.paths, Some(&job.workspace))?;
+        if config.limits["on_limit"].as_str().unwrap_or("local") != "local" {
+            return self.note_limit_fallback(&job, json!({"ok":false,"ask":true}));
+        }
+        let provider = job
+            .routing
+            .as_ref()
+            .map(|r| r.provider.clone())
+            .unwrap_or_default();
+        let from = crate::cli_agent::Vendor::from_provider(&provider)
+            .map(|v| v.product_label())
+            .unwrap_or("The model");
+        let Some((id, name)) = self.local_fallback(&config, &job.workspace).await? else {
+            return self.note_limit_fallback(
+                &job,
+                json!({"ok":false,"from":from,"reason":"No local model is ready. Add one in Settings › Local models to keep going when a plan runs out."}),
+            );
+        };
+        let model = crate::model_registry::resolve(&self.0.store, &id, &config.model)?;
+        let task = format!(
+            "Continue where {from} stopped when its plan limit was reached. The request was:\n\n{}",
+            job.task
+        );
+        let started = self
+            .start_consented_owned(
+                StartRequest {
+                    workspace: job.workspace.clone(),
+                    task,
+                    session_id: Some(job.session_id.clone()),
+                    model: Some(model),
+                    mode: job.mode.clone(),
+                    queue: true,
+                    images: Vec::new(),
+                    web: job.web,
+                },
+                "coder",
+                None,
+                None,
+                false,
+            )
+            .await?;
+        self.0
+            .store
+            .set_session_meta(&job.session_id, "execution_target", &id)?;
+        self.0.store.set_native_meta(
+            &format!("execution_target:{}", job.workspace.display()),
+            &id,
+        )?;
+        self.note_limit_fallback(
+            &job,
+            json!({"ok":true,"from":from,"to":name,"target":id,"job_id":started.id}),
+        )
     }
     fn finish(&self, running: &Running, outcome: Result<String>, plan: Value) -> Result<()> {
         if running.finished.load(Ordering::Acquire) {

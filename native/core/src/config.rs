@@ -273,6 +273,11 @@ pub struct Config {
     pub local_engine: crate::local_engine::LocalEngineConfig,
     #[serde(default)]
     pub network: NetworkConfig,
+    /// What happens when a subscription reports its plan limit:
+    /// `on_limit` is `"local"` (continue the conversation on a model on this
+    /// computer) or `"ask"`; `fallback_model` optionally names the
+    /// `local:gguf:` row to use.
+    pub limits: Value,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -294,6 +299,7 @@ impl Default for Config {
             cli_agents: crate::cli_agent::CliAgentsConfig::default(),
             local_engine: crate::local_engine::LocalEngineConfig::default(),
             network: NetworkConfig::default(),
+            limits: json!({"on_limit":"local","fallback_model":""}),
             extra: BTreeMap::new(),
         }
     }
@@ -355,6 +361,21 @@ impl Config {
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.ui.is_object(), "UI configuration must be an object");
+        ensure!(self.limits.is_object(), "limits must be an object");
+        ensure!(
+            matches!(
+                self.limits["on_limit"].as_str(),
+                None | Some("local" | "ask")
+            ),
+            "limits.on_limit must be \"local\" or \"ask\""
+        );
+        ensure!(
+            self.limits["fallback_model"].is_null()
+                || self.limits["fallback_model"].as_str().is_some_and(
+                    |m| m.is_empty() || (m.starts_with("local:gguf:") && m.len() <= 1024)
+                ),
+            "limits.fallback_model must be empty or a local:gguf: model id"
+        );
         ensure!(
             valid_keep_alive(&self.model.keep_alive),
             "Ollama residency must be -1, 0, or a positive duration such as 5m, 30m or 1h"

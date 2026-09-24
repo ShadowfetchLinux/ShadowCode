@@ -888,6 +888,41 @@ impl Service {
                 let cfg = self.config()?;
                 return self.picker_catalog(&cfg, q("refresh") == "1").await;
             }
+            ("GET", "/api/allowance") => {
+                // Everything the user can run and how much of it is left,
+                // from what each source reports. `refresh=1` re-checks
+                // vendor accounts; otherwise their status is at most 5
+                // minutes old.
+                let cfg = self.config()?;
+                let workspace = self.workspace()?;
+                let vendors = self
+                    .engine
+                    .vendors()
+                    .status_json(&cfg.cli_agents, q("refresh") == "1")
+                    .await;
+                let openrouter =
+                    crate::openrouter::status(self.engine.paths(), cfg.offline(), true).await;
+                let local_cfg = cfg.local_engine.clone();
+                let engine = self.engine.clone();
+                let local = tokio::task::spawn_blocking(move || {
+                    crate::local_engine::catalog_with(&local_cfg, Some(engine.local_runtime()))
+                })
+                .await?;
+                let fallback = self
+                    .engine
+                    .local_fallback(&cfg, Path::new(&workspace))
+                    .await?;
+                return Ok(crate::allowance::build(
+                    &vendors,
+                    &openrouter,
+                    &local,
+                    fallback
+                        .as_ref()
+                        .map(|(id, name)| (id.as_str(), name.as_str())),
+                    cfg.limits["on_limit"].as_str().unwrap_or("local"),
+                    crate::now(),
+                ));
+            }
             ("GET", "/api/openrouter") => {
                 let cfg = self.config()?;
                 return Ok(
@@ -1328,6 +1363,13 @@ impl Service {
                     }
                 };
                 if let Some(id) = target_id.filter(|_| !text("model").is_empty()) {
+                    // Remembered for "keep going on a local model" when a plan runs out.
+                    if id.starts_with("local:gguf:") {
+                        store.set_native_meta(
+                            &format!("last_local_target:{}", job.workspace.display()),
+                            &id,
+                        )?;
+                    }
                     store.set_session_meta(&job.session_id, "execution_target", &id)?;
                     store.set_native_meta(
                         &format!("execution_target:{}", job.workspace.display()),

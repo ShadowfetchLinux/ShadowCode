@@ -3,6 +3,7 @@
 //! `/props`, and `/v1/chat/completions` (canned tool calls), requires the
 //! per-launch bearer key, records every launch and request, and exits on
 //! SIGTERM. Nothing here touches a GPU or a real model.
+mod vendor_support;
 use serde_json::{json, Value};
 use shadowcode_core::{
     config::{Config, ModelConfig},
@@ -265,7 +266,7 @@ async fn wait_job(service: &Service, id: &str) -> Value {
             .unwrap();
         if matches!(
             job["status"].as_str(),
-            Some("completed" | "failed" | "cancelled")
+            Some("completed" | "failed" | "cancelled" | "limit_reached")
         ) {
             return job;
         }
@@ -1309,4 +1310,132 @@ async fn live_qwen3_agent_and_gemma4_vision_from_the_ollama_store() {
     assert_eq!(attached["status"], "completed", "{attached}");
     assert_eq!(viewed["status"], "completed", "{viewed}");
     drop(service);
+}
+
+/// A subscription hits its plan limit: with `limits.on_limit = "local"` (the
+/// default) the same conversation continues on a local model on its own;
+/// with "ask" nothing starts and the transcript says so.
+#[tokio::test]
+async fn a_plan_limit_continues_the_conversation_on_a_local_model() {
+    let f = fixture(GPU);
+    let coder = f.models.join("coder.gguf");
+    qwen_like(&coder, "qwen3", TOOLS_TEMPLATE);
+    fs::write(f.project.join("hello.txt"), "hello\n").unwrap();
+    let fake_root = tempfile::tempdir().unwrap();
+    let fake =
+        vendor_support::FakeCodex::new(fake_root.path(), json!({"auth":"chatgpt","turn":"limit"}));
+    Config::patch(
+        &f.paths,
+        json!({
+            "local_engine":{"files":[coder.display().to_string()]},
+            "cli_agents": vendor_support::cli_agents(&fake),
+        }),
+    )
+    .unwrap();
+    let service = Service::open(f.paths.clone(), Some(f.project.clone())).unwrap();
+    let picker = call(&service, "GET", "/api/picker", Value::Null)
+        .await
+        .unwrap();
+    let local_id = picker["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["model"] == "coder")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The Allowance view already names the model a limit would fall back to.
+    let allowance = call(&service, "GET", "/api/allowance", Value::Null)
+        .await
+        .unwrap();
+    let local_row = allowance["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "local")
+        .unwrap()
+        .clone();
+    assert_eq!(local_row["fallback"]["id"], json!(local_id));
+    assert_eq!(local_row["on_limit"], "local");
+
+    let job = call(
+        &service,
+        "POST",
+        "/api/jobs",
+        json!({"workspace": f.project, "task": "What does hello.txt say?", "model": "cli:codex"}),
+    )
+    .await
+    .unwrap();
+    let limited = wait_job(&service, job["id"].as_str().unwrap()).await;
+    assert_eq!(limited["status"], "limit_reached", "{limited}");
+    let session = limited["session_id"].as_str().unwrap().to_owned();
+    // The follow-up job appears in the same conversation and finishes locally.
+    let store = service.engine.store();
+    let mut follow_up = None;
+    for _ in 0..300 {
+        let events = store.events_after(&session, 0, None, 10_000).unwrap();
+        if let Some(e) = events.iter().find(|e| e["type"] == "limit.fallback") {
+            follow_up = Some(e["payload"].clone());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let follow_up = follow_up.expect("a limit.fallback event is recorded");
+    assert_eq!(follow_up["ok"], true, "{follow_up}");
+    assert_eq!(follow_up["from"], "Codex");
+    assert_eq!(follow_up["target"], json!(local_id));
+    let next = wait_job(&service, follow_up["job_id"].as_str().unwrap()).await;
+    assert_eq!(next["status"], "completed", "{next}");
+    assert_eq!(next["session_id"], json!(session));
+    assert!(next["task"]
+        .as_str()
+        .unwrap()
+        .starts_with("Continue where Codex stopped"));
+    assert_eq!(
+        store.session_meta(&session, "execution_target").unwrap(),
+        Some(local_id.clone()),
+        "the conversation now stays on the local model"
+    );
+
+    // "ask": the limit stops the conversation and nothing else starts.
+    Config::patch(&f.paths, json!({"limits":{"on_limit":"ask"}})).unwrap();
+    let job = call(
+        &service,
+        "POST",
+        "/api/jobs",
+        json!({"workspace": f.project, "task": "Again", "model": "cli:codex", "handoff_consent": true}),
+    )
+    .await
+    .unwrap();
+    let limited = wait_job(&service, job["id"].as_str().unwrap()).await;
+    assert_eq!(limited["status"], "limit_reached");
+    let session = limited["session_id"].as_str().unwrap().to_owned();
+    let mut asked = None;
+    for _ in 0..200 {
+        let events = store.events_after(&session, 0, None, 10_000).unwrap();
+        if let Some(e) = events
+            .iter()
+            .find(|e| e["type"] == "limit.fallback" && e["task_id"] == limited["task_id"])
+        {
+            asked = Some(e["payload"].clone());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(asked.expect("ask is recorded")["ask"], true);
+    let jobs = call(&service, "GET", "/api/jobs", Value::Null)
+        .await
+        .unwrap();
+    let later = jobs["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|j| {
+            j["session_id"] == json!(session)
+                && j["started_at"].as_f64() > limited["started_at"].as_f64()
+        })
+        .count();
+    assert_eq!(later, 0, "no follow-up job in ask mode");
+    assert!(Config::patch(&f.paths, json!({"limits":{"on_limit":"sometimes"}})).is_err());
 }
