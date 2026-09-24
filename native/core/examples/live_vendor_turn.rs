@@ -38,6 +38,119 @@ async fn main() -> anyhow::Result<()> {
     let paths = AppPaths::isolated(&root.path().join("profile"))?;
     Config::patch(&paths, json!({"trusted_workspaces":[project]}))?;
     let service = Service::open(paths, Some(project.clone()))?;
+    // --compare <other id>: race this model against another on a small bug
+    // in a scratch git repository, keep the first lane that changed the
+    // file, and check the fix reached the project.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--compare") {
+        let other = args.get(pos + 1).cloned().unwrap_or_default();
+        let git = |a: &[&str]| {
+            std::process::Command::new("git")
+                .args(a)
+                .current_dir(&project)
+                .output()
+        };
+        std::fs::write(
+            project.join("calc.py"),
+            "def add(a, b):\n    return a - b\n",
+        )?;
+        git(&["init", "-q"])?;
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"])?;
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "init",
+        ])?;
+        let started = call(
+            &service,
+            "POST",
+            "/api/compare",
+            json!({"workspace": project, "task": "calc.py's add() subtracts. Fix it so add(2, 3) == 5. Edit the file; don't run anything.", "models": [target, other]}),
+        )
+        .await?;
+        let id = started["id"].as_str().unwrap_or_default().to_owned();
+        println!(
+            "compare {id}: {} lanes",
+            started["lanes"].as_array().map_or(0, Vec::len)
+        );
+        let begin = std::time::Instant::now();
+        let record = loop {
+            // Lane jobs may ask to edit files; approve them like a user would.
+            let pending = call(&service, "GET", "/api/approvals", json!({})).await?;
+            for approval in pending["approvals"].as_array().into_iter().flatten() {
+                let aid = approval["id"].as_str().unwrap_or_default();
+                call(
+                    &service,
+                    "POST",
+                    &format!("/api/approvals/{aid}"),
+                    json!({"decision":"approve","session_id":approval["session_id"]}),
+                )
+                .await?;
+            }
+            let record = call(&service, "GET", &format!("/api/compare/{id}"), json!({})).await?;
+            if record["state"] != "running" || begin.elapsed() > Duration::from_secs(300) {
+                break record;
+            }
+            tokio::time::sleep(Duration::from_millis(700)).await;
+        };
+        println!(
+            "state={} in {:.1}s",
+            record["state"],
+            begin.elapsed().as_secs_f64()
+        );
+        for lane in record["lanes"].as_array().into_iter().flatten() {
+            println!(
+                "  lane {} status={} files={} summary={:?}",
+                lane["model"],
+                lane["status"],
+                lane["changed_files"],
+                lane["summary"]
+                    .as_str()
+                    .map(|s| s.chars().take(120).collect::<String>())
+            );
+        }
+        if let Some(winner) = record["lanes"].as_array().and_then(|l| {
+            l.iter().find(|lane| {
+                lane["changed_files"]
+                    .as_array()
+                    .is_some_and(|f| !f.is_empty())
+            })
+        }) {
+            let kept = call(
+                &service,
+                "POST",
+                &format!("/api/compare/{id}/keep"),
+                json!({"model": winner["model"]}),
+            )
+            .await?;
+            println!(
+                "kept {} -> state={} applied={}",
+                winner["model"], kept["state"], kept["applied_files"]
+            );
+            println!(
+                "calc.py now: {:?}",
+                std::fs::read_to_string(project.join("calc.py"))?
+            );
+            let board = call(
+                &service,
+                "GET",
+                &format!("/api/compare/scoreboard?workspace={}", project.display()),
+                json!({}),
+            )
+            .await?;
+            println!("scoreboard: {}", board["rows"]);
+            let worktrees = git(&["worktree", "list"])?;
+            println!(
+                "worktrees left: {}",
+                String::from_utf8_lossy(&worktrees.stdout).lines().count()
+            );
+        }
+        return Ok(());
+    }
     // --allowance: print the Allowance rows and stop.
     if std::env::args().any(|a| a == "--allowance") {
         let allowance = call(&service, "GET", "/api/allowance", json!({})).await?;
