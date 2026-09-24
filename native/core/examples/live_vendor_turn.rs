@@ -38,6 +38,19 @@ async fn main() -> anyhow::Result<()> {
     let paths = AppPaths::isolated(&root.path().join("profile"))?;
     Config::patch(&paths, json!({"trusted_workspaces":[project]}))?;
     let service = Service::open(paths, Some(project.clone()))?;
+    // --allowance: print the Allowance rows and stop.
+    if std::env::args().any(|a| a == "--allowance") {
+        let allowance = call(&service, "GET", "/api/allowance", json!({})).await?;
+        for row in allowance["rows"].as_array().into_iter().flatten() {
+            println!(
+                "{:<16} {:<14} {}",
+                row["product"].as_str().unwrap_or(""),
+                row["state"].as_str().unwrap_or(""),
+                row["headline"].as_str().unwrap_or("")
+            );
+        }
+        return Ok(());
+    }
     let picker = call(&service, "GET", "/api/picker", json!({})).await?;
     let row = picker["targets"]
         .as_array()
