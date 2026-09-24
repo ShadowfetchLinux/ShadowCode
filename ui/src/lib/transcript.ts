@@ -15,6 +15,15 @@ import {
 } from "./activity";
 import type { UsageSnapshot } from "./picker";
 
+const ROUTE_PRODUCTS: Record<string, string> = {
+  "cli:codex": "Codex",
+  "cli:claude": "Claude Code",
+  "cli:cursor": "Cursor",
+  "cli:antigravity": "Antigravity",
+  "cli:grok": "Grok",
+  openrouter: "OpenRouter",
+};
+
 export type LimitReached = {
   vendor: string;
   usage?: UsageSnapshot | null;
@@ -339,9 +348,15 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   if (event.type === "routing.selected" || event.type === "routing.fallback") {
     if (p.model_id && p.model_name && p.provider)
       routing = p as unknown as RoutingDecision;
-    const name = String(
+    const raw = String(
       p.model_name || p.model_id || p.fallback || "configured model",
     );
+    // Subscription and API rows name the product, as the picker does:
+    // "Cursor · Auto", not a bare "auto".
+    const product = ROUTE_PRODUCTS[String(p.provider || "")];
+    const modelLabel =
+      raw === "auto" ? "Auto" : raw === "default" ? "Default" : raw;
+    const name = product ? `${product} · ${modelLabel}` : raw;
     // With `inference` the row name says enough; older records also name
     // the provider and purpose.
     const selected = p.inference
@@ -554,8 +569,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       text &&
       !p.cancelled &&
       !(
+        // The streamed reply already says this; older vendor turns never
+        // marked their stream finished, so a live item counts too.
         last?.kind === "agent" &&
-        !last.live &&
         last.text.trim() === text.trim() &&
         p.success &&
         !p.cancelled

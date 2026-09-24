@@ -1,5 +1,17 @@
-ShadowCode 0.30.0 makes Antigravity a full citizen: it now asks before it
-acts, like Codex, Claude Code, Cursor and Grok. The 0.29 notes follow below.
+ShadowCode 0.30.1 fixes what a live Antigravity session and a real
+conversation showed. The 0.30.0 notes follow below.
+
+## Fixed in 0.30.1
+
+- **Antigravity works end to end.** Tested live after signing in: it lists
+  its 11 Gemini models, asks ShadowCode before running a command, answers, and
+  resumes the conversation. A timing bug that made the first prompt end with
+  no answer is fixed.
+- **Answers appear once.** Replies from Codex, Claude Code, Cursor, Grok and
+  Antigravity are no longer repeated under *Result*.
+- **Clearer notes.** The model note reads "Using Cursor · Auto · Cloud", and a
+  question that changed nothing ends with one quiet line instead of an empty
+  report card.
 
 ## New in 0.30.0
 
@@ -132,9 +144,9 @@ runtime that ships with the app.
 
 ## Downloads
 
-- `ShadowCode_0.30.0_amd64.AppImage`
-- `ShadowCode_0.30.0_amd64.deb`
-- `ShadowCode_0.30.0_appimage-runtime-sources.tar.gz`
+- `ShadowCode_0.30.1_amd64.AppImage`
+- `ShadowCode_0.30.1_amd64.deb`
+- `ShadowCode_0.30.1_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
 Builds are for x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).

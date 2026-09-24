@@ -65,6 +65,10 @@ pub struct AcpAdapter {
     tool_names: HashMap<String, String>,
     options: Option<LaunchOptions>,
     prompt_active: bool,
+    /// A model switch was sent and not yet answered. Prompts wait for it:
+    /// Antigravity ends a prompt at once, with no output, when the model
+    /// changes underneath it.
+    switching: bool,
 }
 impl AcpAdapter {
     pub fn new(vendor: Vendor) -> Self {
@@ -84,6 +88,7 @@ impl AcpAdapter {
             tool_names: HashMap::new(),
             options: None,
             prompt_active: false,
+            switching: false,
         }
     }
     fn id(&mut self) -> u64 {
@@ -175,6 +180,7 @@ impl AcpAdapter {
             {
                 let set_id = self.id();
                 self.set_model_id = Some(set_id);
+                self.switching = true;
                 step.send.push(request(
                     set_id,
                     "session/set_config_option",
@@ -190,6 +196,7 @@ impl AcpAdapter {
             {
                 let set_id = self.id();
                 self.set_model_id = Some(set_id);
+                self.switching = true;
                 step.send.push(request(
                     set_id,
                     "session/set_model",
@@ -197,8 +204,10 @@ impl AcpAdapter {
                 ));
             }
         }
-        if let Some((prompt, images)) = self.pending_prompt.take() {
-            step.send.extend(self.start_prompt(&prompt, &images)?);
+        if !self.switching {
+            if let Some((prompt, images)) = self.pending_prompt.take() {
+                step.send.extend(self.start_prompt(&prompt, &images)?);
+            }
         }
         Ok(step)
     }
@@ -231,6 +240,8 @@ impl AcpAdapter {
                 );
             }
             if Some(id) == self.set_model_id {
+                self.switching = false;
+                self.pending_prompt = None;
                 return Ok(Step::update(Update::TurnFailed(format!(
                     "{} does not accept model `{}` ({text}). Pick the model again from the list.",
                     self.vendor.product_label(),
@@ -313,7 +324,13 @@ impl AcpAdapter {
             return self.after_session(&session, &res["modes"]);
         }
         if Some(id) == self.set_model_id {
-            return Ok(Step::default());
+            // The model is in place; now send the queued prompt.
+            self.switching = false;
+            let mut step = Step::default();
+            if let Some((prompt, images)) = self.pending_prompt.take() {
+                step.send.extend(self.start_prompt(&prompt, &images)?);
+            }
+            return Ok(step);
         }
         if Some(id) == self.prompt_id {
             self.prompt_active = false;
@@ -559,7 +576,7 @@ impl CliAdapter for AcpAdapter {
         )]
     }
     fn ready(&self) -> bool {
-        self.phase == Phase::Session
+        self.phase == Phase::Session && !self.switching
     }
     fn prompt(&mut self, text: &str, images: &[PromptImage]) -> Result<Vec<String>> {
         if self.ready() {

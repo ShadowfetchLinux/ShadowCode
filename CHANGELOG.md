@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.30.1: Antigravity verified live, cleaner answers
+
+- **Antigravity prompts wait for the model switch.** Checked against the real
+  server after sign-in: a prompt sent while `session/set_config_option` was
+  still pending ended at once with no output. Prompts now wait for the switch
+  (Cursor's `session/set_model` too). A live task ran `date +%Y` through a
+  ShadowCode approval and answered; a follow-up resumed the same session.
+- **Answers from subscriptions appear once.** Vendor turns now send
+  `model.stream_end`, and the final result no longer repeats a reply with the
+  same text, including in older conversations.
+- **"Using Cursor · Auto · Cloud"** instead of "Using auto · Cloud": the model
+  note names the product, as the picker does.
+- **Quiet summary for answers.** A finished task that changed no files and ran
+  no checks shows one line ("Finished · 7s · No files were changed.") without
+  a *Review changes* button, which now appears only when there are changes.
+
 ## 0.30.0: Antigravity that asks first
 
 - **Antigravity runs through Google's official ACP agent server** (the

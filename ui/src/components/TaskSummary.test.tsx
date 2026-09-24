@@ -71,9 +71,31 @@ it("states vendor-owned checks and unverified claims honestly", () => {
       onReview={vi.fn()}
     />,
   );
-  expect(screen.getByText(/vendor CLI owns verification/)).toBeTruthy();
-  expect(screen.getByText("No file changes were recorded.")).toBeTruthy();
+  // A finished answer that changed nothing gets one quiet line, with no
+  // Review or Rewind actions.
+  const quiet = screen.getByRole("region", { name: "Task summary" });
+  expect(quiet.className).toContain("is-quiet");
+  expect(quiet.textContent).toContain("Finished");
+  expect(quiet.textContent).toContain("No files were changed.");
+  expect(screen.queryByRole("button", { name: "Review changes" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Rewind" })).toBeNull();
+  cleanup();
+  render(
+    <TaskSummary
+      activity={{
+        ...base,
+        changed: ["src/app.ts"],
+        verification: {
+          status: "vendor_owned",
+          commands: [],
+          note: "The vendor CLI owns verification; ShadowCode does not claim a harness verdict.",
+        },
+      }}
+      onReview={vi.fn()}
+    />,
+  );
+  expect(screen.getByText(/vendor CLI owns verification/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Review changes" })).toBeTruthy();
   cleanup();
   render(
     <TaskSummary

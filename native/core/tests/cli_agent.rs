@@ -676,9 +676,15 @@ fn cursor_acp_command_and_cancel() {
     assert!(send
         .iter()
         .any(|l| l.contains("\"authenticate\"") && l.contains("cursor_login")));
-    assert!(send
+    let set_model_id = send
         .iter()
-        .any(|l| l.contains("session/set_model") && l.contains("gpt-5.5[context=272k")));
+        .find(|l| l.contains("session/set_model") && l.contains("gpt-5.5[context=272k"))
+        .and_then(|l| serde_json::from_str::<Value>(l).ok())
+        .and_then(|v| v["id"].as_u64())
+        .expect("model is set per session");
+    // The prompt waits until the model switch is acknowledged.
+    assert!(send.iter().all(|l| !l.contains("session/prompt")));
+    let (send, _) = feed(&mut *adapter, &[&rpc_result(set_model_id, json!({}))]);
     assert!(send.iter().any(|l| l.contains("session/prompt")));
     assert!(updates
         .iter()
@@ -753,6 +759,16 @@ fn antigravity_runs_through_googles_acp_server() {
         .find(|l| l.contains("session/set_config_option"))
         .expect("model is set per session");
     assert!(set.contains("\"configId\":\"model\"") && set.contains("gemini-3.8-pro"));
+    // Antigravity ends a prompt at once if the model changes under it, so
+    // the prompt waits for the switch to be acknowledged.
+    assert!(send.iter().all(|l| !l.contains("session/prompt")));
+    let set_id = serde_json::from_str::<Value>(set).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let (send, _) = feed(
+        &mut *adapter,
+        &[&rpc_result(set_id, json!({"configOptions":[]}))],
+    );
     let prompt = send.iter().find(|l| l.contains("session/prompt")).unwrap();
     assert!(prompt.contains("\"type\":\"image\""));
     // Permission requests reach ShadowCode as approvals.

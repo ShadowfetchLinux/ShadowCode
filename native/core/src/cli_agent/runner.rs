@@ -660,6 +660,12 @@ async fn apply_update(
         }
         Update::TurnCompleted { text, interrupted } => {
             flush_text(request, message_id, pending_text)?;
+            // The streamed reply is complete, so the final result can
+            // recognise it instead of repeating it.
+            request.events.emit(
+                "model.stream_end",
+                json!({"message_id": message_id, "complete": !interrupted}),
+            )?;
             if let Some(text) = text {
                 if !text.is_empty() {
                     collected.push_str(&text);
@@ -677,6 +683,10 @@ async fn apply_update(
         }
         Update::TurnFailed(error) => {
             flush_text(request, message_id, pending_text)?;
+            request.events.emit(
+                "model.stream_end",
+                json!({"message_id": message_id, "complete": false}),
+            )?;
             if super::is_limit_error(&error) {
                 return Err(limit_reached(request, vendor, error, stdin, adapter).await);
             }

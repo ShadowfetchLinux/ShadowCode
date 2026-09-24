@@ -49,13 +49,19 @@ export function TaskSummary({
       ? "Finished"
       : "Finished with problems";
   const stopped = Boolean(activity.finished?.cancelled);
-  // A stop the user asked for is not a failure. With nothing changed and no
-  // checks run, one quiet line says so.
-  if (stopped && changed.length === 0 && !verification?.commands.length) {
+  // A stop the user asked for is not a failure, and an answer that changed
+  // nothing needs no report. With nothing changed, no checks run and no
+  // unverified claims, one quiet line says so.
+  const quiet =
+    (stopped || Boolean(activity.finished?.success)) &&
+    changed.length === 0 &&
+    !verification?.commands.length &&
+    verification?.presentedAs !== "unverified";
+  if (quiet) {
     return (
       <section className="task-summary is-quiet" aria-label="Task summary">
         <header>
-          <strong>Stopped</strong>
+          <strong>{stopped ? "Stopped" : "Finished"}</strong>
           {duration && (
             <span className="dim">
               <Timer size={12} aria-hidden="true" /> {duration}
@@ -146,13 +152,15 @@ export function TaskSummary({
         )}
       </div>
       <div className="row task-summary-actions">
-        <button
-          type="button"
-          className="mini"
-          onClick={() => onReview(changed[0])}
-        >
-          Review changes
-        </button>
+        {changed.length > 0 && (
+          <button
+            type="button"
+            className="mini"
+            onClick={() => onReview(changed[0])}
+          >
+            Review changes
+          </button>
+        )}
         {onRewind && changed.length > 0 && (
           <button
             type="button"

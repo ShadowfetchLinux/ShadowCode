@@ -382,3 +382,43 @@ describe("durable transcript", () => {
     ).toBe("FAILED");
   });
 });
+
+describe("subscription turns", () => {
+  it("also shows older vendor answers once, without a stream end", () => {
+    const text = "Today is Thursday.";
+    const state = replay([
+      event(1, "model.stream", { text, message_id: "m1" }),
+      event(2, "agent.completed", { summary: text, success: true }),
+    ]);
+    expect(
+      state.items.filter((i) => i.kind === "agent" && i.text === text),
+    ).toHaveLength(1);
+  });
+  it("shows a vendor's answer once, not again as the result", () => {
+    const text = "Today is **Thursday, September 24, 2026**.";
+    const state = replay([
+      event(1, "routing.selected", {
+        inference: "cloud",
+        model_id: "cli:cursor:auto",
+        model_name: "auto",
+        provider: "cli:cursor",
+      }),
+      event(2, "model.stream", { text, message_id: "m1" }),
+      event(3, "model.stream_end", { message_id: "m1", complete: true }),
+      event(4, "agent.completed", { summary: text, success: true }),
+    ]);
+    const answers = state.items.filter(
+      (item) => item.kind === "agent" && item.text === text,
+    );
+    expect(answers).toHaveLength(1);
+    expect(state.items.some((i) => "who" in i && i.who === "Result")).toBe(
+      false,
+    );
+    // The note names the product the picker showed.
+    expect(
+      state.items.some(
+        (i) => i.kind === "note" && i.text === "Using Cursor · Auto · Cloud",
+      ),
+    ).toBe(true);
+  });
+});

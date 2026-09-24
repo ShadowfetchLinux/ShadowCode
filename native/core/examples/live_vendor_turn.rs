@@ -57,7 +57,12 @@ async fn main() -> anyhow::Result<()> {
         println!("vendor status: {}", picker["vendors"][&vendor]);
         return Ok(());
     }
-    let prompts: &[&str] = if second {
+    // --command: one harmless shell command, so the runtime must ask for
+    // permission; the approval is granted through the same API the window uses.
+    let command = std::env::args().any(|a| a == "--command");
+    let prompts: &[&str] = if command {
+        &["Run the shell command `date +%Y` in the project folder and reply with only its output."]
+    } else if second {
         &[
             "Reply with exactly the word ALPHA and nothing else. Do not use any tools.",
             "What single word did you reply with last time? Reply with just that word. Do not use any tools.",
@@ -79,9 +84,24 @@ async fn main() -> anyhow::Result<()> {
         }
         let id = job["id"].as_str().unwrap_or_default().to_owned();
         session = job["session_id"].as_str().map(str::to_owned);
-        let done = tokio::time::timeout(Duration::from_secs(240), service.engine.wait(&id))
-            .await
-            .map_err(|_| anyhow::anyhow!("turn did not finish in 240 s"))??;
+        let waiting = service.engine.wait(&id);
+        tokio::pin!(waiting);
+        let deadline = tokio::time::sleep(Duration::from_secs(240));
+        tokio::pin!(deadline);
+        let done = loop {
+            tokio::select! {
+                done = &mut waiting => break done?,
+                _ = &mut deadline => anyhow::bail!("turn did not finish in 240 s"),
+                _ = tokio::time::sleep(Duration::from_millis(300)), if command => {
+                    let pending = call(&service, "GET", "/api/approvals", json!({})).await?;
+                    for approval in pending["approvals"].as_array().into_iter().flatten() {
+                        println!("approval asked: kind={} command={} reason={}", approval["kind"], approval["command"], approval["reason"]);
+                        let aid = approval["id"].as_str().unwrap_or_default();
+                        call(&service, "POST", &format!("/api/approvals/{aid}"), json!({"decision": "approve", "session_id": approval["session_id"]})).await?;
+                    }
+                }
+            }
+        };
         let done = json!(done);
         println!(
             "status={} in {:.1}s | answer={:?} | error={:?}",
