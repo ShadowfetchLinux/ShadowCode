@@ -1,8 +1,8 @@
 # Goals in the native desktop
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › Goals. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › Goals. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
-The native 0.21 release stores goals, milestones, their task IDs, and
+ShadowCode stores goals, milestones, their task IDs, and
 run state in the same SQLite database as conversation history. Goals imported
 from 0.19 retain their original checklist and completion state.
 

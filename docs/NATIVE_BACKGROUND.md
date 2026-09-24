@@ -1,6 +1,6 @@
 # Background processes in the native desktop
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › Background. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › Background. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 Open **Settings › Advanced › Background**.
 Give the process a name, enter its command, and choose **Start process**. This is

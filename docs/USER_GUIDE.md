@@ -1,6 +1,6 @@
 # ShadowCode user guide
 
-This guide covers ShadowCode 0.28 and follows the usual workflow: open a
+This guide covers ShadowCode 0.30 and follows the usual workflow: open a
 project, pick a model, describe the task, watch the agent work, then review
 what changed. Installation and a feature overview are in the
 [README](../README.md).
@@ -35,7 +35,7 @@ groups:
 Each row shows Local or Cloud, its availability, a *Vision* or *Chat only*
 badge where it applies, and its usage line. Search filters rows. Vendors with
 many models show their default, the selected row and recent rows first; the
-rest are behind a *more* entry. Press the right arrow key or the info icon to
+rest are behind a *Show all* entry. Press the right arrow key or the info icon to
 open a row's details: the reason it isn't ready, usage windows and reset times,
 and a link to the vendor's own usage page.
 
@@ -53,10 +53,10 @@ Type in the composer and press `Enter`. `Shift+Enter` adds a line.
 - **Attachments.** Attach text files or up to four images per message. Images
   are accepted only when the selected row is marked Vision. Attachments are
   copied into `<project>/.shadow/attachments/`.
-- **Web.** The **Web** chip appears only when a local model is selected, since
-  vendor CLIs bring their own web tools. Turning it on lets the agent use
-  `web_fetch` and `web_search` for the task. In *Web tools off* and *Offline*
-  modes, a pill replaces the chip.
+- **Web.** The **Web** chip appears when a local or OpenRouter model is
+  selected, since vendor CLIs bring their own web tools. Turning it on lets the agent use `web_fetch` and
+  `web_search` for the task. In *Web tools off* and *Offline* modes, a pill
+  replaces the chip.
 - **Permission mode.** The mode control in the composer shows the current mode
   and how the selected vendor applies it.
 - **Slash commands.** Type `/` to browse them. `/plan` and `/review` start
@@ -66,6 +66,9 @@ If a task is already running, pressing `Enter` queues the message as a
 follow-up.
 
 ## Watch it work
+
+A note above the answer names the model that ran, for example
+*Using Cursor · Auto · Cloud*. It appears again only when the model changes.
 
 The activity timeline under the answer is built from recorded events: reading,
 searching, editing, running commands, waiting for approval, web sources and
@@ -80,8 +83,8 @@ shows what it is, for example `Edit src/main.rs`, `Apply a patch to …`, or a
 shell command. Choose **Allow** or **Deny**. Keyboard shortcuts never approve
 anything.
 
-- **Local models.** ShadowCode enforces the permission mode for every tool
-  call.
+- **Local and OpenRouter models.** ShadowCode enforces the permission mode
+  for every tool call.
 - **Codex, Claude Code, Cursor, Grok.** These vendors send their own approval
   requests, which ShadowCode shows. Each vendor decides which of its actions
   need approval. In Plan/Review tasks, ShadowCode denies vendor requests
@@ -109,11 +112,15 @@ An unanswered vendor approval is denied after 10 minutes
 When the task ends, a summary lists the changed files with line counts and any
 test or build commands with their results. A task counts as verified only from
 recorded command results. An answer that claims success without a recorded
-check is marked as unverified.
+check is marked as unverified. A task that finished or was stopped without
+changing files or running checks shows one quiet line instead, for example
+*Finished · 7s · No files were changed.* A stopped task keeps its partial
+reply.
 
-- **Review changes** opens the Changes drawer (`Ctrl+Shift+B`). Pick a file,
-  compare unstaged and staged hunks, stage a hunk or a whole new file, discard a
-  hunk (after confirming), and commit with a message. If a file changed since
+- **Review changes** appears only when files changed. It opens the Changes
+  drawer (`Ctrl+Shift+B`). Pick a file, compare unstaged and staged hunks,
+  stage a hunk or a whole new file, discard a hunk (after confirming), and
+  commit with a message. If a file changed since
   you previewed it, refresh before staging.
 - **Rewind** undoes every file change the task made with ShadowCode's own
   tools. Stop the task first. Rewind doesn't undo shell commands or Git
@@ -131,8 +138,8 @@ and the new choice applies from the next turn.
 - **Different provider.** The new provider hasn't seen the earlier turns, so
   ShadowCode passes it a handoff block: your requests, the final answers and
   the changed files, up to 12,000 characters, marked as earlier context and not
-  as instructions. Vendor CLIs receive it before your message. Local models
-  read the same turns from the conversation history.
+  as instructions. Vendor CLIs receive it before your message. Local and
+  OpenRouter models read the same turns from the conversation history.
 - **Consent.** Before content goes to a cloud provider, a dialog shows what
   would be sent. This happens when the previous turn ran on this computer, when
   the conversation moves to another provider, or when you first attach images
@@ -154,7 +161,8 @@ retry, buy credits or turn on overages.
 
 In **Settings › Permissions & network**:
 
-- **Web tools off**: local models get no web tools. Subscriptions still work.
+- **Web tools off**: ShadowCode's own agent loop (local and OpenRouter models)
+  gets no web tools. Subscriptions still work.
 - **Offline**: only rows under *On this computer* run. Cloud rows show as
   unavailable. ShadowCode starts no vendor process for sign-in status, models
   or usage, and a cloud job is refused with
@@ -177,8 +185,9 @@ In **Settings › Permissions & network**:
 
 - **A subscription row says Sign in.** Use **Settings › Accounts › Connect**,
   or run the vendor's login command in a terminal and choose **Refresh**.
-  Antigravity first needs **Install** on its Accounts card (a one-time 334 MB
-  download from Google), then **Connect**.
+  Antigravity's sign-in is ShadowCode's own, so use **Connect** for it.
+- **Antigravity says Setup required.** Choose **Install** on its Accounts card
+  (a one-time 334 MB download from Google), then **Connect**.
 - **A local row says Setup required.** The llama.cpp runtime is missing. Run
   `scripts/install-appimage.sh` again, or build it with
   `scripts/build-llama.cpp.sh`.

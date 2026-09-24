@@ -475,7 +475,9 @@ pub fn resolve_vendor(id: &str) -> Option<crate::config::ModelConfig> {
 
 /// Provider credentials that would silently turn a subscription turn into a
 /// pay-per-token API call. They are removed from every vendor CLI child.
-pub const API_KEY_VARIABLES: [&str; 9] = [
+pub const API_KEY_VARIABLES: [&str; 10] = [
+    // ShadowCode's own OpenRouter key must never reach a vendor CLI either.
+    "OPENROUTER_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "OPENAI_API_KEY",

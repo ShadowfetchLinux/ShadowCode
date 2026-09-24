@@ -1,8 +1,8 @@
 # Native project inspection, diagnostics and test jobs
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › Health and the `/understand`, `/doctor`, `/why` commands. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › Health and the `/understand`, `/doctor`, `/why` commands. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
-These workflows run in Rust in the native 0.21 release. The desktop,
+These workflows run in Rust (since the native 0.21 release). The desktop,
 CLI and MCP server use the same project and task services. Python is needed only
 when the user's project itself requires a Python test runner.
 

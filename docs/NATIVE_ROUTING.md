@@ -1,14 +1,14 @@
 # Models and routing in the native desktop
 
-> **Advanced.** In 0.28 this is reached through `config.yaml` (`routing`); there is no desktop control in 0.28. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through `config.yaml` (`routing`); there is no desktop control. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 Routing can choose a registered model for each task purpose when a task
 starts without an explicit model (CLI `run` without `--model`, goal
 milestones). Set `routing.enabled`, `planner`, `coder`, `reviewer` and `tester`
-in `config.yaml` (`shadowcode config routing.enabled true`). The 0.28 desktop
+in `config.yaml` (`shadowcode config routing.enabled true`). The desktop
 has no router control: the composer picker always sends an explicit target,
-which overrides routing. The model note above the response records the actual
-model, provider and purpose.
+which overrides routing. The model note above the response names the model
+that ran, for example "Using Cursor · Auto · Cloud".
 
 The engine normally reserves a quarter of that window for a response (up to
 8,192 tokens). If essential input leaves less room after history compaction,

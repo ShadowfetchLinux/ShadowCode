@@ -1,6 +1,6 @@
 # Native project plugins
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › Plugins. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › Plugins. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 A native plugin installs a reviewed collection of skills, slash commands,
 lifecycle hooks and MCP definitions into one project. The desktop and CLI use

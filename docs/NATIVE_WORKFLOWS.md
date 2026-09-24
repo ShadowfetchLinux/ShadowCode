@@ -1,6 +1,6 @@
 # Native commands and project skills
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › Skills and the `/` command menu. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › Skills and the `/` command menu. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 The native desktop runs slash commands through the Rust command service. Type
 `/` in the composer to see available commands. Command results appear in the

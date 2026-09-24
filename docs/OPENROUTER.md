@@ -15,7 +15,10 @@ OpenRouter account. ShadowCode never presents these rows as a subscription.
 ShadowCode checks the key with OpenRouter (`GET /api/v1/key`) before storing
 it. A rejected key is not saved. A saved key lives in the profile's
 `secrets.env` (readable only by you) as `OPENROUTER_API_KEY`, and is never
-shown again, logged, or passed to other tools. **Remove key** deletes it.
+shown again, logged, or passed to other tools. **Remove key** deletes it. An
+`OPENROUTER_API_KEY` set in ShadowCode's own environment is used instead of
+the stored key. Either way the key is removed from the environment of every
+subscription CLI ShadowCode starts.
 
 The card shows the key's label, credits used, its limit and what is left, and
 how many models are available. **Open OpenRouter activity** links to
@@ -23,9 +26,14 @@ OpenRouter's own usage page.
 
 ## Pick a model
 
-The picker's **API keys** group lists OpenRouter's text models, refreshed from
-OpenRouter's public model list at most every six hours (or with **Refresh
-models**). Each row shows:
+The picker's **API keys** group sits below **On this computer**, so a search
+that matches both picks the local model first. Until a key is saved it offers
+*Add an OpenRouter API key…* and fetches nothing. Saving a key fetches
+OpenRouter's public model list and caches it in
+`~/.local/state/shadow-agent/openrouter-models.json`. The picker shows the
+cached list at once and refreshes it in the background when it is older than
+six hours; **Refresh models** fetches it now. Each row has the ID
+`api:openrouter:<slug>` and shows:
 
 - the price per million input and output tokens, or *free*;
 - *Vision* when the model accepts images;
@@ -39,10 +47,11 @@ or slug, for example `qwen coder` or `qwen/qwen3-coder`).
 ## How tasks run
 
 OpenRouter models run on ShadowCode's own agent loop, the one local models
-use. Your permission mode and approvals, checkpoints, the Web toggle
-(`web_fetch`, `web_search`), image attachments for *Vision* models, the
-activity timeline and the review drawer all work the same way. The model's
-context window comes from OpenRouter's list, capped at 200,000 tokens.
+use. Your permission mode and approvals, checkpoints, image attachments for
+*Vision* models, the activity timeline and the review drawer all work the same
+way. Turn on **Web** in the composer to give the task `web_fetch` and
+`web_search`. The model's context window comes from OpenRouter's list, capped at
+200,000 tokens.
 
 Switching a conversation from a local model to OpenRouter sends earlier turns
 to the cloud, so ShadowCode asks first, as it does for subscriptions.
@@ -50,5 +59,7 @@ to the cloud, so ShadowCode asks first, as it does for subscriptions.
 ## Offline and failures
 
 - **Offline mode** turns the rows off and sends nothing to OpenRouter.
-- **No key**: rows say *Add API key* and open the Accounts card.
+- **No key**: the group shows only *Add an OpenRouter API key…*, which opens
+  **Settings › Accounts**. A task sent to an `api:openrouter:` ID without a
+  key is refused before it starts.
 - **Rejected or out of credit**: OpenRouter's error is shown on the task.

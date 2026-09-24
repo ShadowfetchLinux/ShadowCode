@@ -1,10 +1,10 @@
 # Native command line
 
-> **Reference.** In 0.28 this covers the `shadowcode` command line. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Reference.** This covers the `shadowcode` command line. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 The same `shadowcode` executable runs tasks in a terminal and opens the desktop.
 CLI commands start before GTK or WebKit: they need no display, Python runtime,
-Node runtime, browser, or HTTP listener. Tasks use the same targets as the desktop picker: a vendor CLI (`cli:*`), a GGUF model on the bundled llama.cpp runtime (`local:gguf:*`), or a configured compatible endpoint. The archived [release gates](archive/NATIVE_MIGRATION.md) record its
+Node runtime, browser, or HTTP listener. Tasks use the same targets as the desktop picker: a vendor CLI (`cli:*`), a GGUF model on the bundled llama.cpp runtime (`local:gguf:*`), an OpenRouter model (`api:openrouter:<slug>`, once a key is saved), or a configured compatible endpoint. The archived [release gates](archive/NATIVE_MIGRATION.md) record its
 earlier verification.
 
 For a fullscreen workspace, use [`shadowcode tui`](NATIVE_TUI.md).

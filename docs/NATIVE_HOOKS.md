@@ -1,6 +1,6 @@
 # Native lifecycle hooks
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › Hooks. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › Hooks. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 Native hooks run explicitly enabled project commands at fixed points in an
 agent task. They use the Rust process runner and need no Python interpreter or

@@ -10,7 +10,9 @@ reads, stores or proxies vendor credentials.
 ## Setup
 
 Each CLI must be on `PATH`, or its path set in **Settings › Advanced › Vendor
-tools** (`cli_agents.<vendor>_binary`).
+tools** (`cli_agents.<vendor>_binary`). Antigravity is the exception: its agent
+server is installed from **Settings › Accounts** (see
+[below](#antigravitys-agent-server)).
 
 | Vendor | Binary | Install | Sign in |
 | --- | --- | --- | --- |
@@ -58,7 +60,13 @@ the `agy` CLI's print mode could not do.
   ShadowCode also shows the link. Status checks and tasks never open a browser:
   if the sign-in is missing or expired, the row says *Sign in* and a task
   stops with that message.
-- **Temp files.** Each launch gets its own temp directory, removed afterwards.
+- **Models.** The picker lists the session's `model` config option. A picked
+  model is set with `session/set_config_option`, and the prompt is sent only
+  after the server confirms the switch (Cursor's `session/set_model` works the
+  same way). If the server rejects the model, the task fails and asks you to
+  pick it again.
+- **Temp files.** Each launch gets its own temp directory under
+  `~/.local/share/shadowcode/antigravity-acp/runs`, removed afterwards.
 - **Hosts without IPv6.** The server refuses to start without an IPv6
   loopback (`::1`); on such hosts ShadowCode passes the server's own
   `--enforce_kernel_ipv6_support=false` switch.
@@ -128,7 +136,8 @@ never uses it once a turn has started or when images are attached.
 
 - **Transcript.** Vendor text, tool starts and finishes, file-change reports,
   results and errors go into the transcript. Output is redacted and clipped
-  before it is shown or stored.
+  before it is shown or stored. A streamed reply is shown once; the final
+  result doesn't repeat it.
 - **Approvals.** Vendor approval requests go through the same Allow/Deny cards
   as ShadowCode's own. In read-only tasks they are denied automatically with a
   warning. After `cli_agents.approval_timeout_sec` (600 s) without an answer,
@@ -155,6 +164,9 @@ Vendor tools** edits all of them except `claude_enabled`, which you set with
 - `claude_enabled`: turns the Claude adapter off. Anthropic doesn't allow
   third-party clients to use Pro/Max OAuth tokens directly. Driving the official
   `claude` binary under your own login is tolerated but not guaranteed.
-- `codex_binary`, `claude_binary`, `cursor_binary`, `antigravity_binary`,
-  `grok_binary`: a name on `PATH`, or an absolute path.
+- `codex_binary`, `claude_binary`, `cursor_binary`, `grok_binary`: a name on
+  `PATH`, or an absolute path.
+- `antigravity_binary`: the default, `agy`, means the agent server installed
+  from **Settings › Accounts**. Any other value must be the path to an
+  `agy_acp_server.par` with `localharness_external` beside it.
 - `approval_timeout_sec` (600) and `stall_timeout_sec` (900).

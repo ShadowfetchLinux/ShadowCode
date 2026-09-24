@@ -1,4 +1,4 @@
-# ShadowCode architecture (0.28)
+# ShadowCode architecture (0.30)
 
 ```text
 React window (ui/)                 shadowcode CLI / TUI / MCP clients
@@ -14,11 +14,13 @@ React window (ui/)                 shadowcode CLI / TUI / MCP clients
             ▼                                   ▼
  Vendor adapters (cli_agent/*)        Native agent loop (engine + tools/)
  codex app-server · claude -p ·       ShadowCode tools, permissions,
- cursor-agent acp · agy --print= ·    checkpoints, web tools
- grok agent stdio                               │
- (vendor runs its own loop)                     ▼
-                                      local_engine.rs → local_runtime.rs
-                                      managed llama-server (127.0.0.1)
+ cursor-agent acp ·                   checkpoints, web tools
+ agy_acp_server.par (Antigravity) ·        │                 │
+ grok agent stdio                          ▼                 ▼
+ (vendor runs its own loop)   local_engine.rs →       OpenRouter
+                              local_runtime.rs        chat completions API
+                              managed llama-server    (api:openrouter:*,
+                              (127.0.0.1)             openrouter.rs)
 ```
 
 One executable (`shadowcode`, crate `shadowcode-desktop` in `src-tauri/`) runs the desktop window and
@@ -34,10 +36,11 @@ runs in-process with the window. There is no HTTP server between them.
   attach to an engine already running in a headless `serve` or TUI process.
   Closing an attached window leaves that engine's work running.
 - **Service** (`service.rs`): routes requests (`/api/picker`,
-  `/api/accounts/*`, `/api/local-models/*`, `/api/jobs`, sessions, review,
-  config). The CLI reaches the same service through `control.rs`, a Unix socket
-  in `/run/user/<uid>/shadowcode/` with peer-credential checks. It opens no TCP
-  listener. At startup it removes sockets left behind by dead engines.
+  `/api/accounts/*`, `/api/openrouter/*`, `/api/local-models/*`, `/api/jobs`,
+  sessions, review, config). The CLI reaches the same service through
+  `control.rs`, a Unix socket in `/run/user/<uid>/shadowcode/` with
+  peer-credential checks. It opens no TCP listener. At startup it removes
+  sockets left behind by dead engines.
 - **Engine** (`engine.rs`): owns jobs. Each workspace runs one active job plus
   queued follow-ups. `start_with_context` is the single entry point for the
   desktop, CLI, goals, MCP and workflows. It enforces workspace trust, the
@@ -48,12 +51,16 @@ runs in-process with the window. There is no HTTP server between them.
   (vision, tools, whether approvals reach ShadowCode, cloud or local), resume,
   cancel and usage. Provider protocols stay inside the adapters.
 - **Vendor adapters** (`cli_agent/`): `codex.rs` (app-server JSON-RPC, plus an
-  `exec` fallback), `claude.rs` (stream-json), `acp.rs` (Cursor and Grok),
-  `antigravity.rs` (agy stream-json). Each adapter is a line-oriented state
-  machine. `runner.rs` owns the process, stdin/stdout, approvals, stall
-  detection and cancellation. The vendor runs the agent loop with its own tools
-  and sandbox. ShadowCode's tools are never injected into it.
-- **Native agent loop**: used for local GGUF rows and configured
+  `exec` fallback), `claude.rs` (stream-json), `acp.rs` (Cursor, Grok and
+  Antigravity). `antigravity_server.rs` installs Google's ACP agent server on
+  request (pinned version, size and SHA-256), prepares its private profile and
+  per-launch temp directory, and builds its launch arguments. Each adapter is a
+  line-oriented state machine. `runner.rs` owns the process, stdin/stdout,
+  approvals, stall detection and cancellation. The vendor runs the agent loop
+  with its own tools and sandbox. ShadowCode's tools are never injected into
+  it.
+- **Native agent loop**: used for local GGUF rows, OpenRouter rows
+  (`openrouter.rs`: key check, cached model list, picker rows) and configured
   OpenAI-compatible endpoints. It handles context accounting and compaction,
   tool calls through `permissions.rs`, file checkpoints, verification, web
   tools (`web.rs`) and `view_image` for vision models.
@@ -68,15 +75,17 @@ vendor with official interfaces only:
 | Codex | app-server `account/read`, `account/rateLimits/read` and `model/list` (`codex_probe.rs`) |
 | Cursor, Grok | ACP `initialize`, `authenticate` and `session/new` (`acp_probe.rs`); no prompt is sent |
 | Claude | `claude auth status` and the model aliases in `claude --help` |
-| Antigravity | `agy models` |
+| Antigravity | ACP `initialize`, `authenticate` (`oauth-personal`) and `session/new` against the agent server, with a no-op `BROWSER`; a printed Google sign-in link means *Sign in*. Models come from the session's `model` config option |
 
 - **Caching.** Results are cached with a 5-minute freshness window and backoff
   on failure. *Offline* mode starts no probe.
 - **Picker rows.** `picker_rows` builds one row per discovered model. The local
-  catalog (`local_engine.rs`) adds GGUF rows, and `/api/picker` returns both.
-  Row IDs are stable routing IDs: `cli:<vendor>[:<model>]` or
-  `local:gguf:<hash of the canonical path>`. Display names are never used for
-  routing.
+  catalog (`local_engine.rs`) adds GGUF rows, and `openrouter.rs` adds the
+  **API keys** rows once a key is saved (from a cached model list, refreshed in
+  the background when older than 6 hours). `/api/picker` returns all three.
+  Row IDs are stable routing IDs: `cli:<vendor>[:<model>]`,
+  `local:gguf:<hash of the canonical path>` or `api:openrouter:<slug>`.
+  Display names are never used for routing.
 
 ## Usage persistence
 
@@ -131,11 +140,15 @@ the store.
 
 - **Vendor CLIs** are spawned in the workspace in their own process group with
   `PR_SET_PDEATHSIG(SIGKILL)` and `kill_on_drop`. Provider API-key variables
-  are removed from their environment. Cancelling sends SIGTERM to the group,
-  then SIGKILL. A run with no output line for `stall_timeout_sec` (default
-  900) fails.
+  are removed from their environment. The Antigravity server also runs without
+  Google cloud-project variables, with `GEMINI_HOME` set to ShadowCode's
+  private profile and `TMPDIR` set to a per-launch directory that is removed
+  afterwards. Cancelling sends SIGTERM to the group, then SIGKILL. A run with
+  no output line for `stall_timeout_sec` (default 900) fails.
 - **Login and logout** commands (`cli_agent/auth.rs`) run as supervised
   children: one login per vendor, cancellable, stopped after 10 minutes.
+  Antigravity's Connect starts the agent server and sends `authenticate`;
+  its Disconnect deletes the private profile.
 - **Probes** use short timeouts. Codex probes and doctor commands run with a
   cleared, allow-listed environment.
 - **Restart recovery.** A profile lock (`native.lock`) prevents two engines
@@ -152,6 +165,7 @@ never duplicates or loses output.
 | Event group | Events |
 | --- | --- |
 | Tools and approvals | `tool.started` / `tool.completed` (redacted in storage; web tools add `sources`), `approval.requested` / `approval.resolved`, `command.completed` |
+| Output | `model.stream_end` (a streamed reply is complete, so the final result doesn't repeat it; vendor turns send it too) |
 | Routing and handoff | `routing.selected` (with `inference: cloud\|local`), `vendor.session`, `agent.handoff`, `model.switched` |
 | Usage and limits | `usage.updated`, `limit.reached` |
 | Results | `checkpoint.updated`, `checkpoint.restored`, `files.changed`, `verification.summary`, `web.source` |
@@ -164,7 +178,8 @@ Job statuses end in `completed`, `failed`, `cancelled`, `interrupted` or
 
 - **Picker and settings.** `ui/src/components/UnifiedPicker.tsx` is filled only
   by `GET /api/picker`. The settings pages are in `components/settings/`:
-  Accounts, Local models, Permissions & network, Appearance and Advanced.
+  Accounts (vendors, the Antigravity install and the OpenRouter key), Local
+  models, Permissions & network, Appearance and Advanced.
 - **Consent and progress.** `ConsentDialog.tsx` answers the `needs_consent`
   reply. `ActivityTimeline.tsx` and `TaskSummary.tsx` are built from recorded
   events.

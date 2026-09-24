@@ -3,19 +3,23 @@
 Date: 2026-09-23. Base: `main` at 0.27.0 (`d1b685c`). Machine: Linux, RTX 5060 Ti
 16 GB (Vulkan), 62 GB RAM, 16 threads.
 
+This report describes 0.28.0. What changed in 0.28.1 to 0.30.1 is summarised
+in [Since 0.28](#since-028); the live-verification table below has current
+rows for Antigravity and OpenRouter (2026-09-24).
+
 ## What changed
 
 - **One picker.** The composer has a single searchable dropdown with two groups,
-  *Subscriptions* and *On this computer*. Rows are real execution targets with
-  stable ids (`cli:codex:gpt-6-astra`, `cli:cursor:auto`, `local:gguf:<hash>`),
+  *Subscriptions* and *On this computer* (0.29.0 added a third, *API keys*).
+  Rows are real execution targets with stable ids (`cli:codex:gpt-6-astra`, `cli:cursor:auto`, `local:gguf:<hash>`),
   availability (Ready / Sign in / Setup required / Unavailable), usage as
   reported, and vision / Chat-only badges only when verified. The choice is
   remembered per conversation and per project on the engine side.
 - **Subscriptions through the official CLIs.** Codex (`codex app-server`),
   Claude Code (`claude -p … stream-json`), Cursor (`cursor-agent acp`),
   Antigravity (`agy --print= stream-json`, rewritten to the documented `event`
-  protocol) and Grok (`grok agent stdio`, ACP). A shared vendor catalog asks
-  each CLI for sign-in state, models and usage through documented commands; a
+  protocol; replaced in 0.30.0 by Google's ACP agent server) and Grok
+  (`grok agent stdio`, ACP). A shared vendor catalog asks each CLI for sign-in state, models and usage through documented commands; a
   binary on disk never makes a row Ready. Native session ids are stored per
   conversation and resumed. Provider API-key variables are removed from every
   vendor process so a subscription row can never bill an API key.
@@ -55,15 +59,21 @@ Date: 2026-09-23. Base: `main` at 0.27.0 (`d1b685c`). Machine: Linux, RTX 5060 T
   stack, starter grid, open-weight hub and other dead controls were removed.
 - **Removed.** The legacy 0.19 Python harness and its build/test plumbing.
 
-## Subscription integrations (verified live on this machine)
+## Subscription and API-key integrations (verified live on this machine)
 
 | Runtime | State | Live turn | Resume | Images | Approvals reach ShadowCode | Usage data |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex 0.155.0-alpha.16 | Ready (ChatGPT Pro) | yes, 3.6 s | `thread/resume` | yes (`localImage`) | yes | weekly window, reset, shared pool, credits (live: 2% left) |
 | Claude Code 2.1.278 | Sign in | not possible (not signed in) | `--resume` (fixture-tested) | yes (image blocks) | yes (host prompts) | not exposed |
 | Cursor 2026.09.15 | Ready (Free) | yes, 8.8 s + 7.9 s | `session/load` | yes (ACP) | yes | plan tier only |
-| Antigravity 1.2.9 | Ready | yes, 6.3 s + 6.8 s | `--conversation` | no (text only) | no (its own settings) | not exposed |
+| Antigravity ACP server 1.2.1 (0.30.1) | Ready via the ACP server | yes | `session/load` | yes | yes | not exposed |
 | Grok 1.0.41 | Ready | yes, 8.4 s + 2.6 s | `session/load` | no (ACP reports none) | yes | per-session tokens only |
+| OpenRouter `openai/gpt-4o-mini` (0.30.1, API key) | Ready | yes: a shell command ran through a ShadowCode approval; `web_search` answered with sources | – (no vendor session) | yes: read a red PNG as "Red." | yes | billed per token, no plan usage |
+
+The 0.28.0 Antigravity row (`agy` 1.2.9 in print mode: text only, approvals
+not reaching ShadowCode, `--conversation` resume) no longer applies. In the
+0.30.1 run Antigravity listed 11 models, ran `date +%Y` through a ShadowCode
+approval and resumed the session with `session/load`.
 
 A Grok → Cursor switch in one conversation first returned a consent request and
 wrote nothing; after consent Cursor received a 314-character summary and
@@ -107,11 +117,19 @@ explicit runtime override ranked below a stale installed CPU-only runtime.
 - Antigravity and Claude expose no machine-readable plan usage; Cursor reports
   only the plan tier; Grok reports per-session tokens. ShadowCode shows
   "Usage unavailable" for them.
-- Antigravity applies its own permission settings in print mode, so its
-  actions cannot be approved in ShadowCode; the UI says so at task start.
+- Antigravity's approvals reach ShadowCode since 0.30.0 (ACP agent server).
+  Questions it asks through the permission channel are still skipped with a
+  note.
 - DuckDuckGo answers automated requests from this machine with a bot check.
-  `web_search` reports it as blocked and never invents results; a user-run
-  SearXNG instance can be set as `network.searxng_url`. `web_fetch` works.
+  Since 0.29.0 `web_search` then asks Marginalia Search's public API; if that
+  fails too it reports the search as blocked and never invents results. A
+  user-run SearXNG instance can be set as `network.searxng_url`. `web_fetch`
+  works.
+- IPv6 is disabled on this machine (`net.ipv6.conf.all.disable_ipv6 = 1`, so
+  there is no `::1`). Google's Antigravity agent server refuses to start
+  without an IPv6 loopback, so on such hosts ShadowCode passes the server's own
+  `--enforce_kernel_ipv6_support=false` switch. The 0.30.1 live runs here used
+  it.
 - The llama.cpp runtime links the system OpenSSL, libgomp and (optionally)
   Vulkan loader; the deb declares them.
 - The system `rustdoc` on this machine cannot load its LLVM library; doctests
@@ -130,3 +148,44 @@ explicit runtime override ranked below a stale installed CPU-only runtime.
   `~/.local/lib/shadowcode`. The existing profile migrated to schema 25 with an
   automatic backup; its 8 conversations were kept. A copy of the 0.27 app and
   profile is in `~/.local/share/shadowcode-backups/pre-0.28-*`.
+
+## Since 0.28
+
+- **0.28.1.** Accounts cards no longer repeat the version, status or usage
+  lines; reset times round to whole minutes. A stopped task that changed
+  nothing shows one quiet line. File-based GGUF rows are named from the file's
+  `general.name` plus the quantization. Notifications appear at the top
+  centre. `GET /api/onboarding` no longer probes providers.
+- **0.29.0.** OpenRouter API keys (`openrouter.rs`, [OpenRouter](OPENROUTER.md)):
+  the key is checked with `GET /api/v1/key` and stored as `OPENROUTER_API_KEY`
+  in the profile's `secrets.env`; the picker's *API keys* group lists
+  `api:openrouter:<slug>` rows with price, *Vision* and *Chat only* from
+  OpenRouter's model list, cached and refreshed at most every 6 hours. Turns
+  run on ShadowCode's own agent loop. `web_search` falls back to Marginalia
+  Search when DuckDuckGo shows a bot check, and `web_fetch` allows
+  192.0.0.0/24 apart from its special-purpose hosts (VPN DNS such as NordVPN).
+- **0.30.0.** Antigravity runs through Google's ACP agent server
+  (`agy_acp_server.par`, ACP registry `antigravity-acp` 1.2.1) instead of
+  `agy --print`. It is installed on request from Settings › Accounts (334 MB,
+  pinned SHA-256), signs in to a private profile, sends permission requests to
+  ShadowCode, accepts images and resumes with `session/load`.
+- **0.30.1.** ACP prompts wait until a model switch is acknowledged; vendor
+  turns send `model.stream_end`, so answers are not repeated under *Result*;
+  the model note names the product ("Using Cursor · Auto · Cloud"); a finished
+  task with no changes or checks shows one quiet line, and *Review changes*
+  appears only when files changed.
+- **0.30.2.** The composer's **Web** toggle also appears for OpenRouter rows
+  (tested live: `openai/gpt-4o-mini` searched and cited tokio.rs), and
+  `OPENROUTER_API_KEY` joins the provider keys removed from vendor CLIs.
+- **Tooling.** `scripts/check-secrets.mjs` runs in the CI "Checks" workflow.
+  `examples/live_vendor_turn` gained `--command` (0.30.1), `--web` and
+  `--image` (after 0.30.1) next to `--second` and `--switch <id>`.
+
+Test counts at 0.30.1:
+
+| Check | Result |
+| --- | --- |
+| Rust tests (`cargo test --workspace --locked`) | 457 passed, 4 ignored (live tests) |
+| UI unit (`npm --prefix ui test`) | 106 passed |
+| UI e2e (`npm --prefix ui run test:e2e`) | 11 passed |
+| Real window (`scripts/test-native-desktop.mjs`) | 13 checks |

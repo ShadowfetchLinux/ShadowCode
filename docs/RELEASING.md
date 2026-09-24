@@ -18,7 +18,8 @@ All four must carry the same version, and the tag must be `v<version>`.
 | `packaging/shadow-agent.desktop` | `X-ShadowCode-Version=` |
 
 Update `CHANGELOG.md` and `docs/RELEASE_NOTES.md`. The notes file becomes the
-GitHub release text as it is, so it should describe this release only.
+GitHub release text as it is, so it should start with this release. Notes of
+earlier releases may follow below it, as they do now.
 
 ## 2. Managed llama.cpp runtime
 
@@ -63,10 +64,14 @@ cargo +1.95.0 test --workspace --locked
 node scripts/test-native-cli.mjs
 node scripts/test-native-stress.mjs
 node scripts/test-native-tui.mjs
+node scripts/check-secrets.mjs
 ```
 
 Build the desktop executable before running the Rust suite: the process tests
-launch `target/debug/shadowcode`.
+launch `target/debug/shadowcode`. `check-secrets.mjs` also runs in the CI
+"Checks" workflow, not in `release.yml`; run it before pushing the tag.
+Live turns against real accounts (`live_vendor_turn`) are described under
+[Tests](../README.md#tests) in the README.
 
 ## 4. Packages
 

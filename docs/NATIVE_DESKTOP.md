@@ -1,6 +1,6 @@
 # Native desktop
 
-> **Reference.** In 0.28 this covers the desktop build and packaging. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Reference.** This covers the desktop build and packaging. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 The `main` branch builds one Rust desktop executable with the React
 interface embedded. Tauri hosts it in the system WebKit webview. The interface
@@ -78,8 +78,9 @@ account. To relocate storage through a symlink, link the XDG base or explicit
 profile parent instead. An unsafe `native.lock` (symlink, extra hard link,
 foreign owner or special file) causes a startup error without replacing it.
 
-Pick a subscription or a local GGUF model in the composer picker. Local
-models need the managed llama.cpp runtime (`scripts/build-llama.cpp.sh` for a
+Pick a subscription, a local GGUF model or an OpenRouter model (after adding
+a key, see [OpenRouter](OPENROUTER.md)) in the composer picker. Local models
+need the managed llama.cpp runtime (`scripts/build-llama.cpp.sh` for a
 development checkout; packages bundle it). See [local models](LOCAL_MODELS.md).
 
 The [native CLI](NATIVE_CLI.md) uses this same executable. Commands such as

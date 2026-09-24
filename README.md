@@ -12,9 +12,9 @@ need Ollama, LM Studio or any other model server.
 
 ![ShadowCode workspace](docs/images/workspace-light.png)
 
-- **One picker.** The composer lists **Subscriptions** and **On this computer**
-  in one menu. Each row shows whether it is ready, whether it runs locally or in
-  the cloud, and the usage figures the vendor reports.
+- **One picker.** The composer lists **Subscriptions**, **On this computer**
+  and **API keys** in one menu. Each row shows whether it is ready, whether it
+  runs locally or in the cloud, and the usage figures the vendor reports.
 - **Usage figures come from the vendor.** If a vendor exposes no usage, the row
   says *Usage unavailable* and gives the reason. ShadowCode never makes up a
   figure.
@@ -26,15 +26,15 @@ need Ollama, LM Studio or any other model server.
   ShadowCode's own tools can be rewound.
 
 Release history is in [CHANGELOG.md](CHANGELOG.md). What's new in this release:
-[0.30.1 release notes](docs/RELEASE_NOTES.md).
+[0.30.2 release notes](docs/RELEASE_NOTES.md).
 
 ## Install
 
 Releases target x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).
 Download from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest):
 
-- `ShadowCode_0.30.1_amd64.AppImage`
-- `ShadowCode_0.30.1_amd64.deb`
+- `ShadowCode_0.30.2_amd64.AppImage`
+- `ShadowCode_0.30.2_amd64.deb`
 - `SHA256SUMS`
 
 ### AppImage (recommended)
@@ -45,7 +45,7 @@ from a checkout of this repository:
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
 git clone https://github.com/Shadowfetchapps/ShadowCode.git
-./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.30.1_amd64.AppImage
+./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.30.2_amd64.AppImage
 ```
 
 [`scripts/install-appimage.sh`](scripts/install-appimage.sh):
@@ -65,14 +65,14 @@ git clone https://github.com/Shadowfetchapps/ShadowCode.git
   AppImages only after a successful install.
 
 To run the AppImage without installing it:
-`./ShadowCode_0.30.1_amd64.AppImage --appimage-extract-and-run`. FUSE is not
+`./ShadowCode_0.30.2_amd64.AppImage --appimage-extract-and-run`. FUSE is not
 required.
 
 ### Debian package
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-sudo apt install ./ShadowCode_0.30.1_amd64.deb
+sudo apt install ./ShadowCode_0.30.2_amd64.deb
 ```
 
 The deb installs `shadowcode` and the same llama.cpp runtime in
@@ -149,7 +149,9 @@ Setup details: [subscriptions](docs/SUBSCRIPTIONS.md).
 **Antigravity** runs through Google's official ACP agent server instead of the
 `agy` CLI, so it asks ShadowCode before running commands or editing files.
 **Install** on its Accounts card downloads the server once (334 MB from
-dl.google.com, checksum-verified); **Connect** signs in with Google. Details:
+dl.google.com, checksum-verified); **Connect** signs in with Google.
+**Disconnect** deletes ShadowCode's private Antigravity sign-in and leaves the
+`agy` CLI and the Antigravity app signed in. Details:
 [subscriptions](docs/SUBSCRIPTIONS.md#antigravitys-agent-server).
 
 ## API keys (OpenRouter)
@@ -162,8 +164,8 @@ per million tokens, *Vision* when the model accepts images and *Chat only*
 when it has no tool support. Search the picker by name or slug to find one.
 
 These models run on ShadowCode's own agent loop, the same one local models
-use, so your permission mode, approvals, checkpoints, Web toggle and review
-all apply. Every token is billed to your OpenRouter account; the Accounts card
+use, so your permission mode, approvals, checkpoints, the **Web** toggle,
+image attachments (*Vision* rows) and review all apply. Every token is billed to your OpenRouter account; the Accounts card
 shows credits used and your key's limit. Details: [OpenRouter](docs/OPENROUTER.md).
 
 ## Local models
@@ -208,10 +210,12 @@ Details: [local models](docs/LOCAL_MODELS.md).
 
 ## Web and network
 
-Local and OpenRouter models can use `web_fetch` and `web_search` when you turn
-on **Web** in the composer for that task. Vendor CLIs use their own web tools. Web access
-refuses loopback, private, link-local and metadata addresses, CGNAT, multicast
-and non-standard ports. It re-checks every redirect and caps time and size.
+ShadowCode's own agent loop has `web_fetch` and `web_search`. They are offered
+only for a task started with web turned on: in the window, the **Web** chip in
+the composer, which appears for local rows. Vendor CLIs use their own web
+tools. Web access refuses loopback, private, link-local and metadata
+addresses, CGNAT, multicast and non-standard ports. It re-checks every
+redirect and caps time and size.
 `web_search` uses DuckDuckGo's HTML page. DuckDuckGo often answers automated
 requests with a bot check; ShadowCode then asks
 [Marginalia Search](https://www.marginalia.nu/)'s public API, a keyless API
@@ -227,12 +231,12 @@ enabled under `search.formats`) and `web_search` asks it first.
 | Mode | Effect |
 | --- | --- |
 | Online | Everything allowed by other settings |
-| Web tools off | Local models can't fetch pages. Subscriptions still work |
+| Web tools off | ShadowCode's own agent loop gets no web tools. Subscriptions still work |
 | Offline | Only models on this computer run. Cloud rows are unavailable, and no vendor process is started for status, models or usage |
 
 ## Permissions
 
-| Mode | ShadowCode's own tools (local models) |
+| Mode | ShadowCode's own tools (local and OpenRouter models) |
 | --- | --- |
 | Ask before actions | File edits and shell commands wait for your approval |
 | Allow project edits | File edits inside the project run without asking. Shell commands, deletes and Git history changes still ask |
@@ -243,8 +247,9 @@ still ask. Destructive Git commands ask. Edits outside the project are refused.
 Plan and Review tasks are read-only.
 
 Vendor CLIs enforce their own sandbox. ShadowCode shows the approval requests
-they send and denies them automatically in read-only tasks. The table above
-shows which vendors send requests at all.
+they send and denies them automatically in read-only tasks. Each vendor
+decides which of its actions ask; the table above shows how its requests reach
+ShadowCode.
 
 Shell commands run as your Linux user. **ShadowCode is not an operating-system
 sandbox.** See [SECURITY.md](SECURITY.md).
@@ -254,14 +259,18 @@ sandbox.** See [SECURITY.md](SECURITY.md).
 | What | Where |
 | --- | --- |
 | Settings | `~/.config/shadow-agent/config.yaml` ([example](config.example.yaml)) |
-| Secrets for HTTP providers | `~/.config/shadow-agent/secrets.env` (mode 600) |
+| Secrets for HTTP providers, including the OpenRouter key (`OPENROUTER_API_KEY`) | `~/.config/shadow-agent/secrets.env` (mode 600) |
 | Conversations, jobs, events, goals, usage snapshots | `~/.local/state/shadow-agent/shadow-agent.db` (SQLite, schema version 25; backed up as `shadow-agent.pre-native-<id>.sqlite` before a migration) |
+| OpenRouter model list (cache) | `~/.local/state/shadow-agent/openrouter-models.json` |
 | Webview storage | `~/.local/share/shadow-agent/webview` |
 | llama.cpp runtime (AppImage install) | `~/.local/lib/shadowcode` |
+| Antigravity agent server (installed from Accounts) | `~/.local/share/shadowcode/antigravity-acp/1.2.1` |
+| Antigravity sign-in (ShadowCode's private profile) | `~/.local/share/shadowcode/antigravity-acp/profile` |
 | Project notes, skills, attachments | `<project>/.shadow/` |
 
 The directories are still named `shadow-agent` for compatibility. `--profile
-DIR` keeps a separate set, for example for development.
+DIR` keeps a separate set, for example for development. The Antigravity
+directories follow `XDG_DATA_HOME` and are shared by all profiles.
 
 ## Build from source
 
@@ -312,12 +321,31 @@ npm --prefix ui test
 (cd ui && npx playwright install chromium && npm run test:e2e)
 node --test scripts/test-llama-runtime.mjs
 bash scripts/test-install-appimage.sh
+node scripts/check-secrets.mjs
 ```
 
 The Rust tests use fake vendor CLIs and a fake `llama-server`, so they need no
 account or GPU. The Playwright suite runs against `vite preview` of a test
 build with a fake engine. `e2e/check-bundle.mjs` checks that the fake engine is
-not in the production bundle. See [CONTRIBUTING.md](CONTRIBUTING.md).
+not in the production bundle. `scripts/check-secrets.mjs` fails if a tracked
+file looks like it holds a real API key or private key, or if a `.env` or
+`secrets.env` file is tracked. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Live checks use real accounts and cost a little plan allowance or credit, so
+they are not part of the suite. `live_vendor_turn` runs one short real turn
+through the same service the window uses, in a throwaway profile and project:
+
+```bash
+cargo run -p shadowcode-core --example live_vendor_turn -- <picker id> [--second|--command|--web|--image|--switch <id>]
+```
+
+`--second` sends a follow-up to check resume. `--command` asks for one
+harmless shell command and approves it through the approval API. `--web`
+gives the task web tools (ShadowCode's own loop only). `--image` attaches a
+small red PNG. `--switch <id>` continues the conversation on another row and
+checks that consent is asked before the handoff. Vendor CLIs keep their own
+sign-in; OpenRouter rows read the key from `OPENROUTER_API_KEY`, because the
+throwaway profile has no `secrets.env`.
 
 ## More
 

@@ -1,6 +1,6 @@
 # Native SQLite inspection
 
-> **Advanced.** In 0.28 this is reached through model tools, the CLI and MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through model tools, the CLI and MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 The native engine lists tables and queries existing SQLite files inside the
 selected project. It replaces the Python built-in reader with bundled SQLite;

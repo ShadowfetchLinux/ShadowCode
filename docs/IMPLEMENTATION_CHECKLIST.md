@@ -1,5 +1,11 @@
 # ShadowCode 0.28 implementation checklist
 
+> **Historical (0.28).** This is the 0.28.0 record. Later changes are
+> summarised in the [implementation report](IMPLEMENTATION_REPORT.md#since-028):
+> Antigravity runs through Google's ACP agent server since 0.30.0 (not `agy`),
+> `web_search` falls back to Marginalia Search since 0.29.0, and OpenRouter
+> rows were added in 0.29.0.
+
 One desktop window, one picker, real backends. This checklist replaces the
 0.27 simplification checklist. Every box is ticked only after the code path
 was exercised (unit test, integration test, or a recorded live run on this

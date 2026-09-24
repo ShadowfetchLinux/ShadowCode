@@ -33,7 +33,16 @@ npm --prefix ui run typecheck
 npm --prefix ui test
 (cd ui && npx playwright install chromium && npm run test:e2e)
 npm --prefix ui run format
+node scripts/check-secrets.mjs
 ```
+
+Run `node scripts/check-secrets.mjs` before pushing. It scans tracked files
+for real-looking API keys (OpenRouter, Anthropic, OpenAI, Google, xAI, GitHub)
+and private key blocks, and fails if a `.env` or `secrets.env` file is
+tracked. It never prints a value it finds. `--staged` also scans the staged
+diff, and `--value-file F` looks for the exact value stored in `F` (for
+example a key you just used for a live test) without printing it. The CI
+"Checks" workflow runs it on pushes to `main` and on pull requests.
 
 Where tests go:
 
@@ -49,6 +58,16 @@ Where tests go:
 
 Live checks against real vendor CLIs or a GPU are useful, but report them
 separately from the deterministic suite. Mark tests that need them `#[ignore]`.
+For one real turn through any picker row, use the `live_vendor_turn` example
+(see [Tests](README.md#tests) for its flags):
+
+```bash
+cargo run -p shadowcode-core --example live_vendor_turn -- cli:cursor:auto --second
+```
+
+It uses a throwaway profile and project, but a real account: vendor CLIs keep
+their own sign-in, and OpenRouter rows read `OPENROUTER_API_KEY` from the
+environment.
 
 ## Rules
 

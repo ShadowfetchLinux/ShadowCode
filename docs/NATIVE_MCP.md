@@ -1,6 +1,6 @@
 # Native MCP migration
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 MCP remains an open [native release gate](archive/NATIVE_MIGRATION.md). The Rust stdio and Streamable HTTP
 clients now connect to native Settings, CLI registration, project activation,

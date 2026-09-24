@@ -1,6 +1,6 @@
 # Native isolated worktrees
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › Worktrees. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › Worktrees. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 The native engine can create a Git worktree on a separate `shadowcode/<ID>` branch
 from an existing local commit or branch. Staged, unstaged and untracked changes

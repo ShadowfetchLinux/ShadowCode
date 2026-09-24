@@ -36,6 +36,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
+      - name: No credentials in tracked files
+        run: node scripts/check-secrets.mjs
       - name: Managed llama.cpp packaging (pins, notices, relative links, deb repack)
         run: node --test scripts/test-llama-runtime.mjs
       - name: Packaging PATH ignores host node hijacks

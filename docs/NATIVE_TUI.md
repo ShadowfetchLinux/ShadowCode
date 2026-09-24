@@ -1,10 +1,10 @@
 # Native terminal interface
 
-> **Reference.** In 0.28 this covers `shadowcode tui`. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Reference.** This covers `shadowcode tui`. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 `shadowcode tui` opens a fullscreen terminal workspace in the same Rust executable
 as the desktop and command line. It requires a real, cursor-addressable terminal;
-it does not start GTK, WebKit, Python, Node, or a browser. Tasks use the same targets as the desktop picker: a vendor CLI (`cli:*`), a GGUF model on the bundled llama.cpp runtime (`local:gguf:*`), or a configured compatible endpoint.
+it does not start GTK, WebKit, Python, Node, or a browser. Tasks use the same targets as the desktop picker: a vendor CLI (`cli:*`), a GGUF model on the bundled llama.cpp runtime (`local:gguf:*`), an OpenRouter model (`api:openrouter:<slug>`, once a key is saved), or a configured compatible endpoint.
 
 ```sh
 shadowcode --workspace /path/to/project tui

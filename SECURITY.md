@@ -32,9 +32,10 @@ separate account when you need stronger isolation.
   credential files, the Grok or Cursor login files, or the token in
   Antigravity's profile.
 - **Connect and Disconnect** run the vendor's own login and logout commands
-  as supervised child processes. The vendor opens the browser or prints a URL
-  or device code. ShadowCode only relays the printed lines after redaction, and
-  never shows a URL that carries a code or token parameter as a link.
+  as supervised child processes (Antigravity differs, see below). The vendor
+  opens the browser or prints a URL or device code. ShadowCode only relays the
+  printed lines after redaction, and never shows a URL that carries a code or
+  token parameter as a link.
   Antigravity's Connect asks its agent server to `authenticate`; the server
   opens the browser and stores the token in ShadowCode's private Antigravity
   profile, which Disconnect deletes. Status checks and tasks run the server
@@ -42,7 +43,7 @@ separate account when you need stronger isolation.
 - **No API keys reach vendor CLIs.** Every vendor CLI that runs a task, and
   every login and logout, starts without `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
   `OPENAI_API_KEY`, `CODEX_API_KEY`, `CURSOR_API_KEY`, `XAI_API_KEY`,
-  `GROK_API_KEY`, `GEMINI_API_KEY` and `GOOGLE_API_KEY`, so a subscription turn
+  `GROK_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY` and `OPENROUTER_API_KEY`, so a subscription turn
   can't turn into a per-token API call. A CLI that is itself signed in with an
   API key is labelled *API key login · billed per token*.
 - **Claude Code's terms.** Anthropic doesn't allow third-party clients to use
@@ -73,8 +74,9 @@ separate account when you need stronger isolation.
 ## Web tools
 
 `web_fetch` and `web_search` exist only for ShadowCode's own agent loop (local
-models and OpenRouter models). They are offered only when you turn on Web for the task and the
-network mode is *Online*.
+models and OpenRouter models). They are offered only for a task started with
+web turned on (in the window, the composer's **Web** chip, shown for local
+rows) while the network mode is *Online*.
 
 - **Addresses.** Only http and https URLs without embedded credentials, on
   ports 80 and 443. DNS is resolved once, and every address is checked. The
@@ -112,10 +114,14 @@ or cloud-project variables.
 ## OpenRouter API key
 
 The key is checked with OpenRouter's `GET /api/v1/key`, then stored in the
-profile's `secrets.env` (mode 600) under `OPENROUTER_API_KEY`. It is never
-returned to the window, written to logs or passed to vendor CLIs, and it is
-sent only to `openrouter.ai`. Turns run on ShadowCode's own agent loop, so the
-permission mode, approvals and checkpoints apply as they do for local models.
+profile's `secrets.env` (mode 600) under `OPENROUTER_API_KEY`. The stored
+key is never returned to the window, written to logs or passed to vendor
+CLIs, and it is sent only to `openrouter.ai`. An `OPENROUTER_API_KEY` already
+set in ShadowCode's environment takes precedence over the stored key, and
+`OPENROUTER_API_KEY` is on the removal list above, so vendor CLI tasks and
+logins never inherit it. Turns run on ShadowCode's own agent loop, so
+the permission mode, approvals and checkpoints apply as they do for local
+models.
 Offline mode sends nothing to OpenRouter.
 
 ## Permissions
@@ -224,3 +230,10 @@ files; they are not signatures. The installer refuses an AppImage without a
 matching entry unless you pass `--unverified`. Package notices and the bundled
 llama.cpp licence texts are checked during packaging
 ([licenses/native](licenses/native/README.md)). ShadowCode sends no telemetry.
+
+The CI "Checks" workflow runs `scripts/check-secrets.mjs`. It fails when a
+tracked file looks like it holds a real API key (OpenRouter, Anthropic,
+OpenAI, Google, xAI, GitHub) or a private key, or when a `.env` or
+`secrets.env` file is tracked, and it never prints the value it found.
+Contributors run it before pushing; `--staged` and `--value-file F` are
+described in [CONTRIBUTING.md](CONTRIBUTING.md#checks).

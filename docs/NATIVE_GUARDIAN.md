@@ -1,6 +1,6 @@
 # Guardian diagnostics
 
-> **Advanced.** In 0.28 this is reached through Settings › Advanced › Guardian. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through Settings › Advanced › Guardian. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
 Guardian is off by default. Enable it and save an interval of 60–86,400 seconds
 in Settings › Advanced. Run diagnostics manually there; scheduled checks run

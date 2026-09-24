@@ -364,6 +364,11 @@ test("an OpenRouter API key unlocks per-token models in the picker", async ({
   await search.press("Enter");
   await expect(trigger(page)).toContainText("Qwen: Qwen3 Coder");
   await expect(trigger(page)).toContainText("API key");
+  // OpenRouter runs on ShadowCode's own loop, so the Web toggle applies.
+  const web = page.getByRole("button", { name: "Web lookups for this task" });
+  await expect(web).toHaveAttribute("aria-pressed", "false");
+  await web.click();
+  await expect(web).toHaveAttribute("aria-pressed", "true");
   await prompt(page).fill("Fix the add function");
   await send(page).click();
   await expect(page.getByRole("region", { name: "Task summary" })).toBeVisible({
@@ -375,6 +380,7 @@ test("an OpenRouter API key unlocks per-token models in the picker", async ({
   expect(posts.map((r) => r.body.model)).toEqual([
     "api:openrouter:qwen/qwen3-coder",
   ]);
+  expect(posts[0].body.web).toBe(true);
 });
 
 test("loads a local model from Settings", async ({ page }) => {

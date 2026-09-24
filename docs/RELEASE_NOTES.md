@@ -1,5 +1,17 @@
-ShadowCode 0.30.1 fixes what a live Antigravity session and a real
-conversation showed. The 0.30.0 notes follow below.
+ShadowCode 0.30.2 lets OpenRouter models search the web, keeps your
+OpenRouter key away from other tools, and brings the documentation up to
+date. The 0.30.1 notes follow below.
+
+## Fixed in 0.30.2
+
+- **Web for OpenRouter.** The **Web** toggle now appears for OpenRouter
+  models, as the 0.29 notes promised. Tested live: an OpenRouter model searched
+  the web and cited its source.
+- **Your OpenRouter key stays put.** It is stripped from the environment of
+  every subscription tool ShadowCode starts, like the other provider keys.
+- **No secrets in the repository.** A new check scans every tracked file for
+  real-looking API keys and runs on every push.
+- **Docs** for OpenRouter, Antigravity, data locations and testing are current.
 
 ## Fixed in 0.30.1
 
@@ -144,9 +156,9 @@ runtime that ships with the app.
 
 ## Downloads
 
-- `ShadowCode_0.30.1_amd64.AppImage`
-- `ShadowCode_0.30.1_amd64.deb`
-- `ShadowCode_0.30.1_appimage-runtime-sources.tar.gz`
+- `ShadowCode_0.30.2_amd64.AppImage`
+- `ShadowCode_0.30.2_amd64.deb`
+- `ShadowCode_0.30.2_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
 Builds are for x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).

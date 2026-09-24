@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.30.2: Web for OpenRouter, key hygiene, docs
+
+- **Web toggle for OpenRouter rows.** The 0.29.0 notes said OpenRouter tasks
+  could use web tools, but the composer only showed **Web** for local rows.
+  It now appears for OpenRouter rows too, and those rows no longer show the
+  vendor-CLI note ("runs its own tools…"), since they run on ShadowCode's own
+  loop.
+- **`OPENROUTER_API_KEY` is removed from vendor CLIs.** A key set in
+  ShadowCode's environment was inherited by subscription CLIs; it is now on
+  the same removal list as the other provider keys.
+- **Secret scan.** `scripts/check-secrets.mjs` fails on real-looking API keys,
+  private keys or a tracked `.env`/`secrets.env` (and, with `--value-file`, on
+  an exact value without printing it). It runs in the Checks workflow.
+- **Docs** brought up to date for OpenRouter, Antigravity's agent server, the
+  live test harness, data locations, API contract and test counts.
+
 ## 0.30.1: Antigravity verified live, cleaner answers
 
 - **Antigravity prompts wait for the model switch.** Checked against the real

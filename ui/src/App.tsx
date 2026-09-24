@@ -63,6 +63,7 @@ import { TaskSteerBar } from "./components/TaskSteerBar";
 import { UnifiedPicker } from "./components/UnifiedPicker";
 import { useConversation } from "./hooks/useConversation";
 import {
+  isApiKey,
   isLocal,
   isReady,
   rememberRecent,
@@ -576,15 +577,18 @@ export default function App() {
     string,
     string
   >;
+  // Local and OpenRouter rows run on ShadowCode's own agent loop, with its
+  // tools, approvals and web access; only subscription CLIs bring their own.
+  const ownLoop = Boolean(
+    selectedTarget && (isLocal(selectedTarget) || isApiKey(selectedTarget)),
+  );
   const vendorNote =
-    selectedTarget && !isLocal(selectedTarget)
+    selectedTarget && !ownLoop
       ? vendorNotes[vendorKey(selectedTarget)] ||
         vendorNotes[`cli-${vendorKey(selectedTarget)}`] ||
         `${selectedTarget.name.split(" · ")[0]} runs its own tools, sandbox and web access; ShadowCode passes this choice to it where the tool supports it.`
       : undefined;
-  const webAllowed =
-    Boolean(selectedTarget && isLocal(selectedTarget)) &&
-    networkMode === "online";
+  const webAllowed = ownLoop && networkMode === "online";
 
   async function selectTarget(id: string) {
     setModelChoice(id);
@@ -1335,7 +1339,7 @@ export default function App() {
       />
       {networkMode === "offline" ? (
         <NetworkPill mode="offline" />
-      ) : selectedTarget && isLocal(selectedTarget) ? (
+      ) : ownLoop ? (
         networkMode === "web_off" ? (
           <NetworkPill mode="web_off" />
         ) : (

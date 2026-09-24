@@ -1,8 +1,8 @@
 # Native project and task notes
 
-> **Advanced.** In 0.28 this is reached through the `/memory` command, the CLI and MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
+> **Advanced.** This is reached through the `/memory` command, the CLI and MCP. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
-The native 0.21 build keeps project notes in
+ShadowCode keeps project notes in
 `.shadow/memory/project.md` and task notes in the profile's SQLite history.
 These are explicit notes, distinct from model reasoning and recorded verification
 results. No Python process is involved.

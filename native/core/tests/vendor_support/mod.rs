@@ -28,7 +28,7 @@ def send(o):
     sys.stdout.write(json.dumps(o) + "\n")
     sys.stdout.flush()
 args = sys.argv[1:]
-KEYS = ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","OPENAI_API_KEY","CODEX_API_KEY","CURSOR_API_KEY","XAI_API_KEY","GROK_API_KEY","GEMINI_API_KEY","GOOGLE_API_KEY"]
+KEYS = ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","OPENAI_API_KEY","CODEX_API_KEY","CURSOR_API_KEY","XAI_API_KEY","GROK_API_KEY","GEMINI_API_KEY","GOOGLE_API_KEY"]
 if "--version" in args:
     print("codex-cli 0.155.0-fake"); sys.exit(0)
 if args[:1] == ["--help"]:
