@@ -342,6 +342,10 @@ export type RowAction =
   | { kind: "setup"; hint: string; local: boolean }
   | { kind: "explain"; reason: string };
 
+/** Antigravity's agent server is installed from its Accounts card. */
+export const ANTIGRAVITY_SETUP_HINT =
+  "Install the Antigravity agent in Settings › Accounts.";
+
 export function rowAction(target: PickerTarget): RowAction {
   switch (target.availability) {
     case "ready":
@@ -352,13 +356,17 @@ export function rowAction(target: PickerTarget): RowAction {
       return {
         kind: "setup",
         local: isLocal(target),
+        // Antigravity's row reason already names the download; the hint
+        // says where to install it (its Accounts card).
         hint:
-          target.reason ||
-          (isLocal(target)
-            ? "The local runtime or this model needs setup."
-            : isApiKey(target)
-              ? `Add an API key for ${vendorLabel(target)} in Accounts.`
-              : `Install the ${vendorLabel(target)} command-line tool, then refresh Accounts.`),
+          vendorKey(target) === "antigravity"
+            ? ANTIGRAVITY_SETUP_HINT
+            : target.reason ||
+              (isLocal(target)
+                ? "The local runtime or this model needs setup."
+                : isApiKey(target)
+                  ? `Add an API key for ${vendorLabel(target)} in Accounts.`
+                  : `Install the ${vendorLabel(target)} command-line tool, then refresh Accounts.`),
       };
     default:
       return {

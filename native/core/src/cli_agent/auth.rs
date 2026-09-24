@@ -189,12 +189,14 @@ pub async fn connect_with_timeout(
     config: &CliAgentsConfig,
     timeout: Duration,
 ) -> Result<Value> {
+    if vendor == Vendor::Antigravity {
+        return connect_antigravity(catalog, config, timeout).await;
+    }
     if vendor.login_command().is_empty() {
         return Ok(json!({
             "ok": false,
             "state": "unsupported",
-            "note": "Antigravity has no sign-in command ShadowCode can run.",
-            "hint": "Run `agy` once in a terminal and sign in there, then press Refresh.",
+            "note": format!("{} has no sign-in command ShadowCode can run.", vendor.product_label()),
         }));
     }
     if !config.vendor_enabled(vendor) {
@@ -312,6 +314,146 @@ pub async fn connect_with_timeout(
     }))
 }
 
+/// Antigravity: start Google's ACP server with ShadowCode's private profile,
+/// ask it to `authenticate` with a personal Google account, relay the
+/// sign-in link it prints (it also opens the browser), and finish when it
+/// answers. The token stays in the private profile; ShadowCode never reads it.
+async fn connect_antigravity(
+    catalog: &Arc<VendorCatalog>,
+    config: &CliAgentsConfig,
+    timeout: Duration,
+) -> Result<Value> {
+    let vendor = Vendor::Antigravity;
+    if !config.vendor_enabled(vendor) {
+        bail!("Antigravity is disabled in Settings › Advanced");
+    }
+    let installation = super::antigravity_server::installation(config.binary(vendor))
+        .with_context(|| vendor.install_hint().to_owned())?;
+    let Some(cancel) = catalog.logins().begin(vendor) else {
+        return Ok(json!({
+            "ok": true,
+            "state": "already_running",
+            "note": "An Antigravity sign-in is already in progress.",
+        }));
+    };
+    let mut command = tokio::process::Command::new(&installation.server);
+    command
+        .args(super::antigravity_server::launch_args())
+        .current_dir(super::antigravity_server::home())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .env("NO_COLOR", "1");
+    let run_dir = match super::antigravity_server::prepare(&mut command, &installation, true) {
+        Ok(dir) => dir,
+        Err(error) => {
+            catalog
+                .logins()
+                .finish(vendor, json!({"ok":false,"detail":format!("{error:#}")}));
+            return Err(error);
+        }
+    };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let detail = format!("Could not start the Antigravity agent: {error}");
+            catalog
+                .logins()
+                .finish(vendor, json!({"ok":false,"detail":detail}));
+            bail!(detail);
+        }
+    };
+    let mut stdin = child.stdin.take().context("Antigravity stdin missing")?;
+    let handshake = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":1,
+            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},
+            "clientInfo":{"name":"shadowcode","title":"ShadowCode","version":crate::VERSION}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"authenticate","params":{"methodId":super::antigravity_server::AUTH_METHOD}}),
+    ];
+    for line in handshake {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(format!("{line}\n").as_bytes()).await?;
+    }
+    let catalog = catalog.clone();
+    let config = config.clone();
+    tokio::spawn(async move {
+        let _run_dir = run_dir;
+        let _stdin = stdin;
+        let mut stdout = child.stdout.take().map(|s| BufReader::new(s).lines());
+        let mut stderr = child.stderr.take().map(|s| BufReader::new(s).lines());
+        let relay = |line: &str| {
+            let raw = line.trim();
+            // The server's own log lines (I0924 …) are noise here.
+            if raw.is_empty()
+                || raw.len() > 1
+                    && raw.as_bytes()[0].is_ascii_uppercase()
+                    && raw.as_bytes()[1].is_ascii_digit()
+            {
+                return;
+            }
+            let text = clip(&redact(raw), 2000);
+            let payload = json!({"vendor":vendor.id(),"line":text,"url":login_url(raw)});
+            catalog.logins().push(vendor, payload.clone());
+            catalog.broadcast("account.login", payload);
+        };
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        let outcome = loop {
+            tokio::select! {
+                Some(Ok(Some(line))) = async { match stderr.as_mut() { Some(s) => Some(s.next_line().await), None => None } } => relay(&line),
+                Some(Ok(line)) = async { match stdout.as_mut() { Some(s) => Some(s.next_line().await), None => None } } => {
+                    let Some(line) = line else {
+                        break (false, "The Antigravity agent stopped before signing in".to_owned());
+                    };
+                    match serde_json::from_str::<Value>(&line) {
+                        Ok(message) if message["id"] == 2 => {
+                            break match message.get("error").filter(|e| !e.is_null()) {
+                                None => (true, "Signed in to Antigravity".to_owned()),
+                                Some(error) => (false, format!(
+                                    "Antigravity sign-in failed: {}",
+                                    error["data"]["message"].as_str().or_else(|| error["message"].as_str()).unwrap_or("unknown error")
+                                )),
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(_) => relay(&line),
+                    }
+                }
+                _ = cancel.cancelled() => break (false, "Sign-in cancelled".to_owned()),
+                _ = &mut deadline => break (false, format!("Sign-in timed out after {} seconds", timeout.as_secs())),
+            }
+        };
+        let _ = child.kill().await;
+        catalog.forget_status(vendor).await;
+        let status = catalog.refresh(vendor, &config, true).await;
+        let done = json!({
+            "vendor": vendor.id(),
+            "ok": outcome.0,
+            "detail": outcome.1,
+            "availability": status.availability,
+            "availability_label": status.availability.label(),
+        });
+        catalog.logins().finish(vendor, done.clone());
+        catalog.broadcast("account.login.done", done);
+    });
+    Ok(json!({
+        "ok": true,
+        "state": "started",
+        "note": "Sign in with your Google account in the browser window that opened (or use the link below). This sign-in belongs to ShadowCode's Antigravity agent.",
+    }))
+}
+
 /// Run the official logout command after the user confirmed the shared-CLI
 /// note, then forget everything cached for the vendor and re-probe.
 pub async fn disconnect(
@@ -319,6 +461,20 @@ pub async fn disconnect(
     vendor: Vendor,
     config: &CliAgentsConfig,
 ) -> Result<Value> {
+    if vendor == Vendor::Antigravity {
+        catalog.logins().cancel(vendor);
+        let removed = super::antigravity_server::sign_out()?;
+        catalog.forget(vendor).await?;
+        let status = catalog.refresh(vendor, config, true).await;
+        return Ok(json!({
+            "ok": true,
+            "ran": [],
+            "output": if removed { "Removed ShadowCode's Antigravity profile." } else { "No Antigravity profile was stored." },
+            "note": vendor.shared_cli_note(),
+            "availability": status.availability,
+            "availability_label": status.availability.label(),
+        }));
+    }
     if vendor.logout_command().is_empty() {
         return Ok(json!({
             "ok": false,

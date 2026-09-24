@@ -306,5 +306,19 @@ describe("row actions", () => {
       kind: "setup",
       hint: "Add an API key for OpenRouter in Accounts.",
     });
+    // Antigravity's agent server is installed from its Accounts card.
+    expect(
+      rowAction(
+        row({
+          provider: "cli:antigravity",
+          availability: "setup_required",
+          reason: "Install the Antigravity agent from Settings › Accounts",
+        }),
+      ),
+    ).toEqual({
+      kind: "setup",
+      local: false,
+      hint: "Install the Antigravity agent in Settings › Accounts.",
+    });
   });
 });

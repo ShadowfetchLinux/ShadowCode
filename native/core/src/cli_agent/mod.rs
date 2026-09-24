@@ -24,7 +24,7 @@ use std::path::Path;
 
 pub mod acp;
 pub mod acp_probe;
-pub mod antigravity;
+pub mod antigravity_server;
 pub mod auth;
 pub mod catalog;
 pub mod claude;
@@ -105,29 +105,32 @@ impl Vendor {
             Vendor::Codex => "codex",
             Vendor::Claude => "claude",
             Vendor::Cursor => "cursor-agent",
-            Vendor::Antigravity => "agy",
+            Vendor::Antigravity => antigravity_server::SERVER_FILE,
             Vendor::Grok => "grok",
         }
     }
     pub fn featured(self) -> bool {
         Self::FEATURED.contains(&self)
     }
-    /// Official interfaces that accept image bytes. Antigravity's stream-json
-    /// input is text content blocks only, and Grok's ACP `initialize`
+    /// Official interfaces that accept image bytes. Grok's ACP `initialize`
     /// reports `promptCapabilities.image: false`; we do not invent a vision
-    /// payload for either. The catalog refines this per runtime handshake.
+    /// payload for it. The catalog refines this per runtime handshake.
     pub fn accepts_images(self) -> bool {
-        matches!(self, Vendor::Codex | Vendor::Claude | Vendor::Cursor)
+        matches!(
+            self,
+            Vendor::Codex | Vendor::Claude | Vendor::Cursor | Vendor::Antigravity
+        )
     }
     /// The runtime offers an automatic model choice of its own (Cursor
     /// `default[]`). Codex has a default model but no "auto" router.
     pub fn supports_auto_model(self) -> bool {
         matches!(self, Vendor::Cursor)
     }
-    /// Approval prompts from this runtime reach ShadowCode. Antigravity's
-    /// print mode applies its own permission settings and never asks.
+    /// Approval prompts from this runtime reach ShadowCode. All runtimes do:
+    /// Antigravity runs through its ACP server, which sends
+    /// `session/request_permission`.
     pub fn asks_approval(self) -> bool {
-        !matches!(self, Vendor::Antigravity)
+        true
     }
     pub fn logout_command(self) -> &'static [&'static str] {
         match self {
@@ -135,14 +138,14 @@ impl Vendor {
             Vendor::Claude => &["auth", "logout"],
             Vendor::Cursor => &["logout"],
             Vendor::Grok => &["logout"],
-            // `/logout` exists only inside the interactive CLI.
+            // Disconnect deletes ShadowCode's private Antigravity profile.
             Vendor::Antigravity => &[],
         }
     }
     /// Shown before Disconnect: the login is shared with the native CLI.
     pub fn shared_cli_note(self) -> String {
         match self {
-            Vendor::Antigravity => "Antigravity keeps its login in your OS keyring. Run `agy` and type /logout to sign out; ShadowCode cannot do it for you.".into(),
+            Vendor::Antigravity => "Disconnecting deletes ShadowCode's private Antigravity profile and its Google sign-in. The agy CLI and the Antigravity app keep their own sign-in.".into(),
             _ => format!(
                 "Disconnecting runs `{} {}`, which signs this account out of the {} CLI everywhere on this computer, not only in ShadowCode.",
                 self.binary(),
@@ -157,7 +160,7 @@ impl Vendor {
             Vendor::Claude => "Choose Connect to sign in on Anthropic's page (or run `claude auth login`).",
             Vendor::Cursor => "Choose Connect to sign in on Cursor's page (or run `cursor-agent login`).",
             Vendor::Antigravity => {
-                "Run `agy` once in a terminal; it opens Google's sign-in page. ShadowCode never collects passwords."
+                "Choose Connect to sign in with Google. This sign-in belongs to ShadowCode's Antigravity agent, separate from the agy CLI."
             }
             Vendor::Grok => "Choose Connect to sign in on the Grok page (or run `grok login`).",
         }
@@ -167,7 +170,7 @@ impl Vendor {
             Vendor::Codex => &["login"],
             Vendor::Claude => &["auth", "login"],
             Vendor::Cursor => &["login"],
-            // No login subcommand: starting the CLI opens the browser flow.
+            // Connect runs the ACP server's `authenticate` instead.
             Vendor::Antigravity => &[],
             Vendor::Grok => &["login"],
         }
@@ -177,7 +180,7 @@ impl Vendor {
             Vendor::Codex => "Install the Codex CLI (`npm i -g @openai/codex`) so `codex` is on PATH.",
             Vendor::Claude => "Install Claude Code so `claude` is on PATH (see https://code.claude.com/docs/en/headless).",
             Vendor::Cursor => "Install Cursor Agent (`cursor-agent`) from https://cursor.com/docs/cli/acp so it is on PATH.",
-            Vendor::Antigravity => "Install the Antigravity CLI (`agy`) from https://antigravity.google/docs/cli/install/ so it is on PATH. The `antigravity` desktop app is not the CLI.",
+            Vendor::Antigravity => "Install the Antigravity agent from Settings › Accounts (Google's official ACP server, a 334 MB download from dl.google.com).",
             Vendor::Grok => "Install the Grok CLI so `grok` is on PATH (see https://docs.x.ai/build).",
         }
     }
@@ -351,7 +354,7 @@ pub fn adapter_for(vendor: Vendor, codex_exec_fallback: bool) -> Box<dyn CliAdap
         Vendor::Codex => Box::new(codex::CodexAppServerAdapter::default()),
         Vendor::Claude => Box::new(claude::ClaudeAdapter::default()),
         Vendor::Cursor => Box::new(acp::AcpAdapter::new(Vendor::Cursor)),
-        Vendor::Antigravity => Box::new(antigravity::AntigravityAdapter::default()),
+        Vendor::Antigravity => Box::new(acp::AcpAdapter::new(Vendor::Antigravity)),
         Vendor::Grok => Box::new(acp::AcpAdapter::new(Vendor::Grok)),
     }
 }

@@ -181,3 +181,25 @@ it("stages a model change during a running task for the next message", async () 
   await choose(/Codex · GPT-6-Astra/);
   expect(screen.getByText("Applies to your next message")).toBeTruthy();
 });
+
+it("a setup-required Antigravity row opens Accounts at the Antigravity card", async () => {
+  await boot();
+  fireEvent.click(trigger());
+  const row = await screen.findByRole("option", {
+    name: /Antigravity · Default/,
+  });
+  expect(row.textContent).toContain("Setup required");
+  fireEvent.click(row);
+  expect(
+    screen.getByText("Install the Antigravity agent in Settings › Accounts."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Open Accounts" }));
+  const settings = await screen.findByRole("dialog", { name: "Settings" });
+  const card = await within(settings).findByRole("article", {
+    name: "Antigravity",
+  });
+  const install = within(card).getByRole("button", {
+    name: "Install Antigravity agent",
+  });
+  await waitFor(() => expect(document.activeElement).toBe(install));
+});

@@ -293,3 +293,245 @@ it("Accounts: opening for OpenRouter focuses the key field; offline disables it"
     true,
   );
 });
+
+const agentCard = () => screen.findByRole("article", { name: "Antigravity" });
+
+it("Accounts: installing the Antigravity agent asks first, shows progress and survives reopening", async () => {
+  const onChanged = vi.fn();
+  const view = render(
+    <AccountsPage
+      installPollMs={150}
+      onChanged={onChanged}
+      onToast={vi.fn()}
+    />,
+  );
+  const card = await agentCard();
+  expect(within(card).getByText("Setup required")).toBeTruthy();
+  expect(
+    within(card).getByText(
+      /runs through Google's official agent server, which asks ShadowCode before it runs commands or edits files/,
+    ),
+  ).toBeTruthy();
+  expect(within(card).queryByRole("button", { name: "Connect" })).toBeNull();
+  expect(document.body.textContent).not.toMatch(/Run agy/i);
+
+  fireEvent.click(
+    within(card).getByRole("button", { name: "Install Antigravity agent" }),
+  );
+  const dialog = screen.getByRole("dialog", {
+    name: "Install the Antigravity agent",
+  });
+  expect(dialog.textContent).toContain("334 MB");
+  expect(dialog.textContent).toContain("about 1.1 GB");
+  expect(within(dialog).getByText("dl.google.com")).toBeTruthy();
+  expect(
+    within(dialog).getByText(
+      "/home/user/.local/share/shadowcode/antigravity-acp/1.2.1",
+    ),
+  ).toBeTruthy();
+  // Nothing is downloaded before the user confirms.
+  expect(fake.log.some((r) => r.path.endsWith("/install"))).toBe(false);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
+  await waitFor(() =>
+    expect(
+      fake.log.find(
+        (r) =>
+          r.method === "POST" && r.path === "/api/accounts/antigravity/install",
+      )?.body,
+    ).toEqual({ confirm: true }),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  const bar = await within(card).findByRole("progressbar", {
+    name: "Installing the Antigravity agent",
+  });
+  expect(bar.getAttribute("aria-valuemin")).toBe("0");
+  expect(bar.getAttribute("aria-valuemax")).toBe("100");
+  await within(card).findByText("Downloading 120 MB of 334 MB");
+  expect(
+    within(card).getByRole("progressbar").getAttribute("aria-valuenow"),
+  ).toBe("36");
+
+  // Closing and reopening Accounts picks the running install up again.
+  view.unmount();
+  render(
+    <AccountsPage
+      installPollMs={150}
+      onChanged={onChanged}
+      onToast={vi.fn()}
+    />,
+  );
+  const again = await agentCard();
+  await within(again).findByText("Checking the download…", undefined, {
+    timeout: 3000,
+  });
+  await within(again).findByText("Unpacking…", undefined, { timeout: 3000 });
+  const connect = await within(again).findByRole(
+    "button",
+    { name: "Connect" },
+    { timeout: 3000 },
+  );
+  expect(within(again).getByText("Sign in")).toBeTruthy();
+  expect(within(again).getByText("1.2.1")).toBeTruthy();
+  expect(within(again).queryByRole("progressbar")).toBeNull();
+  expect(
+    fake.log.some(
+      (r) =>
+        r.method === "POST" && r.path === "/api/accounts/antigravity/refresh",
+    ),
+  ).toBe(true);
+  expect(onChanged).toHaveBeenCalled();
+  await waitFor(() => expect(document.activeElement).toBe(connect));
+  // Polling stops once the install is done.
+  const checks = fake.log.filter(
+    (r) => r.method === "GET" && r.path === "/api/accounts/antigravity/install",
+  ).length;
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect(
+    fake.log.filter(
+      (r) =>
+        r.method === "GET" && r.path === "/api/accounts/antigravity/install",
+    ).length,
+  ).toBe(checks);
+});
+
+it("Accounts: a failed Antigravity install shows the error and tries again", async () => {
+  fake.state.agent.installFails = true;
+  render(
+    <AccountsPage installPollMs={20} onChanged={vi.fn()} onToast={vi.fn()} />,
+  );
+  const card = await agentCard();
+  fireEvent.click(
+    within(card).getByRole("button", { name: "Install Antigravity agent" }),
+  );
+  fireEvent.click(
+    within(
+      screen.getByRole("dialog", { name: "Install the Antigravity agent" }),
+    ).getByRole("button", { name: "Install" }),
+  );
+  const alert = await within(card).findByRole("alert", undefined, {
+    timeout: 3000,
+  });
+  expect(alert.textContent).toBe(
+    "The download's SHA-256 does not match the published checksum",
+  );
+  expect(within(card).getByText("Setup required")).toBeTruthy();
+  fireEvent.click(within(card).getByRole("button", { name: "Try again" }));
+  await waitFor(() =>
+    expect(
+      fake.log.filter(
+        (r) =>
+          r.method === "POST" && r.path === "/api/accounts/antigravity/install",
+      ),
+    ).toHaveLength(2),
+  );
+  await within(card).findByRole(
+    "button",
+    { name: "Connect" },
+    { timeout: 3000 },
+  );
+  expect(within(card).queryByRole("alert")).toBeNull();
+});
+
+it("Accounts: Remove agent asks first and returns Antigravity to setup", async () => {
+  const v = fake.state.vendors.antigravity;
+  Object.assign(v, {
+    state: "ready",
+    availability: "ready",
+    availability_label: "Ready",
+    version: "1.2.1",
+    detail: "Signed in with Google",
+    models: [
+      { id: "gemini-3.5-pro", label: "Gemini 3.5 Pro", is_default: true },
+    ],
+    install: {
+      ...v.install,
+      installed: true,
+      managed: true,
+      state: "installed",
+      path: "/home/user/.local/share/shadowcode/antigravity-acp/1.2.1/agy_acp_server.par",
+    },
+  });
+  const onChanged = vi.fn();
+  render(<AccountsPage onChanged={onChanged} onToast={vi.fn()} />);
+  const card = await agentCard();
+  expect(within(card).getByText("Ready")).toBeTruthy();
+  expect(within(card).getByText("1 model available")).toBeTruthy();
+
+  // Disconnect deletes ShadowCode's private profile, after the usual question.
+  fireEvent.click(within(card).getByRole("button", { name: "Disconnect" }));
+  const disconnect = screen.getByRole("dialog", {
+    name: "Disconnect Antigravity (Google's ACP agent)",
+  });
+  expect(disconnect.textContent).toContain(
+    "deletes ShadowCode's private Antigravity profile",
+  );
+  fireEvent.click(within(disconnect).getByRole("button", { name: "Cancel" }));
+
+  fireEvent.click(within(card).getByRole("button", { name: "Remove agent" }));
+  const dialog = screen.getByRole("dialog", {
+    name: "Remove the Antigravity agent",
+  });
+  expect(
+    within(dialog).getByText(
+      "Frees about 1.1 GB. Your Antigravity sign-in is kept.",
+    ),
+  ).toBeTruthy();
+  expect(fake.log.some((r) => r.path.endsWith("/uninstall"))).toBe(false);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove agent" }));
+  await within(card).findByRole("button", {
+    name: "Install Antigravity agent",
+  });
+  expect(
+    fake.log.some(
+      (r) =>
+        r.method === "POST" && r.path === "/api/accounts/antigravity/uninstall",
+    ),
+  ).toBe(true);
+  expect(within(card).getByText("Setup required")).toBeTruthy();
+  expect(
+    within(card).queryByRole("button", { name: "Remove agent" }),
+  ).toBeNull();
+  await waitFor(() => expect(onChanged).toHaveBeenCalled());
+});
+
+it("Accounts: an agent installed elsewhere has no Remove; offline disables Install", async () => {
+  const v = fake.state.vendors.antigravity;
+  v.install = {
+    ...v.install,
+    installed: true,
+    managed: false,
+    path: "/opt/agy/agy_acp_server.par",
+  };
+  Object.assign(v, {
+    state: "not_logged_in",
+    availability: "sign_in",
+    availability_label: "Sign in",
+  });
+  const { unmount } = render(
+    <AccountsPage onChanged={vi.fn()} onToast={vi.fn()} />,
+  );
+  const card = await agentCard();
+  expect(within(card).getByRole("button", { name: "Connect" })).toBeTruthy();
+  expect(
+    within(card).queryByRole("button", { name: "Remove agent" }),
+  ).toBeNull();
+  unmount();
+
+  v.install = { ...v.install, installed: false, managed: false, path: null };
+  Object.assign(v, {
+    state: "not_installed",
+    availability: "setup_required",
+    availability_label: "Setup required",
+  });
+  fake.state.config.network.mode = "offline";
+  render(<AccountsPage offline onChanged={vi.fn()} onToast={vi.fn()} />);
+  const offline = await agentCard();
+  const install = within(offline).getByRole("button", {
+    name: "Install Antigravity agent",
+  });
+  expect(install).toHaveProperty("disabled", true);
+  expect(
+    within(offline).getByText(/Offline mode: downloads are off/),
+  ).toBeTruthy();
+});

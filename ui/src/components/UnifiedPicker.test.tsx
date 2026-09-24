@@ -432,3 +432,38 @@ it("offers to add an OpenRouter key when there are no API-key rows", () => {
   expect(screen.getByText("No API-key model matches")).toBeTruthy();
   expect(screen.queryByText("Add an OpenRouter API key…")).toBeNull();
 });
+
+it("sends an Antigravity row that needs its agent to Accounts with the install hint", () => {
+  const antigravity: PickerTarget = {
+    ...cursor,
+    id: "cli:antigravity",
+    provider: "cli:antigravity",
+    name: "Antigravity · Default",
+    availability: "setup_required",
+    availability_label: "Setup required",
+    reason:
+      "Install the Antigravity agent from Settings › Accounts (Google's official ACP server, a 334 MB download from dl.google.com).",
+  };
+  const onSetup = vi.fn();
+  const onConnect = vi.fn();
+  render(
+    <Harness
+      targets={[codex, antigravity, qwen]}
+      onSetup={onSetup}
+      onConnect={onConnect}
+    />,
+  );
+  fireEvent.click(trigger());
+  fireEvent.click(
+    screen.getByRole("option", { name: /Antigravity · Default/ }),
+  );
+  expect(
+    screen.getByText("Install the Antigravity agent in Settings › Accounts."),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Run agy/i)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Open Accounts" }));
+  expect(onSetup).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "cli:antigravity" }),
+  );
+  expect(onConnect).not.toHaveBeenCalled();
+});

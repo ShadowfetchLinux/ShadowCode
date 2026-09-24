@@ -1,4 +1,5 @@
-//! Agent Client Protocol (ACP) adapter, used for `grok agent stdio`.
+//! Agent Client Protocol (ACP) adapter for Cursor (`cursor-agent acp`), Grok
+//! (`grok agent stdio`) and Antigravity (Google's `agy_acp_server.par`).
 //!
 //! ACP is JSON-RPC 2.0 over stdio (https://agentclientprotocol.com):
 //! client → `initialize`, `session/new`, `session/prompt`, `session/cancel`
@@ -18,6 +19,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 const OUTPUT_PREVIEW: usize = 8000;
+
+/// Shown when the Antigravity server has no valid Google sign-in.
+pub const ANTIGRAVITY_SIGN_IN: &str = "Antigravity isn't signed in, or its sign-in expired. Choose Connect for Antigravity in Settings › Accounts.";
 
 fn request(id: u64, method: &str, params: Value) -> String {
     json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}).to_string()
@@ -162,6 +166,21 @@ impl AcpAdapter {
                     json!({"sessionId":session,"modeId":"plan"}),
                 ));
             }
+            // Antigravity lists its models as the `model` config option and
+            // switches with `session/set_config_option`.
+            if self.vendor == Vendor::Antigravity
+                && !options.model.is_empty()
+                && options.model != "default"
+                && options.model != "auto"
+            {
+                let set_id = self.id();
+                self.set_model_id = Some(set_id);
+                step.send.push(request(
+                    set_id,
+                    "session/set_config_option",
+                    json!({"sessionId":session,"configId":"model","value":options.model}),
+                ));
+            }
             // Cursor ignores `--model` in ACP mode for parameterised ids and
             // only accepts the exact ids it listed in `session/new`.
             if self.vendor == Vendor::Cursor
@@ -202,6 +221,9 @@ impl AcpAdapter {
                 });
             }
             if Some(id) == self.auth_id {
+                if self.vendor == Vendor::Antigravity {
+                    bail!("{}", ANTIGRAVITY_SIGN_IN);
+                }
                 bail!(
                     "{} rejected the login ({text}). Run `{} login` and try again.",
                     self.vendor.product_label(),
@@ -217,6 +239,12 @@ impl AcpAdapter {
                         .map(|o| o.model.as_str())
                         .unwrap_or("")
                 ))));
+            }
+            if self.vendor == Vendor::Antigravity
+                && Some(id) == self.session_new_id
+                && err["code"].as_i64() == Some(-32000)
+            {
+                bail!("{}", ANTIGRAVITY_SIGN_IN);
             }
             if Some(id) == self.init_id || Some(id) == self.session_new_id {
                 bail!("{} rejected the ACP handshake: {text}", self.vendor.id());
@@ -244,11 +272,12 @@ impl AcpAdapter {
                 .flatten()
                 .filter_map(|m| m["id"].as_str().map(str::to_owned))
                 .collect();
-            if let Some(method) = methods
-                .iter()
-                .find(|m| m.as_str() == "cursor_login")
-                .cloned()
-            {
+            let wanted = if self.vendor == Vendor::Antigravity {
+                super::antigravity_server::AUTH_METHOD
+            } else {
+                "cursor_login"
+            };
+            if let Some(method) = methods.iter().find(|m| m.as_str() == wanted).cloned() {
                 let auth_id = self.id();
                 self.auth_id = Some(auth_id);
                 return Ok(Step::send(request(
@@ -414,6 +443,23 @@ impl AcpAdapter {
         step
     }
     fn permission_request(&mut self, id: &Value, params: &Value) -> Step {
+        // Antigravity sends questions for the user through the permission
+        // method with an `interaction_` tool call id; their options are
+        // answers, not approvals. ShadowCode can't show them yet.
+        if self.vendor == Vendor::Antigravity
+            && params["toolCall"]["toolCallId"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("interaction_"))
+        {
+            let question = params["toolCall"]["title"].as_str().unwrap_or("a question");
+            return Step {
+                send: vec![result(id, json!({"outcome":{"outcome":"cancelled"}}))],
+                updates: vec![Update::Warning(format!(
+                    "Antigravity asked \"{}\"; ShadowCode can't answer agent questions yet, so it was skipped. Put the answer in your next message.",
+                    clip(&redact(question), 200)
+                ))],
+            };
+        }
         let key = id.to_string();
         let mut allow = None;
         let mut reject = None;
@@ -479,6 +525,8 @@ impl CliAdapter for AcpAdapter {
             // session with `session/set_model`; the `--model` flag would also
             // rewrite the user's CLI default.
             Vendor::Cursor => args.push("acp".into()),
+            // Google's ACP server; the model is chosen per session.
+            Vendor::Antigravity => args = super::antigravity_server::launch_args(),
             _ => {
                 args.push("agent".into());
                 if !options.model.is_empty()

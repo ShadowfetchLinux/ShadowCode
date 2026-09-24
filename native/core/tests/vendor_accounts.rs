@@ -64,12 +64,14 @@ async fn connect_runs_the_official_login_and_relays_the_url() {
     assert!(fake.marker("login_ran").unwrap().starts_with("login"));
     // Signed in: the re-probe after login shows Ready.
     assert_eq!(status["done"]["availability"], "ready");
-    // Antigravity has no sign-in command ShadowCode can run.
-    let agy = auth::connect(&catalog, Vendor::Antigravity, &cfg)
-        .await
-        .unwrap();
-    assert_eq!(agy["state"], "unsupported");
-    assert!(agy["hint"].as_str().unwrap().contains("agy"));
+    // Antigravity without its agent server installed: Connect says to
+    // install it first.
+    std::env::set_var(
+        "SHADOWCODE_ANTIGRAVITY_HOME",
+        tempfile::tempdir().unwrap().keep(),
+    );
+    let agy = auth::connect(&catalog, Vendor::Antigravity, &cfg).await;
+    assert!(format!("{:#}", agy.unwrap_err()).contains("Install the Antigravity agent"));
 }
 
 #[tokio::test]
@@ -212,6 +214,11 @@ async fn call(service: &Service, method: &str, path: &str, body: Value) -> Value
 
 #[tokio::test]
 async fn disconnect_needs_confirmation_and_clears_usage_and_native_sessions() {
+    // Never touch the real Antigravity profile from a test.
+    std::env::set_var(
+        "SHADOWCODE_ANTIGRAVITY_HOME",
+        tempfile::tempdir().unwrap().keep(),
+    );
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
     fs::create_dir(&project).unwrap();
@@ -279,8 +286,12 @@ async fn disconnect_needs_confirmation_and_clears_usage_and_native_sessions() {
         json!({"confirm":true}),
     )
     .await;
-    assert_eq!(agy["ok"], false);
-    assert!(agy["note"].as_str().unwrap().contains("/logout"));
+    // Disconnect deletes ShadowCode's private Antigravity profile only.
+    assert_eq!(agy["ok"], true);
+    assert!(agy["note"]
+        .as_str()
+        .unwrap()
+        .contains("private Antigravity profile"));
 }
 
 struct Run {

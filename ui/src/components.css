@@ -710,6 +710,26 @@ div.activity-step {
   margin: 4px 0 0;
   padding-left: 18px;
 }
+/* Accounts › Antigravity: installing Google's agent server. */
+.agent-install {
+  display: grid;
+  gap: 6px;
+}
+.agent-install p {
+  margin: 0;
+}
+.install-bar {
+  height: 6px;
+  margin: 2px 0;
+  border-radius: var(--pill);
+}
+.install-bar i {
+  border-radius: inherit;
+}
+.install-dir {
+  font: 12px var(--mono);
+  overflow-wrap: anywhere;
+}
 .login-panel {
   border: 1px dashed var(--border-strong);
   border-radius: 10px;

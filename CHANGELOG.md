@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.30.0: Antigravity that asks first
+
+- **Antigravity runs through Google's official ACP agent server** (the
+  `antigravity-acp` entry in the ACP registry) instead of `agy`'s print mode.
+  It now sends permission requests, so ShadowCode's approvals apply to its
+  commands and edits, it accepts images, and it resumes sessions with
+  `session/load`. Models come from the session's `model` config option and are
+  switched with `session/set_config_option`.
+- **Install from Accounts.** The server is downloaded only when you choose
+  **Install** (334 MB from dl.google.com, size and SHA-256 pinned), unpacked
+  into `~/.local/share/shadowcode/antigravity-acp/1.2.1`, and can be removed
+  again. A built-in unzip handles the archive.
+- **Private sign-in.** The server keeps its Google sign-in in a profile owned
+  by ShadowCode. **Connect** opens the browser and relays the link;
+  **Disconnect** deletes the profile. Status checks and tasks can't open a
+  browser: a printed sign-in link marks the row *Sign in*, and a task stops
+  with that message at once.
+- **Clean launches.** Each launch gets its own temp directory, removed
+  afterwards, and runs without Google API-key or cloud-project variables. On
+  hosts without an IPv6 loopback, the server's own
+  `--enforce_kernel_ipv6_support=false` switch is passed.
+- Questions the server asks through the permission channel are skipped with a
+  note for now.
+
 ## 0.29.0: OpenRouter, working web search
 
 - **OpenRouter API keys.** People without a subscription can paste an

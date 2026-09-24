@@ -445,12 +445,14 @@ mod tests {
         assert!(model_supports_vision("cli:codex", "gpt-5"));
         assert!(model_supports_vision("cli:cursor", "auto"));
         assert!(model_supports_vision("cli:claude", "default"));
-        assert!(!model_supports_vision(
+        // Antigravity's ACP server advertises promptCapabilities.image.
+        assert!(model_supports_vision(
             "cli:antigravity",
             "gemini-3.8-flash-high"
         ));
+        assert!(!model_supports_vision("cli:grok", "grok-4.7"));
         assert!(ensure_vision_or_bail("cli:claude", "default", 1).is_ok());
-        assert!(ensure_vision_or_bail("cli:antigravity", "gemini-3.8-flash-high", 1).is_err());
+        assert!(ensure_vision_or_bail("cli:grok", "grok-4.7", 1).is_err());
         assert!(ensure_vision_or_bail("cli:cursor", "auto", 0).is_ok());
     }
 

@@ -38,6 +38,38 @@ export type VendorStatus = {
   logout_command?: string[];
   shared_cli_note?: string;
   usage?: UsageSnapshot | null;
+  /** Antigravity only: Google's ACP agent server, installed on request. */
+  install?: AgentInstall | null;
+};
+
+/** GET /api/accounts/antigravity/install: the agent server ShadowCode
+ * downloads only when the user chooses Install. */
+export type AgentInstall = {
+  installed: boolean;
+  version: string;
+  /** The server in use, or null when none is installed. */
+  path: string | null;
+  /** The copy in use is the one ShadowCode installed (and can remove). */
+  managed: boolean;
+  download_bytes: number;
+  installed_bytes: number;
+  /** Download URL (dl.google.com). */
+  source: string;
+  /** Folder the managed copy is unpacked into. */
+  dir: string;
+  state:
+    | "not_installed"
+    | "downloading"
+    | "verifying"
+    | "unpacking"
+    | "installed"
+    | "error"
+    | string;
+  busy: boolean;
+  /** Bytes downloaded so far and the expected total. */
+  done: number;
+  total: number;
+  error: string | null;
 };
 
 export type MemoryEstimate = {
@@ -587,6 +619,20 @@ export const api = {
       "POST",
       {},
     ),
+  /** Antigravity's agent server: install state (poll while `busy`). */
+  antigravityInstallStatus: () =>
+    get<AgentInstall>("/api/accounts/antigravity/install"),
+  /** Starts the download the user confirmed; progress follows in
+   * antigravityInstallStatus(). */
+  installAntigravity: () =>
+    send<AgentInstall & { started: boolean }>(
+      "/api/accounts/antigravity/install",
+      "POST",
+      { confirm: true },
+    ),
+  /** Removes the copy ShadowCode installed; the sign-in profile stays. */
+  removeAntigravity: () =>
+    send<AgentInstall>("/api/accounts/antigravity/uninstall", "POST", {}),
   /** OpenRouter (API key, billed per token). */
   openrouterStatus: () => get<OpenRouterStatus>("/api/openrouter"),
   /** Validates the key with OpenRouter and saves it on this computer; the

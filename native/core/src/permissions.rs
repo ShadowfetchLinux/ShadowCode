@@ -248,7 +248,7 @@ pub fn vendor_notes(config: &Config) -> Value {
         "claude": "Claude Code permission prompts are routed to ShadowCode and you answer them here; Plan/Review uses Claude's plan mode. Claude's own settings files can pre-approve tools that ShadowCode never sees.",
         "cursor": "Cursor sends ACP permission requests that ShadowCode shows for approval; Plan/Review uses Cursor's plan mode when the agent offers it. Actions Cursor does not ask about are outside ShadowCode's control.",
         "grok": "Grok sends ACP permission requests that ShadowCode shows for approval. Grok advertises no read-only mode, so Plan/Review is not enforced by the runtime.",
-        "antigravity": "Antigravity uses its own settings and does not send permission prompts to ShadowCode in headless mode. ShadowCode cannot ask before its actions; actions it would prompt for may be refused inside Antigravity.",
+        "antigravity": "Antigravity runs through Google's ACP agent server and asks ShadowCode before running commands or editing files, as Cursor and Grok do.",
         "network": "Network limits and the sudo block apply to ShadowCode's own tools only. Vendor CLIs use their own network access and sandbox."
     })
 }

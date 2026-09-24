@@ -63,6 +63,38 @@ export function installFakeBackend(options: FakeOptions = {}) {
     last_refresh: now() - 60,
     provider_usage_url: "https://chatgpt.com/codex/settings/usage",
   };
+  // Antigravity runs through Google's ACP agent server, which ShadowCode
+  // downloads only when the user chooses Install.
+  const agentBytes = 333_590_110;
+  const agentInstall = (over: Json = {}) => ({
+    installed: false,
+    version: "1.2.1",
+    path: null as null | string,
+    managed: false,
+    download_bytes: agentBytes,
+    installed_bytes: 1_052_767_112,
+    source:
+      "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.2.1-linux-x86_64.zip",
+    dir: "/home/user/.local/share/shadowcode/antigravity-acp/1.2.1",
+    state: "not_installed",
+    busy: false,
+    done: 0,
+    total: 0,
+    error: null as null | string,
+    ...over,
+  });
+  const agentNotInstalled = {
+    state: "not_installed",
+    status: "warn",
+    availability: "setup_required",
+    availability_label: "Setup required",
+    detail:
+      "Install the Antigravity agent from Settings › Accounts (Google's official ACP server, a 334 MB download from dl.google.com).",
+    fix: "Install the Antigravity agent from Settings › Accounts (Google's official ACP server, a 334 MB download from dl.google.com).",
+    version: null,
+    account: null,
+    models: [],
+  };
   const localUsage = {
     ...unknownUsage,
     state: "local",
@@ -257,7 +289,28 @@ export function installFakeBackend(options: FakeOptions = {}) {
           "This signs out the claude CLI for your whole user account, not just ShadowCode.",
         usage: unknownUsage,
       },
+      antigravity: {
+        id: "cli-antigravity",
+        label: "Antigravity (Google's ACP agent)",
+        product: "Antigravity",
+        ...agentNotInstalled,
+        binary: "agy_acp_server.par",
+        accepts_images: true,
+        asks_approval: true,
+        fetched_at: now(),
+        error: null,
+        usage_note: "Antigravity does not report plan usage.",
+        login_command: [],
+        logout_command: [],
+        shared_cli_note:
+          "This deletes ShadowCode's private Antigravity profile (its Google sign-in). The agy CLI and the Antigravity app keep their own sign-in.",
+        usage: unknownUsage,
+        install: agentInstall(),
+      },
     },
+    /** Install progress steps still to come (one per status check);
+     * `installFails` makes the next install stop with an error. */
+    agent: { steps: [] as Json[], installFails: false, hold: false },
     login: null as null | { vendor: string; polls: number },
     local: {
       hardware: {
@@ -384,7 +437,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
       model: model ? model.id : "default",
       route: "vendor_cli",
       group: "subscriptions",
-      name: `${v.label} · ${model ? model.label : "Default"}`,
+      name: `${v.product || v.label} · ${model ? model.label : "Default"}`,
       subtitle: "Cloud · subscription",
       inference: "cloud",
       availability: v.availability,
@@ -487,6 +540,32 @@ export function installFakeBackend(options: FakeOptions = {}) {
         usage: localUsage,
       });
     return rows;
+  }
+
+  /** One status check of a running install: the next progress step. */
+  function agentStep() {
+    const v = state.vendors.antigravity;
+    const next = state.agent.hold ? undefined : state.agent.steps.shift();
+    if (next === "installed") {
+      Object.assign(v, {
+        state: "not_logged_in",
+        status: "warn",
+        availability: "sign_in",
+        availability_label: "Sign in",
+        detail: "Not signed in",
+        fix: "Connect to sign in with your Google account.",
+        version: "1.2.1",
+        install: agentInstall({
+          installed: true,
+          managed: true,
+          path: "/home/user/.local/share/shadowcode/antigravity-acp/1.2.1/agy_acp_server.par",
+          state: "installed",
+          done: agentBytes,
+          total: agentBytes,
+        }),
+      });
+    } else if (next) v.install = next;
+    return v.install;
   }
 
   function emit(
@@ -690,6 +769,65 @@ export function installFakeBackend(options: FakeOptions = {}) {
       };
     if (path === "/api/accounts")
       return { vendors: state.vendors, config: {}, local_engine: state.local };
+    if (path === "/api/accounts/antigravity/install" && method === "GET")
+      return agentStep();
+    if (path === "/api/accounts/antigravity/install" && method === "POST") {
+      if (state.config.network?.mode === "offline")
+        throw new Error(
+          JSON.stringify({ error: "Offline mode: downloads are off" }),
+        );
+      if (body?.confirm !== true)
+        throw new Error(
+          JSON.stringify({ error: "Confirm the 333 MB download first" }),
+        );
+      const v = state.vendors.antigravity;
+      if (v.install.busy) return { ...v.install, started: false };
+      const MB = 1_000_000;
+      const progress = (done: number) =>
+        agentInstall({
+          state: "downloading",
+          busy: true,
+          done,
+          total: agentBytes,
+        });
+      v.install = progress(0);
+      state.agent.steps = [
+        progress(120 * MB),
+        progress(240 * MB),
+        progress(agentBytes),
+        ...(state.agent.installFails
+          ? [
+              agentInstall({
+                state: "error",
+                total: agentBytes,
+                error:
+                  "The download's SHA-256 does not match the published checksum",
+              }),
+            ]
+          : [
+              agentInstall({
+                state: "verifying",
+                busy: true,
+                done: agentBytes,
+                total: agentBytes,
+              }),
+              agentInstall({
+                state: "unpacking",
+                busy: true,
+                done: agentBytes,
+                total: agentBytes,
+              }),
+              "installed",
+            ]),
+      ];
+      state.agent.installFails = false;
+      return { ...v.install, started: true };
+    }
+    if (path === "/api/accounts/antigravity/uninstall" && method === "POST") {
+      const v = state.vendors.antigravity;
+      Object.assign(v, agentNotInstalled, { install: agentInstall() });
+      return v.install;
+    }
     if (
       (m = path.match(
         /^\/api\/accounts\/([a-z]+)\/(connect|login|refresh|disconnect|cancel-login)$/,
@@ -699,6 +837,12 @@ export function installFakeBackend(options: FakeOptions = {}) {
       const v = state.vendors[vendor];
       if (!v) throw new Error(`Unknown vendor ${vendor}`);
       if (action === "connect") {
+        if (v.availability === "setup_required")
+          throw new Error(
+            JSON.stringify({
+              error: `${v.product || v.label} is not installed`,
+            }),
+          );
         state.login = { vendor, polls: 0 };
         return { ok: true, state: "started", note: "Opening the sign-in page" };
       }
@@ -707,30 +851,72 @@ export function installFakeBackend(options: FakeOptions = {}) {
         if (!login || login.vendor !== vendor)
           return { running: false, lines: [], done: null };
         login.polls += 1;
-        const lines = [
-          "Opening https://claude.ai/oauth/authorize?client=cli in your browser",
-          "If the browser did not open, enter code WXYZ-1234 at the page above",
-        ];
-        if (login.polls >= 3) {
-          Object.assign(v, {
-            state: "ready",
-            availability: "ready",
-            availability_label: "Ready",
-            detail: "Signed in with Claude Max",
-            account: {
-              email: "dev@example.com",
-              plan: "Max",
-              auth_mode: "claude.ai",
-            },
-            models: [
+        const google = vendor === "antigravity";
+        // Antigravity's engine relays {vendor, line, url} records.
+        const lines: (string | Json)[] = google
+          ? [
               {
-                id: "default",
-                label: "Default",
-                is_default: true,
-                vision: true,
+                vendor,
+                line: "Sign in with Google: https://accounts.google.com/o/oauth2/v2/auth?client_id=agy-acp&response_type=code",
+                url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=agy-acp&response_type=code",
               },
-            ],
-          });
+              { vendor, line: "Waiting for the browser sign-in…", url: null },
+            ]
+          : [
+              "Opening https://claude.ai/oauth/authorize?client=cli in your browser",
+              "If the browser did not open, enter code WXYZ-1234 at the page above",
+            ];
+        if (login.polls >= 3) {
+          Object.assign(
+            v,
+            google
+              ? {
+                  state: "ready",
+                  status: "pass",
+                  availability: "ready",
+                  availability_label: "Ready",
+                  detail: "Signed in with Google",
+                  fix: null,
+                  account: {
+                    email: "dev@example.com",
+                    plan: null,
+                    auth_mode: "oauth-personal",
+                  },
+                  models: [
+                    {
+                      id: "gemini-3.5-pro",
+                      label: "Gemini 3.5 Pro",
+                      is_default: true,
+                      vision: true,
+                    },
+                    {
+                      id: "gemini-3.5-flash",
+                      label: "Gemini 3.5 Flash",
+                      is_default: false,
+                      vision: true,
+                    },
+                  ],
+                }
+              : {
+                  state: "ready",
+                  availability: "ready",
+                  availability_label: "Ready",
+                  detail: "Signed in with Claude Max",
+                  account: {
+                    email: "dev@example.com",
+                    plan: "Max",
+                    auth_mode: "claude.ai",
+                  },
+                  models: [
+                    {
+                      id: "default",
+                      label: "Default",
+                      is_default: true,
+                      vision: true,
+                    },
+                  ],
+                },
+          );
           return {
             running: false,
             lines,
@@ -755,6 +941,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
           availability: "sign_in",
           availability_label: "Sign in",
           models: [],
+          account: null,
         });
         return {
           ok: true,

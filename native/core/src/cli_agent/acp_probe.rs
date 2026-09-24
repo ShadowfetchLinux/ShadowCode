@@ -107,6 +107,52 @@ pub fn models_from_state(state: &Value) -> (Vec<AcpModel>, Option<String>) {
     (out, current)
 }
 
+/// Model rows from ACP `configOptions` (Antigravity): the `select` option with
+/// id or category `model`. Options may be flat `{value, name}` entries or
+/// groups holding `options`.
+pub fn models_from_config_options(options: &Value) -> (Vec<AcpModel>, Option<String>) {
+    let Some(model) = options.as_array().and_then(|list| {
+        list.iter()
+            .find(|o| o["id"] == "model" || o["category"] == "model")
+    }) else {
+        return (Vec::new(), None);
+    };
+    let current = model["currentValue"].as_str().map(str::to_owned);
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut push = |entry: &Value| {
+        let Some(value) = entry["value"]
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
+            return;
+        };
+        if !seen.insert(value.to_owned()) {
+            return;
+        }
+        let name = entry["name"]
+            .as_str()
+            .map(str::trim)
+            .filter(|n| !n.is_empty());
+        out.push(AcpModel {
+            id: value.to_owned(),
+            label: name.unwrap_or(value).to_owned(),
+            current: current.as_deref() == Some(value),
+        });
+    };
+    for entry in model["options"].as_array().into_iter().flatten() {
+        if entry["options"].is_array() {
+            for inner in entry["options"].as_array().into_iter().flatten() {
+                push(inner);
+            }
+        } else {
+            push(entry);
+        }
+    }
+    (out, current)
+}
+
 /// Cursor's `default[]` wire value for the automatic model.
 pub const CURSOR_AUTO_MODEL_ID: &str = "default[]";
 
@@ -117,15 +163,31 @@ pub async fn probe(
     path_env: Option<&OsStr>,
     deadline: Duration,
 ) -> Result<AcpProbe> {
-    tokio::time::timeout(deadline, probe_inner(binary, args, workspace, path_env))
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "{} did not finish the ACP handshake within {}s",
-                binary.display(),
-                deadline.as_secs()
-            )
-        })?
+    probe_vendor(binary, args, workspace, path_env, deadline, false).await
+}
+
+/// [`probe`]; `antigravity` launches Google's ACP server with ShadowCode's
+/// private profile and treats a printed sign-in link as "not signed in".
+pub async fn probe_vendor(
+    binary: &Path,
+    args: &[&str],
+    workspace: &Path,
+    path_env: Option<&OsStr>,
+    deadline: Duration,
+    antigravity: bool,
+) -> Result<AcpProbe> {
+    tokio::time::timeout(
+        deadline,
+        probe_inner(binary, args, workspace, path_env, antigravity),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "{} did not finish the ACP handshake within {}s",
+            binary.display(),
+            deadline.as_secs()
+        )
+    })?
 }
 
 async fn probe_inner(
@@ -133,10 +195,42 @@ async fn probe_inner(
     args: &[&str],
     workspace: &Path,
     path_env: Option<&OsStr>,
+    antigravity: bool,
 ) -> Result<AcpProbe> {
-    let mut child = sanitized(binary, args, workspace, path_env)
+    let mut command = sanitized(binary, args, workspace, path_env);
+    let _run_dir = if antigravity {
+        command.stderr(Stdio::piped());
+        let installation = super::antigravity_server::Installation {
+            server: binary.to_owned(),
+            harness: binary.with_file_name(super::antigravity_server::HARNESS_FILE),
+        };
+        Some(super::antigravity_server::prepare(
+            &mut command,
+            &installation,
+            false,
+        )?)
+    } else {
+        None
+    };
+    let mut child = command
         .spawn()
         .with_context(|| format!("Could not start {}", binary.display()))?;
+    // Antigravity prints a Google sign-in link on stderr when it has no
+    // valid sign-in, then waits; that answer is "not signed in".
+    let (sign_in_tx, mut sign_in_rx) = tokio::sync::oneshot::channel::<()>();
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            let mut tx = Some(sign_in_tx);
+            while let Ok(Some(line)) = lines.next_line().await {
+                if super::antigravity_server::is_sign_in_prompt(&line) {
+                    if let Some(tx) = tx.take() {
+                        let _ = tx.send(());
+                    }
+                }
+            }
+        });
+    }
     let mut stdin = child.stdin.take().context("ACP stdin missing")?;
     let stdout = child.stdout.take().context("ACP stdout missing")?;
     let mut reader = BufReader::new(stdout);
@@ -158,7 +252,14 @@ async fn probe_inner(
     let cwd = workspace.display().to_string();
     loop {
         buf.clear();
-        let read = reader.read_until(b'\n', &mut buf).await?;
+        let read = tokio::select! {
+            read = reader.read_until(b'\n', &mut buf) => read?,
+            Ok(()) = &mut sign_in_rx => {
+                probe.authenticated = Some(false);
+                probe.session_error = Some("Google sign-in required".into());
+                break;
+            }
+        };
         if read == 0 {
             if pending.is_empty() {
                 break;
@@ -229,7 +330,12 @@ async fn probe_inner(
                     let method = probe
                         .auth_methods
                         .iter()
-                        .find(|m| m.as_str() == "cursor_login" || m.as_str() == "cached_token")
+                        .find(|m| {
+                            m.as_str() == "cursor_login"
+                                || m.as_str() == "cached_token"
+                                || (antigravity
+                                    && m.as_str() == super::antigravity_server::AUTH_METHOD)
+                        })
                         .cloned()
                         .unwrap_or_else(|| probe.auth_methods[0].clone());
                     rpc(2, "authenticate", json!({"methodId": method}))
@@ -262,7 +368,11 @@ async fn probe_inner(
                             .flatten()
                             .filter_map(|m| m["id"].as_str().map(str::to_owned))
                             .collect();
-                        let (models, current) = models_from_state(&result["models"]);
+                        let (mut models, mut current) = models_from_state(&result["models"]);
+                        if models.is_empty() {
+                            (models, current) =
+                                models_from_config_options(&result["configOptions"]);
+                        }
                         if !models.is_empty() {
                             probe.models = models;
                             probe.current_model = current;

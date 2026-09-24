@@ -704,92 +704,99 @@ fn cursor_acp_command_and_cancel() {
 }
 
 #[test]
-fn antigravity_documented_stream_json_protocol() {
+fn antigravity_runs_through_googles_acp_server() {
     let root = tempfile::tempdir().unwrap();
     let mut adapter = adapter_for(Vendor::Antigravity, false);
-    let (bin, args) = adapter.command(&LaunchOptions {
-        binary: "agy".into(),
+    let options = LaunchOptions {
+        binary: "/opt/agy/agy_acp_server.par".into(),
         workspace: root.path().to_path_buf(),
-        model: "gemini-3.8-flash-high".into(),
-        read_only: true,
-        resume: Some("conv-9".into()),
-    });
-    assert_eq!(bin, "agy");
-    // `--print=` must be last so no later flag is swallowed as the prompt.
-    assert_eq!(args.last().map(String::as_str), Some("--print="));
-    assert!(args
-        .windows(2)
-        .any(|w| w == ["--output-format", "stream-json"]));
-    assert!(args
-        .windows(2)
-        .any(|w| w == ["--input-format", "stream-json"]));
-    assert!(args.windows(2).any(|w| w == ["--mode", "plan"]));
-    assert!(args.windows(2).any(|w| w == ["--conversation", "conv-9"]));
-    assert!(
-        adapter.prompt("hi", &[sample_image()]).is_err(),
-        "images are refused"
+        model: "gemini-3.8-pro".into(),
+        read_only: false,
+        resume: None,
+    };
+    let (bin, args) = adapter.command(&options);
+    assert_eq!(bin, "/opt/agy/agy_acp_server.par");
+    assert_eq!(args[0], "--uid=", "the registry's Linux launch flag");
+    assert!(args.iter().all(|a| !a.contains("print")));
+    adapter.prompt("Reply OK", &[sample_image()]).unwrap();
+    let first = adapter.on_start(&options);
+    assert!(first[0].contains("\"initialize\""));
+    // initialize → authenticate with the personal Google account.
+    let (send, _) = feed(
+        &mut *adapter,
+        &[&rpc_result(
+            1,
+            json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true}},
+                "authMethods":[{"id":"oauth-personal"},{"id":"gemini-api-key"}]}),
+        )],
     );
-    adapter.prompt("Reply OK", &[]).unwrap();
-    let first = adapter.on_start(&launch(root.path()));
-    assert!(first[0].contains("\"event\":\"user\""));
-    assert!(first[0].contains("\"type\":\"text\""));
-    // Frames recorded from agy 1.2.9 plus a tool step.
+    assert!(send
+        .iter()
+        .any(|l| l.contains("\"authenticate\"") && l.contains("oauth-personal")));
+    // authenticate → session/new → model set through the `model` config
+    // option, then the queued prompt with its image.
+    let (send, _) = feed(&mut *adapter, &[&rpc_result(2, json!({}))]);
+    assert!(send.iter().any(|l| l.contains("session/new")));
+    let (send, updates) = feed(
+        &mut *adapter,
+        &[&rpc_result(
+            3,
+            json!({"sessionId":"agy-1","configOptions":[{"id":"model","type":"select","currentValue":"gemini-3.8-flash-low",
+                "options":[{"value":"gemini-3.8-flash-low","name":"Flash"},{"value":"gemini-3.8-pro","name":"Pro"}]}]}),
+        )],
+    );
+    assert!(updates
+        .iter()
+        .any(|u| matches!(u, Update::NativeSession { id } if id == "agy-1")));
+    let set = send
+        .iter()
+        .find(|l| l.contains("session/set_config_option"))
+        .expect("model is set per session");
+    assert!(set.contains("\"configId\":\"model\"") && set.contains("gemini-3.8-pro"));
+    let prompt = send.iter().find(|l| l.contains("session/prompt")).unwrap();
+    assert!(prompt.contains("\"type\":\"image\""));
+    // Permission requests reach ShadowCode as approvals.
     let (_, updates) = feed(
         &mut *adapter,
         &[
-            r#"{"event":"init","conversation_id":"0114b7b4","init":{"model":"gemini-3.8-flash-low","cwd":"/tmp","tools":["run_command"]}}"#,
-            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":0,"state":"DONE","step_type":"user_input"}}"#,
-            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"write_to_file","tool_info":{"name":"write_to_file","parameters":{"file_path":"a.rs"}}}}"#,
-            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":1,"state":"DONE","step_type":"tool","tool_name":"write_to_file","tool_info":{"name":"write_to_file","parameters":{"file_path":"a.rs"},"output":"written"}}}"#,
-            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"OK"}}"#,
-            r#"{"event":"step_update","step_update":{"conversation_id":"0114b7b4","step_index":2,"state":"DONE","step_type":"agent_response","text_delta":"\n","usage":{"input_tokens":11903,"output_tokens":22}}}"#,
-            r#"{"event":"result","result":{"conversation_id":"0114b7b4","status":"SUCCESS","response":"OK\n","duration_seconds":2.2,"num_turns":1,"usage":{"input_tokens":11903,"output_tokens":22,"thinking_tokens":21,"cache_read_tokens":0,"total_tokens":11925}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"agy-1","toolCall":{"toolCallId":"run_1","title":"Run nvidia-smi","kind":"execute","rawInput":{"command":"nvidia-smi"}},"options":[{"optionId":"a","name":"Allow","kind":"allow_once"},{"optionId":"r","name":"Reject","kind":"reject_once"}]}}"#,
         ],
     );
-    assert!(updates
-        .iter()
-        .any(|u| matches!(u, Update::NativeSession { id } if id == "0114b7b4")));
     assert!(updates.iter().any(
-        |u| matches!(u, Update::ToolStarted { name, .. } if name == "antigravity.write_to_file")
+        |u| matches!(u, Update::Approval(p) if p.command == "nvidia-smi" && p.kind == "command")
     ));
-    assert!(updates
-        .iter()
-        .any(|u| matches!(u, Update::ToolCompleted { success: true, .. })));
-    assert!(updates.iter().any(
-        |u| matches!(u, Update::FilesChanged { paths, .. } if paths == &vec!["a.rs".to_string()])
-    ));
-    assert!(updates
-        .iter()
-        .any(|u| matches!(u, Update::Text(t) if t == "OK")));
-    assert!(updates.iter().any(|u| matches!(
-        u,
-        Update::Usage {
-            input: 11903,
-            output: 22
-        }
-    )));
-    // Streamed text is not repeated from the result frame.
-    assert!(updates.iter().any(|u| matches!(
-        u,
-        Update::TurnCompleted {
-            text: None,
-            interrupted: false
-        }
-    )));
-    assert_eq!(adapter.native_session().as_deref(), Some("0114b7b4"));
-    assert!(
-        adapter.interrupt().is_empty(),
-        "no documented interrupt frame"
-    );
-    let (_, failed) = feed(
+    // Questions arrive through the same method with an `interaction_` id;
+    // they are skipped with a note instead of being approved.
+    let (send, updates) = feed(
         &mut *adapter,
         &[
-            r#"{"event":"result","result":{"conversation_id":"0114b7b4","status":"ERROR","error":"quota"}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"session/request_permission","params":{"sessionId":"agy-1","toolCall":{"toolCallId":"interaction_1","title":"Which file?"},"options":[{"optionId":"x","name":"a.rs","kind":"allow_once"}]}}"#,
         ],
     );
-    assert!(failed
+    assert!(send.iter().any(|l| l.contains("\"cancelled\"")));
+    assert!(updates
         .iter()
-        .any(|u| matches!(u, Update::TurnFailed(e) if e.contains("quota"))));
+        .any(|u| matches!(u, Update::Warning(t) if t.contains("Which file?"))));
+    assert!(updates.iter().all(|u| !matches!(u, Update::Approval(_))));
+}
+
+#[test]
+fn antigravity_sign_in_errors_point_to_accounts() {
+    let root = tempfile::tempdir().unwrap();
+    let mut adapter = adapter_for(Vendor::Antigravity, false);
+    adapter.on_start(&launch(root.path()));
+    feed(
+        &mut *adapter,
+        &[&rpc_result(
+            1,
+            json!({"protocolVersion":1,"authMethods":[]}),
+        )],
+    );
+    let error = adapter
+        .on_line(r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Authentication required"}}"#)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Settings › Accounts"), "{error}");
 }
 
 #[test]
@@ -869,12 +876,11 @@ fn vendor_image_bytes_use_official_fields() {
     assert!(prompt.contains("image/png"));
     assert!(prompt.contains("aW1n"));
 
-    let mut agy = adapter_for(Vendor::Antigravity, false);
-    assert!(agy.prompt("look", std::slice::from_ref(&image)).is_err());
     assert!(Vendor::Codex.accepts_images());
     assert!(Vendor::Claude.accepts_images());
     assert!(Vendor::Cursor.accepts_images());
-    assert!(!Vendor::Antigravity.accepts_images());
+    assert!(Vendor::Antigravity.accepts_images());
+    assert!(!Vendor::Grok.accepts_images());
 }
 
 #[test]

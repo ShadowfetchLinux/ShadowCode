@@ -27,15 +27,18 @@ separate account when you need stronger isolation.
 
 - **ShadowCode never reads vendor credentials.** Sign-in state comes from each
   vendor's documented status command or protocol: Codex app-server
-  `account/read`, `claude auth status`, the ACP handshake for Cursor and Grok,
-  `agy models`. ShadowCode never opens `~/.codex/auth.json`, Claude's
-  credential files, the Grok or Cursor login files, or Antigravity's keyring
-  entry.
+  `account/read`, `claude auth status`, the ACP handshake for Cursor, Grok and
+  Antigravity. ShadowCode never opens `~/.codex/auth.json`, Claude's
+  credential files, the Grok or Cursor login files, or the token in
+  Antigravity's profile.
 - **Connect and Disconnect** run the vendor's own login and logout commands
   as supervised child processes. The vendor opens the browser or prints a URL
   or device code. ShadowCode only relays the printed lines after redaction, and
   never shows a URL that carries a code or token parameter as a link.
-  Antigravity sign-in and sign-out happen only inside `agy`.
+  Antigravity's Connect asks its agent server to `authenticate`; the server
+  opens the browser and stores the token in ShadowCode's private Antigravity
+  profile, which Disconnect deletes. Status checks and tasks run the server
+  with a no-op `BROWSER`, so it can't open a sign-in page on its own.
 - **No API keys reach vendor CLIs.** Every vendor CLI that runs a task, and
   every login and logout, starts without `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
   `OPENAI_API_KEY`, `CODEX_API_KEY`, `CURSOR_API_KEY`, `XAI_API_KEY`,
@@ -98,6 +101,14 @@ network mode is *Online*.
   ShadowCode names itself in its user agent and never works around a bot
   check.
 
+## Antigravity agent download
+
+The Antigravity agent server is downloaded only when you choose **Install**,
+from the URL in the ACP registry (`dl.google.com`). ShadowCode refuses it
+unless its size and SHA-256 match the values pinned in the release, unpacks
+only plain file names from the archive, and starts it without Google API-key
+or cloud-project variables.
+
 ## OpenRouter API key
 
 The key is checked with OpenRouter's `GET /api/v1/key`, then stored in the
@@ -135,7 +146,7 @@ What each vendor runtime enforces (from `permissions.rs`, shown in
 | Claude Code | Permission prompts come to ShadowCode (`--permission-prompts host`). Plan/Review uses `--permission-mode plan`. Claude's own settings can pre-approve tools that ShadowCode never sees |
 | Cursor | ACP permission requests come to ShadowCode. Plan/Review uses Cursor's plan mode when offered |
 | Grok | ACP permission requests come to ShadowCode. Grok has no read-only mode, so Plan/Review is not enforced by Grok |
-| Antigravity | Never asks ShadowCode. It applies its own settings (`~/.gemini/antigravity-cli/settings.json`) and soft-denies actions it may not run. Plan/Review uses `--mode plan` |
+| Antigravity | Asks through ACP `session/request_permission`, like Cursor and Grok. In Plan/Review ShadowCode denies its requests |
 
 In read-only tasks, ShadowCode denies vendor approval requests automatically.
 Unanswered vendor requests are denied after `approval_timeout_sec` (600 s by

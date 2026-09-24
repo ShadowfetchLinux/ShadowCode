@@ -76,6 +76,9 @@ export function Settings({
         {section === "accounts" && (
           <AccountsPage
             focusVendor={focusVendor}
+            offline={
+              ((cfg.network || {}) as { mode?: string }).mode === "offline"
+            }
             onChanged={onCatalogChanged}
             onToast={onToast}
           />

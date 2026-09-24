@@ -17,7 +17,7 @@ tools** (`cli_agents.<vendor>_binary`).
 | Codex | `codex` | `npm i -g @openai/codex` | **Connect** runs `codex login` |
 | Claude Code | `claude` | [Claude Code](https://code.claude.com/docs/en/headless) | **Connect** runs `claude auth login` |
 | Cursor | `cursor-agent` | [Cursor CLI](https://cursor.com/docs/cli/acp) | **Connect** runs `cursor-agent login` |
-| Antigravity | `agy` | [Antigravity CLI](https://antigravity.google/docs/cli/install/) (the `antigravity` desktop app is not the CLI) | Run `agy` once in a terminal. ShadowCode can't start this sign-in |
+| Antigravity | `agy_acp_server.par` (Google's ACP agent server) | **Install** in **Settings › Accounts** downloads Google's official agent server (334 MB from dl.google.com, checked against a pinned SHA-256) | **Connect** signs in with Google in the browser |
 | Grok | `grok` | [xAI CLI](https://docs.x.ai/build) | **Connect** runs `grok login` |
 
 - **Connect** runs the login command with your environment, minus provider API
@@ -29,8 +29,9 @@ tools** (`cli_agents.<vendor>_binary`).
   `claude auth logout`, `cursor-agent logout` or `grok logout`. Those sign the
   CLI out everywhere on this computer, not only in ShadowCode. ShadowCode then
   forgets the vendor's cached status, stored usage snapshots and every
-  conversation's stored vendor session. Antigravity keeps its login in the OS
-  keyring: type `/logout` inside `agy`.
+  conversation's stored vendor session. For Antigravity, Disconnect deletes
+  ShadowCode's private Antigravity profile (its Google sign-in); the `agy` CLI
+  and the Antigravity app keep their own sign-ins.
 - **Refresh** checks one vendor again. Otherwise each vendor is checked at
   most once every 5 minutes, and failures back off. In *Offline* mode no vendor
   process is started for status, models or usage.
@@ -38,17 +39,41 @@ tools** (`cli_agents.<vendor>_binary`).
 A row is **Ready** only after the vendor's own status check says so. An
 installed binary or a login file is not enough.
 
+## Antigravity's agent server
+
+Antigravity runs through Google's official ACP agent server, the one listed in
+the [ACP registry](https://github.com/agentclientprotocol/registry) and used by
+other editors. It asks ShadowCode before it runs commands or edits files, which
+the `agy` CLI's print mode could not do.
+
+- **Install.** **Settings › Accounts › Antigravity › Install** downloads
+  version 1.2.1 from `dl.google.com` (334 MB), checks its size and SHA-256,
+  and unpacks it (about 1.1 GB) into
+  `~/.local/share/shadowcode/antigravity-acp/1.2.1`. **Remove agent** deletes
+  it. To use a copy you manage yourself, set `cli_agents.antigravity_binary`
+  to its `agy_acp_server.par` path (with `localharness_external` beside it).
+- **Sign-in.** The server keeps its Google sign-in in a private profile,
+  `~/.local/share/shadowcode/antigravity-acp/profile`, separate from the `agy`
+  CLI and the Antigravity app. **Connect** lets it open your browser;
+  ShadowCode also shows the link. Status checks and tasks never open a browser:
+  if the sign-in is missing or expired, the row says *Sign in* and a task
+  stops with that message.
+- **Temp files.** Each launch gets its own temp directory, removed afterwards.
+- **Hosts without IPv6.** The server refuses to start without an IPv6
+  loopback (`::1`); on such hosts ShadowCode passes the server's own
+  `--enforce_kernel_ipv6_support=false` switch.
+
 ## What each vendor exposes
 
 | | Codex | Claude Code | Cursor | Antigravity | Grok |
 | --- | --- | --- | --- | --- | --- |
-| Runtime | `codex app-server` (JSON-RPC 2.0) | `claude -p --output-format stream-json --input-format stream-json --verbose --include-partial-messages --permission-prompts host` | `cursor-agent acp` (Agent Client Protocol) | `agy --output-format stream-json --input-format stream-json --print=` | `grok agent stdio` (ACP) |
-| Sign-in check | app-server `account/read` (falls back to `codex login status`) | `claude auth status` | ACP `initialize` → `authenticate` → `session/new` | `agy models` | ACP handshake (falls back to `grok models`) |
-| Models | app-server `model/list` | *Default* plus the aliases (`fable`, `opus`, `sonnet`, `haiku`) that the installed `claude --help` lists | ACP session models. Exact IDs, including bracketed parameters, set with `session/set_model`. *Auto* is Cursor's own router | `agy models` | ACP session models |
-| Image input | Yes (`localImage`), for models that accept images | Yes (base64 image blocks) | When ACP `initialize` reports image support | No: text blocks only, and images are refused before sending | No: ACP reports `image: false` |
-| Approvals reach ShadowCode | Yes: command and file-change requests | Yes: `can_use_tool` control requests | Yes: `session/request_permission` | **No**: its own settings decide, and refusals are reported afterwards | Yes: `session/request_permission` |
-| Plan/Review (read-only) | `sandbox: read-only` | `--permission-mode plan` | ACP mode `plan`, when offered | `--mode plan` | Not enforced by Grok |
-| Resume | `thread/resume` | `--resume <session>` | `session/load` | `--conversation <id>` | `session/load` |
+| Runtime | `codex app-server` (JSON-RPC 2.0) | `claude -p --output-format stream-json --input-format stream-json --verbose --include-partial-messages --permission-prompts host` | `cursor-agent acp` (Agent Client Protocol) | `agy_acp_server.par --uid=` (Agent Client Protocol) | `grok agent stdio` (ACP) |
+| Sign-in check | app-server `account/read` (falls back to `codex login status`) | `claude auth status` | ACP `initialize` → `authenticate` → `session/new` | ACP `initialize` → `authenticate` (`oauth-personal`) → `session/new`; a printed Google sign-in link means *Sign in* | ACP handshake (falls back to `grok models`) |
+| Models | app-server `model/list` | *Default* plus the aliases (`fable`, `opus`, `sonnet`, `haiku`) that the installed `claude --help` lists | ACP session models. Exact IDs, including bracketed parameters, set with `session/set_model`. *Auto* is Cursor's own router | The `model` option of `session/new`'s `configOptions`, set with `session/set_config_option` | ACP session models |
+| Image input | Yes (`localImage`), for models that accept images | Yes (base64 image blocks) | When ACP `initialize` reports image support | Yes: ACP `initialize` reports image support | No: ACP reports `image: false` |
+| Approvals reach ShadowCode | Yes: command and file-change requests | Yes: `can_use_tool` control requests | Yes: `session/request_permission` | Yes: `session/request_permission` (questions it asks are skipped with a note) | Yes: `session/request_permission` |
+| Plan/Review (read-only) | `sandbox: read-only` | `--permission-mode plan` | ACP mode `plan`, when offered | ShadowCode denies its requests | Not enforced by Grok |
+| Resume | `thread/resume` | `--resume <session>` | `session/load` | `session/load` | `session/load` |
 | Usage shown | Plan rate-limit windows per quota pool | *Usage unavailable* | *Usage unavailable* | *Usage unavailable* | *Usage unavailable* |
 
 Grok isn't one of the featured vendors: its rows are listed after the others.
@@ -67,8 +92,7 @@ ShadowCode shows only what a vendor reports. It never estimates a figure.
   *Usage unavailable* and links to `claude.ai/settings/usage`.
 - **Cursor** reports its plan tier but no remaining allowance, so the row says
   *Usage unavailable*.
-- **Antigravity** shows usage only in its interactive `/usage` panel, which
-  can't be read by another program.
+- **Antigravity**'s agent server reports no plan usage to other programs.
 - **Grok** reports per-session token counts only.
 
 After a restart, the last Codex snapshot is loaded from the database and marked

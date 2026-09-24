@@ -220,15 +220,19 @@ async fn run_once(
     ensure_ready(vendor, request)?;
     let mut adapter = adapter_for(vendor, codex_exec_fallback);
     let (program, args) = adapter.command(&request.options);
-    let mut child = spawn_vendor(&program, &args, &request.options.workspace)?;
+    let (mut child, _run_dir) = spawn_vendor(vendor, &program, &args, &request.options.workspace)?;
     let pid = child.id().context("Vendor CLI has no process ID")?;
     let mut group = ProcessGroup(pid);
     let mut stdin = Some(child.stdin.take().context("Vendor CLI stdin missing")?);
     let stdout = child.stdout.take().context("Vendor CLI stdout missing")?;
     let stderr = child.stderr.take().context("Vendor CLI stderr missing")?;
     let mut reader = BufReader::new(stdout);
-    let denied = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    tokio::spawn(drain_stderr(stderr, request.events.clone(), denied.clone()));
+    let sign_in_needed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    tokio::spawn(drain_stderr(
+        stderr,
+        request.events.clone(),
+        sign_in_needed.clone(),
+    ));
     let mut outgoing = adapter.on_start(&request.options);
     outgoing.extend(adapter.prompt(&request.prompt, &request.images)?);
     send_lines(&mut stdin, &outgoing).await?;
@@ -256,6 +260,12 @@ async fn run_once(
             group.kill();
             flush_text(request, &message_id, &mut pending_text)?;
             bail!("Task cancelled. The vendor CLI was stopped; its file changes remain on disk.");
+        }
+        if sign_in_needed.load(std::sync::atomic::Ordering::Acquire) {
+            group.terminate();
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            group.kill();
+            bail!("{}", super::acp::ANTIGRAVITY_SIGN_IN);
         }
         if request.steer.is_paused() && !interrupted_turn && !finished {
             send_lines(&mut stdin, &adapter.interrupt()).await.ok();
@@ -397,16 +407,6 @@ async fn run_once(
     if native_session.is_none() {
         native_session = adapter.native_session();
     }
-    if collected.trim().is_empty() {
-        // stderr is read on another task; give its last lines a moment to land.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    if collected.trim().is_empty() && denied.load(std::sync::atomic::Ordering::Acquire) {
-        bail!(
-            "{} needed permission to run a tool, but its headless mode cannot ask ShadowCode, so it denied the tool and gave no answer. Pick another model for tasks that run commands.",
-            request.vendor.product_label()
-        );
-    }
     Ok(RunOutcome {
         text: collected,
         usage,
@@ -434,7 +434,12 @@ fn ensure_ready(vendor: Vendor, request: &Request<'_>) -> Result<()> {
     Ok(())
 }
 
-fn spawn_vendor(program: &str, args: &[String], workspace: &Path) -> Result<Child> {
+fn spawn_vendor(
+    vendor: Vendor,
+    program: &str,
+    args: &[String],
+    workspace: &Path,
+) -> Result<(Child, Option<super::antigravity_server::RunDir>)> {
     ensure_workspace(workspace)?;
     let mut command = Command::new(program);
     command
@@ -451,6 +456,21 @@ fn spawn_vendor(program: &str, args: &[String], workspace: &Path) -> Result<Chil
     // minus provider API keys: a subscription row must never be billed per
     // token. No bubblewrap, no ShadowCode tools or secrets.
     super::scrub_api_keys(&mut command);
+    // Antigravity's server gets ShadowCode's private profile, its own temp
+    // directory and no way to open a browser.
+    let run_dir = if vendor == Vendor::Antigravity {
+        let installation = super::antigravity_server::Installation {
+            server: Path::new(program).to_owned(),
+            harness: Path::new(program).with_file_name(super::antigravity_server::HARNESS_FILE),
+        };
+        Some(super::antigravity_server::prepare(
+            &mut command,
+            &installation,
+            false,
+        )?)
+    } else {
+        None
+    };
     #[cfg(unix)]
     command.process_group(0);
     #[cfg(target_os = "linux")]
@@ -462,9 +482,10 @@ fn spawn_vendor(program: &str, args: &[String], workspace: &Path) -> Result<Chil
             Ok(())
         });
     }
-    command
+    let child = command
         .spawn()
-        .with_context(|| format!("Could not start {program}"))
+        .with_context(|| format!("Could not start {program}"))?;
+    Ok((child, run_dir))
 }
 
 fn ensure_workspace(workspace: &Path) -> Result<()> {
@@ -507,7 +528,7 @@ async fn read_line<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Result
 async fn drain_stderr<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     stderr: R,
     events: TaskEvents,
-    denied: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    sign_in_needed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut reader = BufReader::new(stderr);
     let mut buf = String::new();
@@ -517,9 +538,15 @@ async fn drain_stderr<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
         if line.is_empty() {
             continue;
         }
-        // Antigravity's headless mode cannot ask for permission and says so.
-        if line.contains("auto-denied") {
-            denied.store(true, std::sync::atomic::Ordering::Release);
+        // Antigravity's server prints a Google sign-in link when its
+        // sign-in is missing or expired; the run cannot continue.
+        if super::antigravity_server::is_sign_in_prompt(&line) {
+            sign_in_needed.store(true, std::sync::atomic::Ordering::Release);
+            let _ = events.emit(
+                "agent.warning",
+                json!({"text": super::acp::ANTIGRAVITY_SIGN_IN}),
+            );
+            continue;
         }
         let _ = events.emit(
             "agent.warning",

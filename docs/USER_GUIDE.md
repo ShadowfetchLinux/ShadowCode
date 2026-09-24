@@ -86,10 +86,10 @@ anything.
   requests, which ShadowCode shows. Each vendor decides which of its actions
   need approval. In Plan/Review tasks, ShadowCode denies vendor requests
   automatically and records a warning.
-- **Antigravity.** It never asks ShadowCode. It applies its own settings
-  (`~/.gemini/antigravity-cli/settings.json`) and denies any tool it would
-  normally ask about. When that leaves it with no answer, the task fails and
-  says so. A warning at task start reminds you.
+- **Antigravity.** It asks ShadowCode through its agent server, like Cursor
+  and Grok. If it asks you a question instead of for permission, ShadowCode
+  can't show the choices yet: it skips the question with a note, and you can
+  answer in your next message.
 
 An unanswered vendor approval is denied after 10 minutes
 (`cli_agents.approval_timeout_sec`).
@@ -141,7 +141,7 @@ and the new choice applies from the next turn.
 
 When you return to a vendor you used earlier in the conversation, ShadowCode
 resumes that vendor's own session: Codex `thread/resume`, Claude `--resume`,
-Cursor and Grok ACP `session/load`, Antigravity `--conversation`.
+Cursor, Grok and Antigravity ACP `session/load`.
 
 ## When a plan limit is reached
 
@@ -177,7 +177,8 @@ In **Settings › Permissions & network**:
 
 - **A subscription row says Sign in.** Use **Settings › Accounts › Connect**,
   or run the vendor's login command in a terminal and choose **Refresh**.
-  Antigravity sign-in happens only inside `agy`.
+  Antigravity first needs **Install** on its Accounts card (a one-time 334 MB
+  download from Google), then **Connect**.
 - **A local row says Setup required.** The llama.cpp runtime is missing. Run
   `scripts/install-appimage.sh` again, or build it with
   `scripts/build-llama.cpp.sh`.

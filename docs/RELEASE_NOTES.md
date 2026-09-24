@@ -1,6 +1,19 @@
-ShadowCode 0.29.0 adds OpenRouter for people without a subscription, and
-makes web search work from networks where DuckDuckGo refuses automated
-requests. The 0.28 notes follow below.
+ShadowCode 0.30.0 makes Antigravity a full citizen: it now asks before it
+acts, like Codex, Claude Code, Cursor and Grok. The 0.29 notes follow below.
+
+## New in 0.30.0
+
+- **Antigravity asks first.** It now runs through Google's official ACP agent
+  server instead of the `agy` CLI's print mode, which silently denied any
+  command. Commands and edits reach ShadowCode's approvals, images work, and
+  conversations resume.
+- **One-time install.** **Settings › Accounts › Antigravity › Install**
+  downloads the server from Google (334 MB, checksum-verified). **Connect**
+  then signs in with Google in your browser. This sign-in is ShadowCode's own
+  and separate from the `agy` CLI.
+- **No surprise browser tabs.** Status checks and tasks never open a sign-in
+  page. If the sign-in expires, the row says *Sign in* and a task stops with
+  that message.
 
 ## New in 0.29.0
 
@@ -119,9 +132,9 @@ runtime that ships with the app.
 
 ## Downloads
 
-- `ShadowCode_0.29.0_amd64.AppImage`
-- `ShadowCode_0.29.0_amd64.deb`
-- `ShadowCode_0.29.0_appimage-runtime-sources.tar.gz`
+- `ShadowCode_0.30.0_amd64.AppImage`
+- `ShadowCode_0.30.0_amd64.deb`
+- `ShadowCode_0.30.0_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
 Builds are for x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).

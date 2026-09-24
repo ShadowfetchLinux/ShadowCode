@@ -26,15 +26,15 @@ need Ollama, LM Studio or any other model server.
   ShadowCode's own tools can be rewound.
 
 Release history is in [CHANGELOG.md](CHANGELOG.md). What's new in this release:
-[0.29.0 release notes](docs/RELEASE_NOTES.md).
+[0.30.0 release notes](docs/RELEASE_NOTES.md).
 
 ## Install
 
 Releases target x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).
 Download from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest):
 
-- `ShadowCode_0.29.0_amd64.AppImage`
-- `ShadowCode_0.29.0_amd64.deb`
+- `ShadowCode_0.30.0_amd64.AppImage`
+- `ShadowCode_0.30.0_amd64.deb`
 - `SHA256SUMS`
 
 ### AppImage (recommended)
@@ -45,7 +45,7 @@ from a checkout of this repository:
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
 git clone https://github.com/Shadowfetchapps/ShadowCode.git
-./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.29.0_amd64.AppImage
+./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.30.0_amd64.AppImage
 ```
 
 [`scripts/install-appimage.sh`](scripts/install-appimage.sh):
@@ -65,14 +65,14 @@ git clone https://github.com/Shadowfetchapps/ShadowCode.git
   AppImages only after a successful install.
 
 To run the AppImage without installing it:
-`./ShadowCode_0.29.0_amd64.AppImage --appimage-extract-and-run`. FUSE is not
+`./ShadowCode_0.30.0_amd64.AppImage --appimage-extract-and-run`. FUSE is not
 required.
 
 ### Debian package
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-sudo apt install ./ShadowCode_0.29.0_amd64.deb
+sudo apt install ./ShadowCode_0.30.0_amd64.deb
 ```
 
 The deb installs `shadowcode` and the same llama.cpp runtime in
@@ -130,7 +130,7 @@ for that vendor.
 | Codex | `codex app-server` (JSON-RPC) | `codex login` | app-server `model/list` | Yes (`localImage`), per model | Yes: command and file-change requests. Codex runs in its own sandbox (`workspace-write`, or `read-only` for Plan/Review) | Rate-limit windows per quota pool (for example 5-hour and weekly), reset times, plan, and credits only when reported |
 | Claude Code | `claude -p --output-format stream-json --input-format stream-json --permission-prompts host` | `claude auth login` | *Default* plus the aliases listed in `claude --help` | Yes (image blocks) | Yes, through `--permission-prompts host`. Claude's own settings can pre-approve tools without asking | *Usage unavailable*: Claude Code exposes no plan usage to other apps |
 | Cursor | `cursor-agent acp` (Agent Client Protocol) | `cursor-agent login` | ACP session models, with exact IDs | When ACP `initialize` advertises image support | Yes, through ACP permission requests | *Usage unavailable*: Cursor reports its plan tier, not the remaining allowance |
-| Antigravity | `agy --output-format stream-json --input-format stream-json --print=` | Not available from ShadowCode: run `agy` once to sign in | `agy models` | No (text-only input) | **No**: Antigravity applies its own permission settings in headless mode | *Usage unavailable*: usage appears only in `agy`'s interactive `/usage` panel |
+| Antigravity | Google's ACP agent server `agy_acp_server.par` (installed from Accounts) | Google sign-in through the server's `authenticate` | The `model` config option of the ACP session | Yes (ACP image support) | Yes, through ACP permission requests | *Usage unavailable*: the server reports no plan usage |
 | Grok | `grok agent stdio` (ACP) | `grok login` | ACP session models (falls back to `grok models`) | No: ACP reports `image: false` | Yes, through ACP. Grok has no read-only mode, so Plan/Review is not enforced by Grok | *Usage unavailable*: Grok reports per-session tokens only |
 
 - **API keys are never used.** Vendor CLIs start with provider API-key
@@ -146,11 +146,11 @@ for that vendor.
 
 Setup details: [subscriptions](docs/SUBSCRIPTIONS.md).
 
-**Antigravity limitation.** `agy`'s headless mode can't ask ShadowCode for
-permission, so it denies any command it would normally ask about. A task that
-needs one now fails with that explanation instead of ending with an empty
-answer. Use Antigravity for questions and edits it may make on its own, or
-pick another model for tasks that run commands.
+**Antigravity** runs through Google's official ACP agent server instead of the
+`agy` CLI, so it asks ShadowCode before running commands or editing files.
+**Install** on its Accounts card downloads the server once (334 MB from
+dl.google.com, checksum-verified); **Connect** signs in with Google. Details:
+[subscriptions](docs/SUBSCRIPTIONS.md#antigravitys-agent-server).
 
 ## API keys (OpenRouter)
 

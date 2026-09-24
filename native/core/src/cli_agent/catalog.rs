@@ -90,10 +90,14 @@ impl VendorStatus {
         Self {
             vendor,
             availability: Availability::SetupRequired,
-            detail: format!(
-                "Not installed: `{configured}` was not found on PATH. {}",
-                vendor.install_hint()
-            ),
+            detail: if vendor == Vendor::Antigravity {
+                format!("Not installed. {}", vendor.install_hint())
+            } else {
+                format!(
+                    "Not installed: `{configured}` was not found on PATH. {}",
+                    vendor.install_hint()
+                )
+            },
             version: None,
             binary: None,
             account: None,
@@ -204,7 +208,11 @@ impl VendorStatus {
         };
         json!({
             "id": format!("cli-{}", self.vendor.id()),
-            "label": format!("{} ({} CLI)", self.vendor.product_label(), self.vendor.binary()),
+            "label": if self.vendor == Vendor::Antigravity {
+                "Antigravity (Google's ACP agent)".to_owned()
+            } else {
+                format!("{} ({} CLI)", self.vendor.product_label(), self.vendor.binary())
+            },
             "product": self.vendor.product_label(),
             "state": state,
             "status": status,
@@ -230,6 +238,12 @@ impl VendorStatus {
             "shared_cli_note": self.vendor.shared_cli_note(),
             "billing": if self.api_key_login() { "api_key" } else { "subscription" },
             "usage": self.usage_for("default", crate::now()),
+            // Antigravity's agent server is installed by ShadowCode on request.
+            "install": (self.vendor == Vendor::Antigravity).then(|| {
+                super::antigravity_server::install_status(
+                    &self.binary.as_ref().map(|b| b.display().to_string()).unwrap_or_default(),
+                )
+            }),
         })
     }
 }
@@ -576,10 +590,21 @@ async fn probe_vendor(vendor: Vendor, config: &CliAgentsConfig, now: f64) -> Ven
         return VendorStatus::disabled(vendor, now);
     }
     let configured = config.binary(vendor);
-    let Some(binary) = resolve_binary(configured) else {
+    let binary = if vendor == Vendor::Antigravity {
+        super::antigravity_server::installation(configured).map(|i| i.server)
+    } else {
+        resolve_binary(configured)
+    };
+    let Some(binary) = binary else {
         return VendorStatus::setup_required(vendor, configured, now);
     };
-    let version = version_of(&binary).await;
+    // The Antigravity server is ~1 GB and has no cheap `--version`; its
+    // version comes from the ACP handshake.
+    let version = if vendor == Vendor::Antigravity {
+        None
+    } else {
+        version_of(&binary).await
+    };
     let mut status = VendorStatus {
         vendor,
         availability: Availability::Unavailable,
@@ -603,7 +628,11 @@ async fn probe_vendor(vendor: Vendor, config: &CliAgentsConfig, now: f64) -> Ven
         Vendor::Claude => probe_claude(&binary, &mut status).await,
         Vendor::Cursor => probe_acp_vendor(&binary, &["acp"], &mut status).await,
         Vendor::Grok => probe_acp_vendor(&binary, &["agent", "stdio"], &mut status).await,
-        Vendor::Antigravity => probe_antigravity(&binary, &mut status).await,
+        Vendor::Antigravity => {
+            let args = super::antigravity_server::launch_args();
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            probe_acp_vendor(&binary, &args, &mut status).await
+        }
     }
     status
 }
@@ -761,10 +790,18 @@ async fn probe_acp_vendor(binary: &Path, args: &[&str], status: &mut VendorStatu
     let workspace = std::env::temp_dir();
     status.usage_note = Some(match vendor {
         Vendor::Cursor => "Cursor reports the plan tier only, not remaining allowance".into(),
+        Vendor::Antigravity => {
+            "Antigravity's agent server reports no plan usage to other apps".into()
+        }
         _ => "Grok reports per-session tokens only, not plan allowance".into(),
     });
-    match acp_probe::probe(binary, args, &workspace, None, PROBE_TIMEOUT).await {
+    let antigravity = vendor == Vendor::Antigravity;
+    match acp_probe::probe_vendor(binary, args, &workspace, None, PROBE_TIMEOUT, antigravity).await
+    {
         Ok(probe) => {
+            if antigravity && status.version.is_none() {
+                status.version = probe.agent_version.clone();
+            }
             status.accepts_images = probe.accepts_images;
             status.models = probe
                 .models
@@ -890,50 +927,6 @@ async fn cursor_email(vendor: Vendor, binary: &Path) -> Option<String> {
         .find_map(|line| line.split("Logged in as").nth(1))
         .map(|rest| rest.trim().trim_end_matches('.').to_owned())
         .filter(|s| s.contains('@'))
-}
-
-async fn probe_antigravity(binary: &Path, status: &mut VendorStatus) {
-    status.accepts_images = false; // stream-json input is text only
-    status.asks_approval = false;
-    status.usage_note = Some(
-        "Antigravity CLI shows usage only in its interactive /usage panel; nothing machine-readable is exposed".into(),
-    );
-    match doctor::short_text(binary, &["models"], None).await {
-        Some(text) => {
-            let models = super::discovery::parse_agy_models(&text);
-            let lower = text.to_ascii_lowercase();
-            if !models.is_empty() {
-                status.availability = Availability::Ready;
-                status.models = models
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, m)| VendorModel {
-                        id: m.id,
-                        label: m.label,
-                        is_default: i == 0,
-                        vision: false,
-                    })
-                    .collect();
-                status.detail = ready_detail(status);
-            } else if lower.contains("login") || lower.contains("sign in") || lower.contains("auth")
-            {
-                status.availability = Availability::SignIn;
-                status.detail = "Installed, not signed in".into();
-            } else {
-                status.availability = Availability::Unavailable;
-                status.error = Some("`agy models` returned no models".into());
-                status.detail = format!(
-                    "Antigravity did not list models: {}",
-                    super::clip(&text, 200)
-                );
-            }
-        }
-        None => {
-            status.availability = Availability::Unavailable;
-            status.error = Some("`agy models` did not respond".into());
-            status.detail = "Antigravity CLI did not respond".into();
-        }
-    }
 }
 
 #[cfg(test)]

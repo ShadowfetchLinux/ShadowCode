@@ -226,6 +226,95 @@ test("a Sign in row opens Accounts and Connect streams the official login", asyn
   ).toContainText("Ready");
 });
 
+test("installs the Antigravity agent, signs in with Google and shows its rows Ready", async ({
+  page,
+}) => {
+  await page.keyboard.press("Control+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  const card = settings.getByRole("article", { name: "Antigravity" });
+  await expect(card).toContainText("Setup required");
+  await card.getByRole("button", { name: "Install Antigravity agent" }).click();
+  const dialog = page.getByRole("dialog", {
+    name: "Install the Antigravity agent",
+  });
+  await expect(dialog).toContainText("334 MB");
+  await expect(dialog).toContainText("about 1.1 GB");
+  await expect(dialog).toContainText("dl.google.com");
+  await expect(dialog).toContainText(
+    "/home/user/.local/share/shadowcode/antigravity-acp/1.2.1",
+  );
+  await expect(
+    new AxeBuilder({ page })
+      .include('[role="dialog"]')
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze(),
+  ).resolves.toMatchObject({ violations: [] });
+  await page.screenshot({
+    path: "test-results/antigravity-install-dialog.png",
+  });
+  await dialog.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  const progress = card.getByRole("progressbar", {
+    name: "Installing the Antigravity agent",
+  });
+  await expect(progress).toBeVisible();
+  await expect(card).toContainText("Downloading 120 MB of 334 MB");
+  await expect(progress).toHaveAttribute("aria-valuenow", "36");
+  await card.screenshot({
+    path: "test-results/antigravity-install-progress.png",
+  });
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (t) => (document.documentElement.dataset.theme = t),
+      theme,
+    );
+    const results = await new AxeBuilder({ page })
+      .include('[role="dialog"]')
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+    expect(results.violations).toEqual([]);
+  }
+  await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+
+  const connect = card.getByRole("button", { name: "Connect" });
+  await expect(connect).toBeVisible({ timeout: 10000 });
+  await expect(card.getByText("Sign in", { exact: true })).toBeVisible();
+  await expect(progress).toHaveCount(0);
+  await connect.click();
+  await expect(
+    card.getByRole("link", { name: /accounts\.google\.com/ }),
+  ).toBeVisible();
+  await expect(card.getByText("Signed in.")).toBeVisible({ timeout: 10000 });
+  await expect(card.getByText("Ready", { exact: true })).toBeVisible();
+  await expect(card.getByText("2 models available")).toBeVisible();
+  await expect(
+    card.getByRole("button", { name: "Remove agent" }),
+  ).toBeVisible();
+  await settings.getByRole("button", { name: "Close" }).last().click();
+  await expect(settings).toHaveCount(0);
+
+  await trigger(page).click();
+  for (const name of [
+    /Antigravity · Gemini 3\.5 Pro/,
+    /Antigravity · Gemini 3\.5 Flash/,
+  ])
+    await expect(page.getByRole("option", { name })).toContainText("Ready");
+  const log = await fakeLog(page);
+  expect(
+    log.filter(
+      (r) =>
+        r.method === "POST" && r.path === "/api/accounts/antigravity/install",
+    ),
+  ).toEqual([
+    {
+      method: "POST",
+      path: "/api/accounts/antigravity/install",
+      body: { confirm: true },
+    },
+  ]);
+});
+
 test("an OpenRouter API key unlocks per-token models in the picker", async ({
   page,
 }) => {

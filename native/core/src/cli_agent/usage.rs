@@ -310,7 +310,7 @@ fn usage_url(provider: &str) -> Option<String> {
             "Claude Code" | "cli:claude" => "https://claude.ai/settings/usage",
             "Cursor" | "cli:cursor" => "https://cursor.com/dashboard",
             "Antigravity" | "cli:antigravity" => {
-                "https://antigravity.google/docs/cli/commands/usage/"
+                "https://antigravity.google/docs/cli/commands/usage/" // plan usage is shown there
             }
             "Grok" | "cli:grok" => "https://grok.com/",
             _ => return None,

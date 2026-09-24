@@ -1605,6 +1605,34 @@ impl Service {
                     return crate::cli_agent::auth::connect(&catalog, vendor, &cfg.cli_agents).await
                 }
                 ("GET", "login") => return Ok(catalog.logins().status(vendor)),
+                // Antigravity's agent server: install on request, show
+                // progress, remove.
+                ("GET", "install") if vendor == crate::cli_agent::Vendor::Antigravity => {
+                    return Ok(crate::cli_agent::antigravity_server::install_status(
+                        cfg.cli_agents.binary(vendor),
+                    ));
+                }
+                ("POST", "install") if vendor == crate::cli_agent::Vendor::Antigravity => {
+                    ensure!(!cfg.offline(), "Offline mode: downloads are off");
+                    ensure!(
+                        body["confirm"].as_bool() == Some(true),
+                        "Confirm the {:.0} MB download first",
+                        crate::cli_agent::antigravity_server::ARCHIVE_BYTES as f64 / 1e6
+                    );
+                    let started = crate::cli_agent::antigravity_server::start_install();
+                    let mut status = crate::cli_agent::antigravity_server::install_status(
+                        cfg.cli_agents.binary(vendor),
+                    );
+                    status["started"] = json!(started);
+                    return Ok(status);
+                }
+                ("POST", "uninstall") if vendor == crate::cli_agent::Vendor::Antigravity => {
+                    crate::cli_agent::antigravity_server::uninstall()?;
+                    catalog.forget_status(vendor).await;
+                    return Ok(crate::cli_agent::antigravity_server::install_status(
+                        cfg.cli_agents.binary(vendor),
+                    ));
+                }
                 ("POST", "cancel-login") => {
                     return Ok(json!({"ok": catalog.logins().cancel(vendor)}))
                 }

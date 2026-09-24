@@ -1207,7 +1207,17 @@ impl Engine {
             Some(handoff) => handoff.prefix(&job.task),
             None => job.task.clone(),
         };
-        let binary = cli.binary(vendor).to_owned();
+        let binary = if vendor == crate::cli_agent::Vendor::Antigravity {
+            crate::cli_agent::antigravity_server::installation(cli.binary(vendor))
+                .map(|i| i.server.display().to_string())
+                .with_context(|| {
+                    crate::cli_agent::Vendor::Antigravity
+                        .install_hint()
+                        .to_owned()
+                })?
+        } else {
+            cli.binary(vendor).to_owned()
+        };
         let native_key = format!("native_session:{}", vendor.id());
         let resume = self.0.store.session_meta(&job.session_id, &native_key)?;
         if let Some((from, to)) = &running.turn_plan.model_switch {

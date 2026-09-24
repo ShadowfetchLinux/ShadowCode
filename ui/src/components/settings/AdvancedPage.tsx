@@ -375,12 +375,19 @@ function GuardianPanel({
   );
 }
 
-const BINARIES: [string, string, string][] = [
-  ["codex_binary", "Codex", "codex"],
-  ["claude_binary", "Claude Code", "claude"],
-  ["cursor_binary", "Cursor", "cursor-agent"],
-  ["antigravity_binary", "Antigravity", "agy"],
-  ["grok_binary", "Grok", "grok"],
+/** [config key, field label, default, hint]. */
+const BINARIES: [string, string, string, string?][] = [
+  ["codex_binary", "Codex command", "codex"],
+  ["claude_binary", "Claude Code command", "claude"],
+  ["cursor_binary", "Cursor command", "cursor-agent"],
+  [
+    "antigravity_binary",
+    "Antigravity agent server",
+    // The engine's default: the agent installed from Settings › Accounts.
+    "agy",
+    "Keep “agy” to use the agent installed from Settings › Accounts, or enter the full path to an agy_acp_server.par that has localharness_external beside it.",
+  ],
+  ["grok_binary", "Grok command", "grok"],
 ];
 
 function VendorToolsPanel({
@@ -406,8 +413,9 @@ function VendorToolsPanel({
     <section className="settings-section advanced-card">
       <p className="hint">
         Subscriptions run through the official command-line tools of Codex,
-        Claude Code, Cursor, Antigravity and Grok. Sign-in stays with those
-        tools; ShadowCode never reads or stores their credentials.
+        Claude Code, Cursor and Grok, and Google's official agent server for
+        Antigravity. Sign-in stays with those tools; ShadowCode never reads or
+        stores their credentials.
       </p>
       <label className="check">
         <input
@@ -417,16 +425,22 @@ function VendorToolsPanel({
         />{" "}
         Offer subscriptions in the model picker
       </label>
-      {BINARIES.map(([key, label]) => (
+      {BINARIES.map(([key, label, , hint]) => (
         <div className="field" key={key}>
-          <label htmlFor={`cli-${key}`}>{label} command</label>
+          <label htmlFor={`cli-${key}`}>{label}</label>
           <input
             id={`cli-${key}`}
             value={binaries[key]}
+            aria-describedby={hint ? `cli-${key}-hint` : undefined}
             onChange={(e) =>
               setBinaries((b) => ({ ...b, [key]: e.target.value }))
             }
           />
+          {hint && (
+            <p className="hint" id={`cli-${key}-hint`}>
+              {hint}
+            </p>
+          )}
         </div>
       ))}
       <div className="field">
