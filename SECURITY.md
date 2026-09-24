@@ -70,7 +70,7 @@ separate account when you need stronger isolation.
 ## Web tools
 
 `web_fetch` and `web_search` exist only for ShadowCode's own agent loop (local
-models). They are offered only when you turn on Web for the task and the
+models and OpenRouter models). They are offered only when you turn on Web for the task and the
 network mode is *Online*.
 
 - **Addresses.** Only http and https URLs without embedded credentials, on
@@ -80,7 +80,10 @@ network mode is *Online*.
 - **Blocked ranges.** Loopback, private, CGNAT (100.64/10), link-local
   (including cloud metadata 169.254.169.254), unspecified, multicast,
   broadcast, reserved and documentation ranges are refused, including IPv4
-  addresses embedded in IPv6 forms. Exact `host:port` entries in
+  addresses embedded in IPv6 forms. In 192.0.0.0/24 only the special-purpose
+  hosts (DS-Lite .0–.7, PCP/TURN anycast .9–.10, NAT64 discovery .170–.171)
+  are refused, because some VPN resolvers answer public names with other
+  addresses in that block. Exact `host:port` entries in
   `network.allow_local_dev` may reach loopback or private dev servers.
   Link-local and metadata addresses stay blocked even then.
 - **Redirects.** At most 5, followed by hand and re-checked each time. A
@@ -90,6 +93,19 @@ network mode is *Online*.
 - **Page content is data.** Every result is framed as data from the URL, not
   instructions. Search results that can't be retrieved are reported as
   `blocked`, never invented.
+- **Search sources.** A configured SearXNG instance first, then DuckDuckGo's
+  HTML page, then Marginalia Search's public API when DuckDuckGo refuses.
+  ShadowCode names itself in its user agent and never works around a bot
+  check.
+
+## OpenRouter API key
+
+The key is checked with OpenRouter's `GET /api/v1/key`, then stored in the
+profile's `secrets.env` (mode 600) under `OPENROUTER_API_KEY`. It is never
+returned to the window, written to logs or passed to vendor CLIs, and it is
+sent only to `openrouter.ai`. Turns run on ShadowCode's own agent loop, so the
+permission mode, approvals and checkpoints apply as they do for local models.
+Offline mode sends nothing to OpenRouter.
 
 ## Permissions
 

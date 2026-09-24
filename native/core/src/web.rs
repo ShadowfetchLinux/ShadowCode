@@ -26,6 +26,10 @@ pub const MAX_URL_BYTES: usize = 2048;
 pub const MAX_QUERY_CHARS: usize = 500;
 /// Keyless HTML results page. Kept in one place so it can be swapped.
 pub const SEARCH_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
+/// Marginalia Search's public API (https://www.marginalia.nu/marginalia-search/api/):
+/// a documented, keyless endpoint for programs, used when DuckDuckGo refuses.
+/// Results are licensed CC-BY-NC-SA 4.0.
+pub const MARGINALIA_ENDPOINT: &str = "https://api.marginalia.nu/public/search/";
 const USER_AGENT: &str = concat!(
     "Mozilla/5.0 (X11; Linux x86_64) ShadowCode/",
     env!("CARGO_PKG_VERSION"),
@@ -178,7 +182,17 @@ fn blocked_v4(ip: Ipv4Addr, local_ok: bool) -> Option<&'static str> {
     if a == 100 && (64..128).contains(&b) {
         return Some("carrier-grade NAT address (100.64.0.0/10)");
     }
-    if (a == 192 && b == 0 && c == 0) || (a == 198 && (18..20).contains(&b)) {
+    // 192.0.0.0/24 holds IETF protocol assignments. Some VPN resolvers
+    // (NordVPN) answer public names such as www.google.com with addresses in
+    // it, so only the special-purpose hosts stay blocked: DS-Lite 0–7,
+    // PCP/TURN anycast 9–10 and NAT64 discovery 170–171.
+    if a == 192 && b == 0 && c == 0 {
+        let d = ip.octets()[3];
+        if d < 8 || matches!(d, 9 | 10 | 170 | 171) {
+            return Some("reserved address");
+        }
+    }
+    if a == 198 && (18..20).contains(&b) {
         return Some("reserved address");
     }
     if (a == 192 && b == 0 && c == 2)
@@ -1265,9 +1279,30 @@ pub fn search_url(endpoint: &str, query: &str) -> Result<Url> {
 }
 
 /// Search: the user's SearXNG instance when configured, then the keyless
-/// DuckDuckGo HTML endpoint. DuckDuckGo often refuses automated clients with a
-/// bot check; that is reported as `blocked`, never worked around or invented.
+/// DuckDuckGo HTML endpoint, then Marginalia's public API. DuckDuckGo often
+/// refuses automated clients with a bot check; ShadowCode identifies itself
+/// honestly and moves on rather than working around it. Nothing is invented.
 pub async fn search(
+    query: &str,
+    max_results: usize,
+    policy: &WebPolicy,
+    cancel: &CancellationToken,
+) -> Result<SearchResult> {
+    search_chain(
+        SEARCH_ENDPOINT,
+        MARGINALIA_ENDPOINT,
+        query,
+        max_results,
+        policy,
+        cancel,
+    )
+    .await
+}
+
+/// [`search`] with replaceable endpoints (tests use loopback fixtures).
+pub async fn search_chain(
+    duckduckgo: &str,
+    marginalia: &str,
     query: &str,
     max_results: usize,
     policy: &WebPolicy,
@@ -1284,16 +1319,93 @@ pub async fn search(
             result.reason.as_deref().unwrap_or("unavailable")
         ));
     }
-    let mut result =
-        search_with_endpoint(SEARCH_ENDPOINT, query, max_results, policy, cancel).await?;
-    if result.blocked && !reasons.is_empty() {
-        reasons.push(format!(
-            "DuckDuckGo: {}",
-            result.reason.as_deref().unwrap_or("unavailable")
-        ));
-        result.reason = Some(reasons.join("; "));
+    let result = search_with_endpoint(duckduckgo, query, max_results, policy, cancel).await?;
+    if !result.blocked {
+        return Ok(result);
     }
+    reasons.push(format!(
+        "DuckDuckGo: {}",
+        result.reason.as_deref().unwrap_or("unavailable")
+    ));
+    let mut fallback = marginalia_search(marginalia, query, max_results, policy, cancel).await?;
+    if fallback.blocked {
+        reasons.push(format!(
+            "Marginalia: {}",
+            fallback.reason.as_deref().unwrap_or("unavailable")
+        ));
+        fallback.reason = Some(reasons.join("; "));
+    }
+    Ok(fallback)
+}
+
+/// Marginalia public API: `GET {base}{query}?count=N` with the public key
+/// built into the path. Failures return `blocked` with the reason.
+pub async fn marginalia_search(
+    base: &str,
+    query: &str,
+    max_results: usize,
+    policy: &WebPolicy,
+    cancel: &CancellationToken,
+) -> Result<SearchResult> {
+    let query = query.trim();
+    ensure!(
+        !query.is_empty() && query.chars().count() <= MAX_QUERY_CHARS,
+        "query must contain between 1 and {MAX_QUERY_CHARS} characters"
+    );
+    let mut url = Url::parse(base).context("Marginalia endpoint is not a URL")?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("Marginalia endpoint cannot take a path"))?
+        .pop_if_empty()
+        .push(query);
+    url.query_pairs_mut().append_pair(
+        "count",
+        &max_results.clamp(1, MAX_SEARCH_RESULTS).to_string(),
+    );
+    let mut result = SearchResult {
+        query: query.to_owned(),
+        results: Vec::new(),
+        source_url: url.to_string(),
+        final_url: url.to_string(),
+        status: None,
+        blocked: false,
+        reason: None,
+    };
+    let raw = match fetch_raw_with(url.as_str(), None, policy, cancel).await {
+        Ok(raw) => raw,
+        Err(error) => {
+            if cancel.is_cancelled() {
+                return Err(error);
+            }
+            result.blocked = true;
+            result.reason = Some(format!("{error:#}"));
+            return Ok(result);
+        }
+    };
+    result.final_url = raw.final_url.to_string();
+    result.status = Some(raw.status);
+    if raw.status != 200 {
+        result.blocked = true;
+        result.reason = Some(format!("the API answered HTTP {}", raw.status));
+        return Ok(result);
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(&raw.body) else {
+        result.blocked = true;
+        result.reason = Some("the API did not return JSON".into());
+        return Ok(result);
+    };
+    result.results = parse_marginalia(&value, max_results.clamp(1, MAX_SEARCH_RESULTS));
     Ok(result)
+}
+
+/// Result list of a Marginalia API response (http(s) URLs only).
+pub fn parse_marginalia(value: &Value, max_results: usize) -> Vec<SearchHit> {
+    let mut rows = value.clone();
+    for hit in rows["results"].as_array_mut().into_iter().flatten() {
+        if hit.get("content").is_none() {
+            hit["content"] = hit["description"].clone();
+        }
+    }
+    parse_searxng(&rows, max_results)
 }
 
 /// SearXNG JSON API: `GET {base}/search?q=…&format=json` (the instance must

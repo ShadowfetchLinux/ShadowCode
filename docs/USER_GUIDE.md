@@ -21,13 +21,16 @@ new conversation in the current project.
 
 ## Pick a model
 
-Open the picker (`Ctrl+M`, or the model button in the composer). It has two
+Open the picker (`Ctrl+M`, or the model button in the composer). It has three
 groups:
 
 - **Subscriptions**: Codex, Claude Code, Cursor, Antigravity and Grok, run
   through the vendor's official CLI. See [subscriptions](SUBSCRIPTIONS.md).
 - **On this computer**: GGUF models run by the bundled llama.cpp. See
   [local models](LOCAL_MODELS.md).
+- **API keys**: OpenRouter models, billed per token to your OpenRouter
+  account. Add a key in **Settings › Accounts › OpenRouter**; until then the
+  group offers *Add an OpenRouter API key…*. See [OpenRouter](OPENROUTER.md).
 
 Each row shows Local or Cloud, its availability, a *Vision* or *Chat only*
 badge where it applies, and its usage line. Search filters rows. Vendors with
@@ -84,8 +87,9 @@ anything.
   need approval. In Plan/Review tasks, ShadowCode denies vendor requests
   automatically and records a warning.
 - **Antigravity.** It never asks ShadowCode. It applies its own settings
-  (`~/.gemini/antigravity-cli/settings.json`) and reports refused actions. A
-  warning at task start reminds you.
+  (`~/.gemini/antigravity-cli/settings.json`) and denies any tool it would
+  normally ask about. When that leaves it with no answer, the task fails and
+  says so. A warning at task start reminds you.
 
 An unanswered vendor approval is denied after 10 minutes
 (`cli_agents.approval_timeout_sec`).

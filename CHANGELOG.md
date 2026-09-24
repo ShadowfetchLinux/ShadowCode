@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.29.0: OpenRouter, working web search
+
+- **OpenRouter API keys.** People without a subscription can paste an
+  [OpenRouter](https://openrouter.ai) key in **Settings › Accounts ›
+  OpenRouter** and pick any of its text models from a new **API keys** group
+  in the picker, labelled as billed per token. The key is checked with
+  OpenRouter before it is saved to the profile's private `secrets.env`, and is
+  never shown again. Rows show price per million tokens, *Vision* and *Chat
+  only* from OpenRouter's model list. Tasks run on ShadowCode's own agent loop,
+  so permissions, approvals, checkpoints, the Web toggle, image attachments and
+  review all apply. Offline mode turns the rows off. The group sits below *On
+  this computer*, so a search that matches both picks the free local model.
+- **Web search works again.** DuckDuckGo refuses ShadowCode's honestly
+  labelled requests with a bot check. `web_search` now falls back to
+  Marginalia Search's public API instead of returning nothing, and reports
+  both reasons if that fails too.
+- **VPN DNS no longer blocks sites.** Some VPN resolvers (NordVPN) answer
+  names such as `www.google.com` with an address in 192.0.0.0/24, which
+  `web_fetch` refused as reserved. Only that block's special-purpose hosts are
+  refused now.
+- **Antigravity no longer reports an empty success.** `agy`'s headless mode
+  denies any tool it would ask about, because it can't ask ShadowCode. When
+  that leaves it with no answer, the task now fails and explains why.
+
 ## 0.28.1: Polish
 
 - **Settings › Accounts is shorter.** Each card is headed by the product name

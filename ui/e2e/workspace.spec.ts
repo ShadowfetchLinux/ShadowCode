@@ -45,7 +45,7 @@ async function chooseBySearch(page: Page, text: string) {
 }
 
 async function runLocalTask(page: Page, text: string) {
-  await chooseBySearch(page, "qwen");
+  await chooseBySearch(page, "qwen3:14b");
   await prompt(page).fill(text);
   await send(page).click();
   await expect(
@@ -98,7 +98,7 @@ test("picks a local row; web and permission controls follow the row", async ({
   await expect(
     page.getByRole("button", { name: "Web lookups for this task" }),
   ).toHaveCount(0);
-  await chooseBySearch(page, "qwen");
+  await chooseBySearch(page, "qwen3:14b");
   await expect(trigger(page)).toHaveAttribute(
     "aria-label",
     /qwen3:14b · This computer/,
@@ -125,7 +125,7 @@ test("picks a local row; web and permission controls follow the row", async ({
 test("runs a task with streamed events and reviews the changes", async ({
   page,
 }) => {
-  await chooseBySearch(page, "qwen");
+  await chooseBySearch(page, "qwen3:14b");
   await prompt(page).fill("Fix the add function");
   await send(page).click();
   const live = page.locator(".working .activity-timeline");
@@ -224,6 +224,68 @@ test("a Sign in row opens Accounts and Connect streams the official login", asyn
   await expect(
     page.getByRole("option", { name: /Claude Code · Default/ }),
   ).toContainText("Ready");
+});
+
+test("an OpenRouter API key unlocks per-token models in the picker", async ({
+  page,
+}) => {
+  await trigger(page).click();
+  const api = page.getByRole("group", { name: "API keys" });
+  await expect(api).toContainText("Billed per token by the provider");
+  await expect(
+    api.getByRole("option", { name: "Show all 40 OpenRouter models" }),
+  ).toBeVisible();
+  const keyless = api.getByRole("option", { name: /Qwen: Qwen3 Coder/ });
+  await expect(keyless).toContainText("Add API key");
+  await keyless.click();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  const card = settings.getByRole("article", { name: "OpenRouter" });
+  const input = card.getByLabel("OpenRouter API key");
+  await expect(input).toBeFocused();
+  await input.fill("sk-or-nope");
+  await card.getByRole("button", { name: "Save" }).click();
+  await expect(card.getByRole("alert")).toHaveText(
+    "OpenRouter rejected this key (401)",
+  );
+  await input.fill("sk-or-valid");
+  await card.getByRole("button", { name: "Save" }).click();
+  await expect(card.getByText("Key: sk-or-v1-a1b…9f2")).toBeVisible();
+  await expect(card.getByText(/40 models \(30 support tools\)/)).toBeVisible();
+  expect(await page.content()).not.toContain("sk-or-valid");
+  await expect(
+    new AxeBuilder({ page })
+      .include('[role="dialog"]')
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze(),
+  ).resolves.toMatchObject({ violations: [] });
+  await card.screenshot({ path: "test-results/openrouter-card.png" });
+  await settings.getByRole("button", { name: "Close" }).last().click();
+  await expect(settings).toHaveCount(0);
+
+  await trigger(page).click();
+  await expect(
+    page
+      .getByRole("group", { name: "API keys" })
+      .getByRole("option", { name: /Qwen: Qwen3 Coder/ }),
+  ).toContainText("Ready");
+  await page.screenshot({ path: "test-results/picker-openrouter.png" });
+  const search = page.getByRole("combobox", { name: "Search models" });
+  await search.fill("qwen coder");
+  await expect(page.getByRole("option")).toHaveCount(1);
+  await search.press("Enter");
+  await expect(trigger(page)).toContainText("Qwen: Qwen3 Coder");
+  await expect(trigger(page)).toContainText("API key");
+  await prompt(page).fill("Fix the add function");
+  await send(page).click();
+  await expect(page.getByRole("region", { name: "Task summary" })).toBeVisible({
+    timeout: 15000,
+  });
+  const posts = (await fakeLog(page)).filter(
+    (r) => r.path === "/api/jobs" && r.method === "POST",
+  );
+  expect(posts.map((r) => r.body.model)).toEqual([
+    "api:openrouter:qwen/qwen3-coder",
+  ]);
 });
 
 test("loads a local model from Settings", async ({ page }) => {

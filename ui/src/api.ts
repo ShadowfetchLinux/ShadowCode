@@ -129,6 +129,28 @@ export type AccountsResponse = {
   local_engine?: LocalCatalog;
 };
 
+/** GET /api/openrouter: the saved API key's state (never the key itself) and
+ * the cached model list. */
+export type OpenRouterStatus = {
+  key_set: boolean;
+  key: {
+    label: string;
+    /** USD used by this key. */
+    usage: number;
+    limit: number | null;
+    limit_remaining: number | null;
+    is_free_tier: boolean;
+  } | null;
+  key_error: string | null;
+  models: number;
+  tool_models: number;
+  /** Unix seconds of the last model-list fetch. */
+  fetched_at: number | null;
+  offline: boolean;
+  keys_url: string;
+  activity_url: string;
+};
+
 export type LoginProgress = {
   running: boolean;
   lines: string[];
@@ -565,6 +587,20 @@ export const api = {
       "POST",
       {},
     ),
+  /** OpenRouter (API key, billed per token). */
+  openrouterStatus: () => get<OpenRouterStatus>("/api/openrouter"),
+  /** Validates the key with OpenRouter and saves it on this computer; the
+   * answer never echoes it back. A rejected key is an error. */
+  setOpenrouterKey: async (key: string) => {
+    const api_key = key.trim();
+    // An empty body removes the key; never let a blank field do that.
+    if (!api_key) throw new Error("Paste an OpenRouter API key first.");
+    return send<OpenRouterStatus>("/api/openrouter/key", "POST", { api_key });
+  },
+  removeOpenrouterKey: () =>
+    send<OpenRouterStatus>("/api/openrouter/key", "POST", { api_key: "" }),
+  refreshOpenrouter: () =>
+    send<OpenRouterStatus>("/api/openrouter/refresh", "POST", {}),
   localModels: () => get<LocalCatalog>("/api/local-models"),
   addLocalModel: (path: string) =>
     send<{ ok: boolean; local_engine?: LocalCatalog }>(

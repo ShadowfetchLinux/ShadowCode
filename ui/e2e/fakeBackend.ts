@@ -69,6 +69,109 @@ export function installFakeBackend(options: FakeOptions = {}) {
     label: "Runs on this computer · No subscription quota",
   };
 
+  // OpenRouter catalogue: [slug, name, $/M in, $/M out, tools, vision].
+  // Enough rows that the picker collapses the section.
+  const openrouterSeed: [string, string, number, number, boolean, boolean][] = [
+    ["qwen/qwen3-coder", "Qwen: Qwen3 Coder", 0.3, 1.2, true, false],
+    ["qwen/qwen3-235b-a22b", "Qwen: Qwen3 235B A22B", 0.13, 0.6, true, false],
+    [
+      "qwen/qwen2.5-vl-72b-instruct",
+      "Qwen: Qwen2.5 VL 72B",
+      0.25,
+      0.75,
+      false,
+      true,
+    ],
+    [
+      "deepseek/deepseek-chat-v3.1",
+      "DeepSeek: DeepSeek V3.1",
+      0.2,
+      0.8,
+      true,
+      false,
+    ],
+    ["deepseek/deepseek-r1:free", "DeepSeek: R1 (free)", 0, 0, false, false],
+    ["moonshotai/kimi-k2", "MoonshotAI: Kimi K2", 0.14, 2.49, true, false],
+    ["z-ai/glm-4.6", "Z.AI: GLM 4.6", 0.4, 1.75, true, false],
+    [
+      "mistralai/devstral-medium",
+      "Mistral: Devstral Medium",
+      0.4,
+      2,
+      true,
+      false,
+    ],
+    [
+      "mistralai/mistral-small-3.2-24b-instruct",
+      "Mistral: Mistral Small 3.2 24B",
+      0.05,
+      0.1,
+      true,
+      true,
+    ],
+    [
+      "google/gemini-2.5-flash",
+      "Google: Gemini 2.5 Flash",
+      0.3,
+      2.5,
+      true,
+      true,
+    ],
+    [
+      "google/gemma-3-27b-it:free",
+      "Google: Gemma 3 27B (free)",
+      0,
+      0,
+      false,
+      true,
+    ],
+    [
+      "meta-llama/llama-3.3-70b-instruct",
+      "Meta: Llama 3.3 70B Instruct",
+      0.13,
+      0.4,
+      true,
+      false,
+    ],
+    [
+      "meta-llama/llama-4-maverick",
+      "Meta: Llama 4 Maverick",
+      0.15,
+      0.6,
+      true,
+      true,
+    ],
+    ["openai/gpt-oss-120b", "OpenAI: gpt-oss-120b", 0.05, 0.25, true, false],
+    ["x-ai/grok-code-fast-1", "xAI: Grok Code Fast 1", 0.2, 1.5, true, false],
+    [
+      "nousresearch/hermes-3-llama-3.1-405b",
+      "Nous: Hermes 3 405B",
+      0.7,
+      0.8,
+      false,
+      false,
+    ],
+  ];
+  for (let i = openrouterSeed.length; i < 40; i++)
+    openrouterSeed.push([
+      `vendor${i % 5}/model-${i}`,
+      `Vendor ${i % 5}: Model ${i}`,
+      0.1 * (i % 7),
+      0.4 * (i % 7),
+      i % 4 !== 0,
+      i % 3 === 0,
+    ]);
+  const openrouterModels = openrouterSeed.map(
+    ([slug, name, input, output, tools, vision]) => ({
+      slug,
+      name,
+      input,
+      output,
+      tools,
+      vision,
+    }),
+  );
+
   const state: Json = {
     onboarded: !options.onboarding,
     config: {
@@ -261,6 +364,12 @@ export function installFakeBackend(options: FakeOptions = {}) {
         target: null as string | null,
       },
     ],
+    openrouter: {
+      /** The saved key never leaves the fake either; only `info` is served. */
+      key: null as null | string,
+      info: null as null | Json,
+      fetched_at: null as null | number,
+    },
     jobs: [] as Json[],
     events: [] as Json[],
     cursor: 0,
@@ -288,6 +397,67 @@ export function installFakeBackend(options: FakeOptions = {}) {
       usage: v.usage,
     };
   }
+  const openrouterOffline = () => state.config.network?.mode === "offline";
+  function openrouterStatus() {
+    const or = state.openrouter;
+    return {
+      key_set: Boolean(or.key),
+      key: or.key ? or.info : null,
+      key_error: null,
+      models: openrouterModels.length,
+      tool_models: openrouterModels.filter((m) => m.tools).length,
+      fetched_at: or.fetched_at,
+      offline: openrouterOffline(),
+      keys_url: "https://openrouter.ai/keys",
+      activity_url: "https://openrouter.ai/activity",
+    };
+  }
+  function openrouterRow(m: (typeof openrouterModels)[number]) {
+    const price = (n: number) => `$${n.toFixed(2)}/M`;
+    const free = m.input === 0 && m.output === 0;
+    const offline = openrouterOffline();
+    const ready = Boolean(state.openrouter.key) && !offline;
+    return {
+      id: `api:openrouter:${m.slug}`,
+      provider: "openrouter",
+      account: "",
+      model: m.slug,
+      route: "native",
+      group: "api",
+      name: m.name,
+      subtitle: `OpenRouter · ${m.slug}`,
+      inference: "cloud",
+      availability: offline ? "unavailable" : ready ? "ready" : "sign_in",
+      availability_label: offline
+        ? "Unavailable"
+        : ready
+          ? "Ready"
+          : "Add API key",
+      reason: offline
+        ? "Offline mode: OpenRouter is off"
+        : ready
+          ? ""
+          : "Add an OpenRouter API key in Accounts",
+      featured: false,
+      vision: m.vision,
+      tools: m.tools,
+      is_default: false,
+      usage: {
+        ...unknownUsage,
+        state: "api_key",
+        label: free
+          ? "API key · free"
+          : `API key · ${price(m.input)} in · ${price(m.output)} out`,
+        detail: [
+          free
+            ? "Free model: no charge per token"
+            : `Input ${price(m.input)} tokens · output ${price(m.output)} tokens`,
+          "Billed per token to your OpenRouter key",
+        ],
+        provider_usage_url: "https://openrouter.ai/activity",
+      },
+    };
+  }
   function pickerTargets() {
     const rows: Json[] = [];
     for (const [key, v] of Object.entries(state.vendors) as [string, Json][]) {
@@ -295,6 +465,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
         for (const m of v.models) rows.push(vendorRow(key, v, m));
       else rows.push(vendorRow(key, v));
     }
+    for (const m of openrouterModels) rows.push(openrouterRow(m));
     for (const m of state.local.models as Json[])
       rows.push({
         id: m.id,
@@ -591,6 +762,38 @@ export function installFakeBackend(options: FakeOptions = {}) {
           note: `Signed out of ${v.label}`,
         };
       }
+    }
+    if (path === "/api/openrouter") return openrouterStatus();
+    if (path === "/api/openrouter/key" && method === "POST") {
+      const key = String(body?.api_key ?? "").trim();
+      if (!key) {
+        state.openrouter.key = null;
+        state.openrouter.info = null;
+        return openrouterStatus();
+      }
+      if (openrouterOffline())
+        throw new Error(
+          JSON.stringify({ error: "Offline mode: OpenRouter is off" }),
+        );
+      if (key !== "sk-or-valid")
+        // HTTP 400 over IPC: the error string carries the JSON body.
+        throw new Error(
+          JSON.stringify({ error: "OpenRouter rejected this key (401)" }),
+        );
+      state.openrouter.key = key;
+      state.openrouter.info = {
+        label: "sk-or-v1-a1b…9f2",
+        usage: 1.2345,
+        limit: 10,
+        limit_remaining: 8.7655,
+        is_free_tier: false,
+      };
+      state.openrouter.fetched_at = now();
+      return openrouterStatus();
+    }
+    if (path === "/api/openrouter/refresh" && method === "POST") {
+      state.openrouter.fetched_at = now();
+      return openrouterStatus();
     }
     if (path === "/api/local-models") return state.local;
     if (path === "/api/local-models/load") {

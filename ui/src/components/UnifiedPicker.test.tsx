@@ -177,7 +177,8 @@ it("selects with the keyboard and restores focus to the trigger", async () => {
   await waitFor(() => expect(document.activeElement).toBe(search()));
   expect(activeOption()?.textContent).toContain("Codex · GPT-6-Astra");
   key("End");
-  expect(activeOption()?.textContent).toContain("gpt-oss:20b");
+  // The API keys group comes last; with no rows it offers to add a key.
+  expect(activeOption()?.textContent).toBe("Add an OpenRouter API key…");
   key("Home");
   expect(activeOption()?.textContent).toContain("Codex");
   key("ArrowDown");
@@ -269,4 +270,165 @@ it("collapses a vendor with many models and expands on request", () => {
   });
   fireEvent.click(more);
   expect(screen.getAllByRole("option", { name: /^Cursor/ })).toHaveLength(40);
+});
+
+const openrouterRow = (
+  i: number,
+  over: Partial<PickerTarget> = {},
+): PickerTarget => ({
+  id: `api:openrouter:vendor/model-${i}`,
+  provider: "openrouter",
+  account: "",
+  model: `vendor/model-${i}`,
+  route: "native",
+  group: "api",
+  name: `Vendor: Model ${i}`,
+  subtitle: `OpenRouter · vendor/model-${i}`,
+  inference: "cloud",
+  availability: "ready",
+  availability_label: "Ready",
+  reason: "",
+  featured: false,
+  vision: false,
+  tools: true,
+  is_default: false,
+  usage: {
+    state: "api_key",
+    label: "API key · $0.10/M in · $0.40/M out",
+    detail: ["Billed per token to your OpenRouter key"],
+    provider_usage_url: "https://openrouter.ai/activity",
+  },
+  ...over,
+});
+const qwenCoder = openrouterRow(0, {
+  id: "api:openrouter:qwen/qwen3-coder",
+  model: "qwen/qwen3-coder",
+  name: "Qwen: Qwen3 Coder",
+  subtitle: "OpenRouter · qwen/qwen3-coder",
+  usage: {
+    state: "api_key",
+    label: "API key · $0.30/M in · $1.20/M out",
+    detail: ["Input $0.30/M tokens · output $1.20/M tokens"],
+    provider_usage_url: "https://openrouter.ai/activity",
+  },
+});
+const openrouterRows = [
+  qwenCoder,
+  ...Array.from({ length: 39 }, (_, i) =>
+    openrouterRow(i + 1, { tools: i % 4 !== 0 }),
+  ),
+];
+
+it("shows OpenRouter rows in their own API keys group, collapsed", () => {
+  render(<Harness targets={[codex, ...openrouterRows, qwen]} />);
+  fireEvent.click(trigger());
+  const groups = screen.getAllByRole("group");
+  expect(groups.map((g) => g.getAttribute("aria-labelledby"))).toHaveLength(3);
+  const api = screen.getByRole("group", { name: "API keys" });
+  // After On this computer (free local rows win a shared search), with the
+  // billing note.
+  expect(groups[2]).toBe(api);
+  expect(api.getAttribute("aria-describedby")).toBeTruthy();
+  expect(
+    document.getElementById(api.getAttribute("aria-describedby")!)?.textContent,
+  ).toBe("Billed per token by the provider");
+  const subs = screen.getByRole("group", { name: "Subscriptions" });
+  expect(within(subs).queryByRole("option", { name: /Qwen/ })).toBeNull();
+  // Collapsed: the first row plus "Show all".
+  expect(within(api).getAllByRole("option")).toHaveLength(2);
+  const row = within(api).getByRole("option", { name: /Qwen: Qwen3 Coder/ });
+  expect(row.textContent).toMatch(
+    /Cloud · Ready · API key · \$0\.30\/M in · \$1\.20\/M out/,
+  );
+  expect(row.textContent).not.toMatch(/subscription|plan/i);
+  fireEvent.click(
+    within(api).getByRole("option", { name: "Show all 40 OpenRouter models" }),
+  );
+  expect(within(api).getAllByRole("option")).toHaveLength(40);
+  // tools:false rows carry the Chat only badge.
+  expect(within(api).getAllByText("Chat only")).toHaveLength(10);
+});
+
+it("finds an OpenRouter model by name words or slug and picks it", async () => {
+  const onSelect = vi.fn();
+  render(
+    <Harness targets={[codex, ...openrouterRows, qwen]} onSelect={onSelect} />,
+  );
+  fireEvent.click(trigger());
+  fireEvent.change(search(), { target: { value: "qwen coder" } });
+  expect(
+    screen
+      .getAllByRole("option")
+      .map((o) => o.querySelector("strong")?.textContent),
+  ).toEqual(["Qwen: Qwen3 Coder"]);
+  fireEvent.change(search(), { target: { value: "vendor/model-17" } });
+  expect(screen.getAllByRole("option")).toHaveLength(1);
+  expect(screen.getByText("No subscription matches")).toBeTruthy();
+  fireEvent.change(search(), { target: { value: "qwen3-coder" } });
+  key("Enter");
+  expect(onSelect).toHaveBeenCalledWith("api:openrouter:qwen/qwen3-coder");
+  await waitFor(() => expect(document.activeElement).toBe(trigger()));
+  // The trigger says it is API-key usage, not a subscription.
+  expect(trigger().textContent).toBe("API keyQwen: Qwen3 Coder");
+});
+
+it("sends a keyless OpenRouter row to Accounts and explains it in details", () => {
+  const onConnect = vi.fn();
+  const keyless = openrouterRows.map((t) => ({
+    ...t,
+    availability: "sign_in",
+    availability_label: "Add API key",
+    reason: "Add an OpenRouter API key in Accounts",
+  }));
+  render(<Harness targets={[codex, ...keyless]} onConnect={onConnect} />);
+  fireEvent.click(trigger());
+  const row = screen.getByRole("option", { name: /Qwen: Qwen3 Coder/ });
+  expect(row.textContent).toContain("Cloud · Add API key");
+  // Details from the keyboard: price lines and the activity link.
+  key("ArrowDown");
+  expect(activeOption()).toBe(row);
+  key("ArrowRight");
+  const details = document.querySelector<HTMLElement>(
+    ".unified-picker-details",
+  )!;
+  expect(details.textContent).toContain("OpenRouter · qwen/qwen3-coder");
+  expect(details.textContent).toContain("API key · $0.30/M in · $1.20/M out");
+  expect(details.textContent).toContain(
+    "Input $0.30/M tokens · output $1.20/M tokens",
+  );
+  expect(
+    within(details)
+      .getByRole("link", { name: "Open OpenRouter activity" })
+      .getAttribute("href"),
+  ).toBe("https://openrouter.ai/activity");
+  fireEvent.click(
+    within(details).getByRole("button", { name: "Add OpenRouter API key" }),
+  );
+  expect(onConnect).toHaveBeenLastCalledWith("openrouter");
+  onConnect.mockClear();
+  fireEvent.click(trigger());
+  fireEvent.click(screen.getByRole("option", { name: /Qwen: Qwen3 Coder/ }));
+  expect(onConnect).toHaveBeenCalledWith("openrouter");
+});
+
+it("offers to add an OpenRouter key when there are no API-key rows", () => {
+  const onConnect = vi.fn();
+  render(<Harness targets={[codex, qwen]} onConnect={onConnect} />);
+  fireEvent.click(trigger());
+  const api = screen.getByRole("group", { name: "API keys" });
+  const add = within(api).getByRole("option", {
+    name: "Add an OpenRouter API key…",
+  });
+  expect(add.getAttribute("aria-selected")).toBe("false");
+  key("ArrowDown");
+  key("ArrowDown");
+  expect(activeOption()).toBe(add);
+  key("Enter");
+  expect(onConnect).toHaveBeenCalledWith("openrouter");
+  expect(screen.queryByRole("listbox")).toBeNull();
+  // While searching the group just reports no match.
+  fireEvent.click(trigger());
+  fireEvent.change(search(), { target: { value: "qwen" } });
+  expect(screen.getByText("No API-key model matches")).toBeTruthy();
+  expect(screen.queryByText("Add an OpenRouter API key…")).toBeNull();
 });

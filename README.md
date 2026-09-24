@@ -5,8 +5,10 @@ describe the change, watch the agent work, then review the diff.
 
 The model can come from a subscription you already have (Codex, Claude Code,
 Cursor, Antigravity or Grok, driven through each vendor's own command-line
-tool) or from a GGUF file on your computer, run by a llama.cpp runtime that
-ships with the app. You don't need Ollama, LM Studio or any other model server.
+tool), from an [OpenRouter](https://openrouter.ai) API key if you have no
+subscription (hundreds of models, billed per token), or from a GGUF file on
+your computer, run by a llama.cpp runtime that ships with the app. You don't
+need Ollama, LM Studio or any other model server.
 
 ![ShadowCode workspace](docs/images/workspace-light.png)
 
@@ -24,15 +26,15 @@ ships with the app. You don't need Ollama, LM Studio or any other model server.
   ShadowCode's own tools can be rewound.
 
 Release history is in [CHANGELOG.md](CHANGELOG.md). What's new in this release:
-[0.28.1 release notes](docs/RELEASE_NOTES.md).
+[0.29.0 release notes](docs/RELEASE_NOTES.md).
 
 ## Install
 
 Releases target x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).
 Download from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest):
 
-- `ShadowCode_0.28.1_amd64.AppImage`
-- `ShadowCode_0.28.1_amd64.deb`
+- `ShadowCode_0.29.0_amd64.AppImage`
+- `ShadowCode_0.29.0_amd64.deb`
 - `SHA256SUMS`
 
 ### AppImage (recommended)
@@ -43,7 +45,7 @@ from a checkout of this repository:
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
 git clone https://github.com/Shadowfetchapps/ShadowCode.git
-./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.28.1_amd64.AppImage
+./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.29.0_amd64.AppImage
 ```
 
 [`scripts/install-appimage.sh`](scripts/install-appimage.sh):
@@ -63,14 +65,14 @@ git clone https://github.com/Shadowfetchapps/ShadowCode.git
   AppImages only after a successful install.
 
 To run the AppImage without installing it:
-`./ShadowCode_0.28.1_amd64.AppImage --appimage-extract-and-run`. FUSE is not
+`./ShadowCode_0.29.0_amd64.AppImage --appimage-extract-and-run`. FUSE is not
 required.
 
 ### Debian package
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-sudo apt install ./ShadowCode_0.28.1_amd64.deb
+sudo apt install ./ShadowCode_0.29.0_amd64.deb
 ```
 
 The deb installs `shadowcode` and the same llama.cpp runtime in
@@ -91,8 +93,10 @@ recommends `libvulkan1`, which is needed for GPU inference.
 
 ![Model picker](docs/images/picker.png)
 
-Every row is a concrete target with a stable ID, for example
-`cli:cursor:auto` or `local:gguf:<hash>`. Selecting it applies to the current
+The picker has three groups: **Subscriptions**, **On this computer** and **API
+keys** (OpenRouter, clearly marked as billed per token). Every row is a
+concrete target with a stable ID, for example `cli:cursor:auto`,
+`local:gguf:<hash>` or `api:openrouter:qwen/qwen3-coder`. Selecting it applies to the current
 conversation, and ShadowCode remembers the choice per conversation. Rows
 show:
 
@@ -100,7 +104,8 @@ show:
 - **Availability**: *Ready*, *Sign in*, *Setup required* or *Unavailable*. A
   row that isn't ready stays visible and tells you why.
 - **Vision** if the model and the runtime both accept images.
-- **Chat only** if a local model's chat template has no tool support, so it
+- **Chat only** if a model has no tool support (a local chat template
+  without tool calls, or an OpenRouter model that doesn't list `tools`), so it
   can answer questions but can't read or edit files.
 - **Usage**: see below.
 
@@ -140,6 +145,26 @@ for that vendor.
   buys credits, redeems resets or turns on overages.
 
 Setup details: [subscriptions](docs/SUBSCRIPTIONS.md).
+
+**Antigravity limitation.** `agy`'s headless mode can't ask ShadowCode for
+permission, so it denies any command it would normally ask about. A task that
+needs one now fails with that explanation instead of ending with an empty
+answer. Use Antigravity for questions and edits it may make on its own, or
+pick another model for tasks that run commands.
+
+## API keys (OpenRouter)
+
+No subscription? Create a key at [openrouter.ai/keys](https://openrouter.ai/keys)
+and paste it into **Settings › Accounts › OpenRouter**. ShadowCode checks it
+with OpenRouter, stores it only in your profile, and never shows it again. The
+picker's **API keys** group then lists OpenRouter's text models, with price
+per million tokens, *Vision* when the model accepts images and *Chat only*
+when it has no tool support. Search the picker by name or slug to find one.
+
+These models run on ShadowCode's own agent loop, the same one local models
+use, so your permission mode, approvals, checkpoints, Web toggle and review
+all apply. Every token is billed to your OpenRouter account; the Accounts card
+shows credits used and your key's limit. Details: [OpenRouter](docs/OPENROUTER.md).
 
 ## Local models
 
@@ -183,15 +208,18 @@ Details: [local models](docs/LOCAL_MODELS.md).
 
 ## Web and network
 
-Local models can use `web_fetch` and `web_search` when you turn on **Web** in
-the composer for that task. Vendor CLIs use their own web tools. Web access
+Local and OpenRouter models can use `web_fetch` and `web_search` when you turn
+on **Web** in the composer for that task. Vendor CLIs use their own web tools. Web access
 refuses loopback, private, link-local and metadata addresses, CGNAT, multicast
 and non-standard ports. It re-checks every redirect and caps time and size.
 `web_search` uses DuckDuckGo's HTML page. DuckDuckGo often answers automated
-requests with a bot check; the tool then says no results were retrieved and
-never makes any up. If you run your own [SearXNG](https://docs.searxng.org/)
-instance, set `network.searxng_url` (for example `http://localhost:8888`, with
-`json` enabled under `search.formats`) and `web_search` asks it first.
+requests with a bot check; ShadowCode then asks
+[Marginalia Search](https://www.marginalia.nu/)'s public API, a keyless API
+for programs (an independent index, so results lean toward smaller sites). If
+both fail, the tool says no results were retrieved and never makes any up. If
+you run your own [SearXNG](https://docs.searxng.org/) instance, set
+`network.searxng_url` (for example `http://localhost:8888`, with `json`
+enabled under `search.formats`) and `web_search` asks it first.
 `web_fetch` works independently of search.
 
 **Settings › Permissions & network** has three network modes:

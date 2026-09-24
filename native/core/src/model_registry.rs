@@ -114,6 +114,15 @@ pub fn from_row(row: &Value) -> Result<ModelConfig> {
     Ok(model)
 }
 pub fn resolve(store: &Store, id: &str, default: &ModelConfig) -> Result<ModelConfig> {
+    if id.starts_with(crate::openrouter::ID_PREFIX) {
+        let state = store
+            .path
+            .parent()
+            .context("Database path has no parent directory")?;
+        let model = crate::openrouter::model_config(state, id)?;
+        validate(&model)?;
+        return Ok(model);
+    }
     if let Some(model) = crate::cli_agent::resolve_vendor(id) {
         validate(&model)?;
         return Ok(model);

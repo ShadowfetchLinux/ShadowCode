@@ -888,6 +888,37 @@ impl Service {
                 let cfg = self.config()?;
                 return self.picker_catalog(&cfg, q("refresh") == "1").await;
             }
+            ("GET", "/api/openrouter") => {
+                let cfg = self.config()?;
+                return Ok(
+                    crate::openrouter::status(self.engine.paths(), cfg.offline(), true).await,
+                );
+            }
+            ("POST", "/api/openrouter/key") => {
+                let cfg = self.config()?;
+                let key = body["api_key"].as_str().unwrap_or("");
+                // Removing a key needs no network; checking a new one does.
+                ensure!(
+                    key.trim().is_empty() || !cfg.offline(),
+                    "Offline mode: OpenRouter is off"
+                );
+                crate::openrouter::save_key(self.engine.paths(), key).await?;
+                if !key.trim().is_empty() {
+                    // The first save also fetches the model list.
+                    let _ = crate::openrouter::refresh(self.engine.paths(), false).await;
+                }
+                return Ok(
+                    crate::openrouter::status(self.engine.paths(), cfg.offline(), true).await,
+                );
+            }
+            ("POST", "/api/openrouter/refresh") => {
+                let cfg = self.config()?;
+                ensure!(!cfg.offline(), "Offline mode: OpenRouter is off");
+                crate::openrouter::refresh(self.engine.paths(), true).await?;
+                return Ok(
+                    crate::openrouter::status(self.engine.paths(), cfg.offline(), true).await,
+                );
+            }
             ("GET", "/api/accounts") => {
                 let cfg = self.config()?;
                 let vendors = self.engine.vendors();
@@ -1239,6 +1270,11 @@ impl Service {
                     &cfg.local_engine,
                     target_id.as_deref().unwrap_or(&cfg.model.default),
                     body["images"].as_array().map_or(0, Vec::len),
+                )?;
+                crate::openrouter::precheck(
+                    self.engine.paths(),
+                    target_id.as_deref().unwrap_or(&cfg.model.default),
+                    cfg.offline(),
                 )?;
                 let model = match &target_id {
                     Some(id) => Some(self.resolve_model(id, &cfg.model)?),
@@ -1869,6 +1905,32 @@ impl Service {
         .await
         .context("Local model catalog stopped")?;
         targets.extend(crate::local_engine::picker_rows(&local, &cfg.model.default));
+        // OpenRouter rows appear once a key is saved (saving fetches the list;
+        // until then the picker offers to add one). A stale cached list is
+        // shown at once and refreshed in the background, so the picker never
+        // waits on the network.
+        let paths = self.engine.paths();
+        let offline = cfg.offline();
+        let key_set = crate::openrouter::key(paths).is_some();
+        let catalog = match (key_set, crate::openrouter::cached(paths)) {
+            (false, _) => None,
+            (true, Some(cached)) => {
+                if !offline && !crate::openrouter::is_fresh(&cached) {
+                    let paths = paths.clone();
+                    tokio::spawn(async move {
+                        let _ = crate::openrouter::refresh(&paths, true).await;
+                    });
+                }
+                Some(cached)
+            }
+            (true, None) if !offline => crate::openrouter::refresh(paths, false).await.ok(),
+            (true, None) => None,
+        };
+        targets.extend(crate::openrouter::picker_rows(
+            catalog.as_ref(),
+            key_set,
+            offline,
+        ));
         Ok(json!({
             "targets": targets,
             "vendors": vendors.status_json(&cfg.cli_agents, false).await,

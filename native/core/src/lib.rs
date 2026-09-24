@@ -26,6 +26,7 @@ pub mod memory;
 pub mod model_registry;
 pub mod models;
 pub mod ollama_store;
+pub mod openrouter;
 pub mod parallel;
 pub mod patch;
 pub mod paths;

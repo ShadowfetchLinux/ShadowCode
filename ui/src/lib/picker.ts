@@ -1,5 +1,7 @@
 /** Composer picker rows exactly as GET /api/picker returns them
- * (docs/API_CONTRACT_0.28.md). Nothing here invents availability or usage. */
+ * (docs/API_CONTRACT_0.28.md). Nothing here invents availability or usage.
+ * Three groups: subscriptions (vendor CLIs), API keys (OpenRouter, billed per
+ * token) and models on this computer. */
 
 export type UsageWindow = {
   label: string;
@@ -10,7 +12,14 @@ export type UsageWindow = {
 };
 
 export type UsageSnapshot = {
-  state: "ok" | "stale" | "unavailable" | "local" | "limit_reached" | string;
+  state:
+    | "ok"
+    | "stale"
+    | "unavailable"
+    | "local"
+    | "limit_reached"
+    | "api_key"
+    | string;
   label: string;
   detail?: string[];
   plan?: string | null;
@@ -45,7 +54,7 @@ export type PickerTarget = {
   account?: string;
   model?: string;
   route?: string;
-  group: "subscriptions" | "local" | string;
+  group: "subscriptions" | "api" | "local" | string;
   name: string;
   subtitle?: string;
   inference: "cloud" | "local" | string;
@@ -62,9 +71,20 @@ export type PickerTarget = {
 
 export const UNKNOWN_USAGE = "Usage unavailable · Open provider usage";
 export const LOCAL_USAGE = "Runs on this computer · No subscription quota";
+export const API_KEY_USAGE = "API key · billed per token";
 
 export const isLocal = (target: PickerTarget) =>
   target.inference === "local" || target.group === "local";
+
+/** Rows paid per token with the user's own API key (OpenRouter). They never
+ * share a group with subscription rows. */
+export const isApiKey = (target: PickerTarget) =>
+  !isLocal(target) &&
+  (target.group === "api" || target.provider === "openrouter");
+
+/** Vendors whose product name is not the first part of the row name
+ * (OpenRouter rows are named after the model: "Qwen: Qwen3 Coder"). */
+const VENDOR_LABELS: Record<string, string> = { openrouter: "OpenRouter" };
 
 /** The row name without the " · This computer" suffix, for places that
  * already carry a Local badge next to it (the composer trigger). */
@@ -74,7 +94,8 @@ export const shortName = (target: PickerTarget) =>
 export const isReady = (target: PickerTarget) =>
   target.availability === "ready";
 
-/** "cli:cursor" → "cursor"; local rows share the "local" key. */
+/** "cli:cursor" → "cursor", "openrouter" → "openrouter"; local rows share the
+ * "local" key. */
 export function vendorKey(target: PickerTarget): string {
   if (isLocal(target)) return "local";
   return target.provider.replace(/^cli:/, "");
@@ -82,6 +103,8 @@ export function vendorKey(target: PickerTarget): string {
 
 /** The product name before " · " in a row name ("Cursor · Auto" → "Cursor"). */
 export function vendorLabel(target: PickerTarget): string {
+  const known = VENDOR_LABELS[vendorKey(target)];
+  if (known) return known;
   return target.name.split(" · ")[0] || target.provider;
 }
 
@@ -132,6 +155,8 @@ export function usageLabel(
   if (inference === "local" || usage?.state === "local")
     return usage?.label || LOCAL_USAGE;
   if (!usage) return UNKNOWN_USAGE;
+  // Per-token prices come from the engine as-is ("API key · $0.30/M in …").
+  if (usage.state === "api_key") return usage.label || API_KEY_USAGE;
   if (usage.state === "stale") {
     const checked = usage.last_refresh
       ? `Last checked ${relativeTime(usage.last_refresh, now)}`
@@ -193,21 +218,25 @@ export function usageDetailLines(
 
 export type TargetGroups = {
   subscriptions: PickerTarget[];
+  api: PickerTarget[];
   local: PickerTarget[];
 };
 
-/** Every non-local row is a subscription row; `featured` only orders rows. */
+/** API-key rows go to their own group; every other non-local row is a
+ * subscription row. `featured` only orders subscription rows. */
 export function groupTargets(targets: PickerTarget[]): TargetGroups {
   const subscriptions: PickerTarget[] = [];
+  const api: PickerTarget[] = [];
   const local: PickerTarget[] = [];
   for (const target of targets) {
     if (isLocal(target)) local.push(target);
+    else if (isApiKey(target)) api.push(target);
     else subscriptions.push(target);
   }
   subscriptions.sort(
     (a, b) => Number(b.featured !== false) - Number(a.featured !== false),
   );
-  return { subscriptions, local };
+  return { subscriptions, api, local };
 }
 
 export function matchesQuery(target: PickerTarget, query: string): boolean {
@@ -219,7 +248,11 @@ export function matchesQuery(target: PickerTarget, query: string): boolean {
     target.provider,
     target.model,
     target.availability_label,
-    isLocal(target) ? "local this computer" : "cloud subscription",
+    isLocal(target)
+      ? "local this computer"
+      : isApiKey(target)
+        ? "cloud api key"
+        : "cloud subscription",
   ]
     .filter(Boolean)
     .join(" ")
@@ -323,7 +356,9 @@ export function rowAction(target: PickerTarget): RowAction {
           target.reason ||
           (isLocal(target)
             ? "The local runtime or this model needs setup."
-            : `Install the ${vendorLabel(target)} command-line tool, then refresh Accounts.`),
+            : isApiKey(target)
+              ? `Add an API key for ${vendorLabel(target)} in Accounts.`
+              : `Install the ${vendorLabel(target)} command-line tool, then refresh Accounts.`),
       };
     default:
       return {

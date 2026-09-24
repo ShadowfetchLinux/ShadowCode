@@ -129,8 +129,10 @@ Private, loopback, link-local and metadata addresses are blocked. To let the
 agent reach a local dev server, add its exact `host:port` to
 `network.allow_local_dev`. Full rules: [SECURITY.md](../SECURITY.md#web-tools).
 
-If DuckDuckGo shows a bot check or an error, `web_search` returns
-`blocked: true` with no results. The model is told that nothing was retrieved.
+If DuckDuckGo shows a bot check or an error, `web_search` asks Marginalia
+Search's public API instead. If that fails too, it returns `blocked: true`
+with both reasons and no results, and the model is told that nothing was
+retrieved.
 
 ## Configuration
 

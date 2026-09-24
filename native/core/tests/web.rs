@@ -815,3 +815,82 @@ async fn configured_searxng_answers_first_and_its_failures_are_reported() {
     assert!(refused.reason.unwrap().contains("search.formats"));
     assert!(refused.results.is_empty());
 }
+
+#[tokio::test]
+async fn a_refused_duckduckgo_falls_back_to_marginalia_and_both_failures_are_reported() {
+    let server = serve(|path| {
+        if path.starts_with("POST /ddg") {
+            // DuckDuckGo's bot check answers 202 with a challenge page.
+            Reply::Body(202, "text/html", b"<html>challenge</html>".to_vec())
+        } else if path.starts_with("/marginalia/rust%20tokio?count=3") {
+            Reply::Body(
+                200,
+                "application/json",
+                br#"{"license":"CC-BY-NC-SA 4.0","results":[
+                    {"url":"https://tokio.rs/","title":"Tokio","description":"An asynchronous Rust runtime"},
+                    {"url":"javascript:alert(1)","title":"bad","description":"x"}]}"#
+                    .to_vec(),
+            )
+        } else {
+            Reply::Body(503, "text/plain", b"down".to_vec())
+        }
+    })
+    .await;
+    let cancel = CancellationToken::new();
+    let policy = policy(&[server.allow()]);
+    let found = shadowcode_core::web::search_chain(
+        &server.url("/ddg"),
+        &server.url("/marginalia/"),
+        "rust tokio",
+        3,
+        &policy,
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert!(!found.blocked, "{:?}", found.reason);
+    assert_eq!(found.results.len(), 1, "non-http results are dropped");
+    assert_eq!(found.results[0].url, "https://tokio.rs/");
+    assert_eq!(found.results[0].snippet, "An asynchronous Rust runtime");
+    assert!(found.source_url.contains("/marginalia/rust%20tokio"));
+
+    let none = shadowcode_core::web::search_chain(
+        &server.url("/ddg"),
+        &server.url("/marginalia/"),
+        "something else",
+        3,
+        &policy,
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert!(none.blocked);
+    let reason = none.reason.unwrap();
+    assert!(
+        reason.contains("DuckDuckGo: The search page answered HTTP 202"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("Marginalia: the API answered HTTP 503"),
+        "{reason}"
+    );
+    assert!(none.results.is_empty());
+}
+
+#[test]
+fn vpn_resolver_addresses_in_192_0_0_are_reachable_but_special_hosts_are_not() {
+    use std::net::{IpAddr, Ipv4Addr};
+    let ip = |d| IpAddr::V4(Ipv4Addr::new(192, 0, 0, d));
+    // NordVPN answers www.google.com with 192.0.0.88.
+    assert_eq!(shadowcode_core::web::blocked_ip(ip(88), false), None);
+    for special in [0, 1, 7, 9, 10, 170, 171] {
+        assert_eq!(
+            shadowcode_core::web::blocked_ip(ip(special), false),
+            Some("reserved address"),
+            "192.0.0.{special}"
+        );
+    }
+    assert!(
+        shadowcode_core::web::blocked_ip(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), false).is_some()
+    );
+}

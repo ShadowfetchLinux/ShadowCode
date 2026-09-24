@@ -271,6 +271,15 @@ impl ModelClient {
             crate::context::response_budget(messages, tools, self.config.context_limit)?;
         let body = self.request_body(messages, tools, response_tokens);
         let mut request = self.client.post(&url).json(&body);
+        if self.config.provider == crate::openrouter::PROVIDER {
+            // Optional app attribution OpenRouter documents for its rankings.
+            request = request
+                .header(
+                    "HTTP-Referer",
+                    "https://github.com/Shadowfetchapps/ShadowCode",
+                )
+                .header("X-Title", "ShadowCode");
+        }
         if let Some(key) = &self.key {
             request = request.bearer_auth(key);
         }

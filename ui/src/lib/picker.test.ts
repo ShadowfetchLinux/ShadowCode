@@ -3,10 +3,13 @@ import {
   resetTime,
   availabilityLabel,
   groupTargets,
+  matchesQuery,
   rowAction,
   UNKNOWN_USAGE,
   usageDetailLines,
   usageLabel,
+  vendorKey,
+  vendorLabel,
   vendorSections,
   type PickerTarget,
 } from "./picker";
@@ -23,6 +26,31 @@ const row = (over: Partial<PickerTarget>): PickerTarget => ({
   usage: { state: "unavailable", label: UNKNOWN_USAGE },
   ...over,
 });
+
+const openrouter = (
+  slug: string,
+  name: string,
+  over: Partial<PickerTarget> = {},
+) =>
+  row({
+    id: `api:openrouter:${slug}`,
+    provider: "openrouter",
+    account: "",
+    model: slug,
+    route: "native",
+    group: "api",
+    name,
+    subtitle: `OpenRouter · ${slug}`,
+    featured: false,
+    is_default: false,
+    usage: {
+      state: "api_key",
+      label: "API key · $0.30/M in · $1.20/M out",
+      detail: ["Billed per token to your OpenRouter key"],
+      provider_usage_url: "https://openrouter.ai/activity",
+    },
+    ...over,
+  });
 
 describe("usage labels", () => {
   it("uses the backend label and never invents numbers", () => {
@@ -52,6 +80,22 @@ describe("usage labels", () => {
         now,
       ),
     ).toBe("2% left · Last checked 2h ago");
+  });
+
+  it("shows the API-key price label as the engine sent it", () => {
+    const qwen = openrouter("qwen/qwen3-coder", "Qwen: Qwen3 Coder");
+    expect(usageLabel(qwen.usage, "cloud")).toBe(
+      "API key · $0.30/M in · $1.20/M out",
+    );
+    expect(usageLabel({ state: "api_key", label: "API key · free" })).toBe(
+      "API key · free",
+    );
+    expect(usageLabel({ state: "api_key", label: "" })).toBe(
+      "API key · billed per token",
+    );
+    expect(usageDetailLines(qwen.usage, now)).toEqual([
+      "Billed per token to your OpenRouter key",
+    ]);
   });
 
   it("labels local rows as free of subscription quota", () => {
@@ -142,6 +186,49 @@ describe("grouping", () => {
     ]);
   });
 
+  it("keeps API-key rows out of Subscriptions", () => {
+    const qwen = openrouter("qwen/qwen3-coder", "Qwen: Qwen3 Coder");
+    // Rows are recognised by group or, failing that, by provider.
+    const bare = openrouter("z-ai/glm-4.6", "Z.AI: GLM 4.6", {
+      group: "subscriptions",
+    });
+    const groups = groupTargets([qwen, row({}), bare]);
+    expect(groups.subscriptions.map((t) => t.id)).toEqual([
+      "cli:codex:gpt-6-astra",
+    ]);
+    expect(groups.api.map((t) => t.id)).toEqual([
+      "api:openrouter:qwen/qwen3-coder",
+      "api:openrouter:z-ai/glm-4.6",
+    ]);
+    expect(groups.local).toEqual([]);
+    expect(vendorKey(qwen)).toBe("openrouter");
+    expect(vendorLabel(qwen)).toBe("OpenRouter");
+  });
+
+  it("collapses OpenRouter to one section and searches name, slug and subtitle", () => {
+    const rows = Array.from({ length: 40 }, (_, i) =>
+      openrouter(`vendor/model-${i}`, `Vendor: Model ${i}`),
+    );
+    rows[7] = openrouter("qwen/qwen3-coder", "Qwen: Qwen3 Coder");
+    const [section, ...rest] = vendorSections(rows, {
+      expanded: [],
+      recent: [],
+      selected: "",
+      searching: false,
+    });
+    expect(rest).toEqual([]);
+    expect(section).toMatchObject({ key: "openrouter", label: "OpenRouter" });
+    expect(section.rows.map((r) => r.id)).toEqual([
+      "api:openrouter:vendor/model-0",
+    ]);
+    expect(section.hidden).toBe(39);
+    const found = (q: string) =>
+      rows.filter((r) => matchesQuery(r, q)).map((r) => r.model);
+    expect(found("qwen coder")).toEqual(["qwen/qwen3-coder"]);
+    expect(found("qwen3-coder")).toEqual(["qwen/qwen3-coder"]);
+    expect(found("openrouter qwen/")).toEqual(["qwen/qwen3-coder"]);
+  });
+
   it("collapses long vendor lists to default, recent and selected rows", () => {
     const cursor = Array.from({ length: 40 }, (_, i) =>
       row({
@@ -199,5 +286,25 @@ describe("row actions", () => {
         row({ availability: "sign_in", availability_label: "" }),
       ),
     ).toBe("Sign in");
+    // An OpenRouter row without a key leads to Accounts › OpenRouter.
+    expect(
+      rowAction(
+        openrouter("qwen/qwen3-coder", "Qwen: Qwen3 Coder", {
+          availability: "sign_in",
+          availability_label: "Add API key",
+        }),
+      ),
+    ).toEqual({ kind: "connect", vendor: "openrouter" });
+    expect(
+      rowAction(
+        openrouter("qwen/qwen3-coder", "Qwen: Qwen3 Coder", {
+          availability: "setup_required",
+          reason: "",
+        }),
+      ),
+    ).toMatchObject({
+      kind: "setup",
+      hint: "Add an API key for OpenRouter in Accounts.",
+    });
   });
 });

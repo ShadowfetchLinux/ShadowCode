@@ -184,3 +184,112 @@ it("Permissions: saves only permissions and network groups", async () => {
     network: { mode: "offline" },
   });
 });
+
+it("Accounts: OpenRouter key is validated, saved, never shown and removable", async () => {
+  const onChanged = vi.fn();
+  render(<AccountsPage onChanged={onChanged} onToast={vi.fn()} />);
+  const card = await screen.findByRole("article", { name: "OpenRouter" });
+  expect(within(card).getByText("API key")).toBeTruthy();
+  await within(card).findByText("Add API key");
+  expect(
+    within(card)
+      .getByRole("link", { name: "openrouter.ai/keys" })
+      .getAttribute("href"),
+  ).toBe("https://openrouter.ai/keys");
+  const input = within(card).getByLabelText(
+    "OpenRouter API key",
+  ) as HTMLInputElement;
+  expect(input.type).toBe("password");
+  expect(input.getAttribute("autocomplete")).toBe("off");
+  const save = within(card).getByRole("button", { name: "Save" });
+  expect(save).toHaveProperty("disabled", true);
+
+  // A rejected key: the engine's reason inline, nothing saved.
+  fireEvent.change(input, { target: { value: "sk-or-wrong" } });
+  fireEvent.click(save);
+  const alert = await within(card).findByRole("alert");
+  expect(alert.textContent).toBe("OpenRouter rejected this key (401)");
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  expect(onChanged).not.toHaveBeenCalled();
+
+  fireEvent.change(input, { target: { value: "sk-or-valid" } });
+  expect(within(card).queryByRole("alert")).toBeNull();
+  fireEvent.click(within(card).getByRole("button", { name: "Save" }));
+  await within(card).findByText("Key: sk-or-v1-a1b…9f2");
+  expect(
+    fake.log.find(
+      (r) =>
+        r.path === "/api/openrouter/key" && r.body.api_key === "sk-or-valid",
+    ),
+  ).toBeTruthy();
+  expect(onChanged).toHaveBeenCalledTimes(1);
+  // The field is gone and the key appears nowhere on the page.
+  expect(within(card).queryByLabelText("OpenRouter API key")).toBeNull();
+  expect(document.body.innerHTML).not.toContain("sk-or-valid");
+  expect(within(card).getByText("Ready")).toBeTruthy();
+  expect(
+    within(card).getByText("Credits used: $1.23 of $10.00 limit ($8.77 left)"),
+  ).toBeTruthy();
+  expect(within(card).getByText(/40 models \(30 support tools\)/)).toBeTruthy();
+  expect(within(card).getByText("Billed per token by OpenRouter")).toBeTruthy();
+  expect(
+    within(card)
+      .getByRole("link", { name: "Open OpenRouter activity" })
+      .getAttribute("href"),
+  ).toBe("https://openrouter.ai/activity");
+  await waitFor(() =>
+    expect(document.activeElement?.textContent).toBe("Refresh models"),
+  );
+
+  fireEvent.click(within(card).getByRole("button", { name: "Refresh models" }));
+  await waitFor(() =>
+    expect(fake.log.some((r) => r.path === "/api/openrouter/refresh")).toBe(
+      true,
+    ),
+  );
+  await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+
+  // Remove asks first, like Disconnect.
+  fireEvent.click(within(card).getByRole("button", { name: "Remove key" }));
+  const dialog = screen.getByRole("dialog", { name: "Remove OpenRouter key" });
+  expect(
+    fake.log.some(
+      (r) => r.path === "/api/openrouter/key" && r.body.api_key === "",
+    ),
+  ).toBe(false);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove key" }));
+  const again = await within(card).findByLabelText("OpenRouter API key");
+  expect((again as HTMLInputElement).value).toBe("");
+  expect(
+    fake.log.some(
+      (r) => r.path === "/api/openrouter/key" && r.body.api_key === "",
+    ),
+  ).toBe(true);
+  expect(onChanged).toHaveBeenCalledTimes(3);
+});
+
+it("Accounts: opening for OpenRouter focuses the key field; offline disables it", async () => {
+  const { unmount } = render(
+    <AccountsPage
+      focusVendor="openrouter"
+      onChanged={vi.fn()}
+      onToast={vi.fn()}
+    />,
+  );
+  const input = await screen.findByLabelText("OpenRouter API key");
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  unmount();
+
+  fake.state.config.network.mode = "offline";
+  render(<AccountsPage onChanged={vi.fn()} onToast={vi.fn()} />);
+  const card = await screen.findByRole("article", { name: "OpenRouter" });
+  await within(card).findByText("Offline mode: OpenRouter is off.");
+  expect(within(card).getByLabelText("OpenRouter API key")).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(within(card).getByRole("button", { name: "Save" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+});

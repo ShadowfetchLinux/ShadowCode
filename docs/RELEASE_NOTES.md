@@ -1,6 +1,22 @@
-ShadowCode 0.28.1 is a polish release on top of 0.28.0. Settings, stopped
-tasks, notifications and local model names are cleaner; nothing about how
-models run or bill has changed. The 0.28.0 notes follow below.
+ShadowCode 0.29.0 adds OpenRouter for people without a subscription, and
+makes web search work from networks where DuckDuckGo refuses automated
+requests. The 0.28 notes follow below.
+
+## New in 0.29.0
+
+- **OpenRouter.** Paste an OpenRouter API key in **Settings › Accounts** and
+  pick any of its text models from the picker's new **API keys** group. Rows
+  show the price per million tokens and whether the model supports images or
+  tools. Every token is billed to your OpenRouter account, and the group says
+  so. These models run on ShadowCode's own agent loop, so permissions,
+  approvals, checkpoints, web tools, images and review all work. See
+  [OpenRouter](https://github.com/Shadowfetchapps/ShadowCode/blob/main/docs/OPENROUTER.md).
+- **Web search.** When DuckDuckGo answers with a bot check, `web_search` asks
+  Marginalia Search's public API instead of giving up.
+- **VPN users.** Sites that a VPN's DNS resolves into 192.0.0.0/24 (NordVPN
+  does this for Google) are no longer refused by `web_fetch`.
+- **Antigravity.** Tasks where Antigravity silently denied a command now fail
+  with an explanation instead of reporting success with no answer.
 
 ## Fixed in 0.28.1
 
@@ -103,9 +119,9 @@ runtime that ships with the app.
 
 ## Downloads
 
-- `ShadowCode_0.28.1_amd64.AppImage`
-- `ShadowCode_0.28.1_amd64.deb`
-- `ShadowCode_0.28.1_appimage-runtime-sources.tar.gz`
+- `ShadowCode_0.29.0_amd64.AppImage`
+- `ShadowCode_0.29.0_amd64.deb`
+- `ShadowCode_0.29.0_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
 Builds are for x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).

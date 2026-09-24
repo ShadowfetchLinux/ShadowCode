@@ -224,6 +224,9 @@ impl Engine {
         model: &ModelConfig,
         cancel: &CancellationToken,
     ) -> Result<crate::local_engine::PreparedModel> {
+        if crate::openrouter::is_openrouter(model) {
+            return crate::openrouter::prepare(&self.0.paths, model);
+        }
         if !crate::local_engine::is_managed(model) {
             return Ok(crate::local_engine::PreparedModel::passthrough(
                 model.clone(),

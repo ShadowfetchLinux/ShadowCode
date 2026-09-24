@@ -1,9 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { RefreshCw } from "lucide-react";
-import { api, type LoginProgress, type VendorStatus } from "../../api";
+import {
+  api,
+  type LoginProgress,
+  type OpenRouterStatus,
+  type VendorStatus,
+} from "../../api";
 import { Dialog } from "../Dialog";
 import { listen } from "../../lib/transport";
-import { usageDetailLines, usageLabel } from "../../lib/picker";
+import { relativeTime, usageDetailLines, usageLabel } from "../../lib/picker";
 
 const ORDER = ["codex", "claude", "cursor", "antigravity", "grok"];
 
@@ -17,7 +29,8 @@ type Login = {
 };
 
 /** Settings › Accounts: the official CLI of each subscription, its sign-in
- * state, models and usage. Sign-in and sign-out run the vendors' own commands. */
+ * state, models and usage. Sign-in and sign-out run the vendors' own commands.
+ * API keys (OpenRouter, billed per token) follow in their own card. */
 export function AccountsPage({
   focusVendor,
   onChanged,
@@ -36,6 +49,7 @@ export function AccountsPage({
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [login, setLogin] = useState<Login | null>(null);
   const [confirm, setConfirm] = useState<VendorStatus | null>(null);
+  const [checks, setChecks] = useState(0);
   const rows = useRef<Record<string, HTMLElement | null>>({});
 
   const load = useCallback(async (refresh = false) => {
@@ -196,14 +210,18 @@ export function AccountsPage({
           <p className="hint">
             Subscriptions run through each vendor's official command-line tool.
             Signing in opens the vendor's own page; ShadowCode never asks for a
-            password and never reads vendor tokens.
+            password and never reads vendor tokens. API keys are billed per
+            token by the provider and stay on this computer.
           </p>
         </div>
         <button
           type="button"
           className="ghost"
           disabled={loading}
-          onClick={() => void load(true).then(onChanged)}
+          onClick={() => {
+            setChecks((n) => n + 1);
+            void load(true).then(onChanged);
+          }}
         >
           <RefreshCw size={14} aria-hidden="true" />{" "}
           {loading ? "Checking…" : "Check all"}
@@ -358,6 +376,12 @@ export function AccountsPage({
           </article>
         );
       })}
+      <OpenRouterCard
+        focus={focusVendor === "openrouter"}
+        checks={checks}
+        onChanged={onChanged}
+        onToast={onToast}
+      />
       {confirm && (
         <Dialog
           label={`Disconnect ${confirm.label}`}
@@ -393,6 +417,281 @@ export function AccountsPage({
         </Dialog>
       )}
     </section>
+  );
+}
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** "$0.0042", "$1.20": small per-token spend stays visible. */
+export function formatUsd(value: number): string {
+  if (!Number.isFinite(value)) return "$0.00";
+  const abs = Math.abs(value);
+  return `$${abs > 0 && abs < 0.01 ? value.toFixed(4) : value.toFixed(2)}`;
+}
+
+/** Accounts › OpenRouter: a pay-per-token API key saved on this computer.
+ * The key is write-only here; the engine never sends it back. */
+function OpenRouterCard({
+  focus,
+  checks,
+  onChanged,
+  onToast,
+}: {
+  /** Opened from the picker (connect("openrouter")): scroll here and focus. */
+  focus: boolean;
+  /** Bumped by "Check all" to reread the status. */
+  checks: number;
+  onChanged: () => void;
+  onToast: (text: string, kind: "ok" | "err" | "info") => void;
+}) {
+  const [status, setStatus] = useState<OpenRouterStatus | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [key, setKey] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<"" | "save" | "refresh" | "remove">("");
+  const [confirm, setConfirm] = useState(false);
+  const card = useRef<HTMLElement>(null);
+  const focusAfter = useRef(focus);
+  const uid = useId().replace(/:/g, "");
+
+  useEffect(() => {
+    let live = true;
+    api
+      .openrouterStatus()
+      .then((next) => {
+        if (!live) return;
+        setStatus(next);
+        setLoadError("");
+      })
+      .catch((e) => live && setLoadError(message(e)));
+    return () => {
+      live = false;
+    };
+  }, [checks]);
+
+  useEffect(() => {
+    if (focus) focusAfter.current = true;
+  }, [focus]);
+  // Move focus to the card's main control once it is on screen: after the
+  // picker sent the user here, and after save/remove replaced the controls.
+  useEffect(() => {
+    if (!status || !focusAfter.current) return;
+    focusAfter.current = false;
+    card.current?.scrollIntoView?.({ block: "nearest" });
+    card.current?.querySelector<HTMLElement>("[data-primary]")?.focus();
+  }, [status]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!key.trim() || busy) return;
+    setBusy("save");
+    setError("");
+    try {
+      const next = await api.setOpenrouterKey(key);
+      setKey("");
+      focusAfter.current = true;
+      setStatus(next);
+      onToast("OpenRouter key saved.", "ok");
+      onChanged();
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function refresh() {
+    setBusy("refresh");
+    try {
+      setStatus(await api.refreshOpenrouter());
+      onChanged();
+    } catch (e) {
+      onToast(message(e), "err");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove() {
+    setConfirm(false);
+    setBusy("remove");
+    try {
+      const next = await api.removeOpenrouterKey();
+      focusAfter.current = true;
+      setStatus(next);
+      onToast("OpenRouter key removed from this computer.", "ok");
+      onChanged();
+    } catch (e) {
+      onToast(message(e), "err");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const offline = Boolean(status?.offline);
+  const keysUrl = status?.keys_url || "https://openrouter.ai/keys";
+  const info = status?.key;
+  const [availability, availabilityText] = !status
+    ? ["", ""]
+    : offline
+      ? ["unavailable", "Offline"]
+      : !status.key_set
+        ? ["sign_in", "Add API key"]
+        : status.key_error
+          ? ["sign_in", "Check key"]
+          : ["ready", "Ready"];
+  return (
+    <article
+      className="account-card"
+      ref={card}
+      aria-labelledby={`${uid}-title`}
+    >
+      <header>
+        <h4 id={`${uid}-title`}>OpenRouter</h4>
+        <span className="cap-badge">API key</span>
+        {availabilityText && (
+          <span className={`avail avail-${availability}`}>
+            {availabilityText}
+          </span>
+        )}
+      </header>
+      {loadError && <p className="health-bad">{loadError}</p>}
+      {!status && !loadError && <p role="status">Checking OpenRouter…</p>}
+      {offline && <p className="warn-text">Offline mode: OpenRouter is off.</p>}
+      {status && !status.key_set && (
+        <form className="openrouter-form" onSubmit={(e) => void save(e)}>
+          <p>
+            Pay per token for hundreds of models. Create a key at{" "}
+            <a href={keysUrl} target="_blank" rel="noreferrer">
+              openrouter.ai/keys
+            </a>
+            ; ShadowCode stores it only on this computer.
+          </p>
+          <div className="field">
+            <label htmlFor={`${uid}-key`}>OpenRouter API key</label>
+            <input
+              id={`${uid}-key`}
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              data-primary
+              value={key}
+              disabled={offline || busy === "save"}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? `${uid}-error` : undefined}
+              placeholder="sk-or-…"
+              onChange={(e) => {
+                setKey(e.target.value);
+                if (error) setError("");
+              }}
+            />
+          </div>
+          {error && (
+            <p className="health-bad" id={`${uid}-error`} role="alert">
+              {error}
+            </p>
+          )}
+          <div className="row">
+            <button
+              type="submit"
+              className="primary"
+              disabled={offline || !key.trim() || Boolean(busy)}
+            >
+              {busy === "save" ? "Checking key…" : "Save"}
+            </button>
+          </div>
+        </form>
+      )}
+      {status?.key_set && (
+        <>
+          <p className="warn-text">Billed per token by OpenRouter</p>
+          {info && (
+            <>
+              <p>Key: {info.label}</p>
+              <p>
+                Credits used: {formatUsd(info.usage)}
+                {info.limit != null &&
+                  ` of ${formatUsd(info.limit)} limit${
+                    info.limit_remaining != null
+                      ? ` (${formatUsd(info.limit_remaining)} left)`
+                      : ""
+                  }`}
+              </p>
+              {info.is_free_tier && (
+                <p className="hint">
+                  Free tier: add credits on OpenRouter to use paid models.
+                </p>
+              )}
+            </>
+          )}
+          {status.key_error && <p className="health-bad">{status.key_error}</p>}
+          <p>
+            {status.models} model{status.models === 1 ? "" : "s"} (
+            {status.tool_models} support tools)
+            {status.fetched_at ? (
+              <span className="dim">
+                {" "}
+                · updated {relativeTime(status.fetched_at)}
+              </span>
+            ) : null}
+          </p>
+          {status.activity_url && (
+            <a href={status.activity_url} target="_blank" rel="noreferrer">
+              Open OpenRouter activity
+            </a>
+          )}
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              data-primary
+              disabled={offline || Boolean(busy)}
+              onClick={() => void refresh()}
+            >
+              {busy === "refresh" ? "Refreshing…" : "Refresh models"}
+            </button>
+            <button
+              type="button"
+              className="ghost danger-text"
+              disabled={offline || Boolean(busy)}
+              onClick={() => setConfirm(true)}
+            >
+              Remove key
+            </button>
+          </div>
+        </>
+      )}
+      {confirm && (
+        <Dialog
+          label="Remove OpenRouter key"
+          className="modal modal-sm"
+          onClose={() => setConfirm(false)}
+        >
+          <h2>Remove OpenRouter key?</h2>
+          <p>
+            ShadowCode deletes the key from this computer and OpenRouter models
+            stop working until you add a key again. The key stays valid on
+            OpenRouter; revoke it there if you no longer need it.
+          </p>
+          <div className="row end">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setConfirm(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="primary danger"
+              onClick={() => void remove()}
+            >
+              Remove key
+            </button>
+          </div>
+        </Dialog>
+      )}
+    </article>
   );
 }
 

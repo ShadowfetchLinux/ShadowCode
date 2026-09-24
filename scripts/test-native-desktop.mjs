@@ -377,8 +377,13 @@ try {
   await until("Picker rows rendered", async () => (await pickerRows()).length > 0 || installed.length === 0);
   const rows = await pickerRows();
   const groups = await execute("return [...document.querySelectorAll('.unified-picker-heading')].map(h=>h.textContent)");
-  assert.deepEqual(groups, ["Subscriptions", "On this computer"]);
-  assert.match(await execute("return document.querySelector('.unified-picker-group:last-child').textContent"), /No local models added yet/);
+  assert.deepEqual(groups, ["Subscriptions", "On this computer", "API keys"]);
+  assert.match(await execute("return [...document.querySelectorAll('.unified-picker-group')].find(g=>g.querySelector('.unified-picker-heading').textContent==='On this computer').textContent"), /No local models added yet/);
+  // No OpenRouter key in this profile: API-key rows (if the list loaded) ask for one; none is Ready.
+  const apiText = await execute("return [...document.querySelectorAll('.unified-picker-group')].find(g=>g.querySelector('.unified-picker-heading').textContent==='API keys').textContent");
+  assert.match(apiText, /Billed per token/);
+  assert.doesNotMatch(apiText, /· Ready ·/, "No API-key row is Ready without a key");
+  assert.match(apiText, /Add an OpenRouter API key|Add API key|Show all/);
   const vendorSummary = {};
   for (const vendor of installed) {
     const backend = picker.targets.filter((t) => t.provider === `cli:${vendor}`);
@@ -401,7 +406,7 @@ try {
   await accessibility("picker-vendors");
   await execute("document.querySelector('.unified-picker-search input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
   await until("Picker closed", async () => !(await visible(".unified-picker-menu")));
-  note(`picker: Subscriptions (${Object.entries(vendorSummary).map(([v, s]) => `${v} ${s}`).join(", ") || "no vendor CLIs installed"}) and On this computer`);
+  note(`picker: Subscriptions (${Object.entries(vendorSummary).map(([v, s]) => `${v} ${s}`).join(", ") || "no vendor CLIs installed"}), On this computer and API keys (no key)`);
 
   // ------------------------------------------------------------ local model
   await openPicker();

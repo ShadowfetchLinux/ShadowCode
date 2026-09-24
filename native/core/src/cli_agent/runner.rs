@@ -227,7 +227,8 @@ async fn run_once(
     let stdout = child.stdout.take().context("Vendor CLI stdout missing")?;
     let stderr = child.stderr.take().context("Vendor CLI stderr missing")?;
     let mut reader = BufReader::new(stdout);
-    tokio::spawn(drain_stderr(stderr, request.events.clone()));
+    let denied = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    tokio::spawn(drain_stderr(stderr, request.events.clone(), denied.clone()));
     let mut outgoing = adapter.on_start(&request.options);
     outgoing.extend(adapter.prompt(&request.prompt, &request.images)?);
     send_lines(&mut stdin, &outgoing).await?;
@@ -396,6 +397,16 @@ async fn run_once(
     if native_session.is_none() {
         native_session = adapter.native_session();
     }
+    if collected.trim().is_empty() {
+        // stderr is read on another task; give its last lines a moment to land.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    if collected.trim().is_empty() && denied.load(std::sync::atomic::Ordering::Acquire) {
+        bail!(
+            "{} needed permission to run a tool, but its headless mode cannot ask ShadowCode, so it denied the tool and gave no answer. Pick another model for tasks that run commands.",
+            request.vendor.product_label()
+        );
+    }
     Ok(RunOutcome {
         text: collected,
         usage,
@@ -496,6 +507,7 @@ async fn read_line<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Result
 async fn drain_stderr<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     stderr: R,
     events: TaskEvents,
+    denied: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut reader = BufReader::new(stderr);
     let mut buf = String::new();
@@ -504,6 +516,10 @@ async fn drain_stderr<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
         buf.clear();
         if line.is_empty() {
             continue;
+        }
+        // Antigravity's headless mode cannot ask for permission and says so.
+        if line.contains("auto-denied") {
+            denied.store(true, std::sync::atomic::Ordering::Release);
         }
         let _ = events.emit(
             "agent.warning",

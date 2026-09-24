@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Eye,
   Info,
+  KeyRound,
   MessageSquareText,
   Plus,
   Search,
@@ -19,6 +20,7 @@ import {
 import {
   availabilityLabel,
   groupTargets,
+  isApiKey,
   isLocal,
   isReady,
   matchesQuery,
@@ -27,6 +29,7 @@ import {
   shortName,
   usageDetailLines,
   usageLabel,
+  vendorKey,
   vendorLabel,
   vendorSections,
   type PickerTarget,
@@ -40,12 +43,23 @@ type Item =
       vendor: string;
       label: string;
       hidden: number;
-    };
+    }
+  | { kind: "add-key"; key: string; vendor: string; label: string };
 
-type Group = { id: string; title: string; items: Item[]; empty: string };
+type Group = {
+  id: string;
+  title: string;
+  note?: string;
+  items: Item[];
+  empty: string;
+};
 
-/** The one model control: subscription rows and local GGUF rows from
- * GET /api/picker in a searchable listbox (combobox pattern). */
+/** The vendor whose API key the empty API-keys group offers to add. */
+const API_VENDOR = "openrouter";
+
+/** The one model control: subscription rows, API-key rows (OpenRouter) and
+ * local GGUF rows from GET /api/picker in a searchable listbox (combobox
+ * pattern). */
 export function UnifiedPicker({
   targets,
   value,
@@ -63,7 +77,7 @@ export function UnifiedPicker({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelect: (id: string) => void;
-  /** Accounts › Connect, optionally for one vendor ("codex"). */
+  /** Accounts › Connect, optionally for one vendor ("codex", "openrouter"). */
   onConnect: (vendor?: string) => void;
   /** Where a setup-required row is fixed (Accounts or Local models). */
   onSetup: (target: PickerTarget) => void;
@@ -110,6 +124,8 @@ export function UnifiedPicker({
             ]
           : []),
       ]);
+    // With no API-key rows at all, the group offers to add a key instead.
+    const noApiRows = !targets.some(isApiKey);
     return [
       {
         id: "subscriptions",
@@ -117,11 +133,30 @@ export function UnifiedPicker({
         items: build(all.subscriptions),
         empty: query ? "No subscription matches" : "No accounts connected yet",
       },
+      // Free local models come before paid API rows, so a search that
+      // matches both picks the local one on Enter.
       {
         id: "local",
         title: "On this computer",
         items: build(all.local),
         empty: query ? "No local model matches" : "No local models added yet",
+      },
+      {
+        id: "api",
+        title: "API keys",
+        note: "Billed per token by the provider",
+        items:
+          noApiRows && !query.trim()
+            ? [
+                {
+                  kind: "add-key",
+                  key: `add-key:${API_VENDOR}`,
+                  vendor: API_VENDOR,
+                  label: "Add an OpenRouter API key…",
+                },
+              ]
+            : build(all.api),
+        empty: "No API-key model matches",
       },
     ];
   }, [targets, query, expanded, recent, value]);
@@ -173,6 +208,11 @@ export function UnifiedPicker({
     if (!item) return;
     if (item.kind === "more") {
       setExpanded((keys) => [...keys, item.vendor]);
+      return;
+    }
+    if (item.kind === "add-key") {
+      close(false);
+      onConnect(item.vendor);
       return;
     }
     const target = item.target;
@@ -263,9 +303,13 @@ export function UnifiedPicker({
       >
         {selected && (
           <span
-            className={`inference-badge ${isLocal(selected) ? "local" : "cloud"}`}
+            className={`inference-badge ${isLocal(selected) ? "local" : isApiKey(selected) ? "cloud api" : "cloud"}`}
           >
-            {isLocal(selected) ? "Local" : "Cloud"}
+            {isLocal(selected)
+              ? "Local"
+              : isApiKey(selected)
+                ? "API key"
+                : "Cloud"}
           </span>
         )}
         <span className="unified-picker-current">
@@ -322,6 +366,9 @@ export function UnifiedPicker({
                 className="unified-picker-group"
                 role="group"
                 aria-labelledby={`${uid}-${group.id}`}
+                aria-describedby={
+                  group.note ? `${uid}-${group.id}-note` : undefined
+                }
               >
                 <div
                   className="unified-picker-heading"
@@ -330,6 +377,15 @@ export function UnifiedPicker({
                 >
                   {group.title}
                 </div>
+                {group.note && (
+                  <div
+                    className="unified-picker-group-note"
+                    id={`${uid}-${group.id}-note`}
+                    role="presentation"
+                  >
+                    {group.note}
+                  </div>
+                )}
                 {group.items.length === 0 && (
                   <div className="unified-picker-empty" role="presentation">
                     {group.empty}
@@ -338,6 +394,22 @@ export function UnifiedPicker({
                 {group.items.map((item) => {
                   const index = items.indexOf(item);
                   const isActive = index === active;
+                  if (item.kind === "add-key")
+                    return (
+                      <div
+                        key={item.key}
+                        id={optionId(item)}
+                        role="option"
+                        aria-selected={false}
+                        className={`unified-picker-more unified-picker-add ${isActive ? "is-active" : ""}`}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseMove={() => setActive(index)}
+                        onClick={() => activate(item)}
+                      >
+                        <KeyRound size={13} aria-hidden="true" />
+                        {item.label}
+                      </div>
+                    );
                   if (item.kind === "more")
                     return (
                       <div
@@ -428,11 +500,7 @@ export function UnifiedPicker({
 
 function countShown(items: Item[], vendor: string) {
   return items.filter(
-    (item) =>
-      item.kind === "row" &&
-      (isLocal(item.target)
-        ? vendor === "local"
-        : item.target.provider.replace(/^cli:/, "") === vendor),
+    (item) => item.kind === "row" && vendorKey(item.target) === vendor,
   ).length;
 }
 
@@ -527,12 +595,18 @@ function Details({
 }) {
   const action = rowAction(target);
   const lines = usageDetailLines(target.usage);
+  const apiKey = isApiKey(target);
   return (
     <div className="unified-picker-details" id={id} aria-live="polite">
       <strong>{target.name}</strong>
+      {apiKey && target.subtitle && <p>{target.subtitle}</p>}
       <p>
-        {isLocal(target) ? "Runs on this computer" : "Cloud"} ·{" "}
-        {availabilityLabel(target)}
+        {isLocal(target)
+          ? "Runs on this computer"
+          : apiKey
+            ? "Cloud · your API key, billed per token"
+            : "Cloud"}{" "}
+        · {availabilityLabel(target)}
         {target.reason ? ` · ${target.reason}` : ""}
       </p>
       <p>{usageLabel(target.usage, target.inference)}</p>
@@ -553,7 +627,7 @@ function Details({
             target="_blank"
             rel="noreferrer"
           >
-            Open {vendorLabel(target)} usage
+            Open {vendorLabel(target)} {apiKey ? "activity" : "usage"}
           </a>
         )}
         {action.kind === "connect" && (
@@ -562,7 +636,9 @@ function Details({
             className="mini"
             onClick={() => onConnect(action.vendor)}
           >
-            Sign in to {vendorLabel(target)}
+            {apiKey
+              ? `Add ${vendorLabel(target)} API key`
+              : `Sign in to ${vendorLabel(target)}`}
           </button>
         )}
         {action.kind === "setup" && (
