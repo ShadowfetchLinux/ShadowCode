@@ -1,0 +1,1108 @@
+//! Compare: one task sent to 2–3 models at once. Each model ("lane") works
+//! in its own managed Git worktree created from the same starting state (HEAD
+//! plus the user's uncommitted, non-ignored work) and runs as a normal job.
+//! Keeping a lane applies its changes to the source working tree with
+//! `git apply` (never the index, never a commit) and removes every lane.
+//!
+//! The source checkout is never reset, stashed, checked out or committed in.
+//! The starting state is captured with a temporary index file, so neither the
+//! source index nor its working tree is written while the compare starts.
+use crate::{
+    config::{self, Config},
+    engine::{Engine, Job, JobOwner, StartRequest},
+    model_registry,
+    process::{self, ProcessResult, ProcessSpec},
+    store::Store,
+    workspace::Workspace,
+    worktrees,
+};
+use anyhow::{bail, ensure, Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+
+/// Serialises every read-modify-write of compare records and scoreboards.
+static LOCK: Mutex<()> = Mutex::const_new(());
+const LISTED: usize = 20;
+const INDEXED: usize = 100;
+const MAX_FILES: usize = 1000;
+const COUNT_LIMIT: u64 = 8_000_000;
+const IDENTITY: [&str; 6] = [
+    "-c",
+    "user.name=ShadowCode",
+    "-c",
+    "user.email=shadowcode@localhost",
+    "-c",
+    "commit.gpgsign=false",
+];
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Base {
+    /// The commit every lane starts from: HEAD, or a "ShadowCode compare
+    /// base" commit on top of HEAD holding the uncommitted work.
+    pub commit: String,
+    pub head: String,
+    pub included_uncommitted: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FileStat {
+    pub path: String,
+    /// added | modified | deleted
+    pub status: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub binary: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CheckCommand {
+    pub command: String,
+    pub exit_code: Option<i64>,
+    pub success: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Checks {
+    pub passed: usize,
+    pub failed: usize,
+    pub commands: Vec<CheckCommand>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Lane {
+    pub model: String,
+    pub name: String,
+    pub session_id: String,
+    pub job_id: String,
+    pub worktree: PathBuf,
+    pub worktree_id: String,
+    pub branch: String,
+    pub base_commit: String,
+    pub status: String,
+    pub summary: String,
+    pub changed_files: Vec<FileStat>,
+    pub changed_files_truncated: bool,
+    pub checks: Checks,
+    pub duration_s: f64,
+    pub usage: Value,
+    pub error: Option<String>,
+    /// The lane worktree and its managed branch were removed.
+    pub removed: bool,
+    /// Job id and finish time the stored diffstat belongs to.
+    stats_for: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Record {
+    pub id: String,
+    pub workspace: PathBuf,
+    pub task: String,
+    pub mode: String,
+    pub web: bool,
+    pub created_at: f64,
+    pub finished_at: Option<f64>,
+    /// running | done | applied | discarded
+    pub state: String,
+    pub base: Base,
+    pub lanes: Vec<Lane>,
+    pub winner: Option<String>,
+    pub applied_files: Vec<String>,
+    /// Cleanup problems and lanes that went missing outside ShadowCode.
+    pub notes: Vec<String>,
+    /// Runs were added to the scoreboard (internal; not in `to_json`).
+    counted: bool,
+}
+impl Record {
+    /// The API view: internal bookkeeping fields are left out.
+    pub fn to_json(&self) -> Value {
+        let mut value = json!(self);
+        if let Some(map) = value.as_object_mut() {
+            map.remove("counted");
+        }
+        for lane in value["lanes"].as_array_mut().into_iter().flatten() {
+            if let Some(map) = lane.as_object_mut() {
+                map.remove("stats_for");
+            }
+        }
+        value
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct ScoreRow {
+    model: String,
+    name: String,
+    wins: u64,
+    runs: u64,
+}
+
+fn record_key(id: &str) -> String {
+    format!("compare:{id}")
+}
+fn index_key(workspace: &Path) -> String {
+    format!("compare_index:{}", workspace.display())
+}
+fn score_key(workspace: &Path) -> String {
+    format!("compare_scoreboard:{}", workspace.display())
+}
+fn valid_id(id: &str) -> Result<()> {
+    ensure!(
+        id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+        "Unknown comparison"
+    );
+    Ok(())
+}
+fn load(store: &Store, id: &str) -> Result<Record> {
+    valid_id(id)?;
+    let text = store
+        .native_meta(&record_key(id))?
+        .context("Comparison not found")?;
+    Ok(serde_json::from_str(&text)?)
+}
+fn save(store: &Store, record: &Record) -> Result<()> {
+    store.set_native_meta(&record_key(&record.id), &serde_json::to_string(record)?)
+}
+fn index(store: &Store, workspace: &Path) -> Result<Vec<String>> {
+    Ok(store
+        .native_meta(&index_key(workspace))?
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default())
+}
+fn scores(store: &Store, workspace: &Path) -> Result<Vec<ScoreRow>> {
+    Ok(store
+        .native_meta(&score_key(workspace))?
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default())
+}
+fn bump(store: &Store, workspace: &Path, lanes: &[Lane], winner: Option<&str>) -> Result<()> {
+    let mut rows = scores(store, workspace)?;
+    for lane in lanes {
+        let position = match rows.iter().position(|row| row.model == lane.model) {
+            Some(position) => position,
+            None => {
+                rows.push(ScoreRow {
+                    model: lane.model.clone(),
+                    ..Default::default()
+                });
+                rows.len() - 1
+            }
+        };
+        let row = &mut rows[position];
+        row.name = lane.name.clone();
+        if winner.is_none() {
+            row.runs += 1;
+        } else if winner == Some(lane.model.as_str()) {
+            row.wins += 1;
+        }
+    }
+    store.set_native_meta(&score_key(workspace), &serde_json::to_string(&rows)?)
+}
+
+fn active(status: &str) -> bool {
+    matches!(status, "" | "queued" | "running" | "paused" | "cancelling")
+}
+
+async fn git_with(
+    dir: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+    cancel: &CancellationToken,
+) -> Result<ProcessResult> {
+    let mut flags = vec![
+        "--no-pager",
+        "--literal-pathspecs",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "color.ui=false",
+        "-c",
+        "core.quotepath=false",
+    ];
+    flags.extend_from_slice(args);
+    let mut spec = ProcessSpec::command("git", &flags, dir.into());
+    spec.timeout = Duration::from_secs(300);
+    spec.output_limit = 4_000_000;
+    for (key, value) in env {
+        spec.env.insert((*key).into(), (*value).into());
+    }
+    process::run(spec, cancel.clone(), None).await
+}
+async fn git(dir: &Path, args: &[&str], cancel: &CancellationToken) -> Result<String> {
+    git_env(dir, args, &[], cancel).await
+}
+async fn git_env(
+    dir: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+    cancel: &CancellationToken,
+) -> Result<String> {
+    let result = git_with(dir, args, env, cancel).await?;
+    ensure!(
+        result.ok,
+        "Git {} failed: {}{}",
+        args.first().copied().unwrap_or(""),
+        result.stderr.trim(),
+        result.stdout.trim()
+    );
+    ensure!(!result.truncated, "Git output exceeded its limit");
+    Ok(result.stdout.trim_end_matches('\n').into())
+}
+
+/// Capture HEAD plus the working tree (tracked changes, staged or not, and
+/// untracked files that are not ignored) as one commit, using a temporary
+/// copy of the index. Only new Git objects are written; the source index and
+/// working tree are left exactly as they were.
+async fn snapshot(scratch: &Path, source: &Path, cancel: &CancellationToken) -> Result<Base> {
+    let head = git(source, &["rev-parse", "--verify", "HEAD^{commit}"], cancel)
+        .await
+        .context("Make a first commit in this repository before comparing models")?;
+    let unmerged = git(source, &["ls-files", "--unmerged", "-z"], cancel).await?;
+    ensure!(
+        unmerged.is_empty(),
+        "Resolve merge conflicts in the project before comparing models"
+    );
+    let real_index = PathBuf::from(
+        git(
+            source,
+            &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+            cancel,
+        )
+        .await?,
+    );
+    let temporary = tempfile::tempdir_in(scratch)?;
+    let index = temporary.path().join("index");
+    let index_text = index.to_str().context("Index path must be UTF-8")?;
+    let env = [("GIT_INDEX_FILE", index_text)];
+    // A copy keeps force-added (ignored but staged) files; a fresh index from
+    // HEAD is the fallback, e.g. for a split index the copy cannot resolve.
+    let copied = real_index.is_file()
+        && fs::copy(&real_index, &index).is_ok()
+        && git_env(source, &["add", "--all"], &env, cancel)
+            .await
+            .is_ok();
+    if !copied {
+        let _ = fs::remove_file(&index);
+        git_env(source, &["read-tree", "HEAD"], &env, cancel).await?;
+        git_env(source, &["add", "--all"], &env, cancel)
+            .await
+            .context("Could not capture uncommitted work")?;
+    }
+    let tree = git_env(source, &["write-tree"], &env, cancel).await?;
+    let head_tree = git(source, &["rev-parse", "HEAD^{tree}"], cancel).await?;
+    if tree == head_tree {
+        return Ok(Base {
+            commit: head.clone(),
+            head,
+            included_uncommitted: false,
+        });
+    }
+    let mut args = IDENTITY.to_vec();
+    args.extend([
+        "commit-tree",
+        &tree,
+        "-p",
+        &head,
+        "-m",
+        "ShadowCode compare base",
+    ]);
+    let commit = git(source, &args, cancel).await?;
+    Ok(Base {
+        commit,
+        head,
+        included_uncommitted: true,
+    })
+}
+
+/// Diffstat of a lane against its base: committed and uncommitted tracked
+/// changes plus untracked (not ignored) files.
+async fn diffstat(
+    lane: &Path,
+    base: &str,
+    cancel: &CancellationToken,
+) -> Result<(Vec<FileStat>, bool)> {
+    let numstat = git(
+        lane,
+        &[
+            "diff",
+            "--numstat",
+            "-z",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            base,
+            "--",
+        ],
+        cancel,
+    )
+    .await?;
+    let statuses = git(
+        lane,
+        &["diff", "--name-status", "-z", "--no-renames", base, "--"],
+        cancel,
+    )
+    .await?;
+    let mut kinds = BTreeMap::new();
+    let mut tokens = statuses.split('\0').filter(|s| !s.is_empty());
+    while let (Some(kind), Some(path)) = (tokens.next(), tokens.next()) {
+        kinds.insert(
+            path.to_owned(),
+            match kind.chars().next() {
+                Some('A') => "added",
+                Some('D') => "deleted",
+                _ => "modified",
+            },
+        );
+    }
+    let mut files = Vec::new();
+    for entry in numstat.split('\0').filter(|s| !s.is_empty()) {
+        let mut fields = entry.splitn(3, '\t');
+        let (Some(added), Some(deleted), Some(path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        files.push(FileStat {
+            path: path.into(),
+            status: kinds.get(path).copied().unwrap_or("modified").into(),
+            additions: added.parse().unwrap_or(0),
+            deletions: deleted.parse().unwrap_or(0),
+            binary: added == "-",
+        });
+    }
+    let untracked = git(
+        lane,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+        cancel,
+    )
+    .await?;
+    for path in untracked.split('\0').filter(|s| !s.is_empty()) {
+        if files.len() >= MAX_FILES {
+            return Ok((files, true));
+        }
+        let (additions, binary) = count_lines(&lane.join(path));
+        files.push(FileStat {
+            path: path.into(),
+            status: "added".into(),
+            additions,
+            deletions: 0,
+            binary,
+        });
+    }
+    let truncated = files.len() > MAX_FILES;
+    files.truncate(MAX_FILES);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok((files, truncated))
+}
+fn count_lines(path: &Path) -> (u64, bool) {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return (0, false);
+    };
+    if !meta.is_file() || meta.len() > COUNT_LIMIT {
+        return (0, !meta.is_file());
+    }
+    let mut bytes = Vec::new();
+    if fs::File::open(path)
+        .and_then(|file| file.take(COUNT_LIMIT).read_to_end(&mut bytes))
+        .is_err()
+    {
+        return (0, false);
+    }
+    if bytes.contains(&0) {
+        return (0, true);
+    }
+    let lines = bytes.iter().filter(|b| **b == b'\n').count() as u64;
+    (
+        lines + u64::from(!bytes.is_empty() && !bytes.ends_with(b"\n")),
+        false,
+    )
+}
+
+fn checks_of(engine: &Engine, job: &Job) -> Checks {
+    let verification = job
+        .result
+        .as_ref()
+        .map(|result| result["verification"].clone())
+        .filter(|v| !v.is_null())
+        .or_else(|| {
+            engine
+                .store()
+                .last_task_event(&job.task_id, "verification.summary")
+                .ok()
+                .flatten()
+                .map(|event| event["payload"].clone())
+        })
+        .unwrap_or(Value::Null);
+    let commands: Vec<CheckCommand> = verification["commands"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|command| CheckCommand {
+            command: command["command"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| command["command"].to_string()),
+            exit_code: command["exit_code"].as_i64(),
+            success: command["success"] == true,
+        })
+        .collect();
+    Checks {
+        passed: commands.iter().filter(|c| c.success).count(),
+        failed: commands.iter().filter(|c| !c.success).count(),
+        commands,
+    }
+}
+
+/// Bring lane status, checks and diffstat up to date; move a running compare
+/// to `done` once every lane's latest job has finished.
+async fn refresh(engine: &Engine, record: &mut Record, cancel: &CancellationToken) -> Result<()> {
+    let store = engine.store();
+    for lane in &mut record.lanes {
+        if lane.removed {
+            continue;
+        }
+        // Follow-up turns in a lane conversation update the lane.
+        let latest = store
+            .session_jobs(&lane.session_id, 1)?
+            .pop()
+            .and_then(|job| job["id"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| lane.job_id.clone());
+        let Some(job) = engine.job(&latest)? else {
+            lane.status = "failed".into();
+            lane.error = Some("The lane's task record is missing".into());
+            continue;
+        };
+        lane.job_id = job.id.clone();
+        lane.status = job.status.clone();
+        lane.summary = job.summary.clone();
+        lane.usage = json!({
+            "prompt_tokens": job.usage.prompt_tokens,
+            "completion_tokens": job.usage.completion_tokens,
+            "total_tokens": job.usage.total_tokens,
+            "estimated": job.usage_is_estimated,
+        });
+        lane.duration_s =
+            ((job.finished_at.unwrap_or_else(crate::now) - job.started_at).max(0.0) * 10.0).round()
+                / 10.0;
+        lane.checks = checks_of(engine, &job);
+        lane.error = matches!(
+            job.status.as_str(),
+            "failed" | "limit_reached" | "interrupted"
+        )
+        .then(|| job.summary.clone());
+        if !lane.worktree.is_dir() {
+            let note = format!(
+                "{}: its worktree {} was deleted outside ShadowCode",
+                lane.name,
+                lane.worktree.display()
+            );
+            lane.error = Some(note.clone());
+            if !record.notes.contains(&note) {
+                record.notes.push(note);
+            }
+            continue;
+        }
+        let key = format!("{}:{:?}", job.id, job.finished_at);
+        if active(&job.status) || lane.stats_for != key {
+            match diffstat(&lane.worktree, &lane.base_commit, cancel).await {
+                Ok((files, truncated)) => {
+                    lane.changed_files = files;
+                    lane.changed_files_truncated = truncated;
+                    if !active(&job.status) {
+                        lane.stats_for = key;
+                    }
+                }
+                Err(error) => lane.error = Some(format!("Could not read lane changes: {error:#}")),
+            }
+        }
+    }
+    if record.state == "running" && record.lanes.iter().all(|lane| !active(&lane.status)) {
+        record.state = "done".into();
+        record.finished_at = Some(crate::now());
+    }
+    if !record.counted && record.state != "running" && record.state != "discarded" {
+        bump(&store, &record.workspace, &record.lanes, None)?;
+        record.counted = true;
+    }
+    Ok(())
+}
+
+pub fn parse_mode(mode: &str) -> Result<(&'static str, &'static str)> {
+    Ok(match mode {
+        "" | "code" => ("code", "coder"),
+        "plan" => ("plan", "planner"),
+        "ask" => ("review", "reviewer"),
+        other => bail!("Unknown compare mode '{other}'; use code, plan or ask"),
+    })
+}
+
+/// Validate the lineup before anything is created. Returns (id, model) pairs.
+fn resolve_models(
+    engine: &Engine,
+    cfg: &Config,
+    ids: &[String],
+) -> Result<Vec<(String, config::ModelConfig)>> {
+    ensure!((2..=3).contains(&ids.len()), "Compare needs 2 or 3 models");
+    for (i, id) in ids.iter().enumerate() {
+        ensure!(
+            !id.trim().is_empty() && id.len() <= 1024,
+            "Choose a model for every lane"
+        );
+        ensure!(
+            !ids[..i].contains(id),
+            "Choose different models; {id} is listed twice"
+        );
+    }
+    ensure!(
+        ids.iter().filter(|id| id.starts_with("local:gguf:")).count() <= 1,
+        "Compare can include at most one local model: only one local model fits in GPU memory at a time. Pair it with cloud or subscription models."
+    );
+    let store = engine.store();
+    let mut resolved: Vec<(String, config::ModelConfig)> = Vec::new();
+    for id in ids {
+        crate::local_engine::precheck_job(&cfg.local_engine, id, 0)?;
+        crate::openrouter::precheck(engine.paths(), id, cfg.offline())?;
+        let model = model_registry::resolve(&store, id, &cfg.model)
+            .with_context(|| format!("Could not use {id}"))?;
+        ensure!(
+            !cfg.offline() || config::runs_on_this_computer(&model),
+            "Offline mode: {} does not run on this computer; compare local models only",
+            model.name
+        );
+        ensure!(
+            model.provider != "mock",
+            "Choose a local or compatible model for every lane"
+        );
+        if let Some(vendor) = crate::cli_agent::Vendor::from_provider(&model.provider) {
+            ensure!(
+                cfg.cli_agents.vendor_enabled(vendor),
+                "{} is disabled in Settings → Advanced",
+                vendor.label()
+            );
+        }
+        ensure!(
+            !resolved
+                .iter()
+                .any(|(_, other)| other.default == model.default),
+            "{id} is the same model as another lane; choose different models"
+        );
+        resolved.push((id.clone(), model));
+    }
+    Ok(resolved)
+}
+
+async fn repository_root(workspace: &Path, cancel: &CancellationToken) -> Result<()> {
+    let top = git(workspace, &["rev-parse", "--show-toplevel"], cancel)
+        .await
+        .context("Compare needs a Git repository")?;
+    ensure!(
+        Path::new(&top).canonicalize()? == workspace,
+        "Open the repository root before comparing models"
+    );
+    Ok(())
+}
+
+fn set_trust(engine: &Engine, lanes: &[PathBuf], trusted: bool) -> Result<()> {
+    Config::update(engine.paths(), |cfg| {
+        if trusted {
+            for lane in lanes {
+                cfg.grant_trust(lane);
+            }
+        } else {
+            cfg.trusted_workspaces.retain(|stored| {
+                !lanes
+                    .iter()
+                    .any(|lane| Path::new(stored.trim()) == lane.as_path())
+            });
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Remove lane worktrees and their managed branches; returns notes.
+async fn remove_lanes(engine: &Engine, record: &mut Record) -> Vec<String> {
+    let mut notes = Vec::new();
+    let mut removed = Vec::new();
+    for lane in &mut record.lanes {
+        if lane.removed || lane.worktree_id.is_empty() {
+            continue;
+        }
+        match worktrees::dispose(
+            engine.paths(),
+            &record.workspace,
+            &lane.worktree_id,
+            CancellationToken::new(),
+        )
+        .await
+        {
+            Ok(note) => {
+                lane.removed = true;
+                removed.push(lane.worktree.clone());
+                notes.extend(note.map(|note| format!("{}: {note}", lane.name)));
+            }
+            Err(error) => notes.push(format!(
+                "{}: worktree {} was kept: {error:#}",
+                lane.name,
+                lane.worktree.display()
+            )),
+        }
+    }
+    if let Err(error) = set_trust(engine, &removed, false) {
+        notes.push(format!("Could not update trusted projects: {error:#}"));
+    }
+    notes
+}
+
+/// Cancel active lane jobs and wait (bounded) for them to stop.
+async fn stop_lanes(engine: &Engine, record: &Record, except: Option<&str>) -> Result<()> {
+    for lane in &record.lanes {
+        if lane.removed || except == Some(lane.model.as_str()) || !active(&lane.status) {
+            continue;
+        }
+        engine.request_cancel(&lane.job_id)?;
+    }
+    for lane in &record.lanes {
+        if lane.removed || except == Some(lane.model.as_str()) || !active(&lane.status) {
+            continue;
+        }
+        tokio::time::timeout(Duration::from_secs(60), engine.wait(&lane.job_id))
+            .await
+            .with_context(|| format!("{} is still stopping; try again shortly", lane.name))??;
+    }
+    Ok(())
+}
+
+pub(crate) struct StartOptions<'a> {
+    pub workspace: PathBuf,
+    pub task: String,
+    pub models: Vec<String>,
+    pub mode: String,
+    pub web: bool,
+    pub owner: Option<&'a JobOwner>,
+}
+
+pub(crate) async fn start(engine: &Engine, options: StartOptions<'_>) -> Result<Record> {
+    let cancel = CancellationToken::new();
+    let workspace = Workspace::open(&options.workspace)?.path;
+    let cfg = Config::load(engine.paths(), Some(&workspace))?;
+    ensure!(
+        cfg.is_trusted(&workspace),
+        "Trust this project before comparing models"
+    );
+    let task = options.task.trim().to_owned();
+    ensure!(
+        !task.is_empty() && task.len() <= 128_000,
+        "Task must contain between 1 and 128000 bytes"
+    );
+    let (mode, purpose) = parse_mode(&options.mode)?;
+    let models = resolve_models(engine, &cfg, &options.models)?;
+    repository_root(&workspace, &cancel).await?;
+    let base = snapshot(&engine.paths().data, &workspace, &cancel).await?;
+    let _guard = LOCK.lock().await;
+    let mut record = Record {
+        id: crate::id(),
+        workspace: workspace.clone(),
+        task: task.clone(),
+        mode: if mode == "review" { "ask" } else { mode }.into(),
+        web: options.web,
+        created_at: crate::now(),
+        state: "running".into(),
+        base: base.clone(),
+        ..Default::default()
+    };
+    // Create every checkout before any job starts, so a failure leaves
+    // nothing running and removes what was created.
+    let created: Result<()> = async {
+        for (id, model) in &models {
+            let checkout =
+                worktrees::create(engine.paths(), &workspace, &base.commit, cancel.clone()).await?;
+            record.lanes.push(Lane {
+                model: id.clone(),
+                name: if model.name.is_empty() {
+                    id.clone()
+                } else {
+                    model.name.clone()
+                },
+                worktree: checkout.path.canonicalize()?,
+                worktree_id: checkout.id,
+                branch: checkout.branch,
+                base_commit: base.commit.clone(),
+                status: "queued".into(),
+                usage: json!({}),
+                ..Default::default()
+            });
+        }
+        let lanes: Vec<PathBuf> = record.lanes.iter().map(|l| l.worktree.clone()).collect();
+        set_trust(engine, &lanes, true)
+    }
+    .await;
+    if let Err(error) = created {
+        remove_lanes(engine, &mut record).await;
+        return Err(error);
+    }
+    let store = engine.store();
+    let limit = Some(cfg.permissions.level.clone());
+    let mut failure = None;
+    for (lane, (id, model)) in record.lanes.iter_mut().zip(&models) {
+        let started: Result<Job> = async {
+            let session = store.create_session(
+                &lane.worktree,
+                &model.default,
+                &format!("Compare · {}", lane.name),
+            )?;
+            let sid = session["id"]
+                .as_str()
+                .context("Missing session ID")?
+                .to_owned();
+            lane.session_id = sid.clone();
+            store.set_session_meta(&sid, "compare_id", &record.id)?;
+            store.set_session_meta(&sid, "compare_lane", id)?;
+            store.set_session_meta(&sid, "execution_target", id)?;
+            engine
+                .start_consented_owned(
+                    StartRequest {
+                        workspace: lane.worktree.clone(),
+                        task: task.clone(),
+                        session_id: Some(sid),
+                        model: Some(model.clone()),
+                        mode: mode.into(),
+                        queue: false,
+                        images: Vec::new(),
+                        web: options.web,
+                    },
+                    purpose,
+                    limit.clone(),
+                    options.owner,
+                    false,
+                )
+                .await
+        }
+        .await;
+        match started {
+            Ok(job) => {
+                lane.job_id = job.id;
+                lane.status = job.status;
+            }
+            Err(error) => {
+                failure = Some(error.context(format!("Could not start {}", lane.name)));
+                break;
+            }
+        }
+    }
+    if let Some(error) = failure {
+        for lane in &record.lanes {
+            if !lane.job_id.is_empty() {
+                let _ = engine.cancel(&lane.job_id).await;
+            }
+        }
+        remove_lanes(engine, &mut record).await;
+        for lane in &record.lanes {
+            if !lane.session_id.is_empty() {
+                let _ = engine.delete_session(&lane.session_id);
+            }
+        }
+        return Err(error);
+    }
+    save(&store, &record)?;
+    let mut ids = index(&store, &workspace)?;
+    ids.insert(0, record.id.clone());
+    ids.truncate(INDEXED);
+    store.set_native_meta(&index_key(&workspace), &serde_json::to_string(&ids)?)?;
+    Ok(record)
+}
+
+pub async fn get(engine: &Engine, id: &str) -> Result<Record> {
+    let _guard = LOCK.lock().await;
+    let store = engine.store();
+    let mut record = load(&store, id)?;
+    refresh(engine, &mut record, &CancellationToken::new()).await?;
+    save(&store, &record)?;
+    Ok(record)
+}
+
+pub async fn list(engine: &Engine, workspace: &Path) -> Result<Vec<Record>> {
+    let workspace = Workspace::open(workspace)?.path;
+    let _guard = LOCK.lock().await;
+    let store = engine.store();
+    let mut records = Vec::new();
+    for id in index(&store, &workspace)?.iter().take(LISTED) {
+        let Ok(mut record) = load(&store, id) else {
+            continue;
+        };
+        if matches!(record.state.as_str(), "running" | "done") {
+            refresh(engine, &mut record, &CancellationToken::new()).await?;
+            save(&store, &record)?;
+        }
+        records.push(record);
+    }
+    records.sort_by(|a, b| b.created_at.total_cmp(&a.created_at));
+    Ok(records)
+}
+
+pub async fn scoreboard(engine: &Engine, workspace: &Path) -> Result<Value> {
+    // Listing first moves finished comparisons to `done` and counts them.
+    list(engine, workspace).await?;
+    let workspace = Workspace::open(workspace)?.path;
+    let mut rows = scores(&engine.store(), &workspace)?;
+    rows.sort_by(|a, b| {
+        b.wins
+            .cmp(&a.wins)
+            .then(b.runs.cmp(&a.runs))
+            .then(a.model.cmp(&b.model))
+    });
+    Ok(json!({"workspace": workspace, "rows": rows}))
+}
+
+/// Paths named in `git apply` errors (conflicting files).
+fn conflicting_paths(stderr: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in stderr.lines() {
+        let Some(rest) = line.strip_prefix("error: ") else {
+            continue;
+        };
+        let path = if let Some(rest) = rest.strip_prefix("patch failed: ") {
+            rest.rsplit_once(':').map(|(path, _)| path).unwrap_or(rest)
+        } else if let Some((path, _)) = rest.split_once(": ") {
+            path
+        } else {
+            continue;
+        };
+        if !path.is_empty() && !paths.iter().any(|p| p == path) {
+            paths.push(path.to_owned());
+        }
+    }
+    paths
+}
+
+pub async fn keep(engine: &Engine, id: &str, model: &str) -> Result<Record> {
+    let cancel = CancellationToken::new();
+    let _guard = LOCK.lock().await;
+    let store = engine.store();
+    let mut record = load(&store, id)?;
+    ensure!(
+        matches!(record.state.as_str(), "running" | "done"),
+        "This comparison was already {}",
+        record.state
+    );
+    refresh(engine, &mut record, &cancel).await?;
+    let lane = record
+        .lanes
+        .iter()
+        .find(|lane| lane.model == model)
+        .cloned()
+        .with_context(|| format!("{model} is not part of this comparison"))?;
+    ensure!(
+        !active(&lane.status),
+        "{} is still working; wait for it to finish or cancel it first",
+        lane.name
+    );
+    ensure!(
+        !lane.removed && lane.worktree.is_dir(),
+        "{}'s worktree was deleted outside ShadowCode; its result cannot be kept",
+        lane.name
+    );
+    // No agent task may run in the source while its working tree changes.
+    let _reservation = engine.reserve_workspace(&record.workspace)?;
+    // Commit the lane's result on its managed branch (never the user's).
+    git(&lane.worktree, &["add", "--all"], &cancel).await?;
+    let staged = git_with(
+        &lane.worktree,
+        &["diff", "--cached", "--quiet", "--no-ext-diff"],
+        &[],
+        &cancel,
+    )
+    .await?;
+    if !staged.ok {
+        let message = format!("ShadowCode compare result: {}", lane.name);
+        let mut args = IDENTITY.to_vec();
+        args.extend(["commit", "--quiet", "--no-verify", "-m", &message]);
+        git(&lane.worktree, &args, &cancel).await?;
+    }
+    let head = git(&lane.worktree, &["rev-parse", "--verify", "HEAD"], &cancel).await?;
+    let files: Vec<String> = git(
+        &lane.worktree,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            &lane.base_commit,
+            &head,
+            "--",
+        ],
+        &cancel,
+    )
+    .await?
+    .split('\0')
+    .filter(|s| !s.is_empty())
+    .map(str::to_owned)
+    .collect();
+    ensure!(
+        !files.is_empty() || lane.status == "completed",
+        "{} finished as {} without changes; there is nothing to keep",
+        lane.name,
+        lane.status
+    );
+    if !files.is_empty() {
+        let temporary = tempfile::tempdir_in(&engine.paths().data)?;
+        let patch = temporary.path().join("lane.patch");
+        let output = format!(
+            "--output={}",
+            patch.to_str().context("Patch path must be UTF-8")?
+        );
+        git(
+            &lane.worktree,
+            &[
+                "diff",
+                "--binary",
+                "--full-index",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                &output,
+                &lane.base_commit,
+                &head,
+                "--",
+            ],
+            &cancel,
+        )
+        .await?;
+        let patch_path = patch.to_str().context("Patch path must be UTF-8")?;
+        let check = git_with(
+            &record.workspace,
+            &[
+                "apply",
+                "--check",
+                "--binary",
+                "--whitespace=nowarn",
+                "--",
+                patch_path,
+            ],
+            &[],
+            &cancel,
+        )
+        .await?;
+        if !check.ok {
+            let conflicts = conflicting_paths(&check.stderr);
+            bail!(
+                "{}'s changes no longer apply: the project changed since the comparison started{}. Nothing was changed and every lane is kept; update or revert those files, then keep again.",
+                lane.name,
+                if conflicts.is_empty() {
+                    format!(" ({})", check.stderr.trim())
+                } else {
+                    format!(" in {}", conflicts.join(", "))
+                }
+            );
+        }
+        // Working tree only: no --index, no commit. The user reviews the
+        // result in the normal Changes view.
+        git(
+            &record.workspace,
+            &["apply", "--binary", "--whitespace=nowarn", "--", patch_path],
+            &cancel,
+        )
+        .await
+        .context("Applying the kept changes failed; review the project's Changes")?;
+    }
+    record.winner = Some(lane.model.clone());
+    record.applied_files = files;
+    record.state = "applied".into();
+    record.finished_at.get_or_insert_with(crate::now);
+    // Other lanes are thrown away; a still-running lane is stopped first.
+    if let Err(error) = stop_lanes(engine, &record, Some(model)).await {
+        record.notes.push(format!("{error:#}"));
+    }
+    refresh(engine, &mut record, &cancel).await?;
+    bump(&store, &record.workspace, &record.lanes, Some(model))?;
+    let notes = remove_lanes(engine, &mut record).await;
+    record.notes.extend(notes);
+    save(&store, &record)?;
+    Ok(record)
+}
+
+pub async fn discard(engine: &Engine, id: &str) -> Result<Record> {
+    let cancel = CancellationToken::new();
+    let _guard = LOCK.lock().await;
+    let store = engine.store();
+    let mut record = load(&store, id)?;
+    if matches!(record.state.as_str(), "applied" | "discarded") {
+        // Retry cleanup of anything a previous attempt left behind.
+        if record.lanes.iter().any(|lane| !lane.removed) {
+            let notes = remove_lanes(engine, &mut record).await;
+            record.notes.extend(notes);
+            save(&store, &record)?;
+        }
+        return Ok(record);
+    }
+    refresh(engine, &mut record, &cancel).await?;
+    // A comparison discarded before it finished does not count as a run.
+    if record.state == "running" {
+        record.counted = true;
+    }
+    stop_lanes(engine, &record, None).await?;
+    refresh(engine, &mut record, &cancel).await?;
+    record.state = "discarded".into();
+    record.finished_at.get_or_insert_with(crate::now);
+    let notes = remove_lanes(engine, &mut record).await;
+    record.notes.extend(notes);
+    save(&store, &record)?;
+    Ok(record)
+}
+
+pub async fn cancel(engine: &Engine, id: &str) -> Result<Record> {
+    let _guard = LOCK.lock().await;
+    let store = engine.store();
+    let mut record = load(&store, id)?;
+    for lane in &record.lanes {
+        if !lane.removed && !lane.job_id.is_empty() && active(&lane.status) {
+            engine.request_cancel(&lane.job_id)?;
+        }
+    }
+    refresh(engine, &mut record, &CancellationToken::new()).await?;
+    save(&store, &record)?;
+    Ok(record)
+}
+
+/// The compare a session belongs to, for session views.
+pub fn session_tags(store: &Store, session_id: &str) -> Result<(Option<String>, Option<String>)> {
+    Ok((
+        store.session_meta(session_id, "compare_id")?,
+        store.session_meta(session_id, "compare_lane")?,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_errors_name_conflicting_files() {
+        let stderr = "error: patch failed: src/a.txt:1\nerror: src/a.txt: patch does not apply\nerror: new.txt: already exists in working directory\n";
+        assert_eq!(conflicting_paths(stderr), vec!["src/a.txt", "new.txt"]);
+    }
+
+    #[test]
+    fn modes_map_to_engine_modes() {
+        assert_eq!(parse_mode("ask").unwrap(), ("review", "reviewer"));
+        assert_eq!(parse_mode("").unwrap(), ("code", "coder"));
+        assert!(parse_mode("command").is_err());
+    }
+}

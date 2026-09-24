@@ -26,6 +26,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 mod commands;
+mod compare;
 #[cfg(unix)]
 mod inspection;
 mod memory;
@@ -195,6 +196,11 @@ impl Service {
                 Workspace::open(Path::new(text("workspace")))?.path == self.workspace()?,
                 "Project changed; refresh worktrees before continuing"
             );
+        }
+        if matches!(parts.get(1), Some(&"compare" | &"compares")) {
+            return self
+                .compare(request.method.as_str(), &parts, &query, body)
+                .await;
         }
         match (request.method.as_str(), path) {
             ("GET", "/api/worktrees") => {
@@ -1162,7 +1168,7 @@ impl Service {
             }
             ("GET", "/api/sessions") => {
                 return Ok(
-                    json!({"sessions":store.sessions_in(q("q"),query_limit(&query,100,10000),(!q("workspace").is_empty()).then(||Path::new(q("workspace"))))?}),
+                    json!({"sessions":store.sessions_listed(q("q"),query_limit(&query,100,10000),(!q("workspace").is_empty()).then(||Path::new(q("workspace"))),matches!(q("include_compare"),"true"|"1"))?}),
                 )
             }
             ("GET", "/api/goals") => {
@@ -2135,6 +2141,9 @@ impl Service {
         }
         session["event_cursor"] = json!(cursor);
         session["execution_target"] = json!(store.session_meta(id, "execution_target")?);
+        let (compare_id, compare_lane) = crate::compare::session_tags(&store, id)?;
+        session["compare_id"] = json!(compare_id);
+        session["compare_lane"] = json!(compare_lane);
         let native: serde_json::Map<String, Value> = store
             .session_meta_prefixed(id, "native_session:")?
             .into_iter()

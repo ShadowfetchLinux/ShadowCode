@@ -422,6 +422,127 @@ pub async fn remove(
     }
 }
 
+/// Remove a disposable ShadowCode-owned checkout and delete its managed
+/// `shadowcode/<id>` branch. Only Compare uses this, for lanes whose result
+/// the user kept elsewhere or explicitly discarded. Unlike `remove`, build
+/// outputs and other ignored files do not block removal, and a checkout that
+/// was already deleted outside ShadowCode has its registration cleaned up.
+/// The source checkout, its index and every other branch are never touched.
+/// Returns a note when something was left behind or already missing.
+pub async fn dispose(
+    paths: &AppPaths,
+    source: &Path,
+    id: &str,
+    cancel: CancellationToken,
+) -> Result<Option<String>> {
+    let _guard = tokio::select! {guard=CREATION.lock()=>guard,_=cancel.cancelled()=>anyhow::bail!("Worktree removal cancelled")};
+    let mut record = read_record(paths, source, id)?;
+    let (records, _) = roots(paths)?;
+    let location = record
+        .path
+        .to_str()
+        .context("Worktree path must be UTF-8")?
+        .to_owned();
+    let missing = matches!(
+        fs::symlink_metadata(&record.path),
+        Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+    );
+    let mut note = None;
+    if missing {
+        let common = PathBuf::from(
+            git(
+                &record.source,
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                cancel.clone(),
+            )
+            .await?,
+        )
+        .canonicalize()?;
+        ensure!(
+            common == record.common_directory,
+            "Source repository identity changed"
+        );
+        let registered = git(
+            &record.source,
+            &["worktree", "list", "--porcelain", "-z"],
+            cancel.clone(),
+        )
+        .await?;
+        let expected = format!("worktree {location}");
+        if let Some(block) = registered
+            .split("\0\0")
+            .find(|block| block.split('\0').any(|field| field == expected))
+        {
+            ensure!(
+                !block
+                    .split('\0')
+                    .any(|field| field == "locked" || field.starts_with("locked ")),
+                "Worktree is locked; it may be on an unavailable device"
+            );
+            git(
+                &record.source,
+                &["worktree", "remove", "--force", "--", &location],
+                cancel.clone(),
+            )
+            .await?;
+        }
+        note = Some(format!(
+            "Checkout {} was already deleted outside ShadowCode; its Git registration and branch were cleaned up",
+            record.path.display()
+        ));
+    } else {
+        let inspection = inspect(paths, source, id, cancel.clone()).await?;
+        ensure!(
+            !inspection.locked,
+            "Git worktree is locked; unlock it deliberately before removal"
+        );
+        ensure!(
+            inspection.current_branch == record.branch,
+            "Checkout {} is no longer on its managed branch {}; preserve it before removal",
+            record.path.display(),
+            record.branch
+        );
+        record.state = "removing".into();
+        record.detail = "Removing disposable checkout and its managed branch".into();
+        save(&records, &record)?;
+        git(
+            &record.source,
+            &["worktree", "remove", "--force", "--", &location],
+            cancel.clone(),
+        )
+        .await?;
+    }
+    // Only this record's own branch, whose name `read_record` verified.
+    let reference = format!("refs/heads/{}", record.branch);
+    if git(
+        &record.source,
+        &["show-ref", "--verify", "--quiet", &reference],
+        cancel.clone(),
+    )
+    .await
+    .is_ok()
+    {
+        if let Err(error) = git(&record.source, &["branch", "-D", &record.branch], cancel).await {
+            note = Some(format!("Branch {} was kept: {error:#}", record.branch));
+        }
+    }
+    record.state = "removed".into();
+    record.detail = format!(
+        "Disposable checkout removed; branch {} deleted",
+        record.branch
+    );
+    save(&records, &record)?;
+    let archive = records.join("archive");
+    paths::private_directory(&archive)?;
+    fs::rename(
+        records.join(format!("{}.json", record.id)),
+        archive.join(format!("{}.json", record.id)),
+    )?;
+    fs::File::open(&records)?.sync_all()?;
+    fs::File::open(&archive)?.sync_all()?;
+    Ok(note)
+}
+
 /// A rescue creates a new checkout; it never prunes the missing checkout's
 /// registration or index, which may still contain recoverable staged changes.
 #[derive(Clone, Debug, Serialize)]
