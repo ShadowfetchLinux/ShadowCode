@@ -340,6 +340,33 @@ async fn lanes_start_from_uncommitted_work_and_keep_applies_one_result() {
         2
     );
 
+    // Opening a lane's conversation does not make its worktree a project.
+    let lane_session = all["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["compare_id"] == id.as_str())
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    call(
+        &f.service,
+        "POST",
+        &format!("/api/sessions/{lane_session}/activate"),
+        json!({}),
+    )
+    .await
+    .unwrap();
+    let projects = call(&f.service, "GET", "/api/projects", Value::Null)
+        .await
+        .unwrap();
+    assert!(!projects["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["path"].as_str().unwrap().contains("managed-worktrees")));
+
     // Keeping refuses a model that is not a lane.
     assert!(call(
         &f.service,
@@ -425,9 +452,14 @@ async fn lanes_start_from_uncommitted_work_and_keep_applies_one_result() {
     .unwrap();
     assert_eq!(listed["compares"][0]["id"], id.as_str());
 
-    let board = call(&f.service, "GET", "/api/compare/scoreboard", Value::Null)
-        .await
-        .unwrap();
+    let board = call(
+        &f.service,
+        "GET",
+        &format!("/api/compare/scoreboard?workspace={}", project.display()),
+        Value::Null,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         board["rows"],
         json!([

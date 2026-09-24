@@ -292,6 +292,10 @@ export type Session = {
   updated_at: number;
   usage_json?: string;
   parent_id?: string;
+  /** Set on a Compare lane's conversation (hidden from the sidebar). */
+  compare_id?: string | null;
+  /** The lane's picker id. */
+  compare_lane?: string | null;
 };
 export type SessionDetail = Session & {
   tasks: { id: string; prompt: string; summary?: string; status: string }[];
@@ -557,6 +561,75 @@ export type NativeMcpCatalog = {
   dirs: string[];
 };
 
+/** docs/COMPARE.md: one task on 2–3 models, each in its own worktree. */
+export type CompareFile = {
+  path: string;
+  /** added | modified | deleted */
+  status: string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+};
+export type CompareLane = {
+  model: string;
+  name: string;
+  session_id: string;
+  job_id: string;
+  worktree: string;
+  worktree_id: string;
+  branch: string;
+  base_commit: string;
+  /** The lane's latest job status (queued, running, paused, cancelling,
+   * completed, failed, cancelled, limit_reached, interrupted). */
+  status: string;
+  summary: string;
+  changed_files: CompareFile[];
+  changed_files_truncated: boolean;
+  checks: {
+    passed: number;
+    failed: number;
+    commands: { command: string; exit_code: number | null; success: boolean }[];
+  };
+  duration_s: number;
+  usage: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    estimated?: boolean;
+    cost?: number;
+  } | null;
+  error: string | null;
+  removed: boolean;
+};
+export type CompareRecord = {
+  id: string;
+  workspace: string;
+  task: string;
+  mode: string;
+  web: boolean;
+  created_at: number;
+  finished_at: number | null;
+  state: "running" | "done" | "applied" | "discarded" | string;
+  base: { commit: string; head: string; included_uncommitted: boolean };
+  lanes: CompareLane[];
+  winner: string | null;
+  applied_files: string[];
+  notes: string[];
+};
+export type CompareScore = {
+  model: string;
+  name: string;
+  wins: number;
+  runs: number;
+};
+export type StartCompareRequest = {
+  workspace?: string;
+  task: string;
+  models: string[];
+  mode?: "code" | "plan" | "ask";
+  web?: boolean;
+};
+
 const get = <T>(path: string) => request<T>(path);
 
 async function send<T>(
@@ -604,6 +677,34 @@ export const api = {
   cleanupParallel: () =>
     send<{ cleaned: number }>("/api/parallel/cleanup", "POST", {}),
   guardianStatus: () => get<GuardianStatus>("/api/guardian"),
+  startCompare: (body: StartCompareRequest) =>
+    send<CompareRecord>("/api/compare", "POST", body),
+  compare: (id: string) =>
+    get<CompareRecord>(`/api/compare/${encodeURIComponent(id)}`),
+  compares: (workspace = "") =>
+    get<{ compares: CompareRecord[] }>(
+      `/api/compares${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`,
+    ),
+  keepCompare: (id: string, model: string) =>
+    send<CompareRecord>(`/api/compare/${encodeURIComponent(id)}/keep`, "POST", {
+      model,
+    }),
+  discardCompare: (id: string) =>
+    send<CompareRecord>(
+      `/api/compare/${encodeURIComponent(id)}/discard`,
+      "POST",
+      {},
+    ),
+  cancelCompare: (id: string) =>
+    send<CompareRecord>(
+      `/api/compare/${encodeURIComponent(id)}/cancel`,
+      "POST",
+      {},
+    ),
+  compareScoreboard: (workspace = "") =>
+    get<{ workspace: string; rows: CompareScore[] }>(
+      `/api/compare/scoreboard${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`,
+    ),
   runGuardian: () => send("/api/guardian/run", "POST", {}),
   health: () => get<Health>("/api/health"),
   onboarding: () =>

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.31.0: Allowance, keep going on a local model, Compare
+
+- **Allowance.** A status-bar button and panel (`GET /api/allowance`) list
+  each subscription's reported usage windows and reset times, OpenRouter
+  credits left on the key, and local models ready to run. Only reported
+  figures; states are ok, low (10% or less), limit reached, usage not
+  reported, not signed in, not installed, offline and no key.
+- **Keep going on a local model.** When a subscription reports its plan limit,
+  the same conversation continues on a local model (`limits.on_limit`:
+  `local`, the default, or `ask`; `limits.fallback_model` picks the model,
+  otherwise the last local model used in the project, then the first ready
+  one with tools). The conversation says "Codex reached its plan limit.
+  Continuing on qwen3:14b on this computer." or why it could not. ShadowCode never retries on the same plan or buys more usage.
+- **Compare.** `POST /api/compare` runs one task on 2 or 3 models, each in a
+  managed worktree from a snapshot of HEAD plus uncommitted work (taken with a
+  temporary index; the checkout and index are untouched). Keep applies one
+  lane's diff to the working tree only after `git apply --check`; conflicting
+  files are listed and nothing changes. Lanes are removed after keep or
+  discard, and a per-project scoreboard counts wins. UI: **Compare** button
+  next to Send, a Comparisons view with lanes side by side, lane
+  conversations, and keep/discard/stop.
+- Lane conversations are hidden from the sidebar and never become a project
+  or the folder reopened at startup.
+- Live harness: `--allowance` and `--compare <id>`.
+
 ## 0.30.2: Web for OpenRouter, key hygiene, docs
 
 - **Web toggle for OpenRouter rows.** The 0.29.0 notes said OpenRouter tasks

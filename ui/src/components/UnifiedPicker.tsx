@@ -71,6 +71,7 @@ export function UnifiedPicker({
   onAddLocal,
   note,
   loading,
+  label = "Model for this task",
 }: {
   targets: PickerTarget[];
   value: string;
@@ -84,6 +85,8 @@ export function UnifiedPicker({
   onAddLocal: () => void;
   note?: string;
   loading?: boolean;
+  /** Accessible name of the trigger, before the chosen row's name. */
+  label?: string;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -295,9 +298,7 @@ export function UnifiedPicker({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={
-          selected
-            ? `Model for this task: ${selected.name}`
-            : "Model for this task: none chosen"
+          selected ? `${label}: ${selected.name}` : `${label}: none chosen`
         }
         onClick={() => (open ? close() : onOpenChange(true))}
       >

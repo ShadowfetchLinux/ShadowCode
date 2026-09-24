@@ -589,3 +589,245 @@ test("Allowance shows what is left; in Ask mode a plan limit offers to continue 
     fullPage: true,
   });
 });
+
+const axeClean = async (page: Page, include?: string) => {
+  const builder = new AxeBuilder({ page }).withTags([
+    "wcag2a",
+    "wcag2aa",
+    "wcag21aa",
+  ]);
+  if (include) builder.include(include);
+  expect((await builder.analyze()).violations).toEqual([]);
+};
+
+async function pickSlot(page: Page, slot: number, text: string) {
+  const dialog = page.getByRole("dialog", { name: "Compare models" });
+  await dialog
+    .getByRole("button", { name: new RegExp(`^Model ${slot}:`) })
+    .click();
+  const search = dialog.getByRole("combobox", { name: "Search models" });
+  await expect(search).toBeFocused();
+  await search.fill(text);
+  await search.press("Enter");
+  await expect(dialog.getByRole("listbox")).toHaveCount(0);
+}
+
+test("compares a local and a cloud model, keeps one and counts the win", async ({
+  page,
+}) => {
+  const compare = page.getByRole("button", { name: "Compare", exact: true });
+  await expect(compare).toHaveAttribute("aria-disabled", "true");
+  await expect(compare).toHaveAttribute("title", /Type a task/);
+  await prompt(page).fill("Fix the add function");
+  await expect(compare).toHaveAttribute("aria-disabled", "false");
+  await compare.click();
+  const dialog = page.getByRole("dialog", { name: "Compare models" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".compare-task")).toHaveText(
+    "Fix the add function",
+  );
+  await expect(dialog).toContainText(
+    "Each model uses its own plan allowance or OpenRouter credit.",
+  );
+  await pickSlot(page, 1, "qwen3:14b");
+  await pickSlot(page, 2, "GPT-6-Astra");
+  await expect(
+    dialog.getByRole("button", { name: /^Model 1: qwen3:14b/ }),
+  ).toContainText("Local");
+  await expect(
+    dialog.getByRole("button", { name: /^Model 2: Codex · GPT-6-Astra/ }),
+  ).toContainText("Cloud");
+  await expect(dialog.locator(".compare-cost")).toContainText(
+    "Runs on this computer · No subscription quota",
+  );
+  await expect(dialog.locator(".compare-cost")).toContainText(
+    "Shared plan usage · 2% left",
+  );
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (t) => (document.documentElement.dataset.theme = t),
+      theme,
+    );
+    await axeClean(page, '[role="dialog"]');
+    await dialog.screenshot({
+      path: `test-results/compare-dialog-${theme}.png`,
+    });
+  }
+  await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+
+  await dialog.getByRole("button", { name: "Start comparison" }).click();
+  await expect(dialog).toHaveCount(0);
+  const post = (await fakeLog(page)).find((r) => r.path === "/api/compare");
+  expect(post?.body).toMatchObject({
+    task: "Fix the add function",
+    models: ["local:gguf:qwen", "cli:codex:gpt-6-astra"],
+  });
+  const view = page.getByRole("region", { name: "Comparisons" });
+  await expect(view).toBeVisible();
+  const lanes = view.getByRole("article");
+  await expect(lanes).toHaveCount(2);
+  const local = view.getByRole("article", { name: "qwen3:14b" });
+  const cloud = view.getByRole("article", { name: "Codex · GPT-6-Astra" });
+  await expect(local.locator(".inference-badge")).toHaveText("Local");
+  await expect(cloud.locator(".inference-badge")).toHaveText("Cloud");
+  await expect(cloud).toContainText("Working…");
+  await expect(
+    cloud.getByRole("button", { name: "Keep this one" }),
+  ).toBeDisabled();
+  await page.screenshot({ path: "test-results/compare-running.png" });
+  // Lane conversations stay out of the sidebar.
+  await expect(page.locator(".sidebar")).not.toContainText("Compare ·");
+
+  await expect(local).toContainText("Finished", { timeout: 15000 });
+  await expect(cloud).toContainText("Finished", { timeout: 15000 });
+  await expect(view).toContainText("Finished · choose a result to keep");
+  await expect(cloud).toContainText("src/app.test.ts");
+  await expect(cloud).toContainText("+12");
+  await expect(cloud.locator(".compare-checks summary")).toHaveText(
+    "1 passed · 1 failed",
+  );
+  await expect(local.locator(".compare-checks summary")).toHaveText("1 passed");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (t) => (document.documentElement.dataset.theme = t),
+      theme,
+    );
+    await axeClean(page);
+    await page.screenshot({ path: `test-results/compare-view-${theme}.png` });
+  }
+  await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+
+  await cloud.getByRole("button", { name: "Keep this one" }).click();
+  const confirm = page.getByRole("dialog", {
+    name: "Keep Codex · GPT-6-Astra's result",
+  });
+  await expect(confirm).toContainText(
+    "Apply Codex · GPT-6-Astra’s changes to your project as uncommitted changes and remove the other copies?",
+  );
+  await confirm
+    .getByRole("button", { name: "Keep Codex · GPT-6-Astra" })
+    .click();
+  await expect(confirm).toHaveCount(0);
+  const applied = view.locator(".compare-applied");
+  await expect(applied).toContainText(
+    "Applied 2 files from Codex · GPT-6-Astra — review them in Changes",
+  );
+  await expect(cloud).toContainText("Kept");
+  const board = view.getByRole("region", { name: "Wins in this project" });
+  await expect(
+    board.getByRole("row", { name: /Codex · GPT-6-Astra 1 1/ }),
+  ).toBeVisible();
+  await expect(board.getByRole("row", { name: /qwen3:14b 0 1/ })).toBeVisible();
+  await page.screenshot({ path: "test-results/compare-kept.png" });
+  await applied.getByRole("button", { name: "Open Changes" }).click();
+  const drawer = page.getByRole("complementary", { name: "Drawer" });
+  await expect(drawer).toContainText("src/app.test.ts");
+  await expect(drawer).toContainText("src/app.ts");
+  await expect(
+    page.getByRole("button", { name: "Review changes" }).locator(".count"),
+  ).toHaveText("2");
+
+  // The narrow window keeps the view without horizontal scrolling.
+  await page.getByRole("button", { name: "Close drawer" }).click();
+  await page.setViewportSize({ width: 520, height: 800 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "test-results/compare-520.png",
+    fullPage: true,
+  });
+  // …and so does the dialog with a model list open.
+  await page
+    .getByRole("button", { name: "Back to conversation", exact: true })
+    .click();
+  await prompt(page).fill("Tidy the README");
+  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  const again = page.getByRole("dialog", { name: "Compare models" });
+  // The last lineup is remembered.
+  await expect(
+    again.getByRole("button", { name: /^Model 1: qwen3:14b/ }),
+  ).toBeVisible();
+  await again.getByRole("button", { name: /^Model 2:/ }).click();
+  await expect(again.getByRole("listbox")).toBeVisible();
+  const box = await again.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= 520).toBe(true);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({ path: "test-results/compare-dialog-520.png" });
+  await page.keyboard.press("Escape");
+  await expect(again.getByRole("listbox")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(again).toHaveCount(0);
+  await page.screenshot({ path: "test-results/compare-composer-520.png" });
+});
+
+test("a lane's approval is answered in its conversation; a conflicting Keep names the files", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    const fake = (window as unknown as { __SHADOW_FAKE__: { state: any } })
+      .__SHADOW_FAKE__.state;
+    fake.compare.approval = true;
+    fake.compare.conflict = true;
+  });
+  await prompt(page).fill("Add a regression test for add");
+  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  await pickSlot(page, 1, "qwen3:14b");
+  await pickSlot(page, 2, "GPT-6-Luna");
+  await page
+    .getByRole("dialog", { name: "Compare models" })
+    .getByRole("button", { name: "Start comparison" })
+    .click();
+  const view = page.getByRole("region", { name: "Comparisons" });
+  const cloud = view.getByRole("article", { name: "Codex · GPT-6-Luna" });
+  await expect(cloud).toContainText("Waiting for approval", { timeout: 15000 });
+  await page.screenshot({ path: "test-results/compare-approval.png" });
+  await cloud.getByRole("button", { name: "Answer in conversation" }).click();
+  const banner = page.locator(".compare-banner");
+  await expect(banner).toContainText("Part of a comparison");
+  const approval = page.locator(".approval");
+  await expect(approval).toContainText("npm install --save-dev vitest");
+  await page.screenshot({ path: "test-results/compare-lane-conversation.png" });
+  // The lane's copy is not listed as a project.
+  await expect(page.locator(".sidebar")).not.toContainText("demo-1-");
+  await approval.getByRole("button", { name: "Allow" }).click();
+  await expect(approval).toHaveCount(0);
+  await banner.getByRole("button", { name: "Back to comparison" }).click();
+  await expect(view).toBeVisible();
+  await expect(cloud).toContainText("Finished", { timeout: 15000 });
+  await expect(view.getByRole("article", { name: "qwen3:14b" })).toContainText(
+    "Finished",
+    { timeout: 15000 },
+  );
+
+  await cloud.getByRole("button", { name: "Keep this one" }).click();
+  await page
+    .getByRole("dialog", { name: "Keep Codex · GPT-6-Luna's result" })
+    .getByRole("button", { name: "Keep Codex · GPT-6-Luna" })
+    .click();
+  const conflict = view.locator(".compare-conflict");
+  await expect(conflict).toContainText(
+    "Codex · GPT-6-Luna's changes no longer apply.",
+  );
+  await expect(
+    conflict.getByRole("list", { name: "Conflicting files" }),
+  ).toContainText("src/app.test.ts");
+  await expect(view).toContainText("Finished · choose a result to keep");
+  await page.screenshot({ path: "test-results/compare-conflict.png" });
+  // Resolved: keeping again applies.
+  await cloud.getByRole("button", { name: "Keep this one" }).click();
+  await page
+    .getByRole("dialog", { name: "Keep Codex · GPT-6-Luna's result" })
+    .getByRole("button", { name: "Keep Codex · GPT-6-Luna" })
+    .click();
+  await expect(view.locator(".compare-applied")).toContainText(
+    "Applied 2 files",
+  );
+  await expect(conflict).toHaveCount(0);
+});

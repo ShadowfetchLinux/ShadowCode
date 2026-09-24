@@ -153,9 +153,66 @@ Cursor, Grok and Antigravity ACP `session/load`.
 ## When a plan limit is reached
 
 If a vendor reports that your plan limit is reached, the task stops with the
-status *Plan limit reached*. A banner offers **Choose model**, and that vendor's
-affected rows show as unavailable until the limit resets. ShadowCode doesn't
-retry, buy credits or turn on overages.
+status *Plan limit reached*, and that vendor's affected rows show as
+unavailable until the limit resets. ShadowCode doesn't retry on the same plan,
+buy credits or turn on overages.
+
+What happens next is set under **When a plan runs out**, in the Allowance
+panel and at the top of **Settings › Accounts**:
+
+- **Continue on a local model** (the default). The same conversation carries
+  on right away on a model on this computer, with the usual summary of the
+  earlier turns. The conversation shows "Codex reached its plan limit.
+  Continuing on qwen3:14b on this computer." and the follow-up message is
+  labelled *Continued automatically*. Nothing leaves your computer and there is
+  no quota. The model is the one you pick in the setting, or else the last
+  local model you used in this project, or else the first ready local model
+  with tool support.
+- **Ask me.** The conversation shows a card with **Continue on <local model>**
+  and **Choose another model**.
+
+If no local model is ready, the conversation says so and offers **Open Local
+models**.
+
+## Allowance
+
+The **Allowance** button in the status bar opens one list of everything you
+can run and how much of it is left, as each source reports it:
+
+- **Subscriptions**: the reported usage windows with reset times (Codex), the
+  plan, *Plan limit reached*, or *Usage not reported* for vendors that expose
+  none. Signed-out or missing tools link to **Settings › Accounts**.
+- **OpenRouter**: credits left of your key's limit, or what has been spent.
+- **On this computer**: how many local models are ready. There is no quota,
+  and the **When a plan runs out** setting lives here.
+
+The dot on the button turns amber when a source you can run is low or has
+reached its limit. **Refresh** checks the vendor accounts again.
+
+## Compare models
+
+Not sure which model suits a task? Type it, then press **Compare** next to
+**Send** and choose 2 or 3 models (at most one on this computer). Each works
+in its own copy of the project, starting from your latest commit plus any
+uncommitted work, so your files stay as they are until you choose.
+
+The **Comparisons** view (top bar, or *Comparisons in this project* in the
+command palette) shows every lane side by side: what it changed, which checks
+passed, how long it took and what it used. Open a file to see that lane's
+change, or open its conversation to follow up with that model. A lane that
+asks for permission says so, and approvals work as usual.
+
+- **Keep** applies that model's changes to your project's working tree. Review
+  them in **Changes** as usual; nothing is committed. If your project changed
+  since the comparison started and the changes no longer apply, ShadowCode
+  lists the conflicting files and changes nothing.
+- **Discard all** throws every lane away. **Stop** cancels lanes that are
+  still working and keeps what they did so far.
+
+After keep or discard, every lane's copy and branch is removed. **Wins in this
+project** counts which model you kept. Every lane is a full task: subscription
+lanes use your plan, OpenRouter lanes are billed per token. Details:
+[compare](COMPARE.md).
 
 ## Offline and web-off
 

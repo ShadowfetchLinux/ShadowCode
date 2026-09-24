@@ -1,6 +1,25 @@
-ShadowCode 0.30.2 lets OpenRouter models search the web, keeps your
-OpenRouter key away from other tools, and brings the documentation up to
-date. The 0.30.1 notes follow below.
+ShadowCode 0.31.0 shows how much of every plan is left, keeps working on a
+model on your computer when a plan runs out, and can race 2 or 3 models on the
+same task so you keep the best result. The 0.30.2 notes follow below.
+
+## New in 0.31.0
+
+- **Allowance.** One button in the status bar shows what's left everywhere:
+  each subscription's usage and reset times, your OpenRouter credits, and the
+  local models ready to run. Only figures the services report; nothing is
+  guessed.
+- **Keep going when a plan runs out.** When Codex, Claude Code or another
+  subscription hits its limit, the same conversation continues on a local
+  model, with a note saying so. Prefer to choose? Set **When a plan runs out**
+  to **Ask me**. ShadowCode never retries on the same plan or buys more
+  usage.
+- **Compare.** Press **Compare** next to Send to give one task to 2 or 3
+  models. Each works in its own copy of your project (uncommitted work
+  included); see their changes, checks, time and cost side by side, then
+  **Keep** the best one. Only the kept changes reach your files, nothing is
+  committed, and the copies are cleaned up. **Wins in this project** tracks
+  which model you keep. Tested live: two OpenRouter models fixed the same bug
+  in 11 seconds and the kept fix applied cleanly.
 
 ## Fixed in 0.30.2
 
@@ -156,9 +175,9 @@ runtime that ships with the app.
 
 ## Downloads
 
-- `ShadowCode_0.30.2_amd64.AppImage`
-- `ShadowCode_0.30.2_amd64.deb`
-- `ShadowCode_0.30.2_appimage-runtime-sources.tar.gz`
+- `ShadowCode_0.31.0_amd64.AppImage`
+- `ShadowCode_0.31.0_amd64.deb`
+- `ShadowCode_0.31.0_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
 Builds are for x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).

@@ -177,15 +177,23 @@ explicit runtime override ranked below a stale installed CPU-only runtime.
 - **0.30.2.** The composer's **Web** toggle also appears for OpenRouter rows
   (tested live: `openai/gpt-4o-mini` searched and cited tokio.rs), and
   `OPENROUTER_API_KEY` joins the provider keys removed from vendor CLIs.
+- **0.31.0.** Allowance (`GET /api/allowance`, `allowance.rs`) builds one
+  row per subscription, OpenRouter and local models from reported figures
+  only. A `limit_reached` vendor job starts a queued local continuation in the
+  same session (`Engine::continue_after_limit`, `limits.on_limit`). Compare
+  (`compare.rs`, `service/compare.rs`) snapshots HEAD plus uncommitted work
+  with a temporary index, runs 2–3 lanes in managed worktrees, keeps one via
+  `git apply --check` then `git apply` to the working tree, and disposes every
+  lane. Lane sessions never become projects or the relaunch folder.
 - **Tooling.** `scripts/check-secrets.mjs` runs in the CI "Checks" workflow.
   `examples/live_vendor_turn` gained `--command` (0.30.1), `--web` and
   `--image` (after 0.30.1) next to `--second` and `--switch <id>`.
 
-Test counts at 0.30.1:
+Test counts at 0.31.0:
 
 | Check | Result |
 | --- | --- |
-| Rust tests (`cargo test --workspace --locked`) | 457 passed, 4 ignored (live tests) |
-| UI unit (`npm --prefix ui test`) | 106 passed |
-| UI e2e (`npm --prefix ui run test:e2e`) | 11 passed |
+| Rust tests (`cargo test --workspace --locked`) | 467 passed, 4 ignored (live tests) |
+| UI unit (`npm --prefix ui test`) | 144 passed |
+| UI e2e (`npm --prefix ui run test:e2e`) | 14 passed |
 | Real window (`scripts/test-native-desktop.mjs`) | 13 checks |

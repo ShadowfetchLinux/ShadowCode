@@ -14,6 +14,10 @@ export type FakeOptions = {
   onboarding?: boolean;
   /** Codex tasks stop at the plan limit (then limits.on_limit applies). */
   limitOnCodex?: boolean;
+  /** Compare: the second lane asks for approval before running its checks. */
+  compareApproval?: boolean;
+  /** Compare: the next Keep finds the project changed (a conflict). */
+  compareConflict?: boolean;
 };
 
 export function installFakeBackend(options: FakeOptions = {}) {
@@ -504,6 +508,20 @@ export function installFakeBackend(options: FakeOptions = {}) {
     events: [] as Json[],
     cursor: 0,
     lastRoute: {} as Record<string, string>,
+    /** The engine's selected project (a lane's copy once its conversation
+     * is activated). */
+    selected: workspace,
+    projects: [workspace] as string[],
+    /** Compare records, newest last, and the project's scoreboard. */
+    compares: [] as Json[],
+    scores: [] as Json[],
+    compare: {
+      approval: Boolean(options.compareApproval),
+      conflict: Boolean(options.compareConflict),
+    },
+    approvals: [] as Json[],
+    /** Files a kept comparison applied to the project (uncommitted). */
+    applied: [] as Json[],
   };
 
   function vendorRow(key: string, v: Json, model?: Json) {
@@ -1048,7 +1066,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
     const job: Json = {
       id,
       task_id: `t${state.jobs.length + 1}`,
-      workspace,
+      workspace: body.workspace || workspace,
       session_id: sid,
       status: "queued",
       task: body.task,
@@ -1065,9 +1083,494 @@ export function installFakeBackend(options: FakeOptions = {}) {
     job.event_cursor = state.cursor - 1;
     const session = state.sessions.find((s: Json) => s.id === sid);
     if (session) session.target = body.model;
-    if (target.provider === "cli:codex" && state.limitOnCodex) limitScript(job);
+    if (body.lane) laneScript(job, body.lane, !cloud);
+    else if (target.provider === "cli:codex" && state.limitOnCodex)
+      limitScript(job);
     else script(job, !cloud);
     return job;
+  }
+
+  // --- Compare (docs/COMPARE.md) ------------------------------------------
+  /** What each lane does: different files and checks, and a different pace,
+   * so lanes finish one after another over a few polls. */
+  const LANE_PLANS: Json[] = [
+    {
+      pace: 3,
+      files: [
+        {
+          path: "src/app.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          binary: false,
+        },
+      ],
+      checks: [{ command: "npm test", success: true, exit_code: 0 }],
+      summary: "Fixed `add` in src/app.ts; the tests pass.",
+      tokens: 8200,
+    },
+    {
+      pace: 4,
+      files: [
+        {
+          path: "src/app.test.ts",
+          status: "added",
+          additions: 12,
+          deletions: 0,
+          binary: false,
+        },
+        {
+          path: "src/app.ts",
+          status: "modified",
+          additions: 4,
+          deletions: 1,
+          binary: false,
+        },
+      ],
+      checks: [
+        { command: "npm test", success: true, exit_code: 0 },
+        { command: "npm run lint", success: false, exit_code: 1 },
+      ],
+      summary: "Fixed `add`, added a regression test; lint reports one issue.",
+      tokens: 21400,
+    },
+    {
+      pace: 5,
+      files: [
+        {
+          path: "src/app.ts",
+          status: "modified",
+          additions: 2,
+          deletions: 1,
+          binary: false,
+        },
+        {
+          path: "src/math.ts",
+          status: "added",
+          additions: 9,
+          deletions: 0,
+          binary: false,
+        },
+      ],
+      checks: [{ command: "npm test", success: true, exit_code: 0 }],
+      summary: "Moved arithmetic into src/math.ts and fixed `add`.",
+      tokens: 15100,
+    },
+  ];
+  const ACTIVE = ["", "queued", "running", "paused", "cancelling"];
+  const compareError = (message: string) =>
+    new Error(JSON.stringify({ error: message }));
+
+  /** A lane's job: edits its files one by one (the record's changed files
+   * grow), optionally waits for an approval, runs its checks, finishes. */
+  function laneScript(job: Json, plan: Json, local: boolean) {
+    const sid = job.session_id;
+    const tid = job.task_id;
+    job.laneFiles = [];
+    job.laneChecks = [];
+    const steps: (() => void)[] = [
+      () => emit(sid, tid, "agent.started", { task: job.task, job_id: job.id }),
+      () =>
+        emit(sid, tid, "routing.selected", {
+          purpose: "coder",
+          source: "explicit",
+          requested: job.model,
+          model_id: job.model,
+          model_name: job.model_name,
+          provider: local ? "llamacpp" : job.provider,
+          context_limit: local ? 16384 : 0,
+          inference: local ? "local" : "cloud",
+        }),
+    ];
+    plan.files.forEach((file: Json, index: number) => {
+      const call = `e${index}`;
+      steps.push(() =>
+        emit(sid, tid, "tool.started", {
+          tool: "edit_file",
+          call_id: call,
+          arguments: { path: file.path },
+        }),
+      );
+      steps.push(() => {
+        job.laneFiles.push({ ...file });
+        emit(sid, tid, "tool.completed", {
+          tool: "edit_file",
+          call_id: call,
+          success: true,
+          output: { paths: [file.path] },
+          output_preview: `Edited ${file.path}`,
+          arguments: { path: file.path },
+        });
+      });
+    });
+    if (plan.approval)
+      steps.push(() => {
+        state.approvals.push({
+          id: `a-${job.id}`,
+          session_id: sid,
+          task_id: tid,
+          tool: "exec",
+          arguments: { command: "npm install --save-dev vitest" },
+          command: "npm install --save-dev vitest",
+          reason: "Install the test runner before running the new test",
+          pending: true,
+          created_at: now(),
+          expires_at: now() + 600,
+        });
+      });
+    plan.checks.forEach((check: Json, index: number) => {
+      const call = `x${index}`;
+      steps.push(() =>
+        emit(sid, tid, "tool.started", {
+          tool: "exec",
+          call_id: call,
+          arguments: { command: check.command },
+        }),
+      );
+      steps.push(() => {
+        job.laneChecks.push({ ...check });
+        emit(sid, tid, "tool.completed", {
+          tool: "exec",
+          call_id: call,
+          success: check.success,
+          output_preview: check.success ? "ok" : "1 problem",
+          output: { exit_code: check.exit_code },
+        });
+      });
+    });
+    steps.push(() =>
+      emit(sid, tid, "verification.summary", {
+        status: plan.checks.every((c: Json) => c.success)
+          ? "last_command_succeeded"
+          : "last_command_failed",
+        commands: plan.checks,
+      }),
+    );
+    steps.push(() =>
+      emit(sid, tid, "model.delta", { text: plan.summary, message_id: "m1" }),
+    );
+    let index = 0;
+    const tick = () => {
+      const waiting = state.approvals.some(
+        (a: Json) => a.session_id === sid && a.task_id === tid,
+      );
+      if (job.status === "cancelling") {
+        state.approvals = state.approvals.filter(
+          (a: Json) => a.task_id !== tid,
+        );
+        job.status = "cancelled";
+        job.finished_at = now();
+        job.summary = "Task cancelled";
+        emit(sid, tid, "agent.completed", {
+          summary: job.summary,
+          success: false,
+          cancelled: true,
+        });
+        job.event_cursor = state.cursor;
+        return;
+      }
+      if (waiting) {
+        setTimeout(tick, step);
+        return;
+      }
+      if (index < steps.length) {
+        if (index === 0) job.status = "running";
+        steps[index++]();
+        job.event_cursor = state.cursor;
+        setTimeout(tick, step * plan.pace);
+        return;
+      }
+      const verification = { status: "done", commands: plan.checks };
+      job.status = "completed";
+      job.finished_at = now();
+      job.summary = plan.summary;
+      job.usage = {
+        prompt_tokens: Math.round(plan.tokens * 0.8),
+        completion_tokens: Math.round(plan.tokens * 0.2),
+        total_tokens: plan.tokens,
+      };
+      job.result = { success: true, summary: job.summary, verification };
+      emit(sid, tid, "agent.completed", {
+        summary: job.summary,
+        success: true,
+        cancelled: false,
+        verification,
+        usage: job.usage,
+      });
+      job.event_cursor = state.cursor;
+    };
+    setTimeout(tick, step);
+  }
+
+  function bumpScores(record: Json, winner: string | null) {
+    for (const lane of record.lanes as Json[]) {
+      let row = state.scores.find((r: Json) => r.model === lane.model);
+      if (!row) {
+        row = { model: lane.model, name: lane.name, wins: 0, runs: 0 };
+        state.scores.push(row);
+      }
+      row.name = lane.name;
+      if (winner === null) row.runs += 1;
+      else if (winner === lane.model) row.wins += 1;
+    }
+  }
+
+  /** Lane status, changes and checks from each lane's latest job; a running
+   * comparison is done once every lane has stopped (and counts as a run). */
+  function refreshCompare(record: Json) {
+    for (const lane of record.lanes as Json[]) {
+      if (lane.removed) continue;
+      const job = state.jobs.find((j: Json) => j.id === lane.job_id);
+      if (!job) continue;
+      lane.status = job.status;
+      lane.summary = job.summary || "";
+      lane.duration_s =
+        Math.round(
+          ((job.finished_at || Date.now() / 1000) - job.started_at) * 10,
+        ) / 10;
+      lane.changed_files = (job.laneFiles || []).map((f: Json) => ({ ...f }));
+      const commands = (job.laneChecks || []).map((c: Json) => ({ ...c }));
+      lane.checks = {
+        passed: commands.filter((c: Json) => c.success).length,
+        failed: commands.filter((c: Json) => !c.success).length,
+        commands,
+      };
+      lane.usage = {
+        prompt_tokens: job.usage?.prompt_tokens || 0,
+        completion_tokens: job.usage?.completion_tokens || 0,
+        total_tokens: job.usage?.total_tokens || 0,
+        estimated: false,
+      };
+      lane.error = ["failed", "limit_reached", "interrupted"].includes(
+        job.status,
+      )
+        ? job.summary
+        : null;
+    }
+    if (
+      record.state === "running" &&
+      record.lanes.every((l: Json) => !ACTIVE.includes(l.status))
+    ) {
+      record.state = "done";
+      record.finished_at = now();
+    }
+    if (
+      !record.counted &&
+      record.state !== "running" &&
+      record.state !== "discarded"
+    ) {
+      bumpScores(record, null);
+      record.counted = true;
+    }
+    return record;
+  }
+  const compareJson = (record: Json) => {
+    const { counted: _counted, ...rest } = record;
+    return rest;
+  };
+  function findCompare(id: string) {
+    const record = state.compares.find((c: Json) => c.id === id);
+    if (!record) throw compareError("Comparison not found");
+    return record;
+  }
+  function stopLanes(record: Json, except?: string) {
+    for (const lane of record.lanes as Json[]) {
+      if (lane.removed || lane.model === except) continue;
+      const job = state.jobs.find((j: Json) => j.id === lane.job_id);
+      if (job && ACTIVE.includes(job.status)) {
+        job.status = "cancelled";
+        job.finished_at = now();
+        job.summary = "Task cancelled";
+        state.approvals = state.approvals.filter(
+          (a: Json) => a.task_id !== job.task_id,
+        );
+      }
+    }
+  }
+  /** Uncommitted files in the project (tasks run there, kept results). */
+  function mainFiles(): Json[] {
+    const files: Json[] = state.jobs.some(
+      (j: Json) => j.workspace === workspace && j.status === "completed",
+    )
+      ? [{ path: "src/app.ts", label: "M" }]
+      : [];
+    for (const file of state.applied as Json[])
+      if (!files.some((f) => f.path === file.path))
+        files.push({
+          path: file.path,
+          label: file.status === "added" ? "??" : "M",
+        });
+    return files;
+  }
+  function laneFor(path: string) {
+    for (const record of state.compares as Json[])
+      for (const lane of record.lanes as Json[])
+        if (lane.worktree === path && !lane.removed) return lane;
+    return null;
+  }
+  function startCompare(body: Json) {
+    const models: string[] = Array.isArray(body.models) ? body.models : [];
+    if (models.length < 2 || models.length > 3)
+      throw compareError("Compare needs 2 or 3 models");
+    models.forEach((id, i) => {
+      if (!id) throw compareError("Choose a model for every lane");
+      if (models.indexOf(id) !== i)
+        throw compareError(`Choose different models; ${id} is listed twice`);
+    });
+    if (models.filter((id) => id.startsWith("local:gguf:")).length > 1)
+      throw compareError(
+        "Compare can include at most one local model: only one local model fits in GPU memory at a time. Pair it with cloud or subscription models.",
+      );
+    const task = String(body.task || "").trim();
+    if (!task)
+      throw compareError("Task must contain between 1 and 128000 bytes");
+    const rows = pickerTargets();
+    const targets = models.map((id) => {
+      const target = rows.find((t) => t.id === id);
+      if (!target) throw compareError(`Could not use ${id}`);
+      if (target.availability !== "ready")
+        throw compareError(`${target.name}: ${target.reason || "unavailable"}`);
+      return target;
+    });
+    const n = state.compares.length + 1;
+    const id = `${String(n).padStart(4, "0")}${"c0ffee".repeat(5)}`.slice(
+      0,
+      32,
+    );
+    const record: Json = {
+      id,
+      workspace,
+      task,
+      mode: body.mode || "code",
+      web: Boolean(body.web),
+      created_at: now(),
+      finished_at: null,
+      state: "running",
+      base: {
+        commit: `base${n}`,
+        head: "head0",
+        included_uncommitted: mainFiles().length > 0,
+      },
+      lanes: [] as Json[],
+      winner: null,
+      applied_files: [] as string[],
+      notes: [] as string[],
+      counted: false,
+    };
+    targets.forEach((target, i) => {
+      const name = target.name.replace(/ · This computer$/, "");
+      const worktree = `/work/.shadowcode/worktrees/demo-${n}-${i + 1}`;
+      const sid = `s${state.sessions.length + 1}`;
+      state.sessions.unshift({
+        id: sid,
+        workspace: worktree,
+        status: "idle",
+        title: `Compare · ${name}`,
+        updated_at: now(),
+        target: target.id,
+        compare_id: id,
+        compare_lane: target.id,
+      });
+      const plan = {
+        ...LANE_PLANS[i],
+        approval: state.compare.approval && i === 1,
+      };
+      const job = createJob({
+        task,
+        session_id: sid,
+        model: target.id,
+        workspace: worktree,
+        lane: plan,
+      });
+      record.lanes.push({
+        model: target.id,
+        name,
+        session_id: sid,
+        job_id: job.id,
+        worktree,
+        worktree_id: `wt${n}${i}`,
+        branch: `shadowcode/wt${n}${i}`,
+        base_commit: record.base.commit,
+        status: "queued",
+        summary: "",
+        changed_files: [],
+        changed_files_truncated: false,
+        checks: { passed: 0, failed: 0, commands: [] },
+        duration_s: 0,
+        usage: {},
+        error: null,
+        removed: false,
+      });
+    });
+    state.compares.push(record);
+    return compareJson(record);
+  }
+  function keepCompare(record: Json, model: string) {
+    if (!["running", "done"].includes(record.state))
+      throw compareError(`This comparison was already ${record.state}`);
+    refreshCompare(record);
+    const lane = record.lanes.find((l: Json) => l.model === model);
+    if (!model) throw compareError("Choose the model whose result to keep");
+    if (!lane) throw compareError(`${model} is not part of this comparison`);
+    if (ACTIVE.includes(lane.status))
+      throw compareError(
+        `${lane.name} is still working; wait for it to finish or cancel it first`,
+      );
+    if (!lane.changed_files.length && lane.status !== "completed")
+      throw compareError(
+        `${lane.name} finished as ${lane.status} without changes; there is nothing to keep`,
+      );
+    if (state.compare.conflict) {
+      // The user resolves it and keeps again: the next Keep applies.
+      state.compare.conflict = false;
+      throw compareError(
+        `${lane.name}'s changes no longer apply: the project changed since the comparison started in ${lane.changed_files
+          .map((f: Json) => f.path)
+          .join(
+            ", ",
+          )}. Nothing was changed and every lane is kept; update or revert those files, then keep again.`,
+      );
+    }
+    record.winner = lane.model;
+    record.applied_files = lane.changed_files.map((f: Json) => f.path);
+    for (const file of lane.changed_files as Json[]) {
+      state.applied = state.applied.filter((f: Json) => f.path !== file.path);
+      state.applied.push({ ...file });
+    }
+    record.state = "applied";
+    record.finished_at = record.finished_at || now();
+    stopLanes(record, model);
+    refreshCompare(record);
+    bumpScores(record, model);
+    for (const l of record.lanes as Json[]) l.removed = true;
+    return compareJson(record);
+  }
+  function discardCompare(record: Json) {
+    if (["applied", "discarded"].includes(record.state))
+      return compareJson(record);
+    refreshCompare(record);
+    // Discarded before it finished: not a run.
+    if (record.state === "running") record.counted = true;
+    stopLanes(record);
+    refreshCompare(record);
+    record.state = "discarded";
+    record.finished_at = record.finished_at || now();
+    for (const l of record.lanes as Json[]) l.removed = true;
+    return compareJson(record);
+  }
+  /** A unified-diff view of one file's recorded +/- counts. */
+  function statHunks(file: Json) {
+    const lines: Json[] = [];
+    for (let i = 0; i < file.deletions; i++)
+      lines.push({ kind: "del", text: `old line ${i + 1}` });
+    for (let i = 0; i < file.additions; i++)
+      lines.push({ kind: "add", text: `new line ${i + 1} of ${file.path}` });
+    return [
+      {
+        header: `@@ -1,${file.deletions} +1,${file.additions} @@`,
+        lines,
+      },
+    ];
   }
 
   function sessionDetail(id: string) {
@@ -1080,6 +1583,8 @@ export function installFakeBackend(options: FakeOptions = {}) {
       event_cursor: state.cursor,
       execution_target: session.target,
       native_sessions: {},
+      compare_id: session.compare_id || null,
+      compare_lane: session.compare_lane || null,
     };
   }
 
@@ -1387,8 +1892,55 @@ export function installFakeBackend(options: FakeOptions = {}) {
     }
     if (path === "/api/local-models/add")
       return { ok: true, local_engine: state.local };
-    if (path === "/api/sessions" && method === "GET")
-      return { sessions: state.sessions };
+    if (path === "/api/sessions" && method === "GET") {
+      const all = ["true", "1"].includes(q.get("include_compare") || "");
+      return {
+        sessions: state.sessions
+          .filter((s: Json) => all || !s.compare_id)
+          .map((s: Json) => ({
+            ...s,
+            compare_id: s.compare_id || null,
+            compare_lane: s.compare_lane || null,
+          })),
+      };
+    }
+    if (path === "/api/compare" && method === "POST") return startCompare(body);
+    if (path === "/api/compares")
+      return {
+        compares: [...state.compares]
+          .reverse()
+          .slice(0, 20)
+          .map((c: Json) =>
+            compareJson(
+              ["running", "done"].includes(c.state) ? refreshCompare(c) : c,
+            ),
+          ),
+      };
+    if (path === "/api/compare/scoreboard") {
+      for (const c of state.compares as Json[])
+        if (["running", "done"].includes(c.state)) refreshCompare(c);
+      const rows = [...state.scores].sort(
+        (a: Json, b: Json) =>
+          b.wins - a.wins || b.runs - a.runs || a.model.localeCompare(b.model),
+      );
+      return { workspace, rows };
+    }
+    if ((m = path.match(/^\/api\/compare\/([0-9a-f]+)$/)))
+      return compareJson(refreshCompare(findCompare(m[1])));
+    if (
+      (m = path.match(/^\/api\/compare\/([0-9a-f]+)\/(keep|discard|cancel)$/))
+    ) {
+      const record = findCompare(m[1]);
+      if (m[2] === "keep")
+        return keepCompare(record, String(body?.model || ""));
+      if (m[2] === "discard") return discardCompare(record);
+      for (const lane of record.lanes as Json[]) {
+        const job = state.jobs.find((j: Json) => j.id === lane.job_id);
+        if (!lane.removed && job && ACTIVE.includes(job.status))
+          job.status = "cancelling";
+      }
+      return compareJson(refreshCompare(record));
+    }
     if (path === "/api/sessions" && method === "POST") {
       const id = `s${state.sessions.length + 1}`;
       state.sessions.unshift({
@@ -1406,15 +1958,25 @@ export function installFakeBackend(options: FakeOptions = {}) {
       session.target = body.target_id;
       return { ok: true };
     }
-    if ((m = path.match(/^\/api\/sessions\/([^/]+)\/activate$/)))
-      return sessionDetail(m[1]);
+    if ((m = path.match(/^\/api\/sessions\/([^/]+)\/activate$/))) {
+      const detail = sessionDetail(m[1]);
+      // As in the engine, activating selects (and records) its project,
+      // a lane's copy included.
+      state.selected = detail.workspace;
+      if (!state.projects.includes(detail.workspace))
+        state.projects.push(detail.workspace);
+      return detail;
+    }
     if ((m = path.match(/^\/api\/sessions\/([^/]+)$/)))
       return sessionDetail(m[1]);
     if (path === "/api/projects")
       return {
-        projects: [
-          { id: "p1", path: workspace, name: "demo", last_opened: now() },
-        ],
+        projects: state.projects.map((path: string, i: number) => ({
+          id: `p${i + 1}`,
+          path,
+          name: path.split("/").pop(),
+          last_opened: now(),
+        })),
       };
     if (path === "/api/jobs/current") {
       const sid = q.get("session_id");
@@ -1468,19 +2030,59 @@ export function installFakeBackend(options: FakeOptions = {}) {
     }
     if ((m = path.match(/^\/api\/jobs\/([^/]+)$/)))
       return { ...state.jobs.find((j: Json) => j.id === m![1]) };
-    if (path === "/api/approvals") return { approvals: [] };
+    if (path === "/api/approvals" && method === "GET") {
+      const sid = q.get("session_id");
+      return {
+        approvals: state.approvals.filter(
+          (a: Json) => !sid || a.session_id === sid,
+        ),
+      };
+    }
+    if ((m = path.match(/^\/api\/approvals\/([^/]+)$/)) && method === "POST") {
+      const approval = state.approvals.find((a: Json) => a.id === m![1]);
+      if (!approval)
+        throw compareError("Approval expired or was already answered");
+      if (body?.session_id && body.session_id !== approval.session_id)
+        throw compareError("Approval belongs to a different session");
+      state.approvals = state.approvals.filter((a: Json) => a !== approval);
+      return { ...approval, pending: false };
+    }
     if (path === "/api/commands") return { commands: [] };
-    if (path === "/api/workspace/git")
+    if (path === "/api/workspace/git") {
+      const lane = laneFor(state.selected);
       return {
         repo: true,
-        status: "## main",
+        status: lane ? `## ${lane.branch}` : "## main",
         log: "",
         diff: "",
-        files: state.jobs.some((j: Json) => j.status === "completed")
-          ? [{ path: "src/app.ts", label: "M" }]
-          : [],
+        files: lane
+          ? (
+              state.jobs.find((j: Json) => j.id === lane.job_id)?.laneFiles ||
+              []
+            ).map((f: Json) => ({
+              path: f.path,
+              label: f.status === "added" ? "??" : "M",
+            }))
+          : mainFiles(),
       };
+    }
     if (path === "/api/workspace/diff") {
+      const lane = laneFor(state.selected);
+      const wanted = q.get("path") || "";
+      const pool: Json[] = lane
+        ? state.jobs.find((j: Json) => j.id === lane.job_id)?.laneFiles || []
+        : state.applied;
+      const file = pool.find((f: Json) => f.path === wanted);
+      if (file || lane)
+        return {
+          diff: "",
+          staged: "",
+          hunks: file ? statHunks(file) : [],
+          staged_hunks: [],
+          untracked: file?.status === "added",
+          binary: false,
+          truncated: false,
+        };
       const hunks = [
         {
           header: "@@ -1,1 +1,1 @@",

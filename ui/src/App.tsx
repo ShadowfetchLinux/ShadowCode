@@ -12,6 +12,7 @@ import {
   ChevronRight,
   FolderOpen,
   GitBranch,
+  GitCompareArrows,
   GitPullRequest,
   ListChecks,
   LoaderCircle,
@@ -24,6 +25,8 @@ import {
   type AllowanceResponse,
   type Approval,
   type CommandResult,
+  type CompareLane,
+  type CompareRecord,
   type ConsentRequest,
   type Health,
   type Job,
@@ -69,6 +72,9 @@ import {
   PlanLimitControl,
 } from "./components/Allowance";
 import { LimitFallbackItem } from "./components/LimitFallback";
+import { CompareDialog } from "./components/CompareDialog";
+import { CompareView } from "./components/CompareView";
+import { compareBlocked } from "./lib/compare";
 import type { ChatItem } from "./components/cards";
 import { useConversation } from "./hooks/useConversation";
 import {
@@ -109,7 +115,17 @@ import {
   openExternal,
 } from "./lib/transport";
 
-type Overlay = "" | "settings" | "help" | "palette" | "project" | "allowance";
+type Overlay =
+  "" | "settings" | "help" | "palette" | "project" | "allowance" | "compare";
+/** The open conversation is one lane of a comparison. */
+type LaneOf = {
+  compareId: string;
+  model: string;
+  name: string;
+  title: string;
+  /** The project the comparison belongs to ("" until known). */
+  workspace: string;
+};
 type Toast = { id: number; text: string; kind: "ok" | "err" | "info" };
 type Consent = {
   request: ConsentRequest;
@@ -202,10 +218,25 @@ export default function App() {
   const [cancellingQueued, setCancellingQueued] = useState<string[]>([]);
   const [switching, setSwitching] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
-  const [git, setGit] = useState<{ branch: string; count: number }>({
+  const [git, setGit] = useState<{
+    branch: string;
+    count: number;
+    repo: boolean;
+  }>({
     branch: "",
     count: 0,
+    repo: false,
   });
+  const [view, setView] = useState<"chat" | "compare">("chat");
+  const [compareId, setCompareId] = useState("");
+  const [compareModels, setCompareModels] = useState<string[]>([]);
+  const [laneOf, setLaneOf] = useState<LaneOf | null>(null);
+  /** Lane copies seen in comparison records; activating a lane records its
+   * copy as a project, which the project lists leave out. */
+  const [laneTrees, setLaneTrees] = useState<string[]>([]);
+  /** The project conversation to return to from a lane conversation. */
+  const compareReturn = useRef("");
+  const allowanceReturn = useRef(false);
   const [elapsed, setElapsed] = useState(0);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
@@ -335,6 +366,7 @@ export default function App() {
               .split("...")[0]
           : "",
         count: g.files?.length || 0,
+        repo: Boolean(g.repo),
       });
     } catch {
       /* status is optional outside git */
@@ -397,6 +429,8 @@ export default function App() {
       setWorkspace(detail.workspace);
       writeStore("shadow:selected", id);
       conversation.load(detail, active.job);
+      trackLane(id, detail);
+      setView("chat");
       // The conversation's own target wins; a new conversation starts on the
       // project's last choice. Nothing falls back to a configured default.
       setModelChoice(
@@ -426,6 +460,63 @@ export default function App() {
     }
   }
 
+  const noteLanes = useCallback((records: CompareRecord[]) => {
+    const paths = records.flatMap((r) =>
+      r.lanes.map((lane) => lane.worktree).filter(Boolean),
+    );
+    setLaneTrees((prev) => {
+      const next = [...new Set([...prev, ...paths])];
+      return next.length === prev.length ? prev : next;
+    });
+  }, []);
+
+  /** Lane conversations show where they belong; the comparison's project is
+   * read once when the lane was not opened from the Compare view. */
+  function trackLane(
+    id: string,
+    detail: {
+      compare_id?: string | null;
+      compare_lane?: string | null;
+      title?: string;
+    },
+  ) {
+    const cid = detail.compare_id || "";
+    if (!cid) {
+      setLaneOf(null);
+      return;
+    }
+    const model = detail.compare_lane || "";
+    const title = detail.title || "";
+    setLaneOf((prev) =>
+      prev && prev.compareId === cid && prev.model === model
+        ? { ...prev, title }
+        : {
+            compareId: cid,
+            model,
+            name: title.replace(/^Compare · /, "") || model,
+            title,
+            workspace: "",
+          },
+    );
+    void api
+      .compare(cid)
+      .then((record) => {
+        noteLanes([record]);
+        if (selectedRef.current !== id) return;
+        const lane = record.lanes.find((l) => l.model === model);
+        setLaneOf((prev) =>
+          prev && prev.compareId === cid
+            ? {
+                ...prev,
+                workspace: record.workspace,
+                name: lane?.name || prev.name,
+              }
+            : prev,
+        );
+      })
+      .catch(() => undefined);
+  }
+
   async function boot() {
     setError("");
     try {
@@ -437,14 +528,23 @@ export default function App() {
       setHealth(h);
       setWorkspace(h.workspace);
       setNeedsOnboard(!onboard.completed);
+      void api
+        .compares(h.workspace)
+        .then((r) => noteLanes(r.compares))
+        .catch(() => undefined);
       await reloadConfig();
       void reloadPicker();
       void reloadAllowance();
       await refresh();
       const saved = readStore("shadow:selected");
-      const initial =
+      let initial =
         sessionData.sessions.find((s) => s.id === saved) ||
         sessionData.sessions.find((s) => s.workspace === h.workspace);
+      // Lane conversations are left out of the list; reopen one directly.
+      if (saved && !sessionData.sessions.some((s) => s.id === saved)) {
+        const lane = await api.session(saved).catch(() => null);
+        if (lane?.compare_id) initial = lane;
+      }
       if (onboard.completed && initial) await openSession(initial.id);
       else setModelChoice(readStore(targetKey(h.workspace)) || "");
       const latest = await api.status();
@@ -1171,6 +1271,118 @@ export default function App() {
     setDiffPath(path || "");
     setPanel("changes");
   }
+
+  // --- Compare: one task on 2–3 models, each in its own copy -------------
+  /** The project comparisons belong to (a lane's copy belongs to its
+   * comparison's project). */
+  const projectPath = laneOf?.workspace || workspace;
+  const listedProjects = projects.filter(
+    (p) => !laneTrees.some((tree) => sameWorkspacePath(tree, p.path)),
+  );
+  const compareReason = compareBlocked({
+    task,
+    repo: git.repo,
+    inLane: Boolean(laneOf),
+    images: attachments.filter((a) => a.kind === "image").length,
+  });
+  function openCompare() {
+    if (compareReason || composerLocked) return;
+    setCompareModels((prev) => {
+      const kept = prev.filter((id) => pickerTargets.some((t) => t.id === id));
+      if (kept.length >= 2) return kept;
+      const first =
+        selectedTarget && isReady(selectedTarget) ? selectedTarget.id : "";
+      const next = kept.length ? kept : first ? [first] : [];
+      while (next.length < 2) next.push("");
+      return next;
+    });
+    setOverlay("compare");
+  }
+  async function startCompare(models: string[]) {
+    const texts = attachments
+      .filter((a) => a.kind === "text")
+      .map((a) => a.path);
+    const text = (
+      task.trim() +
+      (texts.length ? `\n\nAttached paths: ${texts.join(", ")}` : "")
+    ).trim();
+    // Throws into the dialog, which shows the engine's reason inline.
+    const record = await api.startCompare({
+      workspace: workspace || undefined,
+      task: text,
+      models,
+      web: webAllowed && webEnabled,
+    });
+    setOverlay("");
+    setTask("");
+    setAttachments([]);
+    writeStore(draftKey(sessionId, workspace), null);
+    compareReturn.current = sessionId;
+    setCompareId(record.id);
+    setView("compare");
+    void refresh().catch(() => undefined);
+  }
+  /** Back from a lane's conversation to its project and the Compare view. */
+  async function backToCompare(id = laneOf?.compareId || compareId) {
+    const lane = laneOf;
+    if (lane) {
+      let project = lane.workspace;
+      if (!project)
+        project = await api
+          .compare(lane.compareId)
+          .then((r) => r.workspace)
+          .catch(() => "");
+      const back =
+        compareReturn.current && compareReturn.current !== sessionId
+          ? compareReturn.current
+          : sessions.find(
+              (s) => project && sameWorkspacePath(s.workspace, project),
+            )?.id;
+      try {
+        if (back) await openSession(back);
+        else if (project) {
+          const opened = await api.openProject(project);
+          await openSession(opened.session_id);
+        }
+      } catch (e) {
+        toast(String(e), "err");
+        return;
+      }
+    }
+    setCompareId(id);
+    setView("compare");
+  }
+  function openComparisons(id = "") {
+    if (laneOf) void backToCompare(id || laneOf.compareId);
+    else {
+      compareReturn.current = sessionId;
+      setCompareId(id);
+      setView("compare");
+    }
+  }
+  async function openLane(record: CompareRecord, lane: CompareLane) {
+    if (!laneOf) compareReturn.current = sessionId;
+    const previous = laneOf;
+    noteLanes([record]);
+    setLaneOf({
+      compareId: record.id,
+      model: lane.model,
+      name: lane.name,
+      title: `Compare · ${lane.name}`,
+      workspace: record.workspace,
+    });
+    setView("chat");
+    await openSession(lane.session_id);
+    if (selectedRef.current !== lane.session_id) setLaneOf(previous);
+  }
+  async function openLaneDiff(
+    record: CompareRecord,
+    lane: CompareLane,
+    path: string,
+  ) {
+    await openLane(record, lane);
+    reviewChanges(path);
+  }
   function exportSession(format: "md" | "json" = "md") {
     if (sessionId)
       void saveExport(sessionId, format).catch((e) => toast(String(e), "err"));
@@ -1203,6 +1415,16 @@ export default function App() {
       run: () => setOverlay("project"),
     },
     { id: "changes", label: "Review changes", run: () => setPanel("changes") },
+    {
+      id: "compare",
+      label: "Compare models on this task",
+      run: () => (compareReason ? toast(compareReason, "info") : openCompare()),
+    },
+    {
+      id: "comparisons",
+      label: "Comparisons in this project",
+      run: () => openComparisons(),
+    },
     { id: "files", label: "Browse files", run: () => setPanel("files") },
     {
       id: "terminal",
@@ -1353,7 +1575,7 @@ export default function App() {
   }, [workspace]);
 
   const currentSession = sessions.find((s) => s.id === sessionId);
-  const title = currentSession?.title || "New task";
+  const title = currentSession?.title || laneOf?.title || "New task";
   const activeModel = job?.routing || transcript.routing;
   const contextLimit =
     activeModel && !activeModel.provider?.startsWith("cli:")
@@ -1518,11 +1740,14 @@ export default function App() {
       {sidebar && (
         <Sidebar
           sessions={sessions}
-          projects={projects}
+          projects={listedProjects}
           selected={sessionId}
-          workspace={workspace}
+          workspace={projectPath}
           jobs={jobs}
-          onSelect={(id) => void openSession(id)}
+          onSelect={(id) => {
+            setView("chat");
+            void openSession(id);
+          }}
           onNew={() => void newSession()}
           onProject={(path) => void pickProject(path)}
           onSettings={() => openSettings()}
@@ -1544,17 +1769,30 @@ export default function App() {
         <button
           type="button"
           className="project-crumb"
-          title={workspace || "Open project"}
+          title={projectPath || "Open project"}
           onClick={() => setOverlay("project")}
         >
           <FolderOpen size={15} aria-hidden="true" />
-          <span>{workspace.split("/").pop() || "Open project"}</span>
+          <span>{projectPath.split("/").pop() || "Open project"}</span>
         </button>
         <ChevronRight size={13} className="dim" aria-hidden="true" />
         <span className="top-title" title={title}>
-          {title}
+          {view === "compare" ? "Comparisons" : title}
         </span>
         <div className="top-right">
+          <button
+            type="button"
+            className={`top-action ${view === "compare" ? "on" : ""}`}
+            aria-label="Comparisons"
+            aria-pressed={view === "compare"}
+            title="Comparisons in this project"
+            onClick={() =>
+              view === "compare" ? setView("chat") : openComparisons()
+            }
+          >
+            <GitCompareArrows size={15} aria-hidden="true" />
+            <span>Comparisons</span>
+          </button>
           <button
             type="button"
             className={`top-action ${panel === "changes" ? "on" : ""}`}
@@ -1625,8 +1863,45 @@ export default function App() {
             Reconnecting… Your task continues in the background.
           </div>
         )}
+        {laneOf && view === "chat" && (
+          <div className="connection-banner compare-banner" role="status">
+            <GitCompareArrows size={14} aria-hidden="true" />
+            <span>
+              Part of a comparison · {laneOf.name} works in its own copy of the
+              project
+            </span>
+            <button
+              type="button"
+              className="mini"
+              disabled={switching}
+              onClick={() => void backToCompare()}
+            >
+              Back to comparison
+            </button>
+          </div>
+        )}
+        {view === "compare" && (
+          <CompareView
+            workspace={projectPath}
+            compareId={compareId}
+            targets={pickerTargets}
+            onSelect={setCompareId}
+            onClose={() => setView("chat")}
+            onOpenLane={(record, lane) => void openLane(record, lane)}
+            onOpenDiff={(record, lane, path) =>
+              void openLaneDiff(record, lane, path)
+            }
+            onOpenChanges={(path) => {
+              void refresh().catch(() => undefined);
+              reviewChanges(path);
+            }}
+            onApplied={() => void refresh().catch(() => undefined)}
+            onRecords={noteLanes}
+          />
+        )}
         <div
           className="chat-stream"
+          hidden={view === "compare"}
           ref={streamRef}
           onScroll={(e) => {
             const el = e.currentTarget;
@@ -1955,7 +2230,7 @@ export default function App() {
             )}
           </div>
         </div>
-        {(!atBottom || conversation.history.viewing) && (
+        {view === "chat" && (!atBottom || conversation.history.viewing) && (
           <button
             type="button"
             className="jump-latest"
@@ -1973,7 +2248,7 @@ export default function App() {
             Latest activity
           </button>
         )}
-        <div className="composer-wrap">
+        <div className="composer-wrap" hidden={view === "compare"}>
           <QueuedTasks
             jobs={queuedJobs}
             sessions={sessions}
@@ -2051,6 +2326,31 @@ export default function App() {
             stopDisabled={job?.status === "cancelling"}
             onSubmit={() => void submit()}
             onStop={() => void stop()}
+            compare={
+              <>
+                <button
+                  type="button"
+                  className="compare-btn"
+                  aria-disabled={Boolean(compareReason) || composerLocked}
+                  aria-describedby={
+                    compareReason ? "compare-blocked" : undefined
+                  }
+                  title={
+                    compareReason ||
+                    "Run this task on 2–3 models at once and keep the best result"
+                  }
+                  onClick={openCompare}
+                >
+                  <GitCompareArrows size={15} aria-hidden="true" />
+                  <span className="compare-btn-text">Compare</span>
+                </button>
+                {compareReason && (
+                  <span id="compare-blocked" className="sr-only">
+                    {compareReason}
+                  </span>
+                )}
+              </>
+            }
           />
         </div>
         <footer className="statusline" aria-live="polite">
@@ -2086,6 +2386,7 @@ export default function App() {
             data={allowance}
             open={overlay === "allowance"}
             onOpen={() => {
+              allowanceReturn.current = false;
               setOverlay("allowance");
               void reloadAllowance();
             }}
@@ -2227,6 +2528,34 @@ export default function App() {
           }}
         />
       )}
+      {overlay === "compare" && (
+        <CompareDialog
+          task={task.trim()}
+          targets={pickerTargets}
+          loading={!pickerLoaded}
+          models={compareModels}
+          onModels={setCompareModels}
+          uncommitted={git.count}
+          web={webAllowed && webEnabled}
+          onStart={startCompare}
+          onClose={() => {
+            setOverlay("");
+            promptRef.current?.focus();
+          }}
+          onOpenAllowance={() => {
+            allowanceReturn.current = true;
+            setOverlay("allowance");
+            void reloadAllowance();
+          }}
+          onConnect={(vendor) => openSettings("accounts", { vendor })}
+          onSetup={(target) =>
+            isLocal(target)
+              ? openSettings("local")
+              : openSettings("accounts", { vendor: vendorKey(target) })
+          }
+          onAddLocal={() => openSettings("local")}
+        />
+      )}
       {overlay === "allowance" && (
         <AllowancePanel
           data={allowance}
@@ -2234,7 +2563,11 @@ export default function App() {
           error={allowanceError}
           planLimit={planLimit}
           onRefresh={() => void reloadAllowance(true)}
-          onClose={() => setOverlay("")}
+          onClose={() => {
+            // Opened from Compare: return to the lineup.
+            setOverlay(allowanceReturn.current ? "compare" : "");
+            allowanceReturn.current = false;
+          }}
           onOpenAccounts={(vendor) => openSettings("accounts", { vendor })}
           onOpenLocal={() => openSettings("local")}
         />
@@ -2247,7 +2580,7 @@ export default function App() {
       )}
       {overlay === "project" && (
         <ProjectPicker
-          projects={projects}
+          projects={listedProjects}
           current={workspace}
           onClose={() => setOverlay("")}
           onPick={(path) => void pickProject(path)}

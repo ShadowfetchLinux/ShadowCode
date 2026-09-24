@@ -26,15 +26,15 @@ need Ollama, LM Studio or any other model server.
   ShadowCode's own tools can be rewound.
 
 Release history is in [CHANGELOG.md](CHANGELOG.md). What's new in this release:
-[0.30.2 release notes](docs/RELEASE_NOTES.md).
+[0.31.0 release notes](docs/RELEASE_NOTES.md).
 
 ## Install
 
 Releases target x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).
 Download from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest):
 
-- `ShadowCode_0.30.2_amd64.AppImage`
-- `ShadowCode_0.30.2_amd64.deb`
+- `ShadowCode_0.31.0_amd64.AppImage`
+- `ShadowCode_0.31.0_amd64.deb`
 - `SHA256SUMS`
 
 ### AppImage (recommended)
@@ -45,7 +45,7 @@ from a checkout of this repository:
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
 git clone https://github.com/Shadowfetchapps/ShadowCode.git
-./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.30.2_amd64.AppImage
+./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.31.0_amd64.AppImage
 ```
 
 [`scripts/install-appimage.sh`](scripts/install-appimage.sh):
@@ -65,14 +65,14 @@ git clone https://github.com/Shadowfetchapps/ShadowCode.git
   AppImages only after a successful install.
 
 To run the AppImage without installing it:
-`./ShadowCode_0.30.2_amd64.AppImage --appimage-extract-and-run`. FUSE is not
+`./ShadowCode_0.31.0_amd64.AppImage --appimage-extract-and-run`. FUSE is not
 required.
 
 ### Debian package
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-sudo apt install ./ShadowCode_0.30.2_amd64.deb
+sudo apt install ./ShadowCode_0.31.0_amd64.deb
 ```
 
 The deb installs `shadowcode` and the same llama.cpp runtime in
@@ -153,6 +153,32 @@ dl.google.com, checksum-verified); **Connect** signs in with Google.
 **Disconnect** deletes ShadowCode's private Antigravity sign-in and leaves the
 `agy` CLI and the Antigravity app signed in. Details:
 [subscriptions](docs/SUBSCRIPTIONS.md#antigravitys-agent-server).
+
+## Allowance and plan limits
+
+The **Allowance** button in the status bar lists every way you can run a
+model and how much of it is left: each subscription's reported usage windows
+and reset times (or *Usage not reported*), OpenRouter credits left on your
+key, and the local models that are ready (no quota). Only reported figures
+are shown.
+
+When a subscription reports its plan limit, ShadowCode can keep going on a
+local model: the same conversation continues on a model on this computer,
+with the usual summary of earlier turns. This is the default; set **When a
+plan runs out** to **Ask me** to choose each time. Details:
+[user guide](docs/USER_GUIDE.md#when-a-plan-limit-is-reached).
+
+## Compare
+
+**Compare** (next to **Send**) runs one task on 2 or 3 models at once, each
+in its own Git worktree that starts from your latest commit plus your
+uncommitted work. Your checkout is not touched while they work. The
+**Comparisons** view shows the lanes side by side: files changed, checks run,
+time and usage, and a link to each lane's conversation. **Keep** one result to
+apply its changes to your working tree (nothing is committed); every lane and
+its branch is then removed, and **Wins in this project** counts which model
+you kept. At most one local model per comparison, since only one fits in GPU
+memory. Details: [compare](docs/COMPARE.md).
 
 ## API keys (OpenRouter)
 

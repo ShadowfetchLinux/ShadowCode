@@ -147,10 +147,21 @@ impl Service {
         if expected.is_some_and(|generation| generation != selection.generation) {
             return Ok(());
         }
-        if self.remember_selection {
-            self.engine.paths().remember_workspace(&workspace)?;
+        // A Compare lane's worktree is temporary: it is selected while its
+        // conversation is open but never becomes a project or the relaunch
+        // folder, which would go stale once the comparison is kept.
+        let lane = match &session {
+            Some(id) => crate::compare::session_tags(&self.engine.store(), id)?
+                .0
+                .is_some(),
+            None => false,
+        };
+        if !lane {
+            if self.remember_selection {
+                self.engine.paths().remember_workspace(&workspace)?;
+            }
+            self.engine.store().touch_project(&workspace)?;
         }
-        self.engine.store().touch_project(&workspace)?;
         *selection = Selection {
             workspace,
             session,

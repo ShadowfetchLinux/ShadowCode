@@ -298,3 +298,79 @@ it("a Codex plan limit continues on the local model in the same conversation", a
   // The engine started the follow-up; the window sent only the first task.
   expect(posts.map((r) => r.body.model)).toEqual(["cli:codex:gpt-6-astra"]);
 }, 20000);
+
+it("Compare runs a task on two models in hidden lanes, opens a lane and returns", async () => {
+  await boot();
+  const compare = screen.getByRole("button", { name: "Compare" });
+  await waitFor(() =>
+    expect(compare.getAttribute("title")).toMatch(/Type a task/),
+  );
+  expect(compare.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(compare);
+  expect(screen.queryByRole("dialog", { name: "Compare models" })).toBeNull();
+  fireEvent.change(prompt(), { target: { value: "Fix the add function" } });
+  expect(compare.getAttribute("aria-disabled")).toBe("false");
+  fireEvent.click(compare);
+  const dialog = await screen.findByRole("dialog", { name: "Compare models" });
+  for (const [slot, name] of [
+    [1, /qwen3:14b · This computer/],
+    [2, /Codex · GPT-6-Astra/],
+  ] as const) {
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: new RegExp(`^Model ${slot}:`),
+      }),
+    );
+    fireEvent.click(await within(dialog).findByRole("option", { name }));
+  }
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Start comparison" }),
+  );
+  const view = await screen.findByRole("region", { name: "Comparisons" });
+  expect(screen.queryByRole("dialog", { name: "Compare models" })).toBeNull();
+  expect(fake.log.find((r) => r.path === "/api/compare")?.body).toMatchObject({
+    workspace: "/work/demo",
+    task: "Fix the add function",
+    models: ["local:gguf:qwen", "cli:codex:gpt-6-astra"],
+  });
+  // Lane conversations never reach the sidebar.
+  const sidebar = screen.getByRole("complementary", {
+    name: "Projects and tasks",
+  });
+  await waitFor(() =>
+    expect(fake.state.sessions.some((s: any) => s.compare_id)).toBe(true),
+  );
+  expect(sidebar.textContent).not.toContain("Compare ·");
+  const local = await within(view).findByRole("article", {
+    name: "qwen3:14b",
+  });
+  await waitFor(() => expect(local.textContent).toContain("Finished"), {
+    timeout: 5000,
+  });
+  fireEvent.click(
+    within(local).getByRole("button", { name: /Open conversation/ }),
+  );
+  const banner = await screen.findByText(/Part of a comparison/);
+  expect(banner.textContent).toContain("qwen3:14b");
+  await waitFor(() =>
+    expect(document.querySelector(".top-title")?.textContent).toBe(
+      "Compare · qwen3:14b",
+    ),
+  );
+  expect(
+    screen.getByRole("button", { name: "Compare" }).getAttribute("title"),
+  ).toMatch(/one model's copy/);
+  // Activating the lane recorded its copy as a project; lists leave it out.
+  await waitFor(() =>
+    expect(fake.state.projects).toContain(
+      "/work/.shadowcode/worktrees/demo-1-1",
+    ),
+  );
+  expect(sidebar.textContent).not.toContain("demo-1-1");
+  fireEvent.click(screen.getByRole("button", { name: "Back to comparison" }));
+  await screen.findByRole("region", { name: "Comparisons" });
+  await waitFor(() =>
+    expect(screen.queryByText(/Part of a comparison/)).toBeNull(),
+  );
+  expect(fake.state.selected).toBe("/work/demo");
+});

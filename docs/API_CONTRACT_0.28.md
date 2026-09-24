@@ -203,6 +203,51 @@ A job on an `api:openrouter:` id runs on the native loop (`routing.route:
 offline or when no key is stored. The context limit comes from the cached
 list, capped at 200,000 tokens.
 
+## Allowance
+
+`GET /api/allowance` (`?refresh=1` re-checks vendor accounts) returns
+`{generated_at, rows}`, one row per source, built only from reported data
+(`native/core/src/allowance.rs`):
+
+```ts
+Row {
+  id: "cli:<vendor>" | "openrouter" | "local",
+  kind: "subscription" | "api_key" | "local",
+  product: string,
+  state: "ok" | "low" | "limit_reached" | "unknown" | "sign_in"
+       | "not_installed" | "unavailable" | "offline" | "no_key" | "none",
+  headline: string,                 // "2% left", "$4.99 of $5.00 left", …
+  remaining_percent: number | null, // lowest reported window, or key credit
+  windows: {label, remaining_percent, resets_at}[],
+  plan, note, last_checked, usage_url,
+  // openrouter: used, limit, limit_remaining (USD)
+  // local: ready_models, on_limit: "local" | "ask", fallback: {id, name} | null
+}
+```
+
+`low` means 10% or less left.
+
+## Plan limits
+
+Config `limits`: `{on_limit: "local" | "ask", fallback_model: "" | "local:gguf:…"}`
+(default `on_limit: "local"`). When a vendor job ends with status
+`limit_reached`, the engine records a `limit.fallback` event on that task:
+
+- `{ok: true, from, to, target, job_id}`: a follow-up job started in the same
+  session on the local model `target`, with the task "Continue where <from>
+  stopped when its plan limit was reached. The request was: …"; the session's
+  `execution_target` becomes `target`.
+- `{ok: false, ask: true}`: `on_limit` is `"ask"`; nothing started.
+- `{ok: false, from, reason}`: no local model is ready.
+
+The fallback model is `fallback_model` when ready, else the last local model
+used in the project, else the first ready local model with tool support.
+
+## Compare
+
+See [Compare](COMPARE.md) for `POST /api/compare`, `GET /api/compare/<id>`,
+`GET /api/compares`, `keep`, `discard`, `cancel` and the scoreboard.
+
 ## Local models
 
 `GET /api/local-models` → `LocalCatalog`:

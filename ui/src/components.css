@@ -1028,3 +1028,541 @@ div.activity-step {
     flex-direction: column;
   }
 }
+
+/* Compare: one task on 2–3 models ----------------------------------------- */
+/* The Compare view replaces the conversation, which stays mounted. */
+.stage > [hidden] {
+  display: none !important;
+}
+.compare-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--pill);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.compare-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.compare-btn[aria-disabled="true"],
+.primary[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.compare-btn[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-2);
+}
+.compare-banner {
+  flex-wrap: wrap;
+}
+.compare-dialog {
+  width: min(620px, 100%);
+}
+.compare-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.compare-dialog-head > div {
+  flex: 1;
+  min-width: 0;
+}
+.compare-dialog-head h2 {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+.compare-dialog-head .hint {
+  margin: 0;
+}
+.compare-label {
+  display: block;
+  margin: 16px 0 6px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.compare-task {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.compare-view .compare-task {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.compare-slots {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.compare-slot {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.compare-slot-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.compare-slot-row .unified-picker {
+  flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+  position: static;
+}
+.compare-slot-row .unified-picker-trigger {
+  max-width: 100%;
+}
+/* Inside the dialog the model list opens in place, so nothing is clipped. */
+.compare-dialog .unified-picker-menu {
+  position: static;
+  flex-basis: 100%;
+  width: auto;
+  max-height: 340px;
+  margin-top: 8px;
+  box-shadow: none;
+}
+.compare-slot-number {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+.compare-slot-meta {
+  margin: 6px 0 0 28px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.compare-slot-error {
+  margin: 6px 0 0 28px;
+  font-size: 11px;
+  color: var(--warn);
+}
+.compare-add {
+  margin-top: 10px;
+}
+.compare-cost {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.compare-cost p {
+  margin: 0;
+}
+.compare-cost .link {
+  padding: 0;
+}
+.compare-cost ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+.compare-cost li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+.compare-cost li .dim {
+  color: var(--muted);
+}
+.compare-base {
+  margin-top: 10px;
+}
+.compare-error {
+  margin: 10px 0 0;
+}
+.compare-dialog-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+  gap: 8px;
+}
+.primary.danger {
+  background: var(--danger);
+  color: var(--canvas);
+}
+.ghost.danger-text {
+  color: var(--danger);
+}
+
+.compare-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.compare-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.compare-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.compare-pick {
+  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.compare-pick select {
+  max-width: 100%;
+  font-size: 12px;
+}
+.compare-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 24px 24px;
+  min-width: 0;
+}
+.compare-loading,
+.compare-empty {
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 40px 0;
+  text-align: center;
+}
+.compare-loading {
+  flex-direction: row;
+  justify-content: center;
+}
+.compare-empty p {
+  margin: 0;
+}
+.compare-summary {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.compare-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.compare-state {
+  font-weight: 600;
+  color: var(--text-2);
+}
+.compare-state.state-applied {
+  color: var(--ok);
+}
+.compare-actions {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.compare-applied {
+  color: var(--text);
+  flex-wrap: wrap;
+}
+.compare-applied > svg {
+  color: var(--ok);
+}
+.compare-conflict {
+  align-items: flex-start;
+}
+.compare-conflict ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.compare-conflict code {
+  overflow-wrap: anywhere;
+}
+.compare-lanes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.compare-lanes > li {
+  min-width: 0;
+}
+.compare-lane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+.compare-lane.is-winner {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.compare-lane.tone-warn:not(.is-winner) {
+  border-color: var(--warn);
+}
+.compare-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.compare-lane-head h3 {
+  margin: 0;
+  font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare-kept {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.compare-lane-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.compare-lane-status .dim {
+  font-weight: 400;
+  color: var(--muted);
+}
+.tone-ok.compare-lane-status {
+  color: var(--ok);
+}
+.tone-warn.compare-lane-status {
+  color: var(--warn);
+}
+.tone-bad.compare-lane-status {
+  color: var(--danger);
+}
+.tone-busy.compare-lane-status {
+  color: var(--text-2);
+}
+.tone-muted.compare-lane-status {
+  color: var(--muted);
+}
+.compare-lane-activity {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.compare-lane-approval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.compare-lane-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+.compare-lane-section h4 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.compare-lane-section h4 .dim {
+  color: var(--muted);
+}
+.compare-lane-section .hint {
+  margin: 0;
+}
+.compare-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.compare-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  text-align: left;
+  color: var(--text);
+}
+.compare-file:hover:not(:disabled) {
+  background: var(--hover);
+}
+.compare-file:disabled {
+  cursor: default;
+}
+.compare-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.compare-file-stat {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.compare-file-stat .add,
+.compare-checks .ok {
+  color: var(--ok);
+}
+.compare-file-stat .del,
+.compare-checks .bad {
+  color: var(--danger);
+}
+.file-status {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.file-status.status-added {
+  color: var(--ok);
+}
+.file-status.status-deleted {
+  color: var(--danger);
+}
+.compare-checks summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.compare-checks ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+}
+.compare-checks code {
+  overflow-wrap: anywhere;
+}
+.compare-lane-usage {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.compare-lane-actions {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.compare-lane-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.compare-notes {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.compare-scoreboard {
+  margin-top: 22px;
+  max-width: 480px;
+}
+.compare-scoreboard h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.compare-scoreboard table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.compare-scoreboard th,
+.compare-scoreboard td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.compare-scoreboard thead th {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.compare-scoreboard tbody th {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.compare-scoreboard td {
+  width: 60px;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 760px) {
+  .compare-btn {
+    padding: 0 8px;
+  }
+  .compare-btn-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .compare-head,
+  .compare-scroll {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .compare-pick {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}

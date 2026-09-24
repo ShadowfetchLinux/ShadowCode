@@ -52,6 +52,7 @@ export function Composer({
   stopDisabled,
   onSubmit,
   onStop,
+  compare,
 }: {
   task: string;
   onTask: (value: string) => void;
@@ -76,6 +77,8 @@ export function Composer({
   stopDisabled: boolean;
   onSubmit: () => void;
   onStop: () => void;
+  /** The Compare button, next to Send. */
+  compare?: ReactNode;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -251,6 +254,7 @@ export function Composer({
           {controls}
           <span className="grow" />
           <span className="composer-hint">{hint}</span>
+          {compare}
           {busy && (
             <button
               type="button"
