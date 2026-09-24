@@ -457,6 +457,32 @@ impl Store {
             OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '!'))
             ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,limit.clamp(1,10000)])
     }
+    /// The session list the app shows. Compare lane conversations (sessions
+    /// with a `compare_id` meta row) are left out unless `include_compare`;
+    /// every row carries `compare_id` and `compare_lane` (null for ordinary
+    /// conversations).
+    pub fn sessions_listed(
+        &self,
+        search: &str,
+        limit: usize,
+        workspace: Option<&Path>,
+        include_compare: bool,
+    ) -> Result<Vec<Value>> {
+        let needle = format!(
+            "%{}%",
+            search
+                .replace('!', "!!")
+                .replace('%', "!%")
+                .replace('_', "!_")
+        );
+        self.query("SELECT s.*,
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_id') AS compare_id,
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_lane') AS compare_lane
+            FROM sessions s WHERE (? IS NULL OR s.workspace=?) AND (s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
+            OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '!'))
+            AND (? OR NOT EXISTS(SELECT 1 FROM session_meta c WHERE c.session_id=s.id AND c.key='compare_id'))
+            ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,include_compare,limit.clamp(1,10000)])
+    }
     pub fn rename_session(&self, sid: &str, title: &str) -> Result<()> {
         ensure!(title.len() <= 500, "Task title is too long");
         ensure!(
