@@ -203,3 +203,98 @@ it("a setup-required Antigravity row opens Accounts at the Antigravity card", as
   });
   await waitFor(() => expect(document.activeElement).toBe(install));
 });
+
+it("Allowance opens from the status bar and its plan-limit choice matches Accounts", async () => {
+  await boot();
+  const button = await screen.findByRole("button", { name: /^Allowance/ });
+  // Codex is low and Cursor is at its limit: the dot warns.
+  await waitFor(() =>
+    expect(button.querySelector(".allowance-dot")?.className).toContain("warn"),
+  );
+  fireEvent.click(button);
+  const dialog = await screen.findByRole("dialog", { name: "Allowance" });
+  const codex = await within(dialog).findByRole("article", { name: "Codex" });
+  expect(codex.textContent).toContain("2% left");
+  const local = within(dialog).getByRole("article", {
+    name: "On this computer",
+  });
+  expect(
+    within(local).getByRole("radio", { name: /Continue on qwen3:14b/ }),
+  ).toHaveProperty("checked", true);
+  fireEvent.click(within(local).getByRole("radio", { name: /Ask me/ }));
+  await waitFor(() =>
+    expect(
+      fake.log.some(
+        (r) =>
+          r.path === "/api/config" &&
+          r.method === "PUT" &&
+          r.body.values?.limits?.on_limit === "ask",
+      ),
+    ).toBe(true),
+  );
+  expect(fake.state.config.limits).toEqual({
+    on_limit: "ask",
+    fallback_model: "",
+  });
+  // Claude Code needs sign-in: its action opens Accounts at its card.
+  fireEvent.click(
+    within(dialog).getByRole("button", {
+      name: "Open Accounts for Claude Code",
+    }),
+  );
+  const settings = await screen.findByRole("dialog", { name: "Settings" });
+  const group = within(settings).getByRole("group", {
+    name: "When a plan runs out",
+  });
+  expect(within(group).getByRole("radio", { name: /Ask me/ })).toHaveProperty(
+    "checked",
+    true,
+  );
+  const claude = await within(settings).findByRole("article", {
+    name: "Claude Code",
+  });
+  const connect = within(claude).getByRole("button", { name: "Connect" });
+  await waitFor(() => expect(document.activeElement).toBe(connect));
+});
+
+it("a Codex plan limit continues on the local model in the same conversation", async () => {
+  fake.state.limitOnCodex = true;
+  await boot();
+  await choose(/Codex · GPT-6-Astra/);
+  fireEvent.change(prompt(), { target: { value: "Fix the add function" } });
+  fireEvent.click(send());
+  expect(
+    await screen.findByText(
+      "Codex reached its plan limit. Continuing on qwen3:14b on this computer.",
+      undefined,
+      { timeout: 8000 },
+    ),
+  ).toBeTruthy();
+  // The follow-up reads as ShadowCode's continuation, text kept.
+  expect(await screen.findByText("Continued automatically")).toBeTruthy();
+  expect(
+    screen.getByText(/^Continue where Codex stopped when its plan limit/),
+  ).toBeTruthy();
+  // The composer follows the conversation onto the local model.
+  await waitFor(() => expect(trigger().textContent).toContain("qwen3:14b"), {
+    timeout: 8000,
+  });
+  await waitFor(
+    () =>
+      expect(
+        screen.getAllByRole("region", { name: "Task summary" }),
+      ).toHaveLength(2),
+    { timeout: 8000 },
+  );
+  const [limited, done] = screen.getAllByRole("region", {
+    name: "Task summary",
+  });
+  expect(limited.textContent).toContain("Plan limit reached");
+  expect(limited.className).not.toContain("is-bad");
+  expect(done.textContent).toContain("Finished");
+  const posts = fake.log.filter(
+    (r) => r.path === "/api/jobs" && r.method === "POST",
+  );
+  // The engine started the follow-up; the window sent only the first task.
+  expect(posts.map((r) => r.body.model)).toEqual(["cli:codex:gpt-6-astra"]);
+}, 20000);

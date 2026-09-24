@@ -116,6 +116,58 @@ it("states vendor-owned checks and unverified claims honestly", () => {
   ).toBeTruthy();
 });
 
+it("a plan limit is a warning, quiet when nothing changed", () => {
+  const limited: TaskActivity = {
+    ...base,
+    changed: [],
+    verification: { status: "vendor_owned", commands: [] },
+    finished: {
+      success: false,
+      cancelled: false,
+      summary: "Codex plan limit reached",
+      limitReached: "Codex",
+    },
+  };
+  render(<TaskSummary activity={limited} onReview={vi.fn()} />);
+  const quiet = screen.getByRole("region", { name: "Task summary" });
+  expect(quiet.className).toContain("is-quiet");
+  expect(quiet.className).toContain("is-warn");
+  expect(quiet.className).not.toContain("is-bad");
+  expect(quiet.textContent).toContain("Plan limit reached");
+  expect(quiet.textContent).not.toContain("Finished with problems");
+  expect(quiet.textContent).toContain("No files were changed.");
+  cleanup();
+  // With work done before the limit, the full card keeps its warning.
+  render(
+    <TaskSummary
+      activity={{ ...limited, changed: ["src/app.ts"] }}
+      onReview={vi.fn()}
+      onRewind={vi.fn()}
+    />,
+  );
+  const card = screen.getByRole("region", { name: "Task summary" });
+  expect(card.className).toContain("is-warn");
+  expect(card.className).not.toContain("is-bad");
+  expect(card.querySelector("header strong")?.textContent).toBe(
+    "Plan limit reached",
+  );
+  expect(screen.getByRole("button", { name: "Review changes" })).toBeTruthy();
+  cleanup();
+  // An ordinary failure is still one.
+  render(
+    <TaskSummary
+      activity={{
+        ...limited,
+        finished: { success: false, cancelled: false, summary: "Broke" },
+      }}
+      onReview={vi.fn()}
+    />,
+  );
+  const failed = screen.getByRole("region", { name: "Task summary" });
+  expect(failed.className).toContain("is-bad");
+  expect(failed.textContent).toContain("Finished with problems");
+});
+
 it("welcome state offers at most three suggestions", () => {
   const onSelect = vi.fn();
   render(<WelcomeBanner onSelect={onSelect} />);

@@ -14,6 +14,7 @@ import {
   type WebSource,
 } from "./activity";
 import type { UsageSnapshot } from "./picker";
+import { CONTINUATION } from "./allowance";
 
 const ROUTE_PRODUCTS: Record<string, string> = {
   "cli:codex": "Codex",
@@ -43,6 +44,8 @@ export type Transcript = {
   limit?: LimitReached;
   /** Increments on usage.updated so the picker can refresh its rows. */
   usageVersion: number;
+  /** The latest automatic continuation on a local model (limit.fallback). */
+  fallback?: { jobId: string; target: string; to: string };
 };
 export const emptyTranscript = (): Transcript => ({
   items: [],
@@ -74,6 +77,39 @@ export function providerLabel(value: unknown): string {
     .split(/[:\s]/)[0]
     .toLowerCase();
   return VENDOR_LABELS[vendor] || text;
+}
+
+function lastIndex(items: ChatItem[], test: (item: ChatItem) => boolean) {
+  for (let index = items.length - 1; index >= 0; index--)
+    if (test(items[index])) return index;
+  return -1;
+}
+
+/** A prompt bubble. A follow-up written after a plan limit is labelled as
+ * such: "manual" when it answers an open "Continue on …" card (which it
+ * closes), otherwise "auto" (the engine started it). */
+function userItem(
+  items: ChatItem[],
+  text: string,
+  taskId: string,
+): { items: ChatItem[]; item: ChatItem } {
+  if (!CONTINUATION.test(text))
+    return { items, item: { kind: "user", text, taskId } };
+  const ask = lastIndex(
+    items,
+    (item) => item.kind === "limit" && item.mode === "ask" && !item.resolved,
+  );
+  if (ask < 0)
+    return { items, item: { kind: "user", text, taskId, continued: "auto" } };
+  const next = [...items];
+  next[ask] = {
+    ...(items[ask] as Extract<ChatItem, { kind: "limit" }>),
+    resolved: true,
+  };
+  return {
+    items: next,
+    item: { kind: "user", text, taskId, continued: "manual" },
+  };
 }
 
 function sourcesFrom(value: unknown): WebSource[] {
@@ -111,6 +147,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let activity = state.activity;
   let limit = state.limit;
   let usageVersion = state.usageVersion;
+  let fallback = state.fallback;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
   const touch = (update: (current: TaskActivity) => TaskActivity) => {
@@ -310,9 +347,90 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
         kind: "note",
         taskId,
         warning: true,
+        limitOf: taskId,
         text: `Plan limit reached on ${vendor}. The task paused; choose another model to continue.`,
       },
     ];
+  }
+  if (event.type === "limit.fallback") {
+    // What the engine did about the plan limit replaces the plain note.
+    const from = String(
+      p.from ||
+        activity[taskId]?.finished?.limitReached ||
+        (limit?.taskId === taskId ? limit.vendor : "") ||
+        "The model",
+    );
+    items = items.filter(
+      (item) => !(item.kind === "note" && item.limitOf === taskId),
+    );
+    if (p.ok) {
+      const to = String(p.to || "a local model");
+      const card: ChatItem = {
+        kind: "limit",
+        taskId,
+        mode: "continued",
+        text: `${from} reached its plan limit. Continuing on ${to} on this computer.`,
+        from,
+        to,
+        target: String(p.target || ""),
+      };
+      // The follow-up's prompt is recorded before this event; the note goes
+      // just above it.
+      const own = lastIndex(items, (item) => item.taskId === taskId);
+      const followUp = lastIndex(
+        items,
+        (item) =>
+          item.kind === "user" &&
+          item.taskId !== taskId &&
+          CONTINUATION.test(item.text),
+      );
+      items = [...items];
+      if (followUp > own) {
+        items[followUp] = {
+          ...(items[followUp] as Extract<ChatItem, { kind: "user" }>),
+          continued: "auto",
+        };
+        items.splice(followUp, 0, card);
+      } else items.push(card);
+      if (p.target)
+        fallback = {
+          jobId: String(p.job_id || ""),
+          target: String(p.target),
+          to: String(p.to || ""),
+        };
+      limit = undefined;
+    } else if (p.ask) {
+      const request = items.find(
+        (item) => item.kind === "user" && item.taskId === taskId,
+      );
+      items = [
+        ...items,
+        {
+          kind: "limit",
+          taskId,
+          mode: "ask",
+          text: `${from} reached its plan limit.`,
+          from,
+          request: request?.text || "",
+        },
+      ];
+      limit = undefined;
+    } else {
+      const reason = String(
+        p.reason || "No local model could continue this conversation.",
+      );
+      items = [
+        ...items,
+        {
+          kind: "limit",
+          taskId,
+          mode: "unavailable",
+          text: `${from} reached its plan limit. ${reason}`,
+          from,
+          reason,
+        },
+      ];
+    }
   }
   if (event.type === "usage.updated") usageVersion += 1;
   if (event.type === "workflow.selected") {
@@ -326,16 +444,30 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     ];
   }
   if (event.type === "user.message") {
-    items = [...items, { kind: "user", text, taskId }];
+    const next = userItem(items, text, taskId);
+    items = [...next.items, next.item];
     if (!activeTaskId) stage = "QUEUED";
   }
   if (event.type === "agent.started") {
     const pending = taskId
       ? items.find((item) => item.kind === "user" && item.taskId === taskId)
       : undefined;
+    const created = pending
+      ? { items, item: pending }
+      : userItem(items, String(p.task || ""), taskId);
+    // A "Continue on …" card is only an offer until other work starts.
     items = [
-      ...items.filter((item) => item !== pending),
-      pending || { kind: "user", text: String(p.task || ""), taskId },
+      ...created.items
+        .filter((item) => item !== pending)
+        .map((item) =>
+          item.kind === "limit" &&
+          item.mode === "ask" &&
+          !item.resolved &&
+          item.taskId !== taskId
+            ? { ...item, resolved: true }
+            : item,
+        ),
+      created.item,
     ];
     activeTaskId = taskId;
     stage = "UNDERSTAND";
@@ -554,6 +686,11 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   if (p.plan && (!activeTaskId || activeTaskId === taskId))
     plan = (p.plan as { steps?: PlanStep[] }).steps || plan;
   if (event.type === "agent.completed") {
+    const limitInfo = p.limit_reached as { vendor?: string } | undefined;
+    const limitReached =
+      !p.success && !p.cancelled && limitInfo
+        ? providerLabel(limitInfo.vendor)
+        : undefined;
     // Completion checks can appear after the final model response. Match the
     // latest answer within this task, rather than whichever card is last.
     let last: ChatItem | undefined;
@@ -587,7 +724,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
             ? "Stopped"
             : p.success
               ? "Result"
-              : "Needs attention",
+              : limitReached
+                ? "Plan limit reached"
+                : "Needs attention",
         },
       ];
     let forkIndex = -1;
@@ -616,6 +755,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
         success: Boolean(p.success),
         cancelled: Boolean(p.cancelled),
         summary: text,
+        ...(limitReached ? { limitReached } : {}),
       },
     }));
     if (
@@ -639,6 +779,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     activity,
     limit,
     usageVersion,
+    fallback,
     cursor: event.id || state.cursor,
   };
 }

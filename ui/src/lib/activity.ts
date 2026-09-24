@@ -54,7 +54,13 @@ export type TaskActivity = {
   approvalsPending: number;
   approvalsSeen: number;
   verification?: Verification;
-  finished?: { success: boolean; cancelled: boolean; summary: string };
+  finished?: {
+    success: boolean;
+    cancelled: boolean;
+    summary: string;
+    /** The subscription that reported its plan limit ("Codex"). */
+    limitReached?: string;
+  };
 };
 
 export const emptyActivity = (taskId: string): TaskActivity => ({
@@ -280,7 +286,9 @@ export function deriveSteps(
             ? "Stopped"
             : activity.finished.success
               ? LABELS.finished
-              : "Finished with problems",
+              : activity.finished.limitReached
+                ? "Plan limit reached"
+                : "Finished with problems",
           state: activity.finished.success ? "done" : "failed",
           calls: [],
         });

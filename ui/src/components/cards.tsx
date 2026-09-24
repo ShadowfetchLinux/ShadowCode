@@ -3,8 +3,41 @@ import { Markdown } from "./Markdown";
 
 export type ChatItem =
   | { kind: "command"; card: CommandResult; text: string; taskId?: string }
-  | { kind: "user"; text: string; taskId?: string }
-  | { kind: "note"; text: string; taskId?: string; warning?: boolean }
+  | {
+      kind: "user";
+      text: string;
+      taskId?: string;
+      /** A follow-up ShadowCode wrote after a plan limit: "auto" when the
+       * engine started it, "manual" when the user chose Continue on …. */
+      continued?: "auto" | "manual";
+    }
+  | {
+      kind: "note";
+      text: string;
+      taskId?: string;
+      warning?: boolean;
+      /** The plain limit.reached note of this task; a limit.fallback record
+       * replaces it. */
+      limitOf?: string;
+    }
+  /** What happened after a plan limit (limit.fallback). */
+  | {
+      kind: "limit";
+      taskId: string;
+      /** The record as one line of plain text. */
+      text: string;
+      /** continued: the engine started a local follow-up; ask: the user
+       * decides; unavailable: nothing could continue (reason). */
+      mode: "continued" | "ask" | "unavailable";
+      from: string;
+      to?: string;
+      target?: string;
+      reason?: string;
+      /** The limited task's request, for Continue on …. */
+      request?: string;
+      /** A follow-up was started from this card. */
+      resolved?: boolean;
+    }
   /** Provider change inside one conversation (agent.handoff). */
   | { kind: "divider"; text: string; taskId?: string }
   /** Final card for a finished task; content comes from transcript.activity. */

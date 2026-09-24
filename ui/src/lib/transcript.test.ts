@@ -422,3 +422,143 @@ describe("subscription turns", () => {
     ).toBe(true);
   });
 });
+
+describe("plan limit fallback (limit.fallback)", () => {
+  const limited = [
+    event(1, "user.message", { text: "Fix the add function" }, "a"),
+    event(2, "agent.started", { task: "Fix the add function" }, "a"),
+    event(3, "limit.reached", { vendor: "codex" }, "a"),
+    event(
+      4,
+      "agent.completed",
+      {
+        success: false,
+        cancelled: false,
+        summary: "Codex plan limit reached: weekly limit.",
+        limit_reached: { vendor: "codex", detail: "weekly limit" },
+      },
+      "a",
+    ),
+  ];
+  const followUp =
+    "Continue where Codex stopped when its plan limit was reached. The request was:\n\nFix the add function";
+
+  it("continued automatically: a note above the follow-up, which is labelled", () => {
+    const state = replay([
+      ...limited,
+      // The engine records the follow-up's prompt before the fallback note.
+      event(5, "user.message", { text: followUp }, "b"),
+      event(
+        6,
+        "limit.fallback",
+        {
+          ok: true,
+          from: "Codex",
+          to: "qwen3:14b",
+          target: "local:gguf:qwen",
+          job_id: "j2",
+        },
+        "a",
+      ),
+      event(7, "agent.started", { task: followUp, job_id: "j2" }, "b"),
+    ]);
+    const kinds = state.items.map((item) => item.kind);
+    const note = state.items.findIndex((item) => item.kind === "limit");
+    const user = state.items.findIndex(
+      (item) => item.kind === "user" && item.taskId === "b",
+    );
+    expect(note).toBeGreaterThan(-1);
+    expect(note).toBe(user - 1);
+    expect(state.items[note]).toMatchObject({
+      mode: "continued",
+      text: "Codex reached its plan limit. Continuing on qwen3:14b on this computer.",
+    });
+    expect(state.items[user]).toMatchObject({
+      text: followUp,
+      continued: "auto",
+    });
+    // The plain limit note is replaced; the original prompt is not labelled.
+    expect(
+      state.items.some((i) => i.kind === "note" && /Plan limit/.test(i.text)),
+    ).toBe(false);
+    expect(
+      state.items.find((i) => i.kind === "user" && i.taskId === "a"),
+    ).not.toHaveProperty("continued");
+    expect(kinds.filter((k) => k === "summary")).toHaveLength(1);
+    expect(state.fallback).toEqual({
+      jobId: "j2",
+      target: "local:gguf:qwen",
+      to: "qwen3:14b",
+    });
+    expect(state.limit).toBeUndefined();
+    expect(state.activity.a.finished?.limitReached).toBe("Codex");
+    expect(
+      state.items.find((i) => i.kind === "agent" && i.taskId === "a"),
+    ).toMatchObject({ who: "Plan limit reached" });
+  });
+
+  it("ask: a card that a manual continuation resolves", () => {
+    const asked = replay([
+      ...limited,
+      event(5, "limit.fallback", { ok: false, ask: true }, "a"),
+    ]);
+    const card = asked.items.find((i) => i.kind === "limit");
+    expect(card).toMatchObject({
+      mode: "ask",
+      from: "Codex",
+      text: "Codex reached its plan limit.",
+      request: "Fix the add function",
+    });
+    expect(card).not.toHaveProperty("resolved");
+    // The card carries the actions; the banner is not repeated.
+    expect(asked.limit).toBeUndefined();
+    const continued = [
+      ...limited,
+      event(5, "limit.fallback", { ok: false, ask: true }, "a"),
+      event(6, "user.message", { text: followUp }, "b"),
+      event(7, "agent.started", { task: followUp }, "b"),
+    ];
+    const state = replay(continued);
+    expect(state.items.find((i) => i.kind === "limit")).toMatchObject({
+      resolved: true,
+    });
+    expect(
+      state.items.find((i) => i.kind === "user" && i.taskId === "b"),
+    ).toMatchObject({ continued: "manual" });
+    // Any other task started later also closes the offer.
+    const other = replay([
+      ...limited,
+      event(5, "limit.fallback", { ok: false, ask: true }, "a"),
+      event(6, "user.message", { text: "Something else" }, "c"),
+      event(7, "agent.started", { task: "Something else" }, "c"),
+    ]);
+    expect(other.items.find((i) => i.kind === "limit")).toMatchObject({
+      resolved: true,
+    });
+    expect(
+      other.items.find((i) => i.kind === "user" && i.taskId === "c"),
+    ).not.toHaveProperty("continued");
+  });
+
+  it("no local model: a warning with the reason, and the banner stays", () => {
+    const state = replay([
+      ...limited,
+      event(
+        5,
+        "limit.fallback",
+        {
+          ok: false,
+          from: "Codex",
+          reason:
+            "No local model is ready. Add one in Settings › Local models.",
+        },
+        "a",
+      ),
+    ]);
+    expect(state.items.find((i) => i.kind === "limit")).toMatchObject({
+      mode: "unavailable",
+      text: "Codex reached its plan limit. No local model is ready. Add one in Settings › Local models.",
+    });
+    expect(state.limit?.vendor).toBe("Codex");
+  });
+});

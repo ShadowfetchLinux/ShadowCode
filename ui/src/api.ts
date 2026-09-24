@@ -183,6 +183,60 @@ export type OpenRouterStatus = {
   activity_url: string;
 };
 
+/** GET /api/allowance: how much each way of running a model has left, only
+ * from what each source reports (no estimates). */
+export type AllowanceState =
+  | "ok"
+  | "low"
+  | "limit_reached"
+  | "unknown"
+  | "sign_in"
+  | "not_installed"
+  | "unavailable"
+  | "offline"
+  | "no_key"
+  | "none";
+
+export type AllowanceWindow = {
+  label: string;
+  remaining_percent: number | null;
+  /** Unix seconds. */
+  resets_at: number | null;
+};
+
+export type AllowanceRow = {
+  /** "cli:codex" …, "openrouter" or "local". */
+  id: string;
+  kind: "subscription" | "api_key" | "local" | string;
+  product: string;
+  state: AllowanceState | string;
+  headline: string;
+  remaining_percent: number | null;
+  windows?: AllowanceWindow[];
+  plan?: string | null;
+  note?: string | null;
+  /** Unix seconds of the vendor's last usage check. */
+  last_checked?: number | null;
+  usage_url?: string | null;
+  /** OpenRouter only, USD. */
+  used?: number | null;
+  limit?: number | null;
+  limit_remaining?: number | null;
+  /** Local only. */
+  ready_models?: number;
+  on_limit?: "local" | "ask" | string;
+  fallback?: { id: string; name: string } | null;
+};
+
+export type AllowanceResponse = { generated_at: number; rows: AllowanceRow[] };
+
+/** config `limits`: what happens when a subscription reports its plan limit. */
+export type LimitsConfig = {
+  on_limit?: "local" | "ask" | string;
+  /** "" = automatic, or a `local:gguf:` picker id. */
+  fallback_model?: string;
+};
+
 export type LoginProgress = {
   running: boolean;
   lines: string[];
@@ -386,6 +440,8 @@ export type Job = {
     plan: { goal: string; steps: PlanStep[] };
     usage?: Record<string, number>;
     verification?: Record<string, unknown>;
+    /** Set when a subscription reported its plan limit (status limit_reached). */
+    limit_reached?: { vendor: string; detail?: string; usage?: unknown };
   };
 };
 export type Health = {
@@ -572,6 +628,9 @@ export const api = {
       api_key,
       api_key_env,
     }),
+  /** Allowance rows; `refresh` re-checks vendor accounts. */
+  allowance: (refresh = false) =>
+    get<AllowanceResponse>(`/api/allowance${refresh ? "?refresh=1" : ""}`),
   /** The composer's only source of rows (vendor + local). */
   picker: (refresh = false) =>
     get<PickerResponse>(`/api/picker${refresh ? "?refresh=1" : ""}`),

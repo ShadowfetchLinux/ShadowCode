@@ -23,7 +23,14 @@ import { jobEvents } from "../lib/jobEvents";
 export const isActive = (job: Job | null) =>
   !!job && ["queued", "running", "paused", "cancelling"].includes(job.status);
 
-export function useConversation(onComplete: () => void) {
+const outcomeLabel = (status: string) =>
+  status === "completed"
+    ? "Result"
+    : status === "limit_reached"
+      ? "Plan limit reached"
+      : "Needs attention";
+
+export function useConversation(onComplete: (done?: Job) => void) {
   const [liveTranscript, setLiveTranscript] = useState(emptyTranscript);
   const [job, setJob] = useState<Job | null>(null);
   const [connection, setConnection] = useState<"connected" | "reconnecting">(
@@ -79,7 +86,7 @@ export function useConversation(onComplete: () => void) {
           state.items.push({
             kind: "agent",
             text: active.summary,
-            who: active.status === "completed" ? "Result" : "Needs attention",
+            who: outcomeLabel(active.status),
           });
       }
       cursor.current = detail.event_cursor || state.cursor;
@@ -129,7 +136,7 @@ export function useConversation(onComplete: () => void) {
           items.push({
             kind: "agent",
             text: done.summary,
-            who: done.status === "completed" ? "Result" : "Needs attention",
+            who: outcomeLabel(done.status),
           });
         return {
           ...s,
@@ -139,7 +146,7 @@ export function useConversation(onComplete: () => void) {
         };
       });
       // The desktop shell sends finish notifications (it honours ui.notify).
-      complete.current();
+      complete.current(done);
     }
     source.onopen = () => {
       if (!closed) {

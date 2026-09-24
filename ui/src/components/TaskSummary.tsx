@@ -43,25 +43,33 @@ export function TaskSummary({
     activity.startedAt && activity.finishedAt
       ? formatDuration(activity.finishedAt - activity.startedAt)
       : null;
-  const outcome = activity.finished?.cancelled
+  const stopped = Boolean(activity.finished?.cancelled);
+  // A subscription that ran out of plan is a warning, not a failure: the
+  // work so far stands and the conversation can continue elsewhere.
+  const limited = !stopped && Boolean(activity.finished?.limitReached);
+  const outcome = stopped
     ? "Stopped"
     : activity.finished?.success
       ? "Finished"
-      : "Finished with problems";
-  const stopped = Boolean(activity.finished?.cancelled);
+      : limited
+        ? "Plan limit reached"
+        : "Finished with problems";
   // A stop the user asked for is not a failure, and an answer that changed
   // nothing needs no report. With nothing changed, no checks run and no
   // unverified claims, one quiet line says so.
   const quiet =
-    (stopped || Boolean(activity.finished?.success)) &&
+    (stopped || limited || Boolean(activity.finished?.success)) &&
     changed.length === 0 &&
     !verification?.commands.length &&
     verification?.presentedAs !== "unverified";
   if (quiet) {
     return (
-      <section className="task-summary is-quiet" aria-label="Task summary">
+      <section
+        className={`task-summary is-quiet${limited ? " is-warn" : ""}`}
+        aria-label="Task summary"
+      >
         <header>
-          <strong>{stopped ? "Stopped" : "Finished"}</strong>
+          <strong>{outcome}</strong>
           {duration && (
             <span className="dim">
               <Timer size={12} aria-hidden="true" /> {duration}
@@ -74,7 +82,7 @@ export function TaskSummary({
   }
   return (
     <section
-      className={`task-summary ${activity.finished?.success || stopped ? "" : "is-bad"}`}
+      className={`task-summary ${activity.finished?.success || stopped ? "" : limited ? "is-warn" : "is-bad"}`}
       aria-label="Task summary"
     >
       <header>

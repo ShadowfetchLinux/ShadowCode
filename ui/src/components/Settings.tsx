@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Dialog } from "./Dialog";
 import type { Health } from "../api";
 import { AccountsPage } from "./settings/AccountsPage";
@@ -35,6 +35,7 @@ export function Settings({
   onOpenSession,
   onSkillsChanged,
   onUseSkill,
+  planLimit,
 }: {
   cfg: Record<string, unknown>;
   initialSection?: SettingsSection;
@@ -53,6 +54,8 @@ export function Settings({
   onOpenSession: (id: string) => void;
   onSkillsChanged: () => Promise<void>;
   onUseSkill: (name: string) => void;
+  /** Accounts › "When a plan runs out" (the same control as Allowance). */
+  planLimit?: ReactNode;
 }) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
   const [advanced, setAdvanced] = useState<AdvancedTab>(initialAdvanced);
@@ -81,6 +84,7 @@ export function Settings({
             }
             onChanged={onCatalogChanged}
             onToast={onToast}
+            planLimit={planLimit}
           />
         )}
         {section === "local" && (

@@ -21,11 +21,13 @@ import {
 } from "lucide-react";
 import {
   api,
+  type AllowanceResponse,
   type Approval,
   type CommandResult,
   type ConsentRequest,
   type Health,
   type Job,
+  type LimitsConfig,
   type Project,
   type Session,
   type StartJobRequest,
@@ -61,6 +63,13 @@ import {
 import { QueuedTasks } from "./components/QueuedTasks";
 import { TaskSteerBar } from "./components/TaskSteerBar";
 import { UnifiedPicker } from "./components/UnifiedPicker";
+import {
+  AllowanceButton,
+  AllowancePanel,
+  PlanLimitControl,
+} from "./components/Allowance";
+import { LimitFallbackItem } from "./components/LimitFallback";
+import type { ChatItem } from "./components/cards";
 import { useConversation } from "./hooks/useConversation";
 import {
   isApiKey,
@@ -77,6 +86,13 @@ import {
   type Attachment,
 } from "./lib/attachments";
 import { formatDuration } from "./lib/activity";
+import {
+  continuationTask,
+  limitsFrom,
+  readyLocalTargets,
+  resolveFallback,
+  type Fallback,
+} from "./lib/allowance";
 import { conversationJob } from "./lib/jobs";
 import {
   isProjectTrustError,
@@ -93,7 +109,7 @@ import {
   openExternal,
 } from "./lib/transport";
 
-type Overlay = "" | "settings" | "help" | "palette" | "project";
+type Overlay = "" | "settings" | "help" | "palette" | "project" | "allowance";
 type Toast = { id: number; text: string; kind: "ok" | "err" | "info" };
 type Consent = {
   request: ConsentRequest;
@@ -204,6 +220,11 @@ export default function App() {
   const browsingHistory = useRef(false);
   const pickerFetched = useRef(0);
   const pickerSeq = useRef(0);
+  const [allowance, setAllowance] = useState<AllowanceResponse | null>(null);
+  const [allowanceLoading, setAllowanceLoading] = useState(false);
+  const [allowanceError, setAllowanceError] = useState("");
+  const allowanceSeq = useRef(0);
+  const appliedFallback = useRef("");
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastSeq.current;
@@ -276,6 +297,23 @@ export default function App() {
     [toast],
   );
 
+  /** Allowance rows for the status bar and its panel. `refresh` re-checks
+   * vendor accounts (slow); otherwise the engine answers from its cache. */
+  const reloadAllowance = useCallback(async (refresh = false) => {
+    const seq = ++allowanceSeq.current;
+    setAllowanceLoading(true);
+    try {
+      const result = await api.allowance(refresh);
+      if (seq !== allowanceSeq.current) return;
+      setAllowance(result);
+      setAllowanceError("");
+    } catch (e) {
+      if (seq === allowanceSeq.current) setAllowanceError(String(e));
+    } finally {
+      if (seq === allowanceSeq.current) setAllowanceLoading(false);
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     const [s, p, active, state] = await Promise.all([
       api.sessions(),
@@ -302,11 +340,15 @@ export default function App() {
       /* status is optional outside git */
     }
   }, []);
-  const conversation = useConversation(() => {
+  const conversation = useConversation((done) => {
     void refresh().catch(() => undefined);
     void reloadPicker();
+    void reloadAllowance();
+    if (done?.status === "limit_reached") void followLimit(done);
   });
   const { transcript, setTranscript, job, busy, connection } = conversation;
+  const jobRef = useRef(job);
+  jobRef.current = job;
   const locked = busy || submitting || switching || Boolean(shutdown);
   const projectBusy =
     busy ||
@@ -397,6 +439,7 @@ export default function App() {
       setNeedsOnboard(!onboard.completed);
       await reloadConfig();
       void reloadPicker();
+      void reloadAllowance();
       await refresh();
       const saved = readStore("shadow:selected");
       const initial =
@@ -461,14 +504,39 @@ export default function App() {
   // resets): refresh rows when the window regains focus.
   useEffect(() => {
     const onFocus = () => {
-      if (Date.now() - pickerFetched.current > 15000) void reloadPicker();
+      if (Date.now() - pickerFetched.current > 15000) {
+        void reloadPicker();
+        void reloadAllowance();
+      }
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [reloadPicker]);
+  }, [reloadPicker, reloadAllowance]);
   useEffect(() => {
-    if (transcript.usageVersion) void reloadPicker();
-  }, [transcript.usageVersion, reloadPicker]);
+    if (transcript.usageVersion) {
+      void reloadPicker();
+      void reloadAllowance();
+    }
+  }, [transcript.usageVersion, reloadPicker, reloadAllowance]);
+  // A plan ran out and the engine continued on a local model: the composer
+  // follows the conversation's saved target (now that local model).
+  useEffect(() => {
+    const next = transcript.fallback;
+    if (!next?.jobId || job?.id !== next.jobId) return;
+    if (appliedFallback.current === next.jobId) return;
+    appliedFallback.current = next.jobId;
+    const sid = sessionId;
+    const apply = (target: string) => {
+      if (selectedRef.current !== sid || !target) return;
+      setModelChoice(target);
+      setRunningChoice(target);
+      if (workspace) writeStore(targetKey(workspace), target);
+    };
+    void api
+      .session(sid)
+      .then((detail) => apply(detail.execution_target || next.target))
+      .catch(() => apply(next.target));
+  }, [transcript.fallback, job?.id, sessionId, workspace]);
   useEffect(() => {
     document.title = `${busy ? "● " : ""}ShadowCode`;
   }, [busy]);
@@ -818,9 +886,11 @@ export default function App() {
     !sendBlocked &&
     (task.trim().startsWith("/") || Boolean(selectedTarget));
 
+  /** `original` is the composer content to restore on failure; null when
+   * the task did not come from the composer (Continue on …). */
   async function startTask(
     body: StartJobRequest,
-    original: { task: string; attachments: Attachment[] },
+    original: { task: string; attachments: Attachment[] } | null,
   ) {
     const submitTicket = selection.current;
     submittingRef.current = true;
@@ -830,7 +900,11 @@ export default function App() {
       const result = await api.startJob(body);
       if ("consent" in result) {
         if (submitTicket === selection.current)
-          setConsent({ request: result.consent, body, original });
+          setConsent({
+            request: result.consent,
+            body,
+            original: original || { task: taskRef.current, attachments: [] },
+          });
         return;
       }
       const started = result.job;
@@ -843,7 +917,7 @@ export default function App() {
         setSessionId(started.session_id);
         writeStore("shadow:selected", started.session_id);
       }
-      for (const a of original.attachments)
+      for (const a of original?.attachments || [])
         if (a.preview) URL.revokeObjectURL(a.preview);
       // Keep streaming the current task while a follow-up waits.
       if (!busy) {
@@ -861,8 +935,10 @@ export default function App() {
         toast(String(e), "err");
         return;
       }
-      setTask(original.task);
-      setAttachments(original.attachments);
+      if (original) {
+        setTask(original.task);
+        setAttachments(original.attachments);
+      }
       setError(String(e));
       toast(String(e), "err");
       if (isProjectTrustError(e) && workspace)
@@ -870,6 +946,73 @@ export default function App() {
     } finally {
       setSubmitting(false);
       submittingRef.current = false;
+    }
+  }
+
+  /** A plan-limit card's "Continue on …": the same conversation continues on
+   * the local model, and the composer follows it. */
+  async function continueOnFallback(
+    item: Extract<ChatItem, { kind: "limit" }>,
+    fallback: Fallback,
+  ) {
+    if (composerLocked || submittingRef.current) return;
+    await selectTarget(fallback.id);
+    stick.current = true;
+    setAtBottom(true);
+    await startTask(
+      {
+        task: continuationTask(item.from, item.request || ""),
+        workspace: workspace || undefined,
+        session_id: sessionId || undefined,
+        model: fallback.id,
+        purpose: "coder",
+        queue: queueing,
+        images: [],
+        web: false,
+      },
+      null,
+    );
+  }
+
+  /** In "ask" mode the engine records the stop after the job ends, when the
+   * job's own event stream has closed: read it from the conversation. */
+  async function followLimit(done: Job) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 300 + attempt * 300));
+      if (selectedRef.current !== done.session_id) return;
+      let detail;
+      try {
+        detail = await api.session(done.session_id);
+      } catch {
+        continue;
+      }
+      const record = detail.events.find(
+        (e) => e.type === "limit.fallback" && e.task_id === done.task_id,
+      );
+      if (!record) continue;
+      // An automatic follow-up arrives with the project's jobs.
+      if (record.payload.ok) {
+        void refresh().catch(() => undefined);
+        return;
+      }
+      if (
+        selectedRef.current === done.session_id &&
+        !submittingRef.current &&
+        jobRef.current?.id === done.id
+      )
+        conversation.load(detail, done, true);
+      return;
+    }
+  }
+
+  async function saveLimits(next: LimitsConfig) {
+    try {
+      await api.saveConfig({ limits: next });
+      await reloadConfig();
+      void reloadAllowance();
+    } catch (e) {
+      toast(String(e), "err");
+      throw e;
     }
   }
 
@@ -1307,6 +1450,19 @@ export default function App() {
       />
     );
 
+  const limits = limitsFrom(cfg);
+  const fallback = resolveFallback(limits, allowance, pickerTargets);
+  const planLimit = (
+    <PlanLimitControl
+      limits={limits}
+      localTargets={readyLocalTargets(pickerTargets)}
+      automaticName={
+        allowance?.rows.find((row) => row.id === "local")?.fallback?.name
+      }
+      onSave={saveLimits}
+      onOpenLocal={() => openSettings("local")}
+    />
+  );
   const picker = (
     <UnifiedPicker
       targets={pickerTargets}
@@ -1672,9 +1828,31 @@ export default function App() {
                           />
                         </div>
                       ) : null
+                    ) : item.kind === "limit" ? (
+                      <LimitFallbackItem
+                        key={i}
+                        item={item}
+                        fallback={fallback}
+                        disabled={composerLocked}
+                        onContinue={(choice) =>
+                          void continueOnFallback(item, choice)
+                        }
+                        onChoose={() => setPickerOpen(true)}
+                        onOpenLocal={() => openSettings("local")}
+                      />
                     ) : item.kind === "user" ? (
-                      <div key={i} className="msg-user">
+                      <div
+                        key={i}
+                        className={`msg-user${item.continued ? " is-continuation" : ""}`}
+                      >
                         <div className="user-pill">
+                          {item.continued && (
+                            <div className="continued-label">
+                              {item.continued === "auto"
+                                ? "Continued automatically"
+                                : "Continued after the plan limit"}
+                            </div>
+                          )}
                           <div className="bubble">{item.text}</div>
                         </div>
                       </div>
@@ -1901,6 +2079,17 @@ export default function App() {
               </button>
             </>
           )}
+          <span className="sep" aria-hidden="true">
+            ·
+          </span>
+          <AllowanceButton
+            data={allowance}
+            open={overlay === "allowance"}
+            onOpen={() => {
+              setOverlay("allowance");
+              void reloadAllowance();
+            }}
+          />
           <span className="grow" />
           {ctx > 0 && (
             <span
@@ -2021,7 +2210,11 @@ export default function App() {
             setTask(`/skill ${name} `);
             promptRef.current?.focus();
           }}
-          onCatalogChanged={() => void reloadPicker()}
+          planLimit={planLimit}
+          onCatalogChanged={() => {
+            void reloadPicker();
+            void reloadAllowance();
+          }}
           onSave={async (values) => {
             try {
               await api.saveConfig(values);
@@ -2032,6 +2225,18 @@ export default function App() {
               toast(String(e), "err");
             }
           }}
+        />
+      )}
+      {overlay === "allowance" && (
+        <AllowancePanel
+          data={allowance}
+          loading={allowanceLoading}
+          error={allowanceError}
+          planLimit={planLimit}
+          onRefresh={() => void reloadAllowance(true)}
+          onClose={() => setOverlay("")}
+          onOpenAccounts={(vendor) => openSettings("accounts", { vendor })}
+          onOpenLocal={() => openSettings("local")}
         />
       )}
       {overlay === "help" && (

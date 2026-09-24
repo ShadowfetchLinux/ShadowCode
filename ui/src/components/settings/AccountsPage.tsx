@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import { RefreshCw } from "lucide-react";
 import {
@@ -60,8 +61,11 @@ export function AccountsPage({
   installPollMs = INSTALL_POLL_MS,
   onChanged,
   onToast,
+  planLimit,
 }: {
   focusVendor?: string;
+  /** "When a plan runs out" (saved as config limits), shown first. */
+  planLimit?: ReactNode;
   /** Offline mode: no downloads (the Antigravity agent install is off). */
   offline?: boolean;
   /** Poll interval while the Antigravity agent installs (tests shorten it). */
@@ -375,6 +379,7 @@ export function AccountsPage({
           {loading ? "Checking…" : "Check all"}
         </button>
       </div>
+      {planLimit && <div className="plan-limit-card">{planLimit}</div>}
       {error && (
         <p className="health-bad" role="alert">
           {error}

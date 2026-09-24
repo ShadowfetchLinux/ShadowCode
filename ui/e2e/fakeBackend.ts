@@ -12,6 +12,8 @@ export type FakeOptions = {
   stepMs?: number;
   /** Start with the onboarding screen. */
   onboarding?: boolean;
+  /** Codex tasks stop at the plan limit (then limits.on_limit applies). */
+  limitOnCodex?: boolean;
 };
 
 export function installFakeBackend(options: FakeOptions = {}) {
@@ -94,6 +96,27 @@ export function installFakeBackend(options: FakeOptions = {}) {
     version: null,
     account: null,
     models: [],
+  };
+  // Cursor's pool is spent: its rows stay visible with the reason.
+  const cursorLimited = {
+    ...unknownUsage,
+    state: "limit_reached",
+    label: "Plan limit reached · resets in 2h",
+    detail: ["Plan limit reached · resets in 2h"],
+    plan: "Pro",
+    windows: [
+      {
+        label: "Monthly",
+        used_percent: 100,
+        remaining_percent: 0,
+        window_minutes: 43200,
+        resets_at: now() + 2 * 3600,
+      },
+    ],
+    remaining_percent: 0,
+    limit_reached: true,
+    last_refresh: now() - 300,
+    provider_usage_url: "https://cursor.com/dashboard?tab=usage",
   };
   const localUsage = {
     ...unknownUsage,
@@ -222,6 +245,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
       ui: { theme: "light", notify: true },
       cli_agents: { enabled: true },
       guardian: { enabled: false, interval_sec: 3600 },
+      limits: { on_limit: "local", fallback_model: "" },
     },
     vendors: {
       codex: {
@@ -307,7 +331,60 @@ export function installFakeBackend(options: FakeOptions = {}) {
         usage: unknownUsage,
         install: agentInstall(),
       },
+      cursor: {
+        id: "cli-cursor",
+        label: "Cursor",
+        state: "ready",
+        status: "pass",
+        availability: "ready",
+        availability_label: "Ready",
+        detail: "Signed in",
+        version: "2026.09.12",
+        binary: "cursor-agent",
+        fix: null,
+        account: { email: "dev@example.com", plan: "Pro", auth_mode: "oauth" },
+        models: [
+          { id: "auto", label: "Auto", is_default: true, vision: false },
+        ],
+        accepts_images: false,
+        asks_approval: true,
+        fetched_at: now(),
+        error: null,
+        usage_note: null,
+        login_command: ["cursor-agent", "login"],
+        logout_command: ["cursor-agent", "logout"],
+        shared_cli_note:
+          "This signs out the cursor-agent CLI for your whole user account, not just ShadowCode.",
+        usage: cursorLimited,
+      },
+      grok: {
+        id: "cli-grok",
+        label: "Grok",
+        state: "not_installed",
+        status: "warn",
+        availability: "setup_required",
+        availability_label: "Setup required",
+        detail: "Install the Grok CLI, then refresh Accounts.",
+        fix: "Install the Grok CLI, then refresh Accounts.",
+        version: null,
+        binary: null,
+        account: null,
+        models: [],
+        accepts_images: false,
+        asks_approval: true,
+        fetched_at: now(),
+        error: null,
+        usage_note: "Grok does not report plan usage.",
+        login_command: ["grok", "login"],
+        logout_command: ["grok", "logout"],
+        shared_cli_note: "",
+        usage: unknownUsage,
+      },
     },
+    /** Codex tasks stop at the plan limit (see `limitScript`). */
+    limitOnCodex: Boolean(options.limitOnCodex),
+    /** The last local model a task ran on (the automatic fallback). */
+    lastLocal: "" as string,
     /** Install progress steps still to come (one per status check);
      * `installFails` makes the next install stop with an error. */
     agent: { steps: [] as Json[], installFails: false, hold: false },
@@ -440,9 +517,11 @@ export function installFakeBackend(options: FakeOptions = {}) {
       name: `${v.product || v.label} · ${model ? model.label : "Default"}`,
       subtitle: "Cloud · subscription",
       inference: "cloud",
-      availability: v.availability,
-      availability_label: v.availability_label,
-      reason: v.detail,
+      availability: v.usage?.limit_reached ? "unavailable" : v.availability,
+      availability_label: v.usage?.limit_reached
+        ? "Plan limit reached"
+        : v.availability_label,
+      reason: v.usage?.limit_reached ? v.usage.label : v.detail,
       featured: true,
       vision: model ? Boolean(model.vision) : Boolean(v.accepts_images),
       tools: true,
@@ -542,6 +621,125 @@ export function installFakeBackend(options: FakeOptions = {}) {
     return rows;
   }
 
+  /** GET /api/allowance, built the way native/core/src/allowance.rs does:
+   * only reported figures. */
+  function subscriptionRow(key: string, v: Json) {
+    const usage = v.usage || {};
+    const windows = (usage.windows || []).map((w: Json) => ({
+      label: w.label,
+      remaining_percent: w.remaining_percent,
+      resets_at: w.resets_at,
+    }));
+    const lefts = windows
+      .map((w: Json) => w.remaining_percent)
+      .filter((n: unknown) => typeof n === "number") as number[];
+    const left = lefts.length ? Math.min(...lefts) : null;
+    let rowState = "unavailable";
+    let headline = v.detail || "Unavailable";
+    if (v.availability === "setup_required") {
+      rowState = "not_installed";
+      headline = "Not installed";
+    } else if (v.availability === "sign_in") {
+      rowState = "sign_in";
+      headline = "Not signed in";
+    } else if (usage.limit_reached || usage.state === "limit_reached") {
+      rowState = "limit_reached";
+      headline = "Plan limit reached";
+    } else if (v.availability === "ready") {
+      if (left != null) {
+        rowState = left <= 10 ? "low" : "ok";
+        headline = `${left.toFixed(0)}% left`;
+      } else {
+        rowState = "unknown";
+        headline = "Usage not reported";
+      }
+    }
+    return {
+      id: `cli:${key}`,
+      kind: "subscription",
+      product: v.product || v.label,
+      state: rowState,
+      headline,
+      remaining_percent: left,
+      windows,
+      plan: v.account?.plan ?? null,
+      note: v.usage_note ?? null,
+      last_checked: usage.last_refresh ?? null,
+      usage_url: usage.provider_usage_url ?? null,
+    };
+  }
+  function localFallback(): { id: string; name: string } | null {
+    const ready = (state.local.models as Json[]).filter(
+      (m) => m.availability === "ready",
+    );
+    const find = (id: string) => ready.find((m) => m.id === id);
+    const hit =
+      find(state.config.limits?.fallback_model || "") ||
+      find(state.lastLocal) ||
+      ready.find((m) => m.tools) ||
+      ready[0];
+    return hit ? { id: hit.id, name: hit.name } : null;
+  }
+  function allowance() {
+    const rows: Json[] = [];
+    for (const key of ["codex", "claude", "cursor", "antigravity", "grok"])
+      if (state.vendors[key])
+        rows.push(subscriptionRow(key, state.vendors[key]));
+    const or = openrouterStatus();
+    const info = or.key as Json | null;
+    let orState = "ok";
+    let orHeadline = "";
+    let orPercent: number | null = null;
+    if (or.offline) {
+      orState = "offline";
+      orHeadline = "Offline mode";
+    } else if (!or.key_set) {
+      orState = "no_key";
+      orHeadline = "No API key";
+    } else if (info?.limit && info.limit_remaining != null) {
+      orPercent = Math.max(
+        0,
+        Math.min(100, (info.limit_remaining / info.limit) * 100),
+      );
+      orState =
+        info.limit_remaining <= 0
+          ? "limit_reached"
+          : orPercent <= 10
+            ? "low"
+            : "ok";
+      orHeadline = `$${info.limit_remaining.toFixed(2)} of $${info.limit.toFixed(2)} left`;
+    } else orHeadline = `$${(info?.usage || 0).toFixed(2)} used · no limit set`;
+    rows.push({
+      id: "openrouter",
+      kind: "api_key",
+      product: "OpenRouter",
+      state: orState,
+      headline: orHeadline,
+      remaining_percent: orPercent,
+      used: info?.usage ?? null,
+      limit: info?.limit ?? null,
+      limit_remaining: info?.limit_remaining ?? null,
+      usage_url: or.activity_url,
+    });
+    const ready = (state.local.models as Json[]).filter(
+      (m) => m.availability === "ready",
+    ).length;
+    rows.push({
+      id: "local",
+      kind: "local",
+      product: "On this computer",
+      state: ready ? "ok" : "none",
+      headline: ready
+        ? `No quota · ${ready} model${ready === 1 ? "" : "s"} ready`
+        : "No local model ready",
+      remaining_percent: null,
+      ready_models: ready,
+      on_limit: state.config.limits?.on_limit || "local",
+      fallback: localFallback(),
+    });
+    return { generated_at: now(), rows };
+  }
+
   /** One status check of a running install: the next progress step. */
   function agentStep() {
     const v = state.vendors.antigravity;
@@ -590,7 +788,10 @@ export function installFakeBackend(options: FakeOptions = {}) {
     const sid = job.session_id;
     const tid = job.task_id;
     const steps: [string, Json][] = [
-      ["agent.started", { task: job.task }],
+      ["agent.started", { task: job.task, job_id: job.id }],
+      ...(job.handoff
+        ? [["agent.handoff", job.handoff] as [string, Json]]
+        : []),
       [
         "routing.selected",
         {
@@ -712,6 +913,163 @@ export function installFakeBackend(options: FakeOptions = {}) {
     setTimeout(tick, step);
   }
 
+  /** A Codex turn that stops at the plan limit, then what the engine does
+   * about it (engine.rs continue_after_limit): continue on a local model in
+   * the same conversation, or record the stop for the user to decide. */
+  function limitScript(job: Json) {
+    const sid = job.session_id;
+    const tid = job.task_id;
+    const detail = "You've hit your usage limit. Try again in 3 hours";
+    const spent = {
+      ...codexUsage,
+      state: "limit_reached",
+      label: "Plan limit reached · resets in 3h",
+      detail: ["Plan limit reached · resets in 3h"],
+      windows: codexUsage.windows.map((w) => ({
+        ...w,
+        used_percent: 100,
+        remaining_percent: 0,
+      })),
+      remaining_percent: 0,
+      limit_reached: true,
+      last_refresh: now(),
+    };
+    const steps: [string, Json][] = [
+      ["agent.started", { task: job.task, job_id: job.id }],
+      [
+        "routing.selected",
+        {
+          purpose: "coder",
+          source: "explicit",
+          requested: job.model,
+          model_id: job.model,
+          model_name: job.model_name,
+          provider: job.provider,
+          context_limit: 0,
+          inference: "cloud",
+        },
+      ],
+      [
+        "tool.started",
+        { tool: "read_file", call_id: "c1", arguments: { path: "src/app.ts" } },
+      ],
+      [
+        "tool.completed",
+        {
+          tool: "read_file",
+          call_id: "c1",
+          success: true,
+          output_preview: "export const add = (a, b) => a - b;",
+          arguments: { path: "src/app.ts" },
+        },
+      ],
+      [
+        "limit.reached",
+        { vendor: "codex", usage: spent, detail, job_id: job.id },
+      ],
+    ];
+    let index = 0;
+    const tick = () => {
+      if (index < steps.length) {
+        if (index === 0) job.status = "running";
+        const [type, payload] = steps[index++];
+        emit(sid, tid, type, payload);
+        job.event_cursor = state.cursor;
+        setTimeout(tick, step);
+        return;
+      }
+      state.vendors.codex.usage = spent;
+      const verification = {
+        status: "vendor_owned",
+        commands: [],
+        note: "Codex ran and judged its own checks; ShadowCode did not verify them.",
+      };
+      job.status = "limit_reached";
+      job.finished_at = now();
+      job.summary = `Codex plan limit reached: ${detail}. ShadowCode never retries on the same plan or buys more usage.`;
+      job.result = {
+        success: false,
+        cancelled: false,
+        summary: job.summary,
+        verification,
+        limit_reached: { vendor: "codex", detail, usage: spent },
+      };
+      emit(sid, tid, "agent.completed", { ...job.result, usage: {} });
+      job.event_cursor = state.cursor;
+      // The engine decides after the job has ended.
+      setTimeout(() => {
+        if ((state.config.limits?.on_limit || "local") !== "local") {
+          emit(sid, tid, "limit.fallback", { ok: false, ask: true });
+          return;
+        }
+        const fallback = localFallback();
+        if (!fallback) {
+          emit(sid, tid, "limit.fallback", {
+            ok: false,
+            from: "Codex",
+            reason:
+              "No local model is ready. Add one in Settings › Local models to keep going when a plan runs out.",
+          });
+          return;
+        }
+        const next = createJob({
+          task: `Continue where Codex stopped when its plan limit was reached. The request was:\n\n${job.task}`,
+          session_id: sid,
+          model: fallback.id,
+          handoff: {
+            from: "cli:codex",
+            to: "local:llamacpp",
+            excerpt_chars: 1800,
+            delivery: "message_tape",
+            job_id: "",
+          },
+        });
+        emit(sid, tid, "limit.fallback", {
+          ok: true,
+          from: "Codex",
+          to: fallback.name,
+          target: fallback.id,
+          job_id: next.id,
+        });
+      }, step);
+    };
+    setTimeout(tick, step);
+  }
+
+  /** Queue a job and its user.message; `handoff` marks a provider change. */
+  function createJob(body: Json) {
+    const target = pickerTargets().find((t) => t.id === body.model);
+    if (!target) throw new Error("Choose a model in the composer");
+    const sid = body.session_id || "s1";
+    const cloud = target.inference === "cloud";
+    state.lastRoute[sid] = cloud ? "cloud" : "local";
+    if (!cloud) state.lastLocal = target.id;
+    const id = `j${state.jobs.length + 1}`;
+    const job: Json = {
+      id,
+      task_id: `t${state.jobs.length + 1}`,
+      workspace,
+      session_id: sid,
+      status: "queued",
+      task: body.task,
+      model: body.model,
+      model_name: target.name,
+      provider: target.provider,
+      started_at: now(),
+      event_cursor: state.cursor,
+      web: Boolean(body.web),
+      handoff: body.handoff ? { ...body.handoff, job_id: id } : undefined,
+    };
+    state.jobs.push(job);
+    emit(sid, job.task_id, "user.message", { text: body.task });
+    job.event_cursor = state.cursor - 1;
+    const session = state.sessions.find((s: Json) => s.id === sid);
+    if (session) session.target = body.model;
+    if (target.provider === "cli:codex" && state.limitOnCodex) limitScript(job);
+    else script(job, !cloud);
+    return job;
+  }
+
   function sessionDetail(id: string) {
     const session = state.sessions.find((s: Json) => s.id === id);
     if (!session) throw new Error(`Unknown session ${id}`);
@@ -769,6 +1127,12 @@ export function installFakeBackend(options: FakeOptions = {}) {
       };
     if (path === "/api/accounts")
       return { vendors: state.vendors, config: {}, local_engine: state.local };
+    if (path === "/api/allowance") {
+      if (q.get("refresh") === "1")
+        for (const v of Object.values(state.vendors) as Json[])
+          if (v.usage?.last_refresh) v.usage.last_refresh = now();
+      return allowance();
+    }
     if (path === "/api/accounts/antigravity/install" && method === "GET")
       return agentStep();
     if (path === "/api/accounts/antigravity/install" && method === "POST") {
@@ -1082,36 +1446,17 @@ export function installFakeBackend(options: FakeOptions = {}) {
             },
           }),
         );
-      state.lastRoute[sid] = cloud ? "cloud" : "local";
-      const id = `j${state.jobs.length + 1}`;
-      const job = {
-        id,
-        task_id: `t${state.jobs.length + 1}`,
-        workspace,
-        session_id: sid,
-        status: "queued",
-        task: body.task,
-        model: body.model,
-        model_name: target.name,
-        provider: target.provider,
-        started_at: now(),
-        event_cursor: state.cursor,
-        web: Boolean(body.web),
-      };
-      state.jobs.push(job);
-      emit(sid, job.task_id, "user.message", { text: body.task });
-      job.event_cursor = state.cursor - 1;
-      const session = state.sessions.find((s: Json) => s.id === sid);
-      if (session) session.target = body.model;
-      script(job, !cloud);
-      return { ...job };
+      return { ...createJob(body) };
     }
     if ((m = path.match(/^\/api\/jobs\/([^/]+)\/events$/))) {
       const job = state.jobs.find((j: Json) => j.id === m![1]);
       const after = Number(q.get("after") || 0);
+      // As in the engine, a finished job's page ends at its own completion.
+      const through = job.finished_at ? job.event_cursor : Infinity;
       return {
         events: state.events.filter(
-          (e: Json) => e.id > after && e.session_id === job.session_id,
+          (e: Json) =>
+            e.id > after && e.id <= through && e.session_id === job.session_id,
         ),
         job: { ...job },
       };

@@ -467,3 +467,125 @@ test("the window works at its 520 px minimum width", async ({ page }) => {
   expect(box && box.x >= 0 && box.x + box.width <= 520).toBe(true);
   await page.screenshot({ path: "test-results/compact.png", fullPage: true });
 });
+
+test("Allowance shows what is left; in Ask mode a plan limit offers to continue on this computer", async ({
+  page,
+}) => {
+  // A saved OpenRouter key with a credit limit, and a Codex plan that runs out
+  // on the next task.
+  await page.evaluate(() => {
+    const fake = (window as unknown as { __SHADOW_FAKE__: { state: any } })
+      .__SHADOW_FAKE__.state;
+    fake.openrouter.key = "sk-or-valid";
+    fake.openrouter.info = {
+      label: "sk-or-v1-a1b…9f2",
+      usage: 1.2345,
+      limit: 10,
+      limit_remaining: 8.7655,
+      is_free_tier: false,
+    };
+    fake.limitOnCodex = true;
+  });
+  const button = page.getByRole("button", { name: /^Allowance/ });
+  await expect(button).toBeVisible();
+  await expect(button.locator(".allowance-dot")).toHaveClass(/warn/);
+  await button.click();
+  const dialog = page.getByRole("dialog", { name: "Allowance" });
+  await expect(dialog).toBeVisible();
+  const codex = dialog.getByRole("article", { name: "Codex" });
+  await expect(codex).toContainText("2% left");
+  await expect(codex).toContainText(/Weekly · 2% left · resets in (2h 59m|3h)/);
+  await expect(
+    codex.getByRole("meter", { name: "Codex remaining" }),
+  ).toHaveAttribute("aria-valuenow", "2");
+  const openrouter = dialog.getByRole("article", { name: "OpenRouter" });
+  await expect(openrouter).toContainText("$8.77 of $10.00 left");
+  await expect(
+    openrouter.getByRole("meter", { name: "OpenRouter remaining" }),
+  ).toHaveAttribute("aria-valuenow", "88");
+  await expect(dialog.getByRole("article", { name: "Cursor" })).toContainText(
+    "Plan limit reached",
+  );
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (t) => (document.documentElement.dataset.theme = t),
+      theme,
+    );
+    const results = await new AxeBuilder({ page })
+      .include('[role="dialog"]')
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+    expect(results.violations).toEqual([]);
+    await dialog.screenshot({ path: `test-results/allowance-${theme}.png` });
+  }
+  await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+
+  const local = dialog.getByRole("article", { name: "On this computer" });
+  await expect(
+    local.getByRole("radio", { name: /Continue on qwen3:14b/ }),
+  ).toBeChecked();
+  await local.getByRole("radio", { name: /Ask me/ }).check();
+  await expect
+    .poll(async () =>
+      (await fakeLog(page)).some(
+        (r) =>
+          r.method === "PUT" &&
+          r.path === "/api/config" &&
+          r.body.values?.limits?.on_limit === "ask",
+      ),
+    )
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(button).toBeFocused();
+
+  await chooseBySearch(page, "GPT-6-Astra");
+  await prompt(page).fill("Fix the add function");
+  await send(page).click();
+  const card = page.getByRole("region", { name: "Plan limit reached" });
+  await expect(card).toContainText("Codex reached its plan limit.", {
+    timeout: 15000,
+  });
+  const summary = page.getByRole("region", { name: "Task summary" });
+  await expect(summary).toContainText("Plan limit reached");
+  await expect(summary).not.toHaveClass(/is-bad/);
+  const resume = card.getByRole("button", { name: "Continue on qwen3:14b" });
+  await expect(resume).toBeVisible();
+  await expect(
+    card.getByRole("button", { name: "Choose another model" }),
+  ).toBeVisible();
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (t) => (document.documentElement.dataset.theme = t),
+      theme,
+    );
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+    expect(results.violations).toEqual([]);
+    await page.screenshot({ path: `test-results/limit-ask-${theme}.png` });
+  }
+  await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+
+  await resume.click();
+  await expect(trigger(page)).toContainText("qwen3:14b");
+  await expect(page.getByText("Continued after the plan limit")).toBeVisible();
+  await expect(summary).toHaveCount(2, { timeout: 15000 });
+  await expect(summary.last()).toContainText("Finished");
+  await expect(card.getByRole("button")).toHaveCount(0);
+  const posts = (await fakeLog(page)).filter(
+    (r) => r.path === "/api/jobs" && r.method === "POST",
+  );
+  expect(posts.map((r) => r.body.model)).toEqual([
+    "cli:codex:gpt-6-astra",
+    "local:gguf:qwen",
+  ]);
+  expect(posts[1].body.task).toBe(
+    "Continue where Codex stopped when its plan limit was reached. The request was:\n\nFix the add function",
+  );
+  expect(posts[1].body.session_id).toBe(posts[0].body.session_id);
+  await page.screenshot({
+    path: "test-results/limit-continued.png",
+    fullPage: true,
+  });
+});
