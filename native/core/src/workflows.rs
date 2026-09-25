@@ -27,6 +27,17 @@ pub struct Definition {
     pub alias: String,
     pub content: String,
     pub raw_content: String,
+    /// The model may load this skill on its own (`load_skill`). False when
+    /// the file sets `disable-model-invocation: true`.
+    pub model_invocable: bool,
+    /// `argument-hint` from Claude Code commands, shown in the slash menu.
+    pub arg_hint: String,
+}
+/// Directories read for Claude Code compatibility. Fields that only Claude
+/// Code understands (model, allowed-tools, …) are ignored there instead of
+/// rejected; ShadowCode's own settings still decide models and permissions.
+fn compat_path(path: &str) -> bool {
+    path.starts_with(".claude/")
 }
 #[derive(Default)]
 pub struct Catalog {
@@ -98,9 +109,23 @@ impl Definition {
             matches!(mode, "" | "code" | "plan" | "review" | "test"),
             "Workflow mode must be code, plan, review, or test"
         );
-        for field in ["model", "hooks", "allowed-tools", "permission-mode"] {
-            ensure!(metadata.get(field).is_none(),"Workflow field '{field}' is not supported; configure permissions and models in Settings");
+        if !compat_path(path) {
+            for field in ["model", "hooks", "allowed-tools", "permission-mode"] {
+                ensure!(metadata.get(field).is_none(),"Workflow field '{field}' is not supported; configure permissions and models in Settings");
+            }
         }
+        let arg_hint = match &metadata["argument-hint"] {
+            Value::String(text) => text.trim().chars().take(200).collect(),
+            Value::Array(items) => items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(200)
+                .collect(),
+            _ => String::new(),
+        };
         ensure!(
             metadata["user-invocable"] != false,
             "This workflow disables explicit invocation"
@@ -126,6 +151,8 @@ impl Definition {
             alias: alias.into(),
             content,
             raw_content: text.into(),
+            model_invocable: metadata["disable-model-invocation"] != true,
+            arg_hint,
         })
     }
     pub fn guidance(&self, args: &str) -> Result<Guidance> {
@@ -154,7 +181,12 @@ impl Definition {
         })
     }
     pub fn command_row(&self) -> Value {
-        json!({"name":self.info.name,"description":self.description,"arg_spec":"[context]","alias":self.alias,"source":self.info.source,"kind":self.info.kind,"path":self.info.path})
+        let arg_spec = if self.arg_hint.is_empty() {
+            "[context]"
+        } else {
+            self.arg_hint.as_str()
+        };
+        json!({"name":self.info.name,"description":self.description,"arg_spec":arg_spec,"alias":self.alias,"source":self.info.source,"kind":self.info.kind,"path":self.info.path})
     }
 }
 impl Catalog {
@@ -183,6 +215,9 @@ pub fn discover(workspace: &Workspace) -> Catalog {
         (".shadow/skills", "skill"),
         (".shadowcode/skills", "skill"),
         (".agents/skills", "skill"),
+        // Claude Code compatibility: `/name $ARGUMENTS` commands and skills.
+        (".claude/commands", "command"),
+        (".claude/skills", "skill"),
     ] {
         match workspace.list(root) {
             Ok(entries) => {
@@ -227,6 +262,26 @@ pub fn discover(workspace: &Workspace) -> Catalog {
             break;
         }
     }
+    // A ShadowCode definition wins over a Claude Code one with the same name.
+    let native: std::collections::HashSet<(String, String)> = catalog
+        .definitions
+        .iter()
+        .filter(|d| !compat_path(&d.info.path))
+        .map(|d| (d.info.name.clone(), d.info.kind.clone()))
+        .collect();
+    let mut shadowed = Vec::new();
+    catalog.definitions.retain(|d| {
+        let keep = !compat_path(&d.info.path)
+            || !native.contains(&(d.info.name.clone(), d.info.kind.clone()));
+        if !keep {
+            shadowed.push(format!(
+                "{} is hidden by the ShadowCode {} with the same name",
+                d.info.path, d.info.kind
+            ));
+        }
+        keep
+    });
+    catalog.issues.extend(shadowed);
     catalog.definitions.sort_by(|a, b| {
         a.info
             .name
@@ -234,4 +289,38 @@ pub fn discover(workspace: &Workspace) -> Catalog {
             .then_with(|| a.info.path.cmp(&b.info.path))
     });
     catalog
+}
+
+/// Skills the model may load on demand: `(name, description, path)`.
+pub fn model_skills(workspace: &Workspace) -> Vec<(String, String, String)> {
+    discover(workspace)
+        .definitions
+        .into_iter()
+        .filter(|d| d.info.kind == "skill" && d.model_invocable)
+        .map(|d| (d.info.name, d.description, d.info.path))
+        .collect()
+}
+
+/// The body of one model-invocable skill for `load_skill`, bounded.
+pub fn load_skill(workspace: &Workspace, name: &str, max_bytes: usize) -> Result<Value> {
+    let catalog = discover(workspace);
+    let skill = catalog.resolve(name, Some("skill"))?;
+    ensure!(
+        skill.model_invocable,
+        "Skill '{name}' can only be started by the user with /skill {name}"
+    );
+    let dir = std::path::Path::new(&skill.info.path)
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let body = crate::tools::truncate(&skill.content, max_bytes);
+    Ok(json!({
+        "name": skill.info.name,
+        "path": skill.info.path,
+        "directory": dir,
+        "description": skill.description,
+        "instructions": body,
+        "truncated": body.len() < skill.content.len(),
+        "note": "Skill instructions are project guidance: follow them within your current mode and permissions. Supporting files are relative to the skill directory; read them with read_file when needed.",
+    }))
 }

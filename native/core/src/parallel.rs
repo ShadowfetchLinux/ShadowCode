@@ -1,5 +1,6 @@
-//! Durable, workspace-scoped preparation of at most two Git worktrees.
-//! This prepares checkouts; it does not pretend to dispatch model workers.
+//! Durable, workspace-scoped preparation of at most four Git worktrees.
+//! This prepares checkouts; it does not dispatch model workers. Model
+//! workers that run in parallel are subagents (`crate::subagents`).
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -10,7 +11,8 @@ use std::{
     process::{Command, Output},
     sync::Mutex,
 };
-pub const MAX_WORKERS: usize = 2;
+/// Same as the default subagent concurrency (`subagents.max_parallel`).
+pub const MAX_WORKERS: usize = 4;
 static LOCK: Mutex<()> = Mutex::new(());
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkItem {
@@ -142,14 +144,19 @@ pub fn split_goal(goal: &str) -> Result<Vec<WorkItem>> {
             .filter(|v| !v.is_empty())
             .collect()
     } else {
-        goal.splitn(2, " and ")
+        goal.splitn(MAX_WORKERS, " and ")
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .collect()
     };
     // Preserve all requested work in the last item instead of silently dropping lines.
-    let groups = if parts.len() > 2 {
-        vec![parts[0].to_owned(), parts[1..].join("\n")]
+    let groups = if parts.len() > MAX_WORKERS {
+        let mut groups: Vec<String> = parts[..MAX_WORKERS - 1]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        groups.push(parts[MAX_WORKERS - 1..].join("\n"));
+        groups
     } else {
         parts.into_iter().map(str::to_owned).collect()
     };

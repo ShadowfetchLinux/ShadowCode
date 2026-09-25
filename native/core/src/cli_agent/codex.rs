@@ -542,7 +542,10 @@ impl CliAdapter for CodexAppServerAdapter {
         Vendor::Codex
     }
     fn command(&self, options: &LaunchOptions) -> (String, Vec<String>) {
-        (options.binary.clone(), vec!["app-server".into()])
+        // Root `-c` overrides apply to the app-server's threads.
+        let mut args = super::McpServerSpec::codex_overrides(&options.mcp_servers);
+        args.push("app-server".into());
+        (options.binary.clone(), args)
     }
     fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {
         self.options = Some(options.clone());
@@ -664,13 +667,14 @@ impl CliAdapter for CodexExecAdapter {
         Vendor::Codex
     }
     fn command(&self, options: &LaunchOptions) -> (String, Vec<String>) {
-        let mut args = vec![
+        let mut args = super::McpServerSpec::codex_overrides(&options.mcp_servers);
+        args.extend([
             "exec".to_owned(),
             "--json".to_owned(),
             "--skip-git-repo-check".to_owned(),
             "--cd".to_owned(),
             options.workspace.display().to_string(),
-        ];
+        ]);
         args.push("--sandbox".into());
         args.push(if options.read_only {
             "read-only".into()

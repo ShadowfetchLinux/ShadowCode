@@ -296,13 +296,26 @@ identical content does not reactivate it. Project overlays cannot grant access.
 Changed or missing project definitions must be reviewed or disabled before a
 new Build task uses them.
 
-Build tasks with enabled servers receive two compact tools: `mcp_tools` discovers
-servers, lists tool names in pages of 20, or reads one exact tool schema;
-`mcp_call` requests a call to a server/tool with an argument object. Initialization
-is lazy and uses the explicit launch grant. Every `mcp_call` requires a separate
+Build tasks with enabled servers receive the servers' tools as first-class
+function schemas named `mcp__<server>__<tool>`, with each tool's own input
+schema, plus two compact tools: `mcp_tools` discovers servers, lists tool names
+in pages of 20, or reads one exact tool schema; `mcp_call` requests a call to a
+server/tool with an argument object. A first-class call is the same request as
+`mcp_call` and asks the same approval. The tool list comes from the server's
+last connection with the same definition hash; when there is none, the task
+starts the server once (using the explicit launch grant) to read it. When the
+enabled servers offer more than `mcp.inline_tools` tools (default 40; `0`
+turns first-class schemas off), only `mcp_tools` and `mcp_call` are offered.
+Otherwise initialization is lazy. Every call requires a separate
 session-scoped approval, even if the peer marks its tool read-only. The server
 ID, tool name, and complete arguments appear in that approval. Plan, Review,
 and untrusted projects cannot open MCP connections.
+
+Enabled servers are also passed to vendor CLIs for each run (ACP
+`mcpServers`, Claude Code `--mcp-config`, Codex `-c mcp_servers…`), except
+servers that use stored secrets or literal environment values. Set
+`mcp.share_with_cli_agents: false` to stop that. See
+[Subagents](SUBAGENTS.md#mcp-servers).
 
 Running and queued tasks retain their configuration snapshot. Disabling a grant
 or replacing a global registration applies to new tasks; cancel existing tasks

@@ -7,6 +7,7 @@ function stableKey(item: ChatItem): string | undefined {
     return `m:${item.taskId || ""}:${item.messageId}`;
   if (item.kind === "tool" && item.callId)
     return `t:${item.taskId || ""}:${item.callId}`;
+  if (item.kind === "subagent") return `s:${item.run.runId}`;
   return undefined;
 }
 

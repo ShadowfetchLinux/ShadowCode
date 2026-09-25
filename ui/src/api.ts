@@ -312,6 +312,15 @@ export type HistoryPage = {
   event_cursor: number;
   has_older: boolean;
 };
+/** An agent definition for subagents (GET /api/agents). */
+export type AgentInfo = {
+  name: string;
+  description: string;
+  mode: "read-only" | "write";
+  model?: string | null;
+  source: "builtin" | "project" | "user";
+  path: string;
+};
 export type EventRow = {
   id?: number;
   ts: number;
@@ -1203,6 +1212,7 @@ export const api = {
       "POST",
       { workspace: "", title },
     ),
+  agents: () => get<{ agents: AgentInfo[]; issues: string[] }>("/api/agents"),
   commands: () =>
     get<{
       commands: {
