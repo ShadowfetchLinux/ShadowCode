@@ -47,6 +47,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 mod accounts;
+mod agents;
 mod background;
 mod call;
 mod commands;
@@ -225,6 +226,7 @@ impl Service {
         self.check_worktree_project(&call)?;
         match call.family() {
             "compare" | "compares" => self.compare(&call).await,
+            "agents" | "subagents" => self.blocking(&call, Self::agent_routes).await,
             "worktrees" | "parallel" | "sandbox" => self.worktree_routes(&call).await,
             "sessions" | "projects" | "events" | "resolve" => {
                 self.blocking(&call, Self::session_routes).await

@@ -11,6 +11,7 @@ import { ActivityTimeline } from "../ActivityTimeline";
 import { CommandCardView, OpCard, type ChatItem } from "../cards";
 import { LimitFallbackItem } from "../LimitFallback";
 import { Markdown } from "../Markdown";
+import { SubagentCard } from "../SubagentCard";
 import { TaskSummary, type DiffStat } from "../TaskSummary";
 import type { TaskActivity } from "../../lib/activity";
 import type { Fallback } from "../../lib/allowance";
@@ -31,6 +32,8 @@ export type RowActions = {
   onChooseModel: () => void;
   onOpenLocal: () => void;
   onFork: (eventId: number) => void;
+  /** Open a subagent's own conversation (hidden from the sidebar). */
+  onOpenSession?: (sessionId: string) => void;
 };
 
 type Row = {
@@ -148,6 +151,8 @@ const TranscriptRow = memo(function TranscriptRow({
         {item.text}
       </div>
     );
+  else if (item.kind === "subagent")
+    node = <SubagentCard run={item.run} onOpen={actions.onOpenSession} />;
   else if (item.kind === "divider")
     node = (
       <div className="msg-divider" role="separator">

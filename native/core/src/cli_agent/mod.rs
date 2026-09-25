@@ -253,7 +253,15 @@ pub enum Update {
     /// Non-fatal diagnostic (shown as a warning, never fails the task).
     Warning(String),
     /// Token usage reported by the vendor, when the protocol carries it.
-    Usage { input: u64, output: u64 },
+    /// `input` includes `cached` (input served from the vendor's cache).
+    Usage {
+        input: u64,
+        output: u64,
+        cached: u64,
+    },
+    /// The vendor's running cost for this run in US dollars (Claude's
+    /// `total_cost_usd`); it replaces, never adds to, an earlier value.
+    VendorCost { total_usd: f64 },
     /// The current turn finished. `text` is the final assistant message when
     /// the protocol delivers one that was not already streamed.
     TurnCompleted {
@@ -310,8 +318,81 @@ pub struct PromptImage {
     pub data_base64: String,
 }
 
+/// A project MCP server the user enabled, shared with a vendor CLI for one
+/// run (`mcp::vendor::servers`). Servers that need stored secrets or literal
+/// environment values are never shared, so nothing here is sensitive.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct McpServerSpec {
+    /// The definition's name (letters, numbers, `-`, `_`).
+    pub name: String,
+    /// Program and arguments for a stdio server; empty for HTTP.
+    pub command: Vec<String>,
+    /// URL of a streamable-HTTP server; empty for stdio.
+    pub url: String,
+}
+impl McpServerSpec {
+    /// ACP `McpServer`: stdio always; HTTP only when the agent advertised
+    /// `mcpCapabilities.http`.
+    pub fn acp(&self, http: bool) -> Option<Value> {
+        if let Some((program, args)) = self.command.split_first() {
+            Some(json!({"name":self.name,"command":program,"args":args,"env":[]}))
+        } else if http && !self.url.is_empty() {
+            Some(json!({"type":"http","name":self.name,"url":self.url,"headers":[]}))
+        } else {
+            None
+        }
+    }
+    /// Claude Code `--mcp-config` JSON (`{"mcpServers":{…}}`).
+    pub fn claude_config(servers: &[Self]) -> Option<String> {
+        let mut map = serde_json::Map::new();
+        for server in servers {
+            let value = if let Some((program, args)) = server.command.split_first() {
+                json!({"type":"stdio","command":program,"args":args})
+            } else if !server.url.is_empty() {
+                json!({"type":"http","url":server.url})
+            } else {
+                continue;
+            };
+            map.insert(server.name.clone(), value);
+        }
+        (!map.is_empty()).then(|| json!({"mcpServers": map}).to_string())
+    }
+    /// Codex `-c mcp_servers.<name>.…=<TOML value>` overrides.
+    pub fn codex_overrides(servers: &[Self]) -> Vec<String> {
+        let toml_string = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
+        let mut args = Vec::new();
+        for server in servers {
+            if let Some((program, rest)) = server.command.split_first() {
+                args.push("-c".into());
+                args.push(format!(
+                    "mcp_servers.{}.command={}",
+                    server.name,
+                    toml_string(program)
+                ));
+                args.push("-c".into());
+                args.push(format!(
+                    "mcp_servers.{}.args=[{}]",
+                    server.name,
+                    rest.iter()
+                        .map(|a| toml_string(a))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
+            } else if !server.url.is_empty() {
+                args.push("-c".into());
+                args.push(format!(
+                    "mcp_servers.{}.url={}",
+                    server.name,
+                    toml_string(&server.url)
+                ));
+            }
+        }
+        args
+    }
+}
+
 /// Launch options shared by every adapter.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LaunchOptions {
     pub binary: String,
     pub workspace: std::path::PathBuf,
@@ -326,6 +407,9 @@ pub struct LaunchOptions {
     /// Reasoning effort for the turn (`low`, `medium`, `high`); `None`
     /// keeps the vendor's default. Only Codex and Claude Code take it.
     pub effort: Option<String>,
+    /// Project MCP servers the user enabled, passed to the vendor for this
+    /// run (ACP `mcpServers`, Claude `--mcp-config`, Codex `-c mcp_servers`).
+    pub mcp_servers: Vec<McpServerSpec>,
 }
 
 /// A pure protocol translator. It never touches processes or the network.

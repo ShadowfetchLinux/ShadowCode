@@ -43,6 +43,24 @@ pub const EXECUTION_TARGET: &str = "execution_target";
 pub const COMPARE_ID: &str = "compare_id";
 /// `session_meta`: the model id of a compare lane conversation.
 pub const COMPARE_LANE: &str = "compare_lane";
+/// `session_meta`: the parent conversation of a subagent conversation.
+pub const SUBAGENT_PARENT: &str = "subagent_parent";
+/// `session_meta`: the subagent run a conversation belongs to.
+pub const SUBAGENT_RUN: &str = "subagent_run";
+/// `session_meta`: the agent definition a subagent conversation ran.
+pub const SUBAGENT_AGENT: &str = "subagent_agent";
+/// `native_meta`: one subagent run (JSON `subagents::RunRecord`).
+pub fn subagent_run(id: &str) -> String {
+    format!("subagent:{id}")
+}
+/// `native_meta`: the subagent run ids of one parent conversation (JSON list).
+pub fn subagent_index(parent_session: &str) -> String {
+    format!("subagent_index:{parent_session}")
+}
+/// `native_meta`: an enabled MCP server's last tool list in a project.
+pub fn mcp_catalog(workspace: &Path, server: &str) -> String {
+    format!("mcp_catalog:{}:{server}", workspace.display())
+}
 /// `session_meta` prefix: a vendor CLI's own session/thread id, per vendor.
 pub const NATIVE_SESSION_PREFIX: &str = "native_session:";
 /// `session_meta`: a vendor CLI's own session/thread id for this conversation.
@@ -74,5 +92,11 @@ mod tests {
         );
         assert_eq!(native_session("codex"), "native_session:codex");
         assert_eq!(rewind_undo("ab12"), "rewind_undo:ab12");
+        assert_eq!(subagent_run("ab12"), "subagent:ab12");
+        assert_eq!(subagent_index("s1"), "subagent_index:s1");
+        assert_eq!(
+            mcp_catalog(project, "config:x"),
+            "mcp_catalog:/home/u/project:config:x"
+        );
     }
 }

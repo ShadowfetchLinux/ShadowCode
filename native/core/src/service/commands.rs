@@ -401,7 +401,12 @@ impl Service {
                     json!({})
                 };
                 let mut result = card("Recorded usage", serde_json::to_string_pretty(&usage)?);
-                result["body"]=json!(format!("{}\nConfigured context limit: {} tokens. Provider prices are not configured; no cost is inferred.",result["body"].as_str().unwrap_or(""),config.model.context_limit));
+                result["body"] = json!(format!(
+                    "{}\n{}.\nConfigured context limit: {} tokens.",
+                    result["body"].as_str().unwrap_or(""),
+                    crate::usage::describe(&crate::usage::parse(&usage)),
+                    config.model.context_limit
+                ));
                 result
             }
             "git" => {

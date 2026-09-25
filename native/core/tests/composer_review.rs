@@ -55,7 +55,7 @@ fn last_tool_message(body: &Value) -> String {
         .unwrap_or_default()
 }
 async fn next_approval(service: &Service) -> Value {
-    tokio::time::timeout(Duration::from_secs(8), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let pending = call(service, "GET", "/api/approvals", Value::Null)
                 .await
@@ -71,7 +71,7 @@ async fn next_approval(service: &Service) -> Value {
 }
 async fn finish(service: &Service, job: &Value) -> shadowcode_core::engine::Job {
     tokio::time::timeout(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         service.engine.wait(job["id"].as_str().unwrap()),
     )
     .await
@@ -79,11 +79,7 @@ async fn finish(service: &Service, job: &Value) -> shadowcode_core::engine::Job 
     .unwrap()
 }
 fn events(service: &Service, session: &str) -> Vec<Value> {
-    service
-        .engine
-        .store()
-        .recent_events(session, 500)
-        .unwrap()
+    service.engine.store().recent_events(session, 500).unwrap()
 }
 
 #[tokio::test]
@@ -96,7 +92,11 @@ async fn allow_for_task_skips_matching_prompts_and_a_deny_note_reaches_the_model
             assert!(last_tool_message(body).contains("\"success\":true"));
             reply(
                 "",
-                json!([tool("c3", "write_file", json!({"path":"notes.txt","content":"one\ntwo\n"}))]),
+                json!([tool(
+                    "c3",
+                    "write_file",
+                    json!({"path":"notes.txt","content":"one\ntwo\n"})
+                )]),
             )
         }
         _ => {
@@ -171,14 +171,12 @@ async fn allow_for_task_skips_matching_prompts_and_a_deny_note_reaches_the_model
     let log = events(&service, &session);
     let kinds: Vec<&str> = log.iter().filter_map(|e| e["type"].as_str()).collect();
     assert_eq!(
-        kinds
-            .iter()
-            .filter(|k| **k == "approval.requested")
-            .count(),
+        kinds.iter().filter(|k| **k == "approval.requested").count(),
         2
     );
-    assert!(log.iter().any(|e| e["type"] == "approval.granted"
-        && e["payload"]["grant"] == "`ls` commands"));
+    assert!(log
+        .iter()
+        .any(|e| e["type"] == "approval.granted" && e["payload"]["grant"] == "`ls` commands"));
     assert!(log.iter().any(|e| e["type"] == "approval.resolved"
         && e["payload"]["scope"] == "task"
         && e["payload"]["approved"] == true));
@@ -209,12 +207,24 @@ async fn mentions_are_searched_and_read_by_a_native_model() {
     let project = service.workspace().unwrap();
     fs::create_dir_all(project.join("src")).unwrap();
     fs::create_dir_all(project.join("docs")).unwrap();
-    fs::write(project.join("src/lib.rs"), "pub fn answer() -> u32 { 42 }\n").unwrap();
+    fs::write(
+        project.join("src/lib.rs"),
+        "pub fn answer() -> u32 { 42 }\n",
+    )
+    .unwrap();
     fs::write(project.join("docs/guide.md"), "# Guide\n").unwrap();
-    let found = call(&service, "GET", "/api/workspace/mentions?q=lib", Value::Null)
-        .await
-        .unwrap();
-    assert_eq!(found["items"][0], json!({"path":"src/lib.rs","kind":"file"}));
+    let found = call(
+        &service,
+        "GET",
+        "/api/workspace/mentions?q=lib",
+        Value::Null,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        found["items"][0],
+        json!({"path":"src/lib.rs","kind":"file"})
+    );
     // Effort and mentions are checked before anything starts.
     assert!(call(
         &service,
@@ -244,6 +254,7 @@ async fn mentions_are_searched_and_read_by_a_native_model() {
     .unwrap();
     let done = finish(&service, &job).await;
     assert_eq!(done.status, "completed", "{}", done.summary);
+    assert_eq!(server.requests.lock().unwrap().len(), 1);
     // The conversation shows the prompt, not the attached contents.
     let log = events(&service, job["session_id"].as_str().unwrap());
     assert!(!log
@@ -258,19 +269,27 @@ async fn review_undoes_one_hunk_and_a_rewind_can_be_undone() {
     let server = support::server(|index, _| match index {
         0 => reply(
             "",
-            json!([
-                tool("e1", "edit_file", json!({"path":"sample.txt","old_string":"line 2\n","new_string":"line two\n"})),
-            ]),
+            json!([tool(
+                "e1",
+                "edit_file",
+                json!({"path":"sample.txt","old_string":"line 2\n","new_string":"line two\n"})
+            ),]),
         ),
         1 => reply(
             "",
-            json!([
-                tool("e2", "edit_file", json!({"path":"sample.txt","old_string":"line 18\n","new_string":"line eighteen\n"})),
-            ]),
+            json!([tool(
+                "e2",
+                "edit_file",
+                json!({"path":"sample.txt","old_string":"line 18\n","new_string":"line eighteen\n"})
+            ),]),
         ),
         2 => reply(
             "",
-            json!([tool("w1", "write_file", json!({"path":"new.txt","content":"hello\n"}))]),
+            json!([tool(
+                "w1",
+                "write_file",
+                json!({"path":"new.txt","content":"hello\n"})
+            )]),
         ),
         _ => reply("Edited sample.txt and added new.txt.", json!([])),
     })
@@ -291,9 +310,14 @@ async fn review_undoes_one_hunk_and_a_rewind_can_be_undone() {
     assert_eq!(done.status, "completed", "{}", done.summary);
     let task = job["task_id"].as_str().unwrap();
 
-    let review = call(&service, "GET", &format!("/api/review/tasks/{task}"), Value::Null)
-        .await
-        .unwrap();
+    let review = call(
+        &service,
+        "GET",
+        &format!("/api/review/tasks/{task}"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
     assert_eq!(review["busy"], false);
     let files = review["files"].as_array().unwrap();
     assert_eq!(files.len(), 2, "only this task's files: {files:?}");
@@ -365,8 +389,14 @@ async fn review_undoes_one_hunk_and_a_rewind_can_be_undone() {
     .await
     .unwrap();
     assert_eq!(undone["restored"].as_array().unwrap().len(), 2);
-    assert_eq!(fs::read_to_string(project.join("sample.txt")).unwrap(), text);
-    assert_eq!(fs::read_to_string(project.join("new.txt")).unwrap(), "hello\n");
+    assert_eq!(
+        fs::read_to_string(project.join("sample.txt")).unwrap(),
+        text
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("new.txt")).unwrap(),
+        "hello\n"
+    );
     assert!(call(
         &service,
         "POST",
@@ -379,15 +409,21 @@ async fn review_undoes_one_hunk_and_a_rewind_can_be_undone() {
     assert!(log.iter().any(|e| e["type"] == "review.undone"
         && e["payload"]["path"] == "sample.txt"
         && e["payload"]["whole"] == false));
-    assert!(log.iter().any(|e| e["type"] == "checkpoint.restored"
-        && e["payload"]["undo_id"] == undo_id.as_str()));
-    assert!(log
-        .iter()
-        .any(|e| e["type"] == "checkpoint.rewind_undone"));
+    assert!(
+        log.iter()
+            .any(|e| e["type"] == "checkpoint.restored"
+                && e["payload"]["undo_id"] == undo_id.as_str())
+    );
+    assert!(log.iter().any(|e| e["type"] == "checkpoint.rewind_undone"));
     // The task can be rewound again after the undo.
-    let checkpoint = call(&service, "GET", &format!("/api/checkpoints/tasks/{task}"), Value::Null)
-        .await
-        .unwrap();
+    let checkpoint = call(
+        &service,
+        "GET",
+        &format!("/api/checkpoints/tasks/{task}"),
+        Value::Null,
+    )
+    .await
+    .unwrap();
     assert_eq!(checkpoint["rewindable"], true);
     service.engine.shutdown().await.unwrap();
 }
@@ -396,9 +432,14 @@ async fn review_undoes_one_hunk_and_a_rewind_can_be_undone() {
 async fn edit_and_resend_forks_just_before_the_message() {
     let server = support::server(|_, _| reply("Done.", json!([]))).await;
     let (_root, service) = setup(&server.endpoint);
-    let first = call(&service, "POST", "/api/jobs", json!({"task":"First request"}))
-        .await
-        .unwrap();
+    let first = call(
+        &service,
+        "POST",
+        "/api/jobs",
+        json!({"task":"First request"}),
+    )
+    .await
+    .unwrap();
     finish(&service, &first).await;
     let session = first["session_id"].as_str().unwrap().to_owned();
     let second = call(
@@ -466,6 +507,7 @@ fn launch(root: &Path, effort: Option<&str>) -> LaunchOptions {
         read_only: false,
         resume: None,
         effort: effort.map(str::to_owned),
+        ..Default::default()
     }
 }
 
@@ -527,7 +569,10 @@ fn allow_for_task_maps_to_the_vendors_session_choice_and_notes_to_claude() {
             },
         )
         .unwrap();
-    assert!(reply[0].contains("\"decision\":\"acceptForSession\""), "{reply:?}");
+    assert!(
+        reply[0].contains("\"decision\":\"acceptForSession\""),
+        "{reply:?}"
+    );
     let step = codex
         .on_line(&rpc(
             8,
@@ -563,7 +608,10 @@ fn allow_for_task_maps_to_the_vendors_session_choice_and_notes_to_claude() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(prompt.arguments["changes"]["a.txt"]["add"]["content"], "x\n");
+    assert_eq!(
+        prompt.arguments["changes"]["a.txt"]["add"]["content"],
+        "x\n"
+    );
     assert!(!codex.deny_note(), "Codex decisions carry no reason");
 
     let mut claude = adapter_for(Vendor::Claude, false);

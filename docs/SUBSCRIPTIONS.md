@@ -153,6 +153,15 @@ never uses it once a turn has started or when images are attached.
 - **Switching providers.** A move between providers hands over at most 12,000
   characters of earlier turns, after you consent. See the
   [user guide](USER_GUIDE.md#switch-models-mid-conversation).
+- **MCP servers.** The MCP servers you enabled for the project are passed to
+  the vendor for each run, in addition to the vendor's own MCP settings:
+  Cursor, Grok and Antigravity receive them in ACP `session/new` and
+  `session/load`, Claude Code through `--mcp-config`, Codex through
+  `-c mcp_servers.<name>.command/args/url`. Nothing is written to the vendor's
+  configuration files. Servers that need stored secrets or literal
+  environment values are not shared, and Plan/Review tasks share none.
+  `mcp.share_with_cli_agents: false` turns this off. See
+  [Subagents](SUBAGENTS.md#mcp-servers).
 
 ## Settings
 

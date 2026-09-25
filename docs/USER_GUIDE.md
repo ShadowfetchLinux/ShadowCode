@@ -60,7 +60,10 @@ Type in the composer and press `Enter`. `Shift+Enter` adds a line.
 - **Permission mode.** The mode control in the composer shows the current mode
   and how the selected vendor applies it.
 - **Slash commands.** Type `/` to browse them. `/plan` and `/review` start
-  read-only tasks. `/model` opens the picker.
+  read-only tasks. `/model` opens the picker. Claude Code commands in
+  `.claude/commands/` appear here too.
+- **Agents.** Start a message with `@explore`, `@plan`, `@review`, `@general`
+  or a project agent's name to run that subagent first. Type `@` to list them.
 
 If a task is already running, pressing `Enter` queues the message as a
 follow-up.
@@ -96,6 +99,21 @@ anything. The card appears in the conversation as soon as the agent asks.
 
 An unanswered vendor approval is denied after 10 minutes
 (`cli_agents.approval_timeout_sec`).
+
+### Subagents
+
+With a local or OpenRouter model, the agent can hand focused work to
+subagents: `explore` searches, `plan` plans, `review` reviews (all
+read-only), and `general` edits files in its own Git worktree. Several can run
+at once. Each run shows as a card in the conversation; click it for the
+result and changed files, or **Open transcript** for its own conversation.
+A write subagent's changes reach your project only when the main agent
+applies its diff, with your usual edit approval. Approvals a subagent needs
+appear in this conversation, labelled with its name.
+
+Projects can add their own agents in `.shadow/agents/`, `.claude/agents/` or
+`.opencode/agent/`, and ShadowCode reads `CLAUDE.md`, nested `AGENTS.md` files,
+Cursor rules and Claude Code skills. See [Subagents](SUBAGENTS.md).
 
 ### Stop, pause and steer
 
@@ -242,6 +260,32 @@ In **Settings › Permissions & network**:
   commands and file edits are never replayed automatically.
 - **Command palette** (`Ctrl+K`): rename, branch, export (`Ctrl+Shift+E`) and
   delete conversations.
+
+## Long conversations, retries and cost
+
+- **Long conversations.** When a conversation no longer fits the model's
+  context, ShadowCode removes the oldest steps (a tool call always goes with
+  its result) and asks the same model for a short summary of what was
+  removed: goals, decisions, files, commands and open problems. The summary
+  stays in the conversation, so later messages start from it. For models with
+  less than 8K of context, or when the summary fails or takes longer than a
+  minute, a built-in digest is used instead. The full history always stays in
+  the app. Turn summaries off with `agent.summary_compaction: false`.
+- **Busy or dropped providers.** A request that fails with a rate limit, an
+  overloaded or failing provider, or a connection that drops mid-answer is
+  sent again, up to three times (`agent.model_retries`), waiting longer each
+  time or as long as the provider asks. A reply that was cut off is thrown
+  away and replaced; tools only run after a complete reply, so nothing runs
+  twice. Errors such as a wrong key or an unknown model are shown at once.
+- **Tokens and cost.** Every job and conversation records input, output and
+  cached tokens and a cost in US dollars: what OpenRouter charged, zero for a
+  model on this computer, and what a subscription CLI reports (Claude Code
+  reports a cost, Codex reports tokens). When OpenRouter doesn't report a
+  cost, ShadowCode works it out from the model's listed prices and marks it
+  as an estimate. Type `/cost` to see the conversation's totals.
+- **Prompt caching.** Claude and Gemini models on OpenRouter are asked to
+  cache the unchanging start of each request, which makes later steps
+  cheaper and faster. Other providers cache on their own.
 
 ## Troubleshooting
 

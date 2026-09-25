@@ -192,6 +192,7 @@ async fn install_sign_in_models_run_and_sign_out_through_the_acp_server() {
             read_only: false,
             resume: None,
             effort: None,
+            mcp_servers: Vec::new(),
         },
         config: &cfg,
         prompt: "Say OK".into(),
