@@ -22,6 +22,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 mod background;
+mod intel;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -72,6 +73,8 @@ pub struct ToolExecutor {
     plan: Arc<Mutex<Value>>,
     hooks: hooks::Runner,
     background: Option<Arc<crate::background::BackgroundManager>>,
+    /// Managed language servers, embedding models and vectors (profile data).
+    code_intel_dir: Option<std::path::PathBuf>,
     #[cfg(unix)]
     mcp: crate::mcp::runner::Runner,
     /// Subagents, skills, nested guidance and a child's limits.
@@ -114,6 +117,7 @@ impl ToolExecutor {
             plan: Arc::new(Mutex::new(json!({"goal":"","steps":[]}))),
             hooks,
             background: None,
+            code_intel_dir: None,
             #[cfg(unix)]
             mcp,
             extensions: Default::default(),
@@ -175,6 +179,7 @@ impl ToolExecutor {
         Ok(None)
     }
     pub fn with_profile(mut self, paths: crate::paths::AppPaths) -> Self {
+        self.code_intel_dir = Some(crate::code_intel::data_dir(&paths));
         #[cfg(unix)]
         self.mcp.set_profile(paths);
         self
@@ -190,6 +195,7 @@ impl ToolExecutor {
     /// [`crate::autonomy::description_tier`]).
     pub fn schemas_for(&self, tier: DescriptionTier) -> Vec<Value> {
         let mut schemas = schemas_tiered(tier);
+        schemas.extend(intel_schemas());
         schemas.extend(self.extensions.schemas().into_iter().map(|mut schema| {
             // Subagent and skill tools follow the same tier as the built-ins.
             if tier == DescriptionTier::Short {
@@ -279,6 +285,7 @@ impl ToolExecutor {
         let mut started = json!({"tool":call.name,"arguments":call.arguments,"call_id":call.id});
         crate::redaction::redact_value(&mut started);
         self.events.emit("tool.started", started)?;
+        let baseline = self.edit_baseline(&call);
         let mut result = match self.execute_inner(&call).await {
             Ok(output) => {
                 let success = output.get("ok").and_then(Value::as_bool).unwrap_or(true);
@@ -371,6 +378,15 @@ impl ToolExecutor {
                 result.output = json!({"tool_output":result.output});
             }
             result.output["hooks"] = json!(outcomes);
+        }
+        // Checked after hooks, so a formatter's rewrite is what gets checked.
+        if let Some(baseline) = baseline.filter(|_| result.success) {
+            if let Some(diagnostics) = self.edit_diagnostics(&baseline, &result.output).await {
+                result.output["diagnostics"] = diagnostics;
+            }
+        }
+        if call.name == "read_file" && result.success {
+            self.warm_file(&result.output);
         }
         if result.success && call.name == "apply_agent_changes" {
             if let (Some(host), Some(run)) = (
@@ -597,7 +613,13 @@ impl ToolExecutor {
         }
         if matches!(
             call.name.as_str(),
-            "workspace_symbols" | "goto_definition" | "find_references" | "get_type_signature"
+            "repo_map" | "search_code" | "goto_definition" | "find_references" | "get_diagnostics"
+        ) {
+            return self.intel(call).await;
+        }
+        if matches!(
+            call.name.as_str(),
+            "workspace_symbols" | "get_type_signature"
         ) {
             let root = self.workspace.path.clone();
             let name = call.name.clone();
@@ -612,22 +634,12 @@ impl ToolExecutor {
                     "workspace_symbols" => {
                         crate::intelligence::workspace_symbols(&root, query, max_hits)
                     }
-                    "goto_definition" => {
-                        crate::intelligence::goto_definition(&root, query, max_hits)
-                    }
-                    "find_references" => {
-                        crate::intelligence::find_references(&root, query, max_hits)
-                    }
                     "get_type_signature" => crate::intelligence::get_type_signature(&root, query),
                     _ => unreachable!(),
                 }
             })
             .await
             .context("Tool worker stopped unexpectedly")?;
-        }
-        if call.name == "get_diagnostics" {
-            let path = call.arguments["path"].as_str().unwrap_or("");
-            return crate::intelligence::get_diagnostics(&self.workspace.path, path).await;
         }
         let worker = self.clone();
         let call = call.clone();
@@ -1361,6 +1373,17 @@ pub fn web_schemas() -> Vec<Value> {
     ]
 }
 
+/// repo_map and search_code, offered by ToolExecutor::schemas() (never to the
+/// small-context core catalog).
+pub fn intel_schemas() -> Vec<Value> {
+    let s = json!({"type":"string"});
+    let n = json!({"type":"integer"});
+    vec![
+        json!({"type":"function","function":{"name":"repo_map","description":"Ranked outline of key definitions; focus with paths or a query","parameters":{"type":"object","properties":{"query":s,"paths":{"type":"array","items":s},"max_tokens":n},"required":[],"additionalProperties":false}}}),
+        json!({"type":"function","function":{"name":"search_code","description":"Search code by keywords or meaning; returns ranked line ranges","parameters":{"type":"object","properties":{"query":s,"path":s,"max_hits":n},"required":["query"],"additionalProperties":false}}}),
+    ]
+}
+
 /// Offered only to models whose runtime accepts images.
 pub fn view_image_schema() -> Value {
     json!({"type":"function","function":{"name":"view_image","description":"Look at a PNG, JPEG, or WebP image inside the project. The image is attached to your next message.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}})
@@ -1393,11 +1416,11 @@ pub fn schemas_tiered(tier: DescriptionTier) -> Vec<Value> {
         ("search_files","Find filenames by substring; respects ignore rules.",json!({"query":s,"path":s}),vec!["query"]),
         ("search_text","Search text; literal by default, optional regex and file glob.",json!({"query":s,"path":s,"regex":b,"glob":s,"max_hits":n}),vec!["query"]),
         ("search_symbol","Find likely symbol definitions by name (regex heuristic).",json!({"query":s,"path":s}),vec!["query"]),
-        ("workspace_symbols","Tree-sitter workspace symbol search for Rust/TypeScript. Bounded; not a vector index.",json!({"query":s,"max_hits":n}),vec!["query"]),
-        ("goto_definition","Best-effort tree-sitter definition lookup for a symbol name.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
-        ("find_references","Tree-sitter identifier references for a symbol name. Not type-aware.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
+        ("workspace_symbols","Find definitions by name (Rust, TS/JS, Python, Go, C/C++, Java)",json!({"query":s,"max_hits":n}),vec!["query"]),
+        ("goto_definition","Definition of a symbol; with path+line asks the language server",json!({"query":s,"symbol":s,"path":s,"line":n,"column":n,"max_hits":n}),vec![]),
+        ("find_references","Uses of a symbol; with path+line asks the language server.",json!({"query":s,"symbol":s,"path":s,"line":n,"column":n,"max_hits":n}),vec![]),
         ("get_type_signature","Parser signature for a symbol when LSP is absent (tree-sitter AST).",json!({"symbol":s,"query":s}),vec![]),
-        ("get_diagnostics","One-shot rust-analyzer diagnostics when rust-analyzer is already installed. Does not start a persistent LSP.",json!({"path":s}),vec!["path"]),
+        ("get_diagnostics","Current errors/warnings for a file from its language server.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_tables","List tables and CREATE TABLE definitions in a project SQLite file. Native read-only tool; no registration. SQLite may maintain WAL sidecars.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_query","Read a project SQLite file with SELECT/WITH or schema PRAGMA (table_info etc). Bind ? placeholders with params; check truncated. Unique column aliases required. SQLite may maintain WAL sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]}},"limit":n}),vec!["path","sql"]),
         ("background_start","Start a named project server/watcher under shell permissions. Continues independently after the task, including cancellation; stop it when no longer wanted. Inspect status/output before claiming readiness.",json!({"name":s,"command":s}),vec!["name","command"]),

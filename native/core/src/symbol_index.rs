@@ -1,23 +1,40 @@
-//! On-demand AST symbol index for Rust and TypeScript in ordinary SQLite tables.
-//! Not sqlite-vec, not embeddings, not BM25. Files are indexed when touched or
-//! during a bounded project scan — never the whole world at startup.
+//! On-demand code index in ordinary SQLite tables: tree-sitter definitions
+//! (`symbols`), identifier counts per file (`refs`, the def/ref graph behind
+//! the repo map) and FTS5 code chunks (`chunks`, `chunks_fts`) for BM25
+//! search. Languages: Rust, TypeScript/TSX, JavaScript, Python, Go, C, C++ and
+//! Java; other text files are chunked for search only.
+//!
+//! Files are indexed when touched or during a bounded project scan — never the
+//! whole world at startup. Unchanged files (same mtime and size) are skipped
+//! without being read. The database lives in a private per-process cache, not
+//! in the project.
+use crate::code_intel::{
+    chunks,
+    langs::{self, Lang},
+};
 use crate::workspace::Workspace;
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor};
 
-const MAX_SCAN_FILES: usize = 200;
+const MAX_SCAN_FILES: usize = 3_000;
+const MAX_WALK_ENTRIES: usize = 40_000;
 const MAX_FILE_BYTES: usize = 512_000;
 const MAX_CALLERS: usize = 24;
+const MAX_REFS_PER_FILE: usize = 4_000;
+/// A repeated scan of the same project inside this window reuses the last one;
+/// edits made through the native tools are re-indexed by `touch` anyway.
+const RESCAN_AFTER: Duration = Duration::from_secs(2);
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -43,77 +60,15 @@ CREATE TABLE IF NOT EXISTS symbols (
 );
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_path ON symbols(path);
+CREATE TABLE IF NOT EXISTS refs (
+  path TEXT NOT NULL,
+  name TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY(path, name),
+  FOREIGN KEY(path) REFERENCES files(path) ON DELETE CASCADE
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_refs_name ON refs(name);
 "#;
-
-#[derive(Clone, Copy)]
-enum Lang {
-    Rust,
-    TypeScript,
-    Tsx,
-}
-
-fn lang_for(path: &Path) -> Option<Lang> {
-    match path.extension().and_then(|e| e.to_str())? {
-        "rs" => Some(Lang::Rust),
-        "ts" | "mts" | "cts" => Some(Lang::TypeScript),
-        "tsx" => Some(Lang::Tsx),
-        _ => None,
-    }
-}
-
-fn lang_name(lang: Lang) -> &'static str {
-    match lang {
-        Lang::Rust => "rust",
-        Lang::TypeScript => "typescript",
-        Lang::Tsx => "tsx",
-    }
-}
-
-fn language(lang: Lang) -> tree_sitter::Language {
-    match lang {
-        Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
-        Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-    }
-}
-
-fn definition_query(lang: Lang) -> &'static str {
-    match lang {
-        Lang::Rust => {
-            r#"
-            (function_item name: (identifier) @name)
-            (struct_item name: (type_identifier) @name)
-            (enum_item name: (type_identifier) @name)
-            (trait_item name: (type_identifier) @name)
-            (impl_item type: (type_identifier) @name)
-            (mod_item name: (identifier) @name)
-            (const_item name: (identifier) @name)
-            (static_item name: (identifier) @name)
-            (type_item name: (type_identifier) @name)
-        "#
-        }
-        Lang::TypeScript | Lang::Tsx => {
-            r#"
-            (function_declaration name: (identifier) @name)
-            (class_declaration name: (type_identifier) @name)
-            (interface_declaration name: (type_identifier) @name)
-            (type_alias_declaration name: (type_identifier) @name)
-            (enum_declaration name: (identifier) @name)
-            (lexical_declaration (variable_declarator name: (identifier) @name))
-            (method_definition name: (property_identifier) @name)
-        "#
-        }
-    }
-}
-
-fn reference_query(lang: Lang) -> &'static str {
-    match lang {
-        Lang::Rust => "(identifier) @id (type_identifier) @id",
-        Lang::TypeScript | Lang::Tsx => {
-            "(identifier) @id (type_identifier) @id (property_identifier) @id"
-        }
-    }
-}
 
 fn now() -> f64 {
     SystemTime::now()
@@ -122,9 +77,9 @@ fn now() -> f64 {
         .as_secs_f64()
 }
 
-fn mtime_ns(path: &Path) -> u64 {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
+fn mtime_ns(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_nanos() as u64)
@@ -163,11 +118,20 @@ fn db_path(root: &Path) -> Result<PathBuf> {
 fn open_db(root: &Path) -> Result<Connection> {
     let path = db_path(root)?;
     let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
-    conn.busy_timeout(std::time::Duration::from_secs(3))?;
-    conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+    )?;
     conn.execute_batch(SCHEMA)?;
+    conn.execute_batch(chunks::SCHEMA)?;
     Ok(conn)
 }
+
+/// Read-only access for search and the repo map. Call `ensure_index` first.
+pub(crate) fn open_index(root: &Path) -> Result<Connection> {
+    open_db(root)
+}
+
 fn read_source(root: &Path, path: &Path) -> Result<String> {
     let workspace = Workspace::open(root)?;
     let rel = workspace.relative(path.to_str().context("Source path is not UTF-8")?)?;
@@ -182,10 +146,30 @@ fn read_source(root: &Path, path: &Path) -> Result<String> {
     );
     Ok(file.content)
 }
+
+/// The node that stands for the whole definition of a captured name.
+fn definition_node<'t>(lang: Lang, name: tree_sitter::Node<'t>) -> tree_sitter::Node<'t> {
+    let kinds = langs::definition_kinds(lang);
+    let parent = name.parent().unwrap_or(name);
+    if kinds.is_empty() {
+        return parent;
+    }
+    let mut node = name;
+    for _ in 0..6 {
+        let Some(next) = node.parent() else {
+            break;
+        };
+        if kinds.contains(&next.kind()) {
+            return next;
+        }
+        node = next;
+    }
+    parent
+}
+
 fn extract_signature(source: &str, node: tree_sitter::Node) -> String {
-    let parent = node.parent().unwrap_or(node);
-    let start = parent.start_byte();
-    let end = parent.end_byte().min(source.len());
+    let start = node.start_byte();
+    let end = node.end_byte().min(source.len());
     let slice = &source[start..end];
     let first = slice.lines().next().unwrap_or(slice).trim();
     let mut out = first.to_owned();
@@ -200,17 +184,44 @@ fn extract_signature(source: &str, node: tree_sitter::Node) -> String {
     out
 }
 
+struct Grammar {
+    parser: Parser,
+    definitions: Query,
+    references: Query,
+}
+
+/// Parsers and compiled queries, built once per indexing pass.
+#[derive(Default)]
+struct Grammars(HashMap<Lang, Grammar>);
+impl Grammars {
+    fn get(&mut self, lang: Lang) -> Result<&mut Grammar> {
+        use std::collections::hash_map::Entry;
+        Ok(match self.0.entry(lang) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let language = langs::language(lang);
+                let mut parser = Parser::new();
+                parser.set_language(&language)?;
+                entry.insert(Grammar {
+                    parser,
+                    definitions: Query::new(&language, &langs::definition_query(lang))?,
+                    references: Query::new(&language, langs::reference_query(lang))?,
+                })
+            }
+        })
+    }
+}
+
 type ParsedSymbol = (String, String, usize, usize, String);
-fn parse_symbols(_path: &Path, source: &str, lang: Lang) -> Result<Vec<ParsedSymbol>> {
-    let mut parser = Parser::new();
-    parser.set_language(&language(lang))?;
-    let Some(tree) = parser.parse(source, None) else {
-        return Ok(Vec::new());
+type Parsed = (Vec<ParsedSymbol>, HashMap<String, i64>);
+
+fn parse_file(grammar: &mut Grammar, source: &str, lang: Lang) -> Parsed {
+    let Some(tree) = grammar.parser.parse(source, None) else {
+        return Default::default();
     };
-    let query = Query::new(&language(lang), definition_query(lang))?;
+    let mut symbols = Vec::new();
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    let mut out = Vec::new();
+    let mut matches = cursor.matches(&grammar.definitions, tree.root_node(), source.as_bytes());
     while let Some(m) = matches.next() {
         for capture in m.captures {
             let name = capture
@@ -221,26 +232,80 @@ fn parse_symbols(_path: &Path, source: &str, lang: Lang) -> Result<Vec<ParsedSym
             if name.is_empty() {
                 continue;
             }
-            let kind = capture
-                .node
-                .parent()
-                .map(|n| n.kind())
-                .unwrap_or("symbol")
-                .to_owned();
-            let signature = extract_signature(source, capture.node);
-            out.push((
+            let definition = definition_node(lang, capture.node);
+            symbols.push((
                 name,
-                kind,
+                definition.kind().to_owned(),
                 capture.node.start_position().row + 1,
                 capture.node.start_position().column + 1,
-                signature,
+                extract_signature(source, definition),
             ));
         }
     }
-    Ok(out)
+    let mut refs: HashMap<String, i64> = HashMap::new();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&grammar.references, tree.root_node(), source.as_bytes());
+    while let Some(m) = matches.next() {
+        for capture in m.captures {
+            let name = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+            if name.len() < 2 || name.len() > 80 {
+                continue;
+            }
+            if let Some(count) = refs.get_mut(name) {
+                *count += 1;
+            } else if refs.len() < MAX_REFS_PER_FILE {
+                refs.insert(name.to_owned(), 1);
+            }
+        }
+    }
+    (symbols, refs)
 }
 
-fn walk_sources(root: &Path, limit: usize) -> Vec<PathBuf> {
+/// Walk indexable files. Returns the files and whether the walk saw the whole
+/// project (no entry or file limit reached).
+fn walk_sources(root: &Path, limit: usize) -> (Vec<PathBuf>, bool) {
+    let mut walker = ignore::WalkBuilder::new(root)
+        .follow_links(false)
+        .max_depth(Some(32))
+        .filter_entry(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            entry.depth() == 0
+                || (!name.starts_with('.')
+                    && !matches!(
+                        name.as_ref(),
+                        "node_modules" | "target" | "dist" | "build" | "__pycache__" | "vendor"
+                    )
+                    && !crate::redaction::is_secret_path(&entry.path().to_string_lossy()))
+        })
+        .build();
+    let mut out = Vec::new();
+    let mut entries = 0usize;
+    for entry in walker.by_ref() {
+        entries += 1;
+        if entries > MAX_WALK_ENTRIES {
+            return (out, false);
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if entry.file_type().is_some_and(|kind| kind.is_file())
+            && langs::indexable(entry.path())
+            && entry
+                .metadata()
+                .is_ok_and(|metadata| metadata.len() <= MAX_FILE_BYTES as u64)
+        {
+            if out.len() >= limit {
+                return (out, false);
+            }
+            out.push(entry.into_path());
+        }
+    }
+    (out, true)
+}
+
+/// True when the project has at least one file a grammar can parse (stops at
+/// the first one; bounded like a scan).
+pub fn has_sources(root: &Path) -> bool {
     ignore::WalkBuilder::new(root)
         .follow_links(false)
         .max_depth(Some(32))
@@ -248,38 +313,46 @@ fn walk_sources(root: &Path, limit: usize) -> Vec<PathBuf> {
             let name = entry.file_name().to_string_lossy();
             entry.depth() == 0
                 || (!name.starts_with('.')
-                    && !matches!(name.as_ref(), "node_modules" | "target" | "dist")
-                    && !crate::redaction::is_secret_path(&entry.path().to_string_lossy()))
+                    && !matches!(
+                        name.as_ref(),
+                        "node_modules" | "target" | "dist" | "build" | "vendor"
+                    ))
         })
         .build()
-        .take(20_000)
+        .take(MAX_WALK_ENTRIES)
         .filter_map(|entry| entry.ok())
-        .filter(|entry| {
+        .any(|entry| {
             entry.file_type().is_some_and(|kind| kind.is_file())
-                && lang_for(entry.path()).is_some()
-                && entry
-                    .metadata()
-                    .is_ok_and(|metadata| metadata.len() <= MAX_FILE_BYTES as u64)
+                && langs::lang_for(entry.path()).is_some()
         })
-        .take(limit)
-        .map(|entry| entry.into_path())
-        .collect()
 }
 
-fn index_file(conn: &Connection, root: &Path, path: &Path) -> Result<usize> {
-    let Some(lang) = lang_for(path) else {
-        return Ok(0);
-    };
-    let rel = relative(root, path);
-    let Ok(source) = read_source(root, path) else {
-        return Ok(0);
-    };
-    if source.len() > MAX_FILE_BYTES {
-        return Ok(0);
+enum Indexed {
+    Skipped,
+    Unchanged,
+    Updated(usize),
+}
+
+fn index_file(
+    conn: &Connection,
+    root: &Path,
+    path: &Path,
+    grammars: &mut Grammars,
+    force: bool,
+) -> Result<Indexed> {
+    let lang = langs::lang_for(path);
+    if lang.is_none() && !langs::searchable_text(path) {
+        return Ok(Indexed::Skipped);
     }
-    let mt = mtime_ns(path) as i64;
-    let size = source.len() as i64;
-    let digest = format!("{:x}", Sha256::digest(source.as_bytes()));
+    let rel = relative(root, path);
+    let Ok(metadata) = fs::metadata(path) else {
+        return Ok(Indexed::Skipped);
+    };
+    if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
+        return Ok(Indexed::Skipped);
+    }
+    let mt = mtime_ns(&metadata) as i64;
+    let size = metadata.len() as i64;
     let existing: Option<(i64, i64, String)> = conn
         .query_row(
             "SELECT mtime_ns, size, digest FROM files WHERE path=?",
@@ -287,24 +360,78 @@ fn index_file(conn: &Connection, root: &Path, path: &Path) -> Result<usize> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .ok();
-    if existing == Some((mt, size, digest.clone())) {
-        return Ok(0);
+    if !force
+        && existing
+            .as_ref()
+            .is_some_and(|(m, s, _)| *m == mt && *s == size)
+    {
+        return Ok(Indexed::Unchanged);
     }
-    let symbols = parse_symbols(path, &source, lang)?;
-    conn.execute("DELETE FROM symbols WHERE path=?", [&rel])?;
+    let Ok(source) = read_source(root, path) else {
+        return Ok(Indexed::Skipped);
+    };
+    let digest = format!("{:x}", Sha256::digest(source.as_bytes()));
+    if existing.as_ref().is_some_and(|(_, _, d)| *d == digest) {
+        conn.execute(
+            "UPDATE files SET mtime_ns=?, size=? WHERE path=?",
+            params![mt, size, rel],
+        )?;
+        return Ok(Indexed::Unchanged);
+    }
+    let (symbols, refs) = match lang {
+        Some(lang) => parse_file(grammars.get(lang)?, &source, lang),
+        None => Default::default(),
+    };
+    // Cascades to symbols, refs and chunks (and chunks_fts via its trigger).
     conn.execute("DELETE FROM files WHERE path=?", [&rel])?;
     conn.execute(
         "INSERT INTO files(path, lang, mtime_ns, size, digest, indexed_at) VALUES(?,?,?,?,?,?)",
-        params![rel, lang_name(lang), mt, size, digest, now()],
+        params![
+            rel,
+            lang.map(langs::name).unwrap_or("text"),
+            mt,
+            size,
+            digest,
+            now()
+        ],
     )?;
-    for (name, kind, line, column, signature) in &symbols {
-        conn.execute(
+    {
+        let mut insert = conn.prepare_cached(
             "INSERT INTO symbols(path, name, kind, line, column, signature) VALUES(?,?,?,?,?,?)",
-            params![rel, name, kind, *line as i64, *column as i64, signature],
         )?;
+        for (name, kind, line, column, signature) in &symbols {
+            insert.execute(params![
+                rel,
+                name,
+                kind,
+                *line as i64,
+                *column as i64,
+                signature
+            ])?;
+        }
+        let mut insert =
+            conn.prepare_cached("INSERT INTO refs(path, name, count) VALUES(?,?,?)")?;
+        for (name, count) in &refs {
+            insert.execute(params![rel, name, count])?;
+        }
     }
-    Ok(symbols.len())
+    let definitions: Vec<(usize, String)> = symbols
+        .iter()
+        .map(|(name, _, line, _, _)| (*line, name.clone()))
+        .collect();
+    chunks::store(conn, &rel, &chunks::split(&source, &definitions))?;
+    Ok(Indexed::Updated(symbols.len()))
 }
+
+/// A stored file that still qualifies for the index, by metadata only.
+fn still_indexable(root: &Path, rel: &str) -> bool {
+    let full = root.join(rel);
+    !crate::redaction::is_secret_path(rel)
+        && langs::indexable(&full)
+        && fs::metadata(&full).is_ok_and(|m| m.is_file() && m.len() <= MAX_FILE_BYTES as u64)
+}
+
+static LAST_SCAN: Mutex<Option<HashMap<PathBuf, Instant>>> = Mutex::new(None);
 
 /// Index specific relative paths (touched files) and/or a bounded scan.
 pub fn ensure_index(root: &Path, touched: &[String], scan: bool) -> Result<Value> {
@@ -313,67 +440,87 @@ pub fn ensure_index(root: &Path, touched: &[String], scan: bool) -> Result<Value
         .lock()
         .map_err(|_| anyhow::anyhow!("symbol index lock poisoned"))?;
     let conn = open_db(root)?;
-    let transaction = conn.unchecked_transaction()?;
     let workspace = Workspace::open(root)?;
+    let mut touched_paths = Vec::new();
+    let mut touched_rel = HashSet::new();
     for path in touched {
         let rel = workspace.relative(path)?;
         ensure!(
             !crate::redaction::is_secret_path(&rel.to_string_lossy()),
             "Secret paths are not indexed"
         );
-        if root.join(&rel).exists() {
-            read_source(root, &root.join(&rel))?;
+        let full = root.join(&rel);
+        if full.exists() {
+            read_source(root, &full)?;
+        }
+        touched_rel.insert(relative(root, &full));
+        if full.is_file() {
+            touched_paths.push(full);
         }
     }
+    let wants_scan = scan || touched.is_empty();
+    let key = root.canonicalize()?;
+    let recent_scan = LAST_SCAN
+        .lock()
+        .ok()
+        .and_then(|scans| scans.as_ref()?.get(&key).copied())
+        .is_some_and(|at| at.elapsed() < RESCAN_AFTER);
+    let (walked, complete) = if wants_scan && !recent_scan {
+        walk_sources(root, MAX_SCAN_FILES)
+    } else {
+        (Vec::new(), false)
+    };
+    let scanned = walked.len();
+    let transaction = conn.unchecked_transaction()?;
+    let mut grammars = Grammars::default();
     let mut indexed_files = 0usize;
     let mut symbol_count = 0usize;
-    let mut paths: Vec<PathBuf> = touched
-        .iter()
-        .filter_map(|p| {
-            let full = root.join(p);
-            if full.is_file() {
-                Some(full)
-            } else {
-                None
+    let mut walked_rel = HashSet::new();
+    let forced = touched_paths.iter().map(|p| (p, true));
+    let scanned_paths = walked.iter().map(|p| (p, false));
+    for (path, force) in forced.chain(scanned_paths) {
+        let rel = relative(root, path);
+        if !force {
+            walked_rel.insert(rel.clone());
+            if touched_rel.contains(&rel) {
+                continue;
             }
-        })
-        .collect();
-    let scanned = if scan || paths.is_empty() {
-        let walked = walk_sources(root, MAX_SCAN_FILES);
-        let n = walked.len();
-        paths.extend(walked);
-        n
-    } else {
-        0
-    };
-    paths.sort();
-    paths.dedup();
-    for path in &paths {
-        let n = index_file(&conn, root, path)?;
-        if n > 0
-            || conn
-                .query_row(
-                    "SELECT 1 FROM files WHERE path=?",
-                    [relative(root, path)],
-                    |_| Ok(()),
-                )
-                .is_ok()
-        {
-            indexed_files += 1;
-            symbol_count += n;
+        }
+        match index_file(&conn, root, path, &mut grammars, force)? {
+            Indexed::Updated(n) => {
+                indexed_files += 1;
+                symbol_count += n;
+            }
+            Indexed::Unchanged => indexed_files += 1,
+            Indexed::Skipped => {}
         }
     }
-    // Remove stale entries for deleted, renamed, oversized, or inaccessible files.
-    let stored: Vec<String> = conn
-        .prepare("SELECT path FROM files")?
-        .query_map([], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    for path in stored {
-        if read_source(root, &root.join(&path)).is_err() {
-            conn.execute("DELETE FROM files WHERE path=?", [path])?;
+    // Remove stale entries for deleted, renamed, oversized, ignored or secret
+    // files. A complete scan is authoritative; otherwise check metadata.
+    {
+        let stored: Vec<String> = conn
+            .prepare("SELECT path FROM files")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for path in stored {
+            let keep = if complete {
+                walked_rel.contains(&path) || touched_rel.contains(&path)
+            } else {
+                still_indexable(root, &path)
+            };
+            if !keep {
+                conn.execute("DELETE FROM files WHERE path=?", [path])?;
+            }
         }
     }
     transaction.commit()?;
+    if wants_scan && !recent_scan {
+        if let Ok(mut scans) = LAST_SCAN.lock() {
+            scans
+                .get_or_insert_with(HashMap::new)
+                .insert(key, Instant::now());
+        }
+    }
     let total: i64 = conn.query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))?;
     Ok(json!({
         "ok": true,
@@ -381,9 +528,30 @@ pub fn ensure_index(root: &Path, touched: &[String], scan: bool) -> Result<Value
         "symbols_written": symbol_count,
         "symbols_total": total,
         "scanned_files": scanned,
+        "complete": complete,
         "bounded": true,
         "storage": "private process cache; workspace is unchanged",
-        "note": "Ordinary SQLite AST tables; not embeddings or a world index."
+        "note": "Ordinary SQLite tables (tree-sitter symbols, identifier references, FTS5 chunks); bounded scan, not a world index."
+    }))
+}
+
+/// Index size for status views; does not scan.
+pub fn stats(root: &Path) -> Result<Value> {
+    let conn = open_db(root)?;
+    let count = |sql: &str| -> Result<i64> { Ok(conn.query_row(sql, [], |r| r.get(0))?) };
+    let mut languages = serde_json::Map::new();
+    let mut stmt = conn.prepare("SELECT lang, COUNT(*) FROM files GROUP BY lang ORDER BY lang")?;
+    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+        let (lang, n) = row?;
+        languages.insert(lang, json!(n));
+    }
+    Ok(json!({
+        "files": count("SELECT COUNT(*) FROM files")?,
+        "symbols": count("SELECT COUNT(*) FROM symbols")?,
+        "references": count("SELECT COUNT(*) FROM refs")?,
+        "chunks": count("SELECT COUNT(*) FROM chunks")?,
+        "languages": languages,
+        "max_files": MAX_SCAN_FILES,
     }))
 }
 
@@ -440,80 +608,71 @@ pub fn query_definitions(root: &Path, symbol: &str, max_hits: usize) -> Result<V
 pub fn query_references(root: &Path, symbol: &str, max_hits: usize) -> Result<Value> {
     references(root, symbol, max_hits, false)
 }
+
+fn is_call(capture: tree_sitter::Node) -> bool {
+    let mut node = capture;
+    while let Some(parent) = node.parent() {
+        if let Some((_, field)) = langs::CALL_KINDS
+            .iter()
+            .find(|(kind, _)| *kind == parent.kind())
+        {
+            return parent.child_by_field_name(field).is_some_and(|f| {
+                f.start_byte() <= capture.start_byte() && f.end_byte() >= capture.end_byte()
+            });
+        }
+        if !langs::CALLEE_WRAPPERS.contains(&parent.kind()) {
+            return false;
+        }
+        node = parent;
+    }
+    false
+}
+
 fn references(root: &Path, symbol: &str, max_hits: usize, calls_only: bool) -> Result<Value> {
     ensure!(!symbol.is_empty(), "symbol required");
     let max_hits = max_hits.clamp(1, 80);
     let _ = ensure_index(root, &[], true)?;
-    let files = walk_sources(root, MAX_SCAN_FILES);
+    // Only files whose identifier counts mention the symbol are parsed again.
+    let files: Vec<String> = open_db(root)?
+        .prepare("SELECT path FROM refs WHERE name=? ORDER BY path")?
+        .query_map([symbol], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut grammars = Grammars::default();
     let mut hits = Vec::new();
     let mut truncated = false;
-    for path in files {
-        let Some(lang) = lang_for(&path) else {
+    'files: for rel in files {
+        let path = root.join(&rel);
+        let Some(lang) = langs::lang_for(&path) else {
             continue;
         };
         let Ok(source) = read_source(root, &path) else {
             continue;
         };
-        let mut parser = Parser::new();
-        parser.set_language(&language(lang))?;
-        let Some(tree) = parser.parse(&source, None) else {
+        let grammar = grammars.get(lang)?;
+        let Some(tree) = grammar.parser.parse(&source, None) else {
             continue;
         };
-        let query = Query::new(&language(lang), reference_query(lang))?;
         let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        let mut matches = cursor.matches(&grammar.references, tree.root_node(), source.as_bytes());
         while let Some(m) = matches.next() {
             for capture in m.captures {
                 let name = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-                if name != symbol {
+                if name != symbol || (calls_only && !is_call(capture.node)) {
                     continue;
                 }
-                if calls_only {
-                    let mut node = capture.node;
-                    let mut called = false;
-                    while let Some(parent) = node.parent() {
-                        if parent.kind() == "call_expression" {
-                            called = parent.child_by_field_name("function").is_some_and(|f| {
-                                f.start_byte() <= capture.node.start_byte()
-                                    && f.end_byte() >= capture.node.end_byte()
-                            });
-                            break;
-                        }
-                        if !matches!(
-                            parent.kind(),
-                            "scoped_identifier"
-                                | "field_expression"
-                                | "member_expression"
-                                | "generic_function"
-                                | "parenthesized_expression"
-                        ) {
-                            break;
-                        }
-                        node = parent;
-                    }
-                    if !called {
-                        continue;
-                    }
+                if hits.len() >= max_hits {
+                    truncated = true;
+                    break 'files;
                 }
                 hits.push(hit_json(
-                    &relative(root, &path),
+                    &rel,
                     name,
                     "reference",
                     (capture.node.start_position().row + 1) as i64,
                     (capture.node.start_position().column + 1) as i64,
                     "",
                 ));
-                if hits.len() >= max_hits {
-                    truncated = true;
-                    break;
-                }
             }
-            if truncated {
-                break;
-            }
-        }
-        if truncated {
-            break;
         }
     }
     Ok(json!({
@@ -585,6 +744,38 @@ pub fn callers_for(root: &Path, symbol: &str, cap: usize) -> Result<Value> {
     }))
 }
 
+/// Recently edited files per project, newest first (in-process only).
+static RECENT: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+const MAX_RECENT: usize = 64;
+
+fn remember_edit(root: &Path, rel: &str) {
+    let Ok(root) = root.canonicalize() else {
+        return;
+    };
+    if let Ok(mut recent) = RECENT.lock() {
+        recent.retain(|(r, p)| !(r == &root && p == rel));
+        recent.insert(0, (root, rel.to_owned()));
+        recent.truncate(MAX_RECENT);
+    }
+}
+
+pub fn recent_edits(root: &Path, max: usize) -> Vec<String> {
+    let Ok(root) = root.canonicalize() else {
+        return Vec::new();
+    };
+    RECENT
+        .lock()
+        .map(|recent| {
+            recent
+                .iter()
+                .filter(|(r, _)| r == &root)
+                .map(|(_, p)| p.clone())
+                .take(max)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Touch-index a relative path after an edit (no full scan).
 pub fn touch(root: &Path, relative_path: &str) -> Result<()> {
     let _guard = INDEX_LOCK
@@ -594,14 +785,16 @@ pub fn touch(root: &Path, relative_path: &str) -> Result<()> {
     let workspace = Workspace::open(root)?;
     let rel = workspace.relative(relative_path)?;
     let full = root.join(&rel);
+    let key = relative(root, &full);
     if !full.exists() {
         // Delete by the normalized key the index stores, not the caller's
         // spelling ("./src/a.rs" must remove "src/a.rs").
-        conn.execute("DELETE FROM files WHERE path=?", [relative(root, &full)])?;
+        conn.execute("DELETE FROM files WHERE path=?", [key])?;
         return Ok(());
     }
     read_source(root, &full)?;
-    let _ = index_file(&conn, root, &full)?;
+    let _ = index_file(&conn, root, &full, &mut Grammars::default(), true)?;
+    remember_edit(root, &key);
     Ok(())
 }
 
@@ -656,6 +849,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(remaining, 0);
+        let chunks: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunks_fts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(chunks, 0, "FTS rows follow their file");
     }
 
     #[test]
@@ -687,5 +884,106 @@ mod tests {
         assert!(sig["ok"].as_bool().unwrap());
         let callers = callers_for(root.path(), "add", 8).unwrap();
         assert!(callers["count"].as_u64().unwrap() >= 1);
+    }
+
+    fn definitions_in(root: &Path, file: &str) -> Vec<(String, String, String)> {
+        ensure_index(root, &[file.into()], false).unwrap();
+        let conn = open_db(root).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name, kind, signature FROM symbols WHERE path=? ORDER BY line")
+            .unwrap();
+        stmt.query_map([file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn indexes_python_go_c_cpp_and_java() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |name: &str, text: &str| fs::write(root.path().join(name), text).unwrap();
+        write(
+            "app.py",
+            "import os\nLIMIT = 3\nclass Store:\n    def load(self, key):\n        return helper(key)\n\ndef helper(key):\n    return key\n",
+        );
+        write(
+            "main.go",
+            "package main\n\ntype Server struct{ port int }\n\nconst Version = \"1\"\n\nfunc (s *Server) Start() error { return run(s.port) }\n\nfunc run(port int) error { return nil }\n",
+        );
+        write(
+            "util.c",
+            "#define MAX 4\nstruct point { int x; };\ntypedef int count_t;\nstatic int add(int a, int b) { return a + b; }\nint twice(int a) { return add(a, a); }\n",
+        );
+        write(
+            "shape.hpp",
+            "namespace geo {\nclass Shape {\n public:\n  double area() const;\n};\n}\ndouble geo::Shape::area() const { return 0; }\n",
+        );
+        write(
+            "App.java",
+            "public class App {\n  public App() {}\n  public int run(int n) { return helper(n); }\n  private int helper(int n) { return n; }\n}\n",
+        );
+        let names = |file: &str| -> Vec<String> {
+            definitions_in(root.path(), file)
+                .into_iter()
+                .map(|(n, _, _)| n)
+                .collect()
+        };
+        assert_eq!(names("app.py"), ["LIMIT", "Store", "load", "helper"]);
+        let python = definitions_in(root.path(), "app.py");
+        assert_eq!(python[2].1, "function_definition");
+        assert_eq!(python[2].2, "def load(self, key):");
+        assert_eq!(names("main.go"), ["Server", "Version", "Start", "run"]);
+        assert_eq!(names("util.c"), ["MAX", "point", "count_t", "add", "twice"]);
+        let c = definitions_in(root.path(), "util.c");
+        assert_eq!(c[3].2, "static int add(int a, int b) { return a + b; }");
+        assert_eq!(names("shape.hpp"), ["geo", "Shape", "area", "area"]);
+        assert_eq!(names("App.java"), ["App", "App", "run", "helper"]);
+        // Callers resolve across grammars' call shapes.
+        let callers = callers_for(root.path(), "helper", 8).unwrap();
+        let paths: HashSet<_> = callers["callers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["path"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(
+            paths.contains("app.py") && paths.contains("App.java"),
+            "{callers}"
+        );
+        let go = callers_for(root.path(), "run", 8).unwrap();
+        assert_eq!(go["count"], 1, "{go}");
+        let c_calls = callers_for(root.path(), "add", 8).unwrap();
+        assert_eq!(c_calls["callers"][0]["path"], "util.c");
+    }
+
+    #[test]
+    fn unchanged_files_are_not_reparsed_and_deleted_files_leave_the_index() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("a.py"), "def one():\n    pass\n").unwrap();
+        fs::write(root.path().join("notes.md"), "# Title\nsearchable words\n").unwrap();
+        let first = ensure_index(root.path(), &["a.py".into()], true).unwrap();
+        assert_eq!(first["symbols_written"], 1);
+        let stats = stats(root.path()).unwrap();
+        assert_eq!(stats["languages"]["text"], 1, "{stats}");
+        assert_eq!(stats["languages"]["python"], 1, "{stats}");
+        // A forced touch of an unchanged file keeps the same rows.
+        touch(root.path(), "a.py").unwrap();
+        assert_eq!(stats_of(root.path())["symbols"], 1);
+        fs::remove_file(root.path().join("notes.md")).unwrap();
+        fs::write(
+            root.path().join("a.py"),
+            "def one():\n    pass\ndef two():\n    pass\n",
+        )
+        .unwrap();
+        touch(root.path(), "a.py").unwrap();
+        assert_eq!(stats_of(root.path())["symbols"], 2);
+        assert_eq!(recent_edits(root.path(), 4), ["a.py"]);
+        // Not a scan (the last one was moments ago) but metadata still prunes.
+        ensure_index(root.path(), &["a.py".into()], false).unwrap();
+        assert_eq!(stats_of(root.path())["files"], 1);
+    }
+
+    fn stats_of(root: &Path) -> Value {
+        stats(root).unwrap()
     }
 }

@@ -50,6 +50,7 @@ mod accounts;
 mod agents;
 mod background;
 mod call;
+mod code_intel;
 mod commands;
 mod compare;
 mod extensions;
@@ -233,6 +234,7 @@ impl Service {
             "goals" => self.goal_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "background" => self.background_routes(&call).await,
+            "code-intel" => self.code_intel_routes(&call).await,
             "workspace" => self.workspace_routes(&call).await,
             "config" | "routing" | "onboarding" | "health" | "version" | "doctor" | "guardian" => {
                 self.settings_routes(&call).await

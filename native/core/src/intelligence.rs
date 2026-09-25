@@ -1,5 +1,7 @@
-//! Local code intelligence: on-demand SQLite AST index (tree-sitter) plus
-//! optional rust-analyzer diagnostics. No vector DB, no startup world index.
+//! Name-based code intelligence over the on-demand SQLite AST index
+//! (tree-sitter), plus one-shot `rust-analyzer diagnostics`, the fallback
+//! when the persistent language server (`crate::lsp`) cannot answer. No
+//! startup world index.
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
@@ -70,7 +72,7 @@ pub async fn get_diagnostics(root: &Path, path: &str) -> Result<Value> {
             "exit_code": out.exit_code,
             "stdout": crate::tools::truncate(&out.stdout, 32_000),
             "stderr": crate::tools::truncate(&out.stderr, 8_000),
-            "note": "One-shot rust-analyzer diagnostics; no persistent LSP was started."
+            "note": "One-shot rust-analyzer diagnostics (the persistent language server did not answer)."
         })),
         Err(error) => Ok(json!({
             "ok": false,

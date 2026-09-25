@@ -235,6 +235,25 @@ project** counts which model you kept. Every lane is a full task: subscription
 lanes use your plan, OpenRouter lanes are billed per token. Details:
 [compare](COMPARE.md).
 
+## Code intelligence
+
+With a local or OpenRouter model, ShadowCode helps the agent understand the
+project (**Settings › Code intelligence**):
+
+- **Errors after each edit.** If a language server is installed for the file
+  (rust-analyzer, typescript-language-server, pyright, gopls or clangd), the
+  agent is told about errors its edit introduced, not ones that were already
+  there. Servers run without building or running project code. The TypeScript
+  and Python servers can be installed from Settings with one click (about
+  25 MB and 19 MB); nothing downloads on its own.
+- **A map of the code.** Each task starts with a short, ranked outline of the
+  project's main definitions, favoring files you name and files the agent
+  recently edited. Choose its size, or turn it off, in Settings.
+- **Code search.** The agent can search code by keywords. Install a small
+  embedding model (35 MB or 139 MB) in Settings to also search by meaning.
+
+Details: [code intelligence](CODE_INTELLIGENCE.md).
+
 ## Offline and web-off
 
 In **Settings › Permissions & network**:

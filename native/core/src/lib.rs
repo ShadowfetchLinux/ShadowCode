@@ -8,6 +8,7 @@ pub mod checkpoint;
 #[cfg(unix)]
 pub mod cli;
 pub mod cli_agent;
+pub mod code_intel;
 pub mod compaction;
 pub mod compare;
 pub mod config;
@@ -25,6 +26,7 @@ pub mod intelligence;
 pub mod lifecycle;
 pub mod local_engine;
 pub mod local_runtime;
+pub mod lsp;
 #[cfg(unix)]
 pub mod mcp;
 pub mod memory;
