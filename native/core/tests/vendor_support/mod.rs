@@ -110,6 +110,14 @@ for raw in sys.stdin:
             continue
         if mode == "slow":
             time.sleep(float(C.get("slow", 2)))
+        if mode == "edit":
+            # Write and delete project files with the CLI's own tools, as a
+            # real vendor would, relative to the working directory.
+            for name, text in (C.get("edits") or {}).items():
+                with open(os.path.join(os.getcwd(), name), "w") as f:
+                    f.write(text)
+            for name in C.get("deletes") or []:
+                os.remove(os.path.join(os.getcwd(), name))
         reply = "fake answer"
         if mode == "env":
             reply = "API keys visible: " + (",".join(k for k in KEYS if k in os.environ) or "none") + "; marker=" + os.environ.get("SHADOWCODE_FAKE_MARKER", "absent")

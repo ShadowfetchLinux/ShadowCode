@@ -371,7 +371,7 @@ export function Stage({
         paused={job?.status === "paused"}
         reconnecting={connection === "reconnecting"}
         branch={gitBranch}
-        onBranch={() => setPanel("changes")}
+        onBranch={() => setPanel("git")}
         allowance={allowance.data}
         allowanceOpen={allowanceOpen}
         onAllowance={onAllowance}

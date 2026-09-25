@@ -186,24 +186,91 @@ reply.
   all** puts back every file you haven't kept. Keep only marks what you have
   looked at; Undo writes the file, and only if it hasn't changed since the
   diff was shown. Undoing asks first in ShadowCode's own dialog. Files a
-  vendor CLI changed are compared with the last commit. While a task runs in
-  the project the review is read-only and says why. **Back to conversation**
-  returns.
-- **Git** (a tab in the review, and the Changes drawer, `Ctrl+Shift+B`) shows
-  the whole working tree: compare unstaged and staged hunks, stage a hunk or
-  a whole new file, discard a hunk (after confirming), and commit. The
+  vendor CLI reported without a checkpoint are compared with the last
+  commit. While a task runs in the project the review is read-only and says
+  why. **Back to conversation** returns.
+- **Git** (a tab in the review, and the drawer's Changes tab, `Ctrl+Shift+B`)
+  shows the whole working tree: compare unstaged and staged hunks, stage a
+  hunk or a whole new file, discard a hunk (after confirming), and commit.
+  If a file changed since you previewed it, refresh before staging. The
   drawer's tabs keep your work while you switch between them or close the
-  drawer: terminal output, the file open in Files and an unsent commit
-  message stay until you open another project.
-- **Rewind** undoes every file change the task made with ShadowCode's own
-  tools. It asks first and lists the files that will change. Afterwards a
-  divider marks the conversation (*Rewound to here · 2 files restored*) and
-  the notification offers **Undo**, which puts the files back as they were
-  just before the rewind (if you haven't changed them since). Stop the task
-  first. Rewind doesn't undo shell commands or Git history. It isn't offered
-  for vendor CLI tasks, because the vendor writes files with its own tools;
-  use the review or Git to undo those. After a rewind (or its undo), the next
-  turn is told which files changed on disk.
+  drawer: your terminals, the file open in Files and unsent commit and pull
+  request drafts stay until you open another project.
+- **Rewind** undoes every change the task made to project files. That
+  includes ShadowCode's own file tools, files changed by the task's shell
+  commands, and files a subscription CLI (Codex, Claude Code, Cursor, Grok,
+  Antigravity) changed during the turn. Before each shell command and each
+  subscription turn, ShadowCode takes a checkpoint of the project. In a Git
+  repository it is a hidden commit under `refs/shadowcode/checkpoints/`; your
+  branch, index and staged changes are untouched. In a folder without Git it
+  is a copy, for folders up to 5,000 files and 64 MB. A larger folder
+  shows *Rewind does not cover this command*. Stop the task first (for a
+  subscription, wait for the turn to end). Rewind asks first and lists the
+  files that will change. Afterwards a divider marks the conversation
+  (*Rewound to here · 2 files restored*) and the notification offers
+  **Undo**, which puts the files back as they were just before the rewind
+  (if you haven't changed them since). Rewind doesn't restore Git-ignored
+  files, files over 4 MB, symlinks, Git history or branches, or anything
+  outside the project. It refuses, and changes nothing, if a file was edited
+  again after the task. After a rewind (or its undo), the next turn is told
+  which files changed on disk. A subscription's own conversation isn't told,
+  so mention it in your next message.
+
+## Commit, push and open a pull request
+
+The drawer's **Git** tab (click the branch in the status bar, or
+**Commit, push and open a pull request** in `Ctrl+K`) takes the work from
+staged changes to a pull request:
+
+- **Branch.** Type a name and **Create branch**, or switch with
+  **Switch to…**. Names Git would refuse (spaces, `..`, a leading dash) are
+  explained before anything runs.
+- **Commit.** **Stage all** (or stage hunks in Changes), then **Suggest
+  message**. The draft comes from the conversation's model when ShadowCode
+  runs it (a local, API or OpenRouter model), otherwise from the loaded local
+  model, otherwise a plain summary of the staged files. It is always an
+  editable draft, and files that look like secrets (`.env`, keys) are named
+  but never sent to a model.
+- **Push** publishes the branch and tracks it, using your own Git sign-in
+  (SSH agent, credential helper or `gh auth setup-git`). ShadowCode never
+  stores a credential and never force-pushes; if Git would need to ask for a
+  password, the push stops and says how to set up sign-in.
+- **Pull request.** **Suggest title and description** drafts both the same
+  way. Pick the branch to merge into, tick **Draft** if you like, and
+  **Create pull request**. The branch is pushed first when needed. This uses
+  the GitHub CLI (`gh`) when it is installed and signed in (`glab` for
+  GitLab). Without it the tab explains how to install and sign in, and
+  **Open compare page in browser** opens the same page on the website.
+- After the pull request opens, its link and CI checks appear. Checks refresh
+  every minute while the tab is visible, or at once with the refresh button.
+
+Switching branches and committing wait while the agent works; push and pull
+requests do not.
+
+## Terminal
+
+The drawer's **Terminal** tab (`` Ctrl+` ``) is your own login shell in the
+project folder, with colours, full-screen programs and your usual
+environment. **+** opens another; each tab keeps running when you switch tabs
+or close the drawer, and all of them close when ShadowCode quits. Terminals
+work while the agent runs. They are outside the agent's sandbox, need no
+approval, and nothing typed or printed there is shown to a model. The last
+512 KB of output is kept for each terminal. Inside a terminal the keyboard
+belongs to the shell (`Esc`, `Ctrl+L`, `Ctrl+P` …); `` Ctrl+` `` still
+toggles the drawer.
+
+## Tools while you work
+
+The drawer's **Tools** tab holds what you use during work rather than
+configure: **Goals** (milestone checklists), **Processes** (dev servers and
+watchers that keep running between tasks) and **Worktrees**. `Ctrl+K`
+(*Goals and milestones*, *Background processes*, *Worktrees*) and the
+`/goals` and `/background` commands open them there. Skills, MCP, plugins,
+hooks, Guardian, vendor tools and health stay in **Settings › Advanced**.
+
+In **Settings › Permissions & network**, how each runner applies the mode
+(ShadowCode's own tools, and each subscription) is folded under
+*How … applies this*.
 
 ## Switch models mid-conversation
 
@@ -291,6 +358,25 @@ project** counts which model you kept. Every lane is a full task: subscription
 lanes use your plan, OpenRouter lanes are billed per token. Details:
 [compare](COMPARE.md).
 
+## Code intelligence
+
+With a local or OpenRouter model, ShadowCode helps the agent understand the
+project (**Settings › Code intelligence**):
+
+- **Errors after each edit.** If a language server is installed for the file
+  (rust-analyzer, typescript-language-server, pyright, gopls or clangd), the
+  agent is told about errors its edit introduced, not ones that were already
+  there. Servers run without building or running project code. The TypeScript
+  and Python servers can be installed from Settings with one click (about
+  25 MB and 19 MB); nothing downloads on its own.
+- **A map of the code.** Each task starts with a short, ranked outline of the
+  project's main definitions, favoring files you name and files the agent
+  recently edited. Choose its size, or turn it off, in Settings.
+- **Code search.** The agent can search code by keywords. Install a small
+  embedding model (35 MB or 139 MB) in Settings to also search by meaning.
+
+Details: [code intelligence](CODE_INTELLIGENCE.md).
+
 ## Offline and web-off
 
 In **Settings › Permissions & network**:
@@ -302,6 +388,37 @@ In **Settings › Permissions & network**:
   or usage, and a cloud job is refused with
   "Offline mode: choose a model that runs on this computer". Shell commands
   that reach the network (for example `curl`, `npm` or `pip`) are denied.
+
+## The shell sandbox
+
+ShadowCode runs shell commands from local and OpenRouter models in a sandbox
+when [bubblewrap](https://github.com/containers/bubblewrap) is installed
+(`sudo apt install bubblewrap`). Inside it:
+
+- Your **home folder is empty**. Only toolchain folders (`~/.cargo`,
+  `~/.rustup`, `~/.nvm`, `~/.npm`, `~/.cache/pip`, `~/.local/bin`,
+  `~/.gitconfig`, `~/.pyenv`, `~/.bun`, `~/.deno`) are visible, and they are
+  read-only. SSH keys, cloud credentials, `~/.config` (including ShadowCode's
+  API keys) and `~/.local/share` are never visible. To change the list, edit
+  `sandbox.home_binds` in `~/.config/shadow-agent/config.yaml`. Credential
+  folders are refused there.
+- **Only the project is writable.** Files written elsewhere in the home
+  folder vanish when the command ends.
+- **Network**, under **Shell commands** in **Settings › Permissions &
+  network**: *No network*, *Full network*, or *Only allowed hosts*. With
+  *Only allowed hosts*, list one host per line (`crates.io`,
+  `*.githubusercontent.com`, `localhost:3000`). Web requests from tools that
+  use the standard proxy variables (curl, pip, npm, cargo, git) reach only
+  those hosts. Anything else, including direct connections and DNS, fails.
+  A blocked request gets `403` with the host named. The tool result lists
+  what was reached and blocked.
+
+The **Shell commands** section says which sandbox this computer provides.
+Without bubblewrap, commands run under Landlock file limits when the kernel
+supports them, and the conversation shows a warning once. Turn on **Require
+sandbox** to refuse shell commands instead. *Only allowed hosts* always needs
+bubblewrap: without it, commands are refused rather than run unfiltered.
+Subscription CLIs use their own sandboxes, not this one.
 
 ## Continue, organize and recover
 
@@ -358,8 +475,15 @@ In **Settings › Permissions & network**:
   the error on **Settings › Local models**.
 - **The AppImage won't mount.** Run it with `--appimage-extract-and-run`. FUSE
   is optional.
+- **A command fails with "Require sandbox is on".** Install bubblewrap, or turn
+  off **Require sandbox**. If bubblewrap is installed but still reported
+  unavailable, your system may block unprivileged user namespaces. Ubuntu
+  24.04 ships an AppArmor profile that allows them for `bwrap`.
+- **A command can't find a tool from your home folder.** Add its folder to
+  `sandbox.home_binds`, for example `go` or `.sdkman`.
 - **You need stronger isolation.** Use a container or a separate Linux account.
-  Shell commands run with your user's privileges.
+  Shell commands run with your user's privileges, and the sandbox limits what
+  they can see, not what that user may do.
 
 Settings and history live in `~/.config/shadow-agent` and
 `~/.local/state/shadow-agent`. Back up both before moving to another machine.

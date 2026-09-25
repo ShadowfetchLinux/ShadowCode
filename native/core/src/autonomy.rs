@@ -113,9 +113,11 @@ pub fn replay_class(name: &str) -> ReplayClass {
     match name {
         "system_info" | "list_files" | "read_file" | "search_files" | "search_text"
         | "search_symbol" | "workspace_symbols" | "goto_definition" | "find_references"
-        | "get_diagnostics" | "mcp_sqlite_tables" | "mcp_sqlite_query" | "background_list"
-        | "background_output" | "git_status" | "git_diff" | "git_log" | "update_plan"
-        | "update_todos" => ReplayClass::SafeToReplay,
+        | "get_diagnostics" | "get_type_signature" | "repo_map" | "search_code"
+        | "mcp_sqlite_tables" | "mcp_sqlite_query" | "background_list" | "background_output"
+        | "git_status" | "git_diff" | "git_log" | "update_plan" | "update_todos" => {
+            ReplayClass::SafeToReplay
+        }
         "git_branch" => ReplayClass::ReEvaluate,
         "exec" | "background_start" | "background_stop" | "mcp_call" | "git_commit"
         | "git_checkout" | "git_add" => ReplayClass::RequiresConfirmation,
@@ -844,6 +846,8 @@ pub fn catalog() -> Value {
         "goto_definition",
         "find_references",
         "get_diagnostics",
+        "repo_map",
+        "search_code",
         "mcp_sqlite_tables",
         "mcp_sqlite_query",
         "background_start",

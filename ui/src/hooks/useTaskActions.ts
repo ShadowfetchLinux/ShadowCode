@@ -29,11 +29,9 @@ import type { ToastKind } from "./useToasts";
 import type { WorkspaceStatus } from "./useWorkspace";
 
 const ADVANCED_PANELS: Record<string, AdvancedTab> = {
-  goals: "goals",
   skills: "skills",
   health: "health",
   doctor: "health",
-  background: "background",
 };
 const DRAWERS: Record<string, DrawerTab> = {
   sessions: "sessions",
@@ -41,6 +39,10 @@ const DRAWERS: Record<string, DrawerTab> = {
   changes: "changes",
   files: "files",
   terminal: "terminal",
+  git: "git",
+  goals: "goals",
+  background: "background",
+  worktrees: "worktrees",
 };
 
 /** A cloud route asked for consent before the conversation leaves this
@@ -206,7 +208,18 @@ export function useTaskActions(c: TaskActionContext) {
     if (typeof metadata.panel === "string") {
       const panelName = metadata.panel;
       if (DRAWERS[panelName]) c.setPanel(DRAWERS[panelName]);
-      else if (["sessions", "files", "terminal", "changes"].includes(panelName))
+      else if (
+        [
+          "sessions",
+          "files",
+          "terminal",
+          "changes",
+          "git",
+          "goals",
+          "background",
+          "worktrees",
+        ].includes(panelName)
+      )
         c.setPanel(panelName as DrawerTab);
       else if (ADVANCED_PANELS[panelName])
         c.openSettings("advanced", { advanced: ADVANCED_PANELS[panelName] });

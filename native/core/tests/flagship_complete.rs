@@ -106,7 +106,7 @@ fn fork_session_keeps_original() {
 }
 
 #[test]
-fn sandbox_scratch_and_home_readonly_args() {
+fn sandbox_scratch_and_hidden_home_args() {
     let base = tempfile::tempdir().unwrap();
     let scratch = sandbox::create_scratch(base.path()).unwrap();
     assert!(scratch.path.is_dir());
@@ -119,8 +119,10 @@ fn sandbox_scratch_and_home_readonly_args() {
     assert!(args
         .windows(3)
         .any(|w| w[0] == "--bind" && w[2] == "/shadowcode-scratch"));
-    if std::path::Path::new("/home").exists() {
-        assert!(args
+    // Home is an empty tmpfs; only allowed toolchain folders come back.
+    if std::path::Path::new("/home").is_dir() {
+        assert!(args.windows(2).any(|w| w == ["--tmpfs", "/home"]));
+        assert!(!args
             .windows(3)
             .any(|w| w == ["--ro-bind", "/home", "/home"]));
     }

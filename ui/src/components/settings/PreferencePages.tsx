@@ -1,4 +1,10 @@
 import { useState } from "react";
+import {
+  SandboxSettings,
+  sandboxPatch,
+  sandboxValues,
+} from "./SandboxSettings";
+import "../../tools.css";
 
 type Save = (values: Record<string, unknown>) => Promise<void>;
 
@@ -10,8 +16,28 @@ const VENDOR_NAMES: Record<string, string> = {
   grok: "Grok",
 };
 
-/** Settings › Permissions & network. Saves only the permissions and network
- * groups. */
+/** The disclosure label for one `permissions.vendor_notes` entry. The
+ * engine keys ShadowCode's own enforcement as `native`; that key is never
+ * shown. */
+export function noteSummary(id: string) {
+  if (id === "native")
+    return "How ShadowCode applies this (local, API and OpenRouter models)";
+  if (id === "network")
+    return "How the network setting applies to subscriptions";
+  const name = VENDOR_NAMES[id.replace(/^cli[-:]/, "")];
+  return name
+    ? `How ${name} applies this`
+    : "How this subscription applies this";
+}
+
+/** ShadowCode first, the subscriptions, then the network note. */
+function noteOrder(notes: Record<string, string>) {
+  const rank = (id: string) => (id === "native" ? 0 : id === "network" ? 2 : 1);
+  return Object.entries(notes).sort(([a], [b]) => rank(a) - rank(b));
+}
+
+/** Settings › Permissions & network. Saves only the permissions, network
+ * and sandbox groups. */
 export function PermissionsPage({
   cfg,
   onSave,
@@ -28,9 +54,7 @@ export function PermissionsPage({
   );
   const [readOnly, setReadOnly] = useState(originalLevel === "read_only");
   const [netMode, setNetMode] = useState(String(network.mode || "online"));
-  const [shellNetwork, setShellNetwork] = useState(
-    Boolean(permissions.network),
-  );
+  const [shell, setShell] = useState(() => sandboxValues(cfg));
   const [dangerous, setDangerous] = useState(
     permissions.require_approval_for_dangerous !== false,
   );
@@ -71,19 +95,16 @@ export function PermissionsPage({
       </fieldset>
       {Object.keys(notes).length > 0 && (
         <div className="vendor-notes">
-          <h4>Subscriptions</h4>
           <p className="hint">
-            Vendor tools enforce their own sandbox. This is how each one applies
-            the mode above:
+            ShadowCode enforces this for models it runs itself. Subscriptions
+            run in their vendor's own sandbox and apply it their way.
           </p>
-          <dl>
-            {Object.entries(notes).map(([id, note]) => (
-              <div key={id}>
-                <dt>{VENDOR_NAMES[id.replace(/^cli[-:]/, "")] || id}</dt>
-                <dd>{note}</dd>
-              </div>
-            ))}
-          </dl>
+          {noteOrder(notes).map(([id, note]) => (
+            <details key={id} className="vendor-note">
+              <summary>{noteSummary(id)}</summary>
+              <p>{note}</p>
+            </details>
+          ))}
         </div>
       )}
       <fieldset className="mode-options">
@@ -119,6 +140,7 @@ export function PermissionsPage({
           </label>
         ))}
       </fieldset>
+      <SandboxSettings values={shell} onChange={setShell} />
       <details className="advanced-options">
         <summary>Advanced</summary>
         <label className="check">
@@ -139,14 +161,6 @@ export function PermissionsPage({
           Ask before destructive commands (rm -rf, git push --force). Privileged
           commands such as sudo are always blocked.
         </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={shellNetwork}
-            onChange={(e) => setShellNetwork(e.target.checked)}
-          />{" "}
-          Let approved shell commands use the network
-        </label>
       </details>
       <div className="row end settings-foot">
         <button
@@ -155,6 +169,7 @@ export function PermissionsPage({
           disabled={saving}
           onClick={() => {
             setSaving(true);
+            const patch = sandboxPatch(shell);
             void onSave({
               permissions: {
                 mode,
@@ -163,10 +178,11 @@ export function PermissionsPage({
                   : originalLevel === "read_only"
                     ? "workspace"
                     : originalLevel,
-                network: shellNetwork,
+                ...patch.permissions,
                 require_approval_for_dangerous: dangerous,
               },
-              network: { mode: netMode },
+              network: { mode: netMode, ...patch.network },
+              sandbox: patch.sandbox,
             }).finally(() => setSaving(false));
           }}
         >

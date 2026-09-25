@@ -286,7 +286,11 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     }));
   }
   if (event.type === "checkpoint.updated") {
-    touch((a) => ({ ...a, changed: addChanged(a.changed, p.paths) }));
+    touch((a) => ({
+      ...a,
+      checkpointed: true,
+      changed: addChanged(a.changed, p.paths),
+    }));
   }
   if (event.type === "checkpoint.restored") {
     // The files are back to how they were before this task: the divider

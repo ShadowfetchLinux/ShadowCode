@@ -233,6 +233,11 @@ impl Engine {
     pub fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.0.sender.subscribe()
     }
+    /// The windows' wake-up channel, for transient notifications that are
+    /// never stored (a terminal printed output, for example).
+    pub fn notifier(&self) -> broadcast::Sender<Value> {
+        self.0.sender.clone()
+    }
     pub fn paths(&self) -> &AppPaths {
         &self.0.paths
     }
@@ -820,8 +825,8 @@ impl Engine {
     pub fn rewind_job(&self, id: &str) -> Result<Value> {
         let running = self.running(id)?;
         let job = self.job(id)?.context("Job not found")?;
-        if vendor_job(&job, running.as_deref()) {
-            bail!("Rewind does not apply to Claude / Codex / Grok vendor-agent tasks. Those CLIs write files with their own tools; use Git or the vendor CLI to undo.");
+        if vendor_job(&job, running.as_deref()) && running.is_some() {
+            bail!("Wait for the subscription turn to finish, then rewind. Its file changes are recorded from a project checkpoint when the turn ends.");
         }
         let _reservation = if running.is_none() {
             Some(self.reserve_workspace(&job.workspace)?)
@@ -1378,6 +1383,47 @@ impl Engine {
             }
         }
     }
+    /// Record what a subscription CLI changed in the project into the task's
+    /// file checkpoint. A failure never fails the turn; it is reported.
+    #[cfg(unix)]
+    async fn record_vendor_changes(
+        &self,
+        before: crate::checkpoint::capture::Before,
+        running: &Running,
+        job: &Job,
+        events: &TaskEvents,
+        label: &str,
+    ) {
+        let recorded = crate::checkpoint::capture::after(
+            before,
+            &self.0.store,
+            &running.workspace,
+            &job.task_id,
+        )
+        .await;
+        match recorded {
+            Ok(outcome) => {
+                if !outcome.paths.is_empty() {
+                    if let Ok(mut summary) =
+                        checkpoint::summary(&self.0.store, &running.workspace, &job.task_id)
+                    {
+                        summary["source"] = json!("vendor");
+                        summary["changed"] = json!(outcome.paths);
+                        let _ = events.emit("checkpoint.updated", summary);
+                    }
+                }
+                if let Some(text) = outcome.warning(&format!("this {label} turn")) {
+                    let _ = events.emit("agent.warning", json!({"text":text,"kind":"checkpoint"}));
+                }
+            }
+            Err(error) => {
+                let _ = events.emit(
+                    "agent.warning",
+                    json!({"text":format!("Rewind may not cover this {label} turn: the project checkpoint failed ({error:#})."),"kind":"checkpoint"}),
+                );
+            }
+        }
+    }
     async fn run_cli_agent(
         &self,
         running: &Running,
@@ -1404,9 +1450,15 @@ impl Engine {
                 "images":job.images
             }),
         )?;
+        let checkpoints = running.config.checkpoints.vendor
+            && running.config.permissions.level != crate::config::PermissionLevel::ReadOnly;
         events.emit(
             "agent.warning",
-            json!({"text":"Vendor agent: the official CLI owns tools and sandbox. Rewind does not apply to this task."}),
+            json!({"text":if checkpoints {
+                "Vendor agent: the official CLI owns its tools and sandbox. ShadowCode checkpoints the project around the turn, so Rewind can restore files it changed (not Git-ignored files or Git history)."
+            } else {
+                "Vendor agent: the official CLI owns tools and sandbox. Project checkpoints are off, so Rewind does not apply to this task."
+            }}),
         )?;
         if let Some(decision) = &job.routing {
             events.emit(
@@ -1471,6 +1523,20 @@ impl Engine {
             #[cfg(not(unix))]
             mcp_servers: Vec::new(),
         };
+        // A project checkpoint around the turn: the CLI writes with its own
+        // tools, so the changes are recorded afterwards for rewind.
+        #[cfg(unix)]
+        let checkpoint = if checkpoints {
+            crate::checkpoint::capture::before(
+                &running.workspace.path,
+                &job.session_id,
+                &format!("a {} turn", vendor.label()),
+                &running.config.checkpoints,
+            )
+            .await
+        } else {
+            crate::checkpoint::capture::not_needed()
+        };
         #[cfg(unix)]
         let outcome = crate::cli_agent::runner::run(crate::cli_agent::runner::Request {
             vendor,
@@ -1489,6 +1555,9 @@ impl Engine {
             catalog: Some(self.0.vendors.clone()),
         })
         .await;
+        #[cfg(unix)]
+        self.record_vendor_changes(checkpoint, running, &job, &events, vendor.label())
+            .await;
         // Usage may have moved: refresh after every vendor turn, bounded by
         // the catalog's refresh window unless the turn hit the plan limit.
         #[cfg(unix)]
@@ -1735,6 +1804,16 @@ impl Engine {
         if let Some(extra) = &running.system_context {
             system.push_str("\n\n");
             system.push_str(extra);
+        }
+        if schemas.iter().any(|s| s["function"]["name"] == "repo_map") {
+            let root = running.workspace.path.clone();
+            if let Some(map) =
+                crate::code_intel::repo_map::system_note(root, job.task.clone(), &running.config)
+                    .await
+            {
+                system.push_str("\n\n");
+                system.push_str(&map);
+            }
         }
         system.push_str(&context::capability_guidance(&running.config, &schemas));
         system.push_str(&tools.extensions().context_note(&schemas));
@@ -2241,6 +2320,8 @@ impl Engine {
                                 | "find_references"
                                 | "get_diagnostics"
                                 | "get_type_signature"
+                                | "repo_map"
+                                | "search_code"
                                 | "git_diff"
                                 | "git_status"
                                 | "git_log"

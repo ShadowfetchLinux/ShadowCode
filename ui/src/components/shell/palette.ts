@@ -33,6 +33,11 @@ export function paletteItems(a: PaletteActions): PaletteItem[] {
       run: a.openProject,
     },
     { id: "changes", label: "Review changes", run: () => a.panel("changes") },
+    {
+      id: "git",
+      label: "Commit, push and open a pull request",
+      run: () => a.panel("git"),
+    },
     { id: "compare", label: "Compare models on this task", run: a.compare },
     {
       id: "comparisons",
@@ -42,7 +47,8 @@ export function paletteItems(a: PaletteActions): PaletteItem[] {
     { id: "files", label: "Browse files", run: () => a.panel("files") },
     {
       id: "terminal",
-      label: "Run a terminal command",
+      label: "Open a terminal",
+      hint: "Ctrl+`",
       run: () => a.panel("terminal"),
     },
     {
@@ -55,7 +61,17 @@ export function paletteItems(a: PaletteActions): PaletteItem[] {
     {
       id: "goals",
       label: "Goals and milestones",
-      run: () => a.settings("advanced", "goals"),
+      run: () => a.panel("goals"),
+    },
+    {
+      id: "background",
+      label: "Background processes · dev servers and watchers",
+      run: () => a.panel("background"),
+    },
+    {
+      id: "worktrees",
+      label: "Worktrees",
+      run: () => a.panel("worktrees"),
     },
     {
       id: "skills",

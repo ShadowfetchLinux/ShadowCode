@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { installFakeBackend } from "./fakeBackend";
+import { installFakeTools } from "./fakeTools";
 
 // Every test drives the production UI build against the deterministic fake
 // engine; nothing here talks to a real vendor CLI or model.
@@ -9,6 +10,7 @@ test.beforeEach(async ({ page }) => {
   page.on("pageerror", (e) => errors.push(e.message));
   (page as Page & { errors?: string[] }).errors = errors;
   await page.addInitScript(installFakeBackend, { stepMs: 90 });
+  await page.addInitScript(installFakeTools, {});
   await page.goto("/");
   await expect(
     page.getByRole("heading", { name: "What should we work on?" }),
@@ -199,7 +201,7 @@ test("approvals appear as soon as the engine asks, without polling", async ({
   expect(decided?.body).toMatchObject({ decision: "approve" });
 });
 
-test("drawer tabs keep terminal output, the open file and the commit message", async ({
+test("drawer tabs keep the terminal, the open file and the commit message", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Review changes" }).click();
@@ -208,12 +210,12 @@ test("drawer tabs keep terminal output, the open file and the commit message", a
     drawer.locator(".drawer-tabs").getByRole("button", { name });
   await drawer.getByPlaceholder("Commit message").fill("Fix the add function");
   await tab("Terminal").click();
-  await drawer.getByRole("textbox", { name: "Terminal command" }).fill("ls");
-  await drawer.getByRole("button", { name: "Run" }).click();
-  await expect(drawer).toContainText("ran ls");
-  await drawer
-    .getByRole("textbox", { name: "Terminal command" })
-    .fill("git log");
+  const shell = drawer.getByRole("group", { name: "Terminal 1" });
+  await shell.click();
+  await page.keyboard.type("ls");
+  await page.keyboard.press("Enter");
+  await expect(shell).toContainText("ls: ran in /work/demo");
+  await page.keyboard.type("echo half-typed");
   await tab("Files").click();
   await drawer.getByRole("button", { name: /README\.md/ }).click();
   await expect(drawer).toContainText("Contents of README.md");
@@ -222,10 +224,8 @@ test("drawer tabs keep terminal output, the open file and the commit message", a
     "Fix the add function",
   );
   await tab("Terminal").click();
-  await expect(drawer).toContainText("ran ls");
-  await expect(
-    drawer.getByRole("textbox", { name: "Terminal command" }),
-  ).toHaveValue("git log");
+  await expect(shell).toContainText("ls: ran in /work/demo");
+  await expect(shell).toContainText("echo half-typed");
   await tab("Files").click();
   await expect(drawer).toContainText("Contents of README.md");
   // Closing and reopening the drawer keeps them too.

@@ -251,6 +251,71 @@ used in the project, else the first ready local model with tool support.
 See [Compare](COMPARE.md) for `POST /api/compare`, `GET /api/compare/<id>`,
 `GET /api/compares`, `keep`, `discard`, `cancel` and the scoreboard.
 
+## Code intelligence
+
+Language servers, the code index, search, the repo map and embedding models
+([code intelligence](CODE_INTELLIGENCE.md)). Routes act on the selected
+project. Downloads are refused in offline mode.
+
+`GET /api/code-intel/status` →
+
+```
+{
+  config: CodeIntelSettings,          // effective code_intel settings
+  config_error: string|null,          // set when config.yaml's section is invalid (defaults in use)
+  offline: boolean,
+  languages: [{ language: "rust"|"typescript"|"python"|"go"|"c", label, enabled,
+                available, server?, path?, source?: "config"|"managed"|"path",
+                note?, install_hint?, managed_package: "typescript"|"python"|null }],
+  servers: [{ root, language, server, program, state: "ready"|"loading"|"backoff"|"stopped"|"idle"|"busy",
+              pid, idle_sec, starts, failures, last_error }],
+  managed: [{ id: "typescript"|"python", label, packages: ["name@version"], approx_bytes,
+              installed, installed_bytes: number|null, versions: [{name, version|null}], path,
+              progress: {state: "installing"|"installed"|"error", error, log}|null }],
+  managed_dir, npm: { available, path, node },
+  index: { files, symbols, references, chunks, languages: {[lang]: files}, max_files } | null,
+  embeddings: { models: EmbeddingModel[], active: string|null, runtime: string|null,
+                server: {model, pid, idle_sec}|null,
+                coverage: {embedded, chunks}|null,
+                backfill: {state: "running"|"done"|"error", embedded, error}|null }
+}
+CodeIntelSettings = { lsp, diagnostics_on_edit, diagnostics_wait_ms, lsp_idle_minutes, max_servers,
+                      servers: {[language]: {command, args}}, repo_map_tokens, semantic_search, embedding_model }
+EmbeddingModel = { id, name, summary, bytes, license, sha256, url, dims, installed, active,
+                   progress: {state: "downloading"|"verifying"|"installed"|"error", done, total, error}|null }
+```
+
+- `POST /api/code-intel/config {…some CodeIntelSettings fields}` → `{ok, config}`.
+  Unknown or mistyped fields and out-of-range values are errors. Turning `lsp`
+  off stops running servers.
+- `POST /api/code-intel/install {package: "typescript"|"python"}` →
+  `{ok, started, managed}`; the npm install runs in the background (poll
+  status). `POST /api/code-intel/uninstall {package}` → `{ok, removed, managed}`.
+- `POST /api/code-intel/servers/stop` → `{ok, stopped, embedding_server_stopped}`.
+- `POST /api/code-intel/embeddings/install {model}` → `{ok, started, models}`;
+  downloads in the background, verifies size and SHA-256, then makes the
+  model active if none was chosen and embeds the project.
+  `POST /api/code-intel/embeddings/remove {model}` → `{ok, removed, models}`.
+- `POST /api/code-intel/reindex` → `{ok, index, embedding_started}`.
+- `POST /api/code-intel/search {query, path?, max_hits?}` → the `search_code`
+  result: `{ok, query, mode: "bm25"|"hybrid", count, hits: [{path, start_line,
+  end_line, score, preview, symbols?, bm25?, similarity?}], semantic, note}`.
+- `GET /api/code-intel/repo-map?tokens=&query=` → `{ok, map, files, symbols,
+  tokens_estimate, focus, note}`.
+
+Native tools: edit results (`write_file`, `edit_file`, `apply_patch`) may
+carry `diagnostics: {new_errors: [{path, line, column, severity, message,
+source?, code?}], checked: [path], servers?, pending?, unverified?,
+unavailable?, truncated?, note}`. New tools `repo_map {query?, paths?,
+max_tokens?}` and `search_code {query, path?, max_hits?}` are read-only.
+`goto_definition` / `find_references` accept `path`, `line`, `column`
+(1-based) and then answer `{ok, source: "lsp:<server>", count, truncated,
+locations: [{path, line, column, preview}], note}`; without a position, or
+when no server answers, they keep the tree-sitter shape (plus `lsp_note`).
+`get_diagnostics {path}` answers `{ok, path, server, errors, total,
+truncated, diagnostics: [...], note}` from the language server, or
+`{ok: false, pending: true, error}` while it loads.
+
 ## Local models
 
 `GET /api/local-models` → `LocalCatalog`:
@@ -508,7 +573,6 @@ Usage = {
   get the complete native tool descriptions; smaller ones get descriptions cut
   to 64 bytes.
 
-||||||| f942214
 
 ## Subagents and agent definitions
 
@@ -624,6 +688,91 @@ engine says something changed, plus a 15 s backstop read.
   `POST /api/checkpoints/rewinds/{undo_id}/undo` → `{ok, restored, task_id}`
   puts them back once (refused if they changed since the rewind); the task
   can then be rewound again.
+## Terminals
+
+The drawer's interactive terminals: the user's login shell on a
+pseudo-terminal, started in the selected project with the user's environment
+(AppImage library paths removed, `TERM=xterm-256color`). They run outside the
+sandbox, need no approval or trust, work while a task runs (no workspace
+reservation), and are never stored or shown to a model. Terminals belong to
+one desktop view: an attached window has its own, and they end when the view
+or the app closes (`SIGHUP` to the shell's session, then `SIGKILL`). At most
+12 per view.
+
+- `GET /api/terminals` → `{ workspace, terminals: Terminal[], limits: {open,
+  scrollback_bytes} }` for the selected project. `Terminal` is `{id (32 hex),
+  title ("Terminal N"), number, workspace, shell, cols, rows, created, exited,
+  exit_code, cursor}`.
+- `POST /api/terminals {cols?, rows?}` → `Terminal` (a new shell).
+- `POST /api/terminals/{id}/input {data}` → `{ok}`; at most 64 KB per call.
+  Refused once the shell has exited.
+- `POST /api/terminals/{id}/resize {cols, rows}` → `{cols, rows}` (clamped).
+- `GET /api/terminals/{id}/output?after=<byte offset>` → `{id, data (base64
+  bytes), from, cursor, more, truncated, exited, exit_code}`. Offsets count
+  everything the terminal printed; the engine keeps the last 512 KB, so an
+  older `after` starts at the oldest kept byte with `truncated: true`. At most
+  256 KB per read; `more` asks for another.
+- `POST /api/terminals/{id}/close` → `{ok}`.
+- Engine broadcast `terminal.output {terminal_id}` / `terminal.exited
+  {terminal_id}`: transient wake-ups (at most one per 16 ms per terminal,
+  never stored, never carrying output). The desktop shell forwards them as the
+  `shadowcode:terminal` event `{type, terminal_id}`, not as
+  `shadowcode:events`; attached views receive `terminal_id` in their
+  notifications.
+
+## Git panel
+
+Branches, suggested messages, push and pull requests for the selected
+project. Staging and commits stay on `POST /api/workspace/git/add` and
+`/commit`. Git runs with hooks disabled; push, `gh` and `glab` run with the
+user's sign-in environment (SSH agent, askpass, credential helpers,
+`GH_TOKEN`/`GITLAB_TOKEN` when set) and prompts disabled. No credential is
+read or stored; remote URLs are reported without user-info; tool errors are
+redacted.
+
+- `GET /api/git?remote=` → `{repo, branch|null, detached, has_commits,
+  upstream ("origin/x"|null), ahead, behind, staged, changed, branches:
+  [{name, upstream, current}], remotes: [{name, info: RemoteInfo|null}],
+  remote, remote_info, bases: string[], default_base}`; `{repo: false}`
+  outside a repository. `RemoteInfo` is `{host, path ("owner/repo"), web_url,
+  kind: "github"|"gitlab"|"other"}`. The remote is the requested one, else the
+  branch's upstream remote, else `origin`, else the first.
+- `POST /api/git/branch {name, create}` → `{ok, branch, created}`. Names are
+  validated (no spaces, control characters, `~^:?*[\`, `..`, `@{`, `//`,
+  leading `-` or `/`, trailing `/`, `.` or `.lock`, components starting with
+  `.`), then `git check-ref-format --branch`. Needs a trusted, writable
+  project and no running task.
+- `POST /api/git/suggest {kind: "commit"|"pr", base?, remote?}` → `{kind,
+  source: "model"|"local"|"summary", model, note, message}` for commits or
+  `{…, title, body}` for pull requests. Commit drafts read the staged diff
+  (an error when nothing is staged); PR drafts read the commits and diff since
+  `base` (default: the remote's HEAD branch, else main/master/trunk/develop).
+  `model` uses the conversation's picker target when ShadowCode runs it
+  (local GGUF, API, OpenRouter; not subscriptions, and only loopback models
+  when offline), `local` the loaded local model, `summary` a deterministic
+  text. Secret-looking paths are listed but their contents are never sent,
+  and the text is redacted before it leaves. 60 s limit; failures fall back
+  to `summary` with a `note`.
+- `POST /api/git/push {remote?}` → `{ok, remote, branch, output,
+  remote_info}`. Pushes `refs/heads/<branch>` to the same name with
+  `--set-upstream`, never forced; 180 s limit. Sign-in and rejected pushes
+  answer with an explanation.
+- `GET /api/git/pr?remote=&base=` → `{remote, provider, remote_info, cli:
+  {name: "gh"|"glab"|null, installed, version, authenticated, detail,
+  install_url, login_command}, base, compare_url, pr: {number, url, state,
+  draft, title, base}|null}`. `cli.authenticated` comes from `gh|glab auth
+  status --hostname <host>`; `compare_url` is the forge's new pull/merge
+  request page for the current branch.
+- `POST /api/git/pr {title, body, base, draft, remote?}` → `{ok, url, number,
+  provider, pushed, branch, base, draft}`. Pushes first when the branch has
+  no upstream or unpushed commits, then runs `gh pr create` (`glab mr
+  create` for GitLab). Refused on the base branch itself and when the CLI is
+  missing or signed out.
+- `GET /api/git/pr/checks?number=&remote=` → `{supported, checks: [{name,
+  workflow, state, bucket: "pass"|"fail"|"pending"|"skipping", link,
+  description}], summary: {bucket: count}, overall:
+  "pass"|"fail"|"pending"|"none", url, checked_at}` from `gh pr checks
+  --json`. GitLab answers `supported: false` with the pipelines URL.
 
 ## Config
 
@@ -670,6 +819,44 @@ Details (safety branch):
   when `allow_root`; never allowed silently. Destructive Git commands in the
   shell always ask. Network shell commands are denied offline.
 
+### Shell sandbox and checkpoints (0.32)
+
+- `sandbox: { require: bool = false, home_binds: string[], landlock: bool = true }`.
+  `home_binds` are paths relative to the home folder, mounted read-only in
+  the bubblewrap sandbox (default `.cargo .rustup .nvm .npm .cache/pip
+  .local/bin .gitconfig .pyenv .bun .deno`). PUT rejects absolute paths, `..`,
+  and anything equal to, inside or containing `.ssh .aws .gnupg .config
+  .local/share .netrc .docker .kube .password-store .pki .azure .npmrc
+  .pypirc .git-credentials .mozilla .var`. `require: true`: without
+  bubblewrap, `exec` fails with "The command did not run: 'Require sandbox'
+  is on …". `landlock`: without bubblewrap (and `require` off), commands
+  run under Landlock when the kernel has it.
+- `network.shell: "on" | "off" | "allowlist"` (default `on`) and
+  `network.allow: string[]` (at most 128; `host`, `*.domain`, `host:port`,
+  `[v6]:port`; without a port, 80 and 443). The effective shell network is
+  `off` whenever `permissions.network` is false or `network.mode` is
+  `offline`. Settings writes `permissions.network = (shell != "off")`
+  together with `network.shell`. `allowlist` needs bubblewrap; without it,
+  `exec` fails closed. Invalid `network.allow` entries are rejected by PUT.
+- `checkpoints: { shell: bool = true, vendor: bool = true, keep: 1..10000 = 200,
+  max_copy_files: <= 200000 = 5000, max_copy_bytes: <= 1 GiB = 64 MiB }`.
+- `GET /api/sandbox/status` → `{ effective: "bubblewrap" | "landlock" |
+  "none" | "blocked", bubblewrap: {installed, works, detail}, landlock_abi,
+  network_namespace: {available, detail}, require, shell_network, allow,
+  home_read_only: string[], home_skipped: string[], never_mounted: string[] }`.
+- The `exec` tool result carries `sandbox: {mode: "bubblewrap" | "landlock" |
+  "none", network, allow, home_read_only, home_skipped, proxy?: {reached,
+  blocked}, …}` and `checkpoint: {method: "git" | "copy" | "none", paths,
+  skipped: [{path, reason}], unavailable, ref, warning?}`.
+- Events: `agent.warning {text, kind: "sandbox"}` once per conversation when a
+  command runs without bubblewrap; `agent.warning {text, kind: "checkpoint"}`
+  when a vendor turn's changes can't all be rewound;
+  `checkpoint.updated {…summary, source: "shell" | "vendor", changed: string[]}`
+  after a shell command or vendor turn changed project files.
+- `POST /api/jobs/{id}/rewind` and `POST /api/checkpoints/tasks/{task}/restore`
+  now also restore files changed by shell commands and subscription CLI turns.
+  For a running vendor job the rewind is refused; rewind after the turn ends.
+
 ## Web tools (native agent)
 
 - `POST /api/jobs {web: true}` offers `web_fetch {url}` and
@@ -693,8 +880,8 @@ Details (safety branch):
   `tool.started`, `tool.completed`, `approval.requested` and
   `command.completed` payloads are stored redacted.
 - `checkpoint.restored {task_id, paths}` is written for
-  `POST /api/checkpoints/tasks/{task}/restore` and for rewinds of native
-  jobs; after a finished task is restored the session's next turn also sees a
+  `POST /api/checkpoints/tasks/{task}/restore` and for job rewinds (native and subscription
+  jobs); after a finished task is restored the session's next turn also sees a
   process note that the edits are no longer on disk.
 - `POST /api/workspace/attach` and `/attach-image` work in read-only
   projects (trust still required); files go to `.shadow/attachments/`.

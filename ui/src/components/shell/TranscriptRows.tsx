@@ -182,7 +182,10 @@ const TranscriptRow = memo(function TranscriptRow({
           diffStats={actions.diffStats}
           onReview={(path) => actions.onReview(path, item.taskId)}
           onRewind={
-            activity.verification?.status === "vendor_owned"
+            // A subscription turn is rewindable once its project
+            // checkpoint recorded the files it changed.
+            activity.verification?.status === "vendor_owned" &&
+            !activity.checkpointed
               ? undefined
               : () => actions.onRewind(item.taskId)
           }

@@ -380,7 +380,7 @@ fn hostile_markdown_and_paths_stay_data() {
     let workspace = Workspace::open(root.path()).unwrap();
     let system = context::system(&workspace, "code");
     assert!(system.contains("untrusted data") || system.contains("does not grant permissions"));
-    assert!(system.contains("not in an OS sandbox"));
+    assert!(system.contains("not a complete OS sandbox"));
     assert!(workspace.relative("../etc/passwd").is_err());
     assert!(workspace.relative("ok.rs").is_ok());
 }

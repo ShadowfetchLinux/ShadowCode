@@ -388,8 +388,10 @@ throwaway profile has no `secrets.env`.
 - [User guide](docs/USER_GUIDE.md) · [Architecture](ARCHITECTURE.md) ·
   [Security](SECURITY.md) · [Subscriptions](docs/SUBSCRIPTIONS.md) ·
   [Local models](docs/LOCAL_MODELS.md)
-- Advanced features (skills, goals, background processes, MCP, plugins, hooks,
-  worktrees, Guardian) are under **Settings › Advanced**. The same executable
+- The drawer has your own terminals, a Git tab (branch, commit with a
+  suggested message, push, pull requests with CI status) and **Tools** (goals,
+  background processes, worktrees). Integrations (skills, MCP, plugins, hooks,
+  Guardian, vendor tools, health) are under **Settings › Advanced**. The same executable
   also has a CLI (`shadowcode run`, `shadowcode tui`, `shadowcode mcp serve`):
   [native CLI](docs/NATIVE_CLI.md), [terminal UI](docs/NATIVE_TUI.md),
   [MCP](docs/NATIVE_MCP.md).
