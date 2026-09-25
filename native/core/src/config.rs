@@ -163,10 +163,28 @@ pub enum NetworkMode {
     Offline,
 }
 
+/// Network for sandboxed shell commands, on top of `permissions.network`
+/// (which must be on for `on` and `allowlist`). `allowlist` lets HTTP(S)
+/// through a proxy to the hosts in `network.allow` only, and needs bubblewrap.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellNetwork {
+    #[default]
+    On,
+    Off,
+    Allowlist,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NetworkConfig {
     pub mode: NetworkMode,
+    /// Shell command network: `on`, `off` or `allowlist` (see [`ShellNetwork`]).
+    pub shell: ShellNetwork,
+    /// Hosts shell commands may reach in `allowlist` mode: `example.com`,
+    /// `*.example.com` (domain and subdomains), `host:port`. Without a port,
+    /// 80 and 443.
+    pub allow: Vec<String>,
     /// Exact `host:port` entries (for example `localhost:3000`) that web tools
     /// may reach although they are local or use another port.
     pub allow_local_dev: Vec<String>,
@@ -192,6 +210,7 @@ impl NetworkConfig {
             crate::web::normalize_allow_entry(entry)
                 .with_context(|| format!("Invalid network.allow_local_dev entry '{entry}'"))?;
         }
+        crate::sandbox::proxy::parse_list(&self.allow)?;
         Ok(())
     }
 }
@@ -273,6 +292,12 @@ pub struct Config {
     pub local_engine: crate::local_engine::LocalEngineConfig,
     #[serde(default)]
     pub network: NetworkConfig,
+    /// Shell sandbox: `require`, `home_binds`, `landlock`.
+    #[serde(default)]
+    pub sandbox: crate::sandbox::SandboxConfig,
+    /// Workspace checkpoints around shell commands and vendor CLI turns.
+    #[serde(default)]
+    pub checkpoints: crate::checkpoint::CheckpointConfig,
     /// What happens when a subscription reports its plan limit:
     /// `on_limit` is `"local"` (continue the conversation on a model on this
     /// computer) or `"ask"`; `fallback_model` optionally names the
@@ -299,6 +324,8 @@ impl Default for Config {
             cli_agents: crate::cli_agent::CliAgentsConfig::default(),
             local_engine: crate::local_engine::LocalEngineConfig::default(),
             network: NetworkConfig::default(),
+            sandbox: crate::sandbox::SandboxConfig::default(),
+            checkpoints: crate::checkpoint::CheckpointConfig::default(),
             limits: json!({"on_limit":"local","fallback_model":""}),
             extra: BTreeMap::new(),
         }
@@ -353,6 +380,15 @@ impl Config {
     /// Web tools can be offered: the task asked for web and the mode is online.
     pub fn web_tools_allowed(&self, task_web: bool) -> bool {
         task_web && self.network.mode == NetworkMode::Online
+    }
+    /// Effective network for shell commands: off when the app is offline or
+    /// `permissions.network` is off, otherwise `network.shell`.
+    pub fn shell_network(&self) -> ShellNetwork {
+        if self.permissions.shell_network() {
+            self.network.shell
+        } else {
+            ShellNetwork::Off
+        }
     }
     /// Derive the runtime-only permission fields for one task.
     pub fn apply_runtime(&mut self, task_web: bool) {
@@ -461,6 +497,8 @@ impl Config {
         self.cli_agents.validate()?;
         self.local_engine.validate()?;
         self.network.validate()?;
+        self.sandbox.validate()?;
+        self.checkpoints.validate()?;
         self.hooks.validate()?;
         ensure!(
             serde_yaml_ng::to_string(self)?.len() <= MAX_CONFIG_BYTES,

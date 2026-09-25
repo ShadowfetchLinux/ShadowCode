@@ -2096,7 +2096,8 @@ export default function App() {
                             onReview={reviewChanges}
                             onRewind={
                               transcript.activity[item.taskId].verification
-                                ?.status === "vendor_owned"
+                                ?.status === "vendor_owned" &&
+                              !transcript.activity[item.taskId].checkpointed
                                 ? undefined
                                 : () => void rewind(item.taskId)
                             }

@@ -22,6 +22,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 mod background;
+mod shell;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -585,89 +586,6 @@ impl ToolExecutor {
             output["error"] = output["content"].clone();
         }
         Ok(output)
-    }
-    async fn shell(&self, args: &Value) -> Result<Value> {
-        let command = string(args, "command")?;
-        ensure!(
-            !command.is_empty() && command.len() <= 64_000 && !command.contains('\0'),
-            "Invalid shell command"
-        );
-        let seconds = integer(
-            args,
-            "timeout_sec",
-            self.config.agent.tool_timeout_sec as usize,
-            1,
-            3600,
-        )?
-        .min(self.config.agent.tool_timeout_sec as usize);
-        let cwd = if let Some(path) = args["cwd"].as_str() {
-            let relative = self.workspace.relative(path)?;
-            let cwd = self.workspace.path.join(relative).canonicalize()?;
-            ensure!(
-                cwd.starts_with(&self.workspace.path),
-                "Command directory escapes the workspace"
-            );
-            cwd
-        } else {
-            self.workspace.path.clone()
-        };
-        let allow_network = self.config.permissions.shell_network();
-        let sandbox_note;
-        let mut scratch_path = None;
-        let probe_cwd = self.workspace.path.clone();
-        let probe_command = command.to_owned();
-        let profile = tokio::task::spawn_blocking(move || {
-            crate::sandbox::build_shell_profile(&probe_cwd, &probe_command, allow_network)
-        })
-        .await?;
-        let primary = match profile {
-            Ok(mut profile) => {
-                if let Some(index) = profile.args.iter().position(|arg| arg == "--chdir") {
-                    profile.args[index + 1] = cwd.to_string_lossy().into_owned();
-                }
-                scratch_path = profile.scratch_dir.clone();
-                sandbox_note = json!({
-                    "mode": "bubblewrap",
-                    "network": profile.network,
-                    "scratch": profile.scratch_dir.as_ref().map(|p| p.to_string_lossy()),
-                    "workspace_cow": profile.workspace_cow,
-                    "note": "Optional bubblewrap profile with ephemeral scratch at SHADOWCODE_SCRATCH; not a full OS sandbox. Real home is read-only."
-                });
-                ProcessSpec {
-                    program: profile.program.to_string_lossy().into_owned(),
-                    args: profile.args,
-                    cwd: cwd.clone(),
-                    timeout: Duration::from_secs(seconds as u64),
-                    output_limit: self.config.agent.max_output_bytes,
-                    env: Default::default(),
-                }
-            }
-            Err(error) => {
-                sandbox_note = json!({
-                    "mode": "none",
-                    "reason": format!("{error:#}"),
-                    "note": "Shell continues without bubblewrap; policy remains heuristic, not an OS sandbox."
-                });
-                let mut spec =
-                    ProcessSpec::shell(command, cwd.clone(), Duration::from_secs(seconds as u64));
-                spec.output_limit = self.config.agent.max_output_bytes;
-                spec
-            }
-        };
-        // Never replay a command after a process failure: it may have changed files.
-        let result = process::run(primary, self.cancel.clone(), None).await;
-        let mut sandbox_note = sandbox_note;
-        if let Some(path) = scratch_path {
-            // The command already ran; a cleanup failure must not discard its
-            // recorded output and exit status.
-            if let Err(error) = crate::sandbox::discard_scratch(&path) {
-                sandbox_note["scratch_cleanup_error"] = json!(format!("{error:#}"));
-            }
-        }
-        let result = result?;
-        let mut value = serde_json::to_value(result)?;
-        value["sandbox"] = sandbox_note;
-        Ok(value)
     }
     async fn git(&self, name: &str, args: &Value) -> Result<Value> {
         let mut command = vec![
@@ -1263,7 +1181,7 @@ pub fn schemas() -> Vec<Value> {
         ("create_directory","Create a workspace directory and parents.",json!({"path":s}),vec!["path"]),
         ("move_file","Move a regular file without overwriting its destination; checkpoint both paths.",json!({"src":s,"dest":s}),vec!["src","dest"]),
         ("delete_file","Delete one regular workspace file after approval; retain a checkpoint.",json!({"path":s,"expected_hash":s}),vec!["path"]),
-        ("exec","Run a shell command after approval. Uses optional bubblewrap when available; still not a full OS sandbox. Output and runtime are bounded.",json!({"command":s,"cwd":s,"timeout_sec":n}),vec!["command"]),
+        ("exec","Run a shell command after approval, in the bubblewrap sandbox when available (empty home, writable project, network per settings). Project files it changes are checkpointed for rewind. Output and runtime are bounded.",json!({"command":s,"cwd":s,"timeout_sec":n}),vec!["command"]),
         ("git_status","Show repository status.",json!({}),vec![]),
         ("git_diff","Show staged or unstaged changes. External diff helpers and textconv are disabled.",json!({"staged":b}),vec![]),
         ("git_log","Show recent commits.",json!({"limit":n}),vec![]),

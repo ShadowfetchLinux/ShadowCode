@@ -30,6 +30,7 @@ mod compare;
 #[cfg(unix)]
 mod inspection;
 mod memory;
+mod sandbox;
 
 #[derive(Clone)]
 struct Selection {
@@ -566,6 +567,7 @@ impl Service {
                 })
                 .await?;
             }
+            ("GET", "/api/sandbox/status") => return self.sandbox_status().await,
             ("POST", "/api/sandbox/discard-scratch") => {
                 let path = PathBuf::from(text("path"));
                 return crate::sandbox::discard_scratch(&path);

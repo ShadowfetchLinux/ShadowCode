@@ -34,6 +34,23 @@ permissions:
 #                          # no vendor status/usage checks, cloud jobs refused)
 #   allow_local_dev: []    # exact host:port entries web tools may reach, e.g. localhost:3000
 #   searxng_url: ""        # your own SearXNG base URL; web_search asks it before DuckDuckGo
+#   shell: on              # shell commands: on | off | allowlist (only when permissions.network is true)
+#   allow: []              # allowlist hosts: example.com, *.example.com, host:port (default ports 80/443)
+
+# Shell sandbox (bubblewrap). Home is an empty temporary folder in the sandbox.
+# sandbox:
+#   require: false         # true: refuse shell commands when bubblewrap is unavailable
+#   landlock: true         # without bubblewrap, restrict files (and TCP) with Landlock
+#   home_binds: [.cargo, .rustup, .nvm, .npm, .cache/pip, .local/bin, .gitconfig, .pyenv, .bun, .deno]
+#                          # read-only; .ssh, .aws, .gnupg, .config, .local/share, ... are refused
+
+# Project checkpoints around shell commands and subscription CLI turns (for Rewind).
+# checkpoints:
+#   shell: true
+#   vendor: true
+#   keep: 200              # refs kept under refs/shadowcode/checkpoints in each repository
+#   max_copy_files: 5000   # folders without Git: larger folders are not covered
+#   max_copy_bytes: 67108864
 
 # Subscriptions (vendor CLIs). Settings › Advanced › Vendor tools edits these.
 # cli_agents:

@@ -630,6 +630,20 @@ export type StartCompareRequest = {
   web?: boolean;
 };
 
+/** GET /api/sandbox/status: shell isolation this computer provides. */
+export type SandboxStatus = {
+  effective: "bubblewrap" | "landlock" | "none" | "blocked";
+  bubblewrap: { installed: boolean; works: boolean; detail: string };
+  landlock_abi: number;
+  network_namespace: { available: boolean; detail: string };
+  require: boolean;
+  shell_network: "off" | "on" | "allowlist";
+  allow: string[];
+  home_read_only: string[];
+  home_skipped: string[];
+  never_mounted: string[];
+};
+
 const get = <T>(path: string) => request<T>(path);
 
 async function send<T>(
@@ -867,6 +881,7 @@ export const api = {
   deleteSession: (id: string) =>
     send<{ ok: boolean }>(`/api/sessions/${id}`, "DELETE"),
   doctor: () => get<DoctorReport>("/api/doctor"),
+  sandboxStatus: () => get<SandboxStatus>("/api/sandbox/status"),
   goals: () => get<{ goals: Goal[] }>("/api/goals"),
   createGoal: (instruction: string, run: boolean, session_id?: string) =>
     send<Goal>("/api/goals", "POST", {
