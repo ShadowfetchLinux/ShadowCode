@@ -3,13 +3,8 @@ use super::*;
 use crate::compare;
 
 impl Service {
-    pub(super) async fn compare(
-        &self,
-        method: &str,
-        parts: &[&str],
-        query: &HashMap<String, String>,
-        body: &Value,
-    ) -> Result<Value> {
+    pub(super) async fn compare(&self, call: &Call) -> Result<Value> {
+        let (method, parts, body) = (call.method.as_str(), call.parts(), &call.body);
         let engine = &self.engine;
         let workspace_in = |value: &str| -> Result<PathBuf> {
             Ok(if value.is_empty() {
@@ -18,7 +13,7 @@ impl Service {
                 Workspace::open(&expand_path(value)?)?.path
             })
         };
-        let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
+        let q = |key: &str| call.q(key);
         match (method, &parts[1..]) {
             ("POST", ["compare"]) => {
                 let models = body["models"]

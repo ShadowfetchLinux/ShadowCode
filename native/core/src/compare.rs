@@ -12,7 +12,7 @@ use crate::{
     engine::{Engine, Job, JobOwner, StartRequest},
     model_registry,
     process::{self, ProcessResult, ProcessSpec},
-    store::Store,
+    store::{keys, MetaTransaction, Store},
     workspace::Workspace,
     worktrees,
 };
@@ -24,12 +24,16 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-/// Serialises every read-modify-write of compare records and scoreboards.
+/// Serialises compare operations in this process, so one operation's
+/// load → refresh → save never races another's. Records, the project index
+/// and the scoreboard are still written transactionally (`save`), which is
+/// what keeps a second ShadowCode process from losing an update.
 static LOCK: Mutex<()> = Mutex::const_new(());
 const LISTED: usize = 20;
 const INDEXED: usize = 100;
@@ -124,8 +128,16 @@ pub struct Record {
     pub applied_files: Vec<String>,
     /// Cleanup problems and lanes that went missing outside ShadowCode.
     pub notes: Vec<String>,
-    /// Runs were added to the scoreboard (internal; not in `to_json`).
+    /// Runs were added to the scoreboard, or will not be (internal; not in
+    /// `to_json`).
     counted: bool,
+    /// Bumped by every save; a save expects the revision it loaded
+    /// (internal; not in `to_json`).
+    revision: u64,
+    /// `refresh` decided this comparison's runs count; the next `save` adds
+    /// them to the scoreboard in the same transaction (in memory only).
+    #[serde(skip)]
+    count_runs: bool,
 }
 impl Record {
     /// The API view: internal bookkeeping fields are left out.
@@ -133,6 +145,7 @@ impl Record {
         let mut value = json!(self);
         if let Some(map) = value.as_object_mut() {
             map.remove("counted");
+            map.remove("revision");
         }
         for lane in value["lanes"].as_array_mut().into_iter().flatten() {
             if let Some(map) = lane.as_object_mut() {
@@ -152,15 +165,19 @@ struct ScoreRow {
     runs: u64,
 }
 
-fn record_key(id: &str) -> String {
-    format!("compare:{id}")
+/// Another ShadowCode process on this profile saved the comparison after it
+/// was loaded here; its version is kept.
+#[derive(Debug)]
+struct Conflict;
+impl std::fmt::Display for Conflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "This comparison was changed by another ShadowCode window; reload it and try again",
+        )
+    }
 }
-fn index_key(workspace: &Path) -> String {
-    format!("compare_index:{}", workspace.display())
-}
-fn score_key(workspace: &Path) -> String {
-    format!("compare_scoreboard:{}", workspace.display())
-}
+impl std::error::Error for Conflict {}
+
 fn valid_id(id: &str) -> Result<()> {
     ensure!(
         id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),
@@ -171,27 +188,96 @@ fn valid_id(id: &str) -> Result<()> {
 fn load(store: &Store, id: &str) -> Result<Record> {
     valid_id(id)?;
     let text = store
-        .native_meta(&record_key(id))?
+        .native_meta(&keys::compare_record(id))?
         .context("Comparison not found")?;
     Ok(serde_json::from_str(&text)?)
 }
-fn save(store: &Store, record: &Record) -> Result<()> {
-    store.set_native_meta(&record_key(&record.id), &serde_json::to_string(record)?)
+/// Write a record back in one transaction with everything that depends on
+/// it: a new record joins its project's index; runs `refresh` decided to
+/// count and a first winner go to the scoreboard. The stored revision must
+/// be the one the record was loaded at, so the scoreboard changes exactly
+/// once however many processes save the same comparison.
+fn save(store: &Store, record: &mut Record) -> Result<()> {
+    let key = keys::compare_record(&record.id);
+    store.meta_transaction(|meta| {
+        let stored: Option<Record> = meta.json(&key)?;
+        match &stored {
+            Some(stored) if stored.revision != record.revision => return Err(Conflict.into()),
+            Some(_) => {}
+            None => {
+                let index = keys::compare_index(&record.workspace);
+                let mut ids: Vec<String> = meta
+                    .get(&index)?
+                    .and_then(|text| serde_json::from_str(&text).ok())
+                    .unwrap_or_default();
+                ids.insert(0, record.id.clone());
+                ids.truncate(INDEXED);
+                meta.set_json(&index, &ids)?;
+            }
+        }
+        let stored_counted = stored.as_ref().is_some_and(|stored| stored.counted);
+        if record.count_runs && !stored_counted {
+            bump(meta, &record.workspace, &record.lanes, None)?;
+        }
+        let stored_winner = stored.as_ref().and_then(|stored| stored.winner.as_deref());
+        if let Some(winner) = record.winner.as_deref().filter(|_| stored_winner.is_none()) {
+            bump(meta, &record.workspace, &record.lanes, Some(winner))?;
+        }
+        let next = Record {
+            revision: record.revision + 1,
+            ..record.clone()
+        };
+        meta.set_json(&key, &next)
+    })?;
+    record.revision += 1;
+    record.count_runs = false;
+    Ok(())
+}
+/// `save` on the blocking pool; returns the saved record.
+async fn persist(store: &Arc<Store>, mut record: Record) -> Result<Record> {
+    store
+        .run(move |store| {
+            save(store, &mut record)?;
+            Ok(record)
+        })
+        .await
+}
+/// `persist` for a refresh-only operation: when another process saved
+/// first, its (at least as fresh) version is returned instead.
+async fn persist_refreshed(store: &Arc<Store>, mut record: Record) -> Result<Record> {
+    store
+        .run(move |store| match save(store, &mut record) {
+            Err(error) if error.is::<Conflict>() => load(store, &record.id),
+            Err(error) => Err(error),
+            Ok(()) => Ok(record),
+        })
+        .await
 }
 fn index(store: &Store, workspace: &Path) -> Result<Vec<String>> {
     Ok(store
-        .native_meta(&index_key(workspace))?
+        .native_meta(&keys::compare_index(workspace))?
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default())
 }
 fn scores(store: &Store, workspace: &Path) -> Result<Vec<ScoreRow>> {
     Ok(store
-        .native_meta(&score_key(workspace))?
+        .native_meta(&keys::compare_scoreboard(workspace))?
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default())
 }
-fn bump(store: &Store, workspace: &Path, lanes: &[Lane], winner: Option<&str>) -> Result<()> {
-    let mut rows = scores(store, workspace)?;
+/// Add one run (no winner) or one win to each lane's model, inside the
+/// caller's transaction.
+fn bump(
+    meta: &MetaTransaction<'_>,
+    workspace: &Path,
+    lanes: &[Lane],
+    winner: Option<&str>,
+) -> Result<()> {
+    let key = keys::compare_scoreboard(workspace);
+    let mut rows: Vec<ScoreRow> = meta
+        .get(&key)?
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
     for lane in lanes {
         let position = match rows.iter().position(|row| row.model == lane.model) {
             Some(position) => position,
@@ -211,7 +297,7 @@ fn bump(store: &Store, workspace: &Path, lanes: &[Lane], winner: Option<&str>) -
             row.wins += 1;
         }
     }
-    store.set_native_meta(&score_key(workspace), &serde_json::to_string(&rows)?)
+    meta.set_json(&key, &rows)
 }
 
 fn active(status: &str) -> bool {
@@ -538,8 +624,9 @@ async fn refresh(engine: &Engine, record: &mut Record, cancel: &CancellationToke
         record.finished_at = Some(crate::now());
     }
     if !record.counted && record.state != "running" && record.state != "discarded" {
-        bump(&store, &record.workspace, &record.lanes, None)?;
+        // Added to the scoreboard by the save that stores this decision.
         record.counted = true;
+        record.count_runs = true;
     }
     Ok(())
 }
@@ -773,9 +860,9 @@ pub(crate) async fn start(engine: &Engine, options: StartOptions<'_>) -> Result<
                 .context("Missing session ID")?
                 .to_owned();
             lane.session_id = sid.clone();
-            store.set_session_meta(&sid, "compare_id", &record.id)?;
-            store.set_session_meta(&sid, "compare_lane", id)?;
-            store.set_session_meta(&sid, "execution_target", id)?;
+            store.set_session_meta(&sid, keys::COMPARE_ID, &record.id)?;
+            store.set_session_meta(&sid, keys::COMPARE_LANE, id)?;
+            store.set_session_meta(&sid, keys::EXECUTION_TARGET, id)?;
             engine
                 .start_consented_owned(
                     StartRequest {
@@ -821,12 +908,8 @@ pub(crate) async fn start(engine: &Engine, options: StartOptions<'_>) -> Result<
         }
         return Err(error);
     }
-    save(&store, &record)?;
-    let mut ids = index(&store, &workspace)?;
-    ids.insert(0, record.id.clone());
-    ids.truncate(INDEXED);
-    store.set_native_meta(&index_key(&workspace), &serde_json::to_string(&ids)?)?;
-    Ok(record)
+    // Also lists the new record in its project's index.
+    persist(&store, record).await
 }
 
 pub async fn get(engine: &Engine, id: &str) -> Result<Record> {
@@ -834,8 +917,7 @@ pub async fn get(engine: &Engine, id: &str) -> Result<Record> {
     let store = engine.store();
     let mut record = load(&store, id)?;
     refresh(engine, &mut record, &CancellationToken::new()).await?;
-    save(&store, &record)?;
-    Ok(record)
+    persist_refreshed(&store, record).await
 }
 
 pub async fn list(engine: &Engine, workspace: &Path) -> Result<Vec<Record>> {
@@ -849,7 +931,7 @@ pub async fn list(engine: &Engine, workspace: &Path) -> Result<Vec<Record>> {
         };
         if matches!(record.state.as_str(), "running" | "done") {
             refresh(engine, &mut record, &CancellationToken::new()).await?;
-            save(&store, &record)?;
+            record = persist_refreshed(&store, record).await?;
         }
         records.push(record);
     }
@@ -1031,11 +1113,10 @@ pub async fn keep(engine: &Engine, id: &str, model: &str) -> Result<Record> {
         record.notes.push(format!("{error:#}"));
     }
     refresh(engine, &mut record, &cancel).await?;
-    bump(&store, &record.workspace, &record.lanes, Some(model))?;
     let notes = remove_lanes(engine, &mut record).await;
     record.notes.extend(notes);
-    save(&store, &record)?;
-    Ok(record)
+    // The first save with a winner scores the win.
+    persist(&store, record).await
 }
 
 pub async fn discard(engine: &Engine, id: &str) -> Result<Record> {
@@ -1048,7 +1129,7 @@ pub async fn discard(engine: &Engine, id: &str) -> Result<Record> {
         if record.lanes.iter().any(|lane| !lane.removed) {
             let notes = remove_lanes(engine, &mut record).await;
             record.notes.extend(notes);
-            save(&store, &record)?;
+            return persist(&store, record).await;
         }
         return Ok(record);
     }
@@ -1063,8 +1144,7 @@ pub async fn discard(engine: &Engine, id: &str) -> Result<Record> {
     record.finished_at.get_or_insert_with(crate::now);
     let notes = remove_lanes(engine, &mut record).await;
     record.notes.extend(notes);
-    save(&store, &record)?;
-    Ok(record)
+    persist(&store, record).await
 }
 
 pub async fn cancel(engine: &Engine, id: &str) -> Result<Record> {
@@ -1077,15 +1157,14 @@ pub async fn cancel(engine: &Engine, id: &str) -> Result<Record> {
         }
     }
     refresh(engine, &mut record, &CancellationToken::new()).await?;
-    save(&store, &record)?;
-    Ok(record)
+    persist_refreshed(&store, record).await
 }
 
 /// The compare a session belongs to, for session views.
 pub fn session_tags(store: &Store, session_id: &str) -> Result<(Option<String>, Option<String>)> {
     Ok((
-        store.session_meta(session_id, "compare_id")?,
-        store.session_meta(session_id, "compare_lane")?,
+        store.session_meta(session_id, keys::COMPARE_ID)?,
+        store.session_meta(session_id, keys::COMPARE_LANE)?,
     ))
 }
 
@@ -1104,5 +1183,108 @@ mod tests {
         assert_eq!(parse_mode("ask").unwrap(), ("review", "reviewer"));
         assert_eq!(parse_mode("").unwrap(), ("code", "coder"));
         assert!(parse_mode("command").is_err());
+    }
+
+    fn record(workspace: &Path) -> Record {
+        let lane = |model: &str| Lane {
+            model: model.into(),
+            name: model.to_uppercase(),
+            ..Default::default()
+        };
+        Record {
+            id: crate::id(),
+            workspace: workspace.into(),
+            state: "running".into(),
+            lanes: vec![lane("alpha"), lane("beta")],
+            ..Default::default()
+        }
+    }
+    fn board(store: &Store, workspace: &Path) -> BTreeMap<String, (u64, u64)> {
+        scores(store, workspace)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.model, (row.wins, row.runs)))
+            .collect()
+    }
+
+    /// Comparisons finishing at once, saved through separate connections
+    /// (as a second ShadowCode process would) and a shared one: every
+    /// record reaches the project index and every run is counted.
+    #[test]
+    fn parallel_compares_lose_no_index_entry_or_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.sqlite");
+        let workspace = dir.path().join("project");
+        let shared = Arc::new(Store::open(&path).unwrap());
+        const EACH: usize = 10;
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let workers: Vec<_> = (0..4)
+            .map(|worker| {
+                let store = if worker % 2 == 0 {
+                    shared.clone()
+                } else {
+                    Arc::new(Store::open(&path).unwrap())
+                };
+                let (workspace, barrier) = (workspace.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..EACH {
+                        let mut record = record(&workspace);
+                        save(&store, &mut record).unwrap();
+                        let mut record = load(&store, &record.id).unwrap();
+                        record.state = "done".into();
+                        record.counted = true;
+                        record.count_runs = true;
+                        save(&store, &mut record).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let ids = index(&shared, &workspace).unwrap();
+        assert_eq!(ids.len(), 4 * EACH);
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), 4 * EACH);
+        let expected = (0, (4 * EACH) as u64);
+        assert_eq!(
+            board(&shared, &workspace),
+            BTreeMap::from([("alpha".into(), expected), ("beta".into(), expected)])
+        );
+    }
+
+    /// Two writers holding the same revision of one comparison: the second
+    /// save is refused, so its run and win are never counted twice.
+    #[test]
+    fn a_stale_save_conflicts_instead_of_counting_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.sqlite");
+        let workspace = dir.path().join("project");
+        let (first, second) = (Store::open(&path).unwrap(), Store::open(&path).unwrap());
+        let mut created = record(&workspace);
+        save(&first, &mut created).unwrap();
+        let mut mine = load(&first, &created.id).unwrap();
+        let mut theirs = load(&second, &created.id).unwrap();
+        for record in [&mut mine, &mut theirs] {
+            record.state = "applied".into();
+            record.counted = true;
+            record.count_runs = true;
+            record.winner = Some("beta".into());
+        }
+        save(&first, &mut mine).unwrap();
+        let error = save(&second, &mut theirs).unwrap_err();
+        assert!(error.is::<Conflict>(), "{error:#}");
+        assert_eq!(
+            board(&first, &workspace),
+            BTreeMap::from([("alpha".into(), (0, 1)), ("beta".into(), (1, 1))])
+        );
+        // A later save of the fresh record changes nothing on the board.
+        let mut fresh = load(&second, &created.id).unwrap();
+        assert_eq!(fresh.revision, 2);
+        fresh.notes.push("cleanup retried".into());
+        save(&second, &mut fresh).unwrap();
+        assert_eq!(board(&second, &workspace)["beta"], (1, 1));
+        assert_eq!(index(&second, &workspace).unwrap(), vec![created.id]);
     }
 }

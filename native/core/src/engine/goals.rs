@@ -59,13 +59,13 @@ impl Engine {
         let target = session_id
             .map(str::to_owned)
             .or_else(|| goal["session_id"].as_str().map(str::to_owned))
-            .map(|sid| self.0.store.session_meta(&sid, "execution_target"))
+            .map(|sid| self.0.store.session_meta(&sid, keys::EXECUTION_TARGET))
             .transpose()?
             .flatten()
             .or(self
                 .0
                 .store
-                .native_meta(&format!("execution_target:{}", workspace.path.display()))?);
+                .native_meta(&keys::execution_target(&workspace.path))?);
         let model = match &target {
             Some(id) => Some(crate::model_registry::resolve(
                 &self.0.store,

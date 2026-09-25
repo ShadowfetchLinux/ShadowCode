@@ -11,7 +11,7 @@ use crate::{
     models::{ModelClient, Usage},
     paths::AppPaths,
     permissions, routing, steering,
-    store::Store,
+    store::{keys, Store},
     tools::{self, ToolExecutor},
     workflows::{Guidance, WorkflowInfo},
     workspace::Workspace,
@@ -977,6 +977,9 @@ impl Engine {
                     .map(|(_, plan)| plan.clone())
                     .unwrap_or_else(|_| json!({"steps":[]}));
                 let result = outcome.map(|(summary, _)| summary);
+                // Stays on this worker: waiters see the job finished only
+                // together with its removal from the queue below (no await in
+                // between), which rewind and follow-up starts rely on.
                 if let Err(error) = self.finish(&job, result, plan) {
                     if let Ok(mut record) = job.record.lock() {
                         record.status = "failed".into();
@@ -1010,6 +1013,17 @@ impl Engine {
                 }
             }
         }
+    }
+    /// Persist a job's message tape. The messages are serialised here; the
+    /// transaction that rewrites the tape runs on the blocking pool, so a
+    /// long tape or a slow disk never stalls this worker.
+    async fn save_tape(&self, job_id: &str, messages: &[Value]) -> Result<()> {
+        let payloads: Vec<String> = messages.iter().map(Value::to_string).collect();
+        let job_id = job_id.to_owned();
+        self.0
+            .store
+            .run(move |store| store.save_message_payloads(&job_id, &payloads))
+            .await
     }
     /// Record a `limit.fallback` event on the limited task and tell listeners.
     fn note_limit_fallback(&self, job: &Job, payload: Value) -> Result<()> {
@@ -1055,7 +1069,7 @@ impl Engine {
         if let Some(last) = self
             .0
             .store
-            .native_meta(&format!("last_local_target:{}", workspace.display()))?
+            .native_meta(&keys::last_local_target(workspace))?
         {
             if let Some(hit) = find(&last) {
                 return Ok(Some(hit));
@@ -1114,13 +1128,15 @@ impl Engine {
                 false,
             )
             .await?;
+        let (session_id, workspace, target) =
+            (job.session_id.clone(), job.workspace.clone(), id.clone());
         self.0
             .store
-            .set_session_meta(&job.session_id, "execution_target", &id)?;
-        self.0.store.set_native_meta(
-            &format!("execution_target:{}", job.workspace.display()),
-            &id,
-        )?;
+            .run(move |store| {
+                store.set_session_meta(&session_id, keys::EXECUTION_TARGET, &target)?;
+                store.set_native_meta(&keys::execution_target(&workspace), &target)
+            })
+            .await?;
         self.note_limit_fallback(
             &job,
             json!({"ok":true,"from":from,"to":name,"target":id,"job_id":started.id}),
@@ -1226,10 +1242,13 @@ impl Engine {
             self.0.store.save_job(&json!(*record))?;
             record.clone()
         };
-        self.0.store.execute(
-            "UPDATE tasks SET status='running' WHERE id=?",
-            [&job.task_id],
-        )?;
+        let task_id = job.task_id.clone();
+        self.0
+            .store
+            .run(move |store| {
+                store.execute("UPDATE tasks SET status='running' WHERE id=?", [&task_id])
+            })
+            .await?;
         let events = TaskEvents {
             store: self.0.store.clone(),
             session_id: job.session_id.clone(),
@@ -1355,7 +1374,7 @@ impl Engine {
         } else {
             cli.binary(vendor).to_owned()
         };
-        let native_key = format!("native_session:{}", vendor.id());
+        let native_key = keys::native_session(vendor.id());
         let resume = self.0.store.session_meta(&job.session_id, &native_key)?;
         if let Some((from, to)) = &running.turn_plan.model_switch {
             // The vendor's own mechanism switches the model on the resumed
@@ -1412,10 +1431,12 @@ impl Engine {
             let _ = (options, prompt, events);
             bail!("Vendor CLI backends require a Unix host")
         };
-        if let Some(native) = &outcome.native_session {
+        if let Some(native) = outcome.native_session.clone() {
+            let session_id = job.session_id.clone();
             self.0
                 .store
-                .set_session_meta(&job.session_id, &native_key, native)?;
+                .run(move |store| store.set_session_meta(&session_id, &native_key, &native))
+                .await?;
         }
         let (text, mut usage) = (outcome.text, outcome.usage);
         usage.source = "vendor".into();
@@ -1442,7 +1463,7 @@ impl Engine {
             "role":"assistant",
             "content":format!("[{} answered]\n{}", vendor.product_label(), crate::tools::truncate(&text, 8000)),
         }));
-        self.0.store.save_messages(&job.id, &tape)?;
+        self.save_tape(&job.id, &tape).await?;
         events.emit(
             "verification.summary",
             json!({
@@ -1498,7 +1519,7 @@ impl Engine {
                 "agent.steered",
                 json!({"job_id": job_id, "note": crate::tools::truncate(&note, 2000)}),
             )?;
-            self.0.store.save_messages(job_id, messages)?;
+            self.save_tape(job_id, messages).await?;
         }
         Ok(())
     }
@@ -1645,7 +1666,7 @@ impl Engine {
                 )
             }));
         }
-        self.0.store.save_messages(&job.id, &messages)?;
+        self.save_tape(&job.id, &messages).await?;
         events.emit("agent.started",json!({"job_id":job.id,"task":job.task,"mode":job.mode,"model":job.model,"native":true,"images":job.images}))?;
         if let Some(decision) = &job.routing {
             events.emit(
@@ -1676,14 +1697,14 @@ impl Engine {
                 arguments: json!({"path":path}),
             };
             messages.push(json!({"role":"assistant","content":"Reading the file explicitly named in your request.","tool_calls":[{"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}}]}));
-            self.0.store.save_messages(&job.id, &messages)?;
+            self.save_tape(&job.id, &messages).await?;
             let result = tools.execute(call.clone()).await?;
             inspected = result.success;
             messages.push(result.message(
                 &call.name,
                 (running.config.model.context_limit * 2).min(running.config.agent.max_output_bytes),
             ));
-            self.0.store.save_messages(&job.id, &messages)?;
+            self.save_tape(&job.id, &messages).await?;
             events.emit(
                 "context.attached",
                 json!({"path":path,"success":inspected,"origin":"explicit_file_request"}),
@@ -1733,7 +1754,7 @@ impl Engine {
                 events.emit("context.budget", budget)?;
             }
             context::validate_pairs(&messages)?;
-            self.0.store.save_messages(&job.id, &messages)?;
+            self.save_tape(&job.id, &messages).await?;
             let mut attempts = 0;
             let mut response = loop {
                 let message_id = crate::id();
@@ -1862,7 +1883,7 @@ impl Engine {
                         if !partial.is_empty() {
                             let interrupted = autonomy::public_assistant_text(&partial);
                             messages.push(json!({"role":"assistant","content":format!("{interrupted}\n[Response interrupted; no partial tool call was executed.]")}));
-                            self.0.store.save_messages(&job.id, &messages)?;
+                            self.save_tape(&job.id, &messages).await?;
                         }
                         tools
                             .fire_hooks(hooks::context(
@@ -1958,7 +1979,7 @@ impl Engine {
                 }
                 if replan {
                     messages.push(json!({"role":"system","content":"Loop check: the same tool and arguments were repeated. Those calls were not executed. Replan from current files and recorded failures. This is a process note, not a new user instruction."}));
-                    self.0.store.save_messages(&job.id, &messages)?;
+                    self.save_tape(&job.id, &messages).await?;
                     continue;
                 }
             }
@@ -1978,7 +1999,7 @@ impl Engine {
                         )?;
                         messages.push(json!({"role":"assistant","content":crate::tools::truncate(&response.text,1500)}));
                         messages.push(json!({"role":"system","content":"Loop check: the assistant text repeated without new evidence or a tool call. Stop repeating. Use a tool or give one concise final answer. This is a process note, not a new user instruction."}));
-                        self.0.store.save_messages(&job.id, &messages)?;
+                        self.save_tape(&job.id, &messages).await?;
                         continue;
                     }
                     autonomy::RunawayAction::Pause => {
@@ -1995,7 +2016,7 @@ impl Engine {
                 assistant["tool_calls"]=json!(response.tool_calls.iter().map(|call|json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}})).collect::<Vec<_>>());
             }
             messages.push(assistant);
-            self.0.store.save_messages(&job.id, &messages)?;
+            self.save_tape(&job.id, &messages).await?;
             if response.tool_calls.is_empty() {
                 ensure!(
                     !response.text.trim().is_empty(),
@@ -2022,7 +2043,7 @@ impl Engine {
                                 json!({"kind":"prose_command","action":label,"repeats":prose_claims}),
                             )?;
                             messages.push(json!({"role":"system","content":"Execution check: you described running a command in prose but did not emit a tool call. Use an available tool now, or clearly explain that you cannot perform the action with the tools you have. Do not invent command output. This is a process note, not a new user instruction."}));
-                            self.0.store.save_messages(&job.id, &messages)?;
+                            self.save_tape(&job.id, &messages).await?;
                             continue;
                         }
                     }
@@ -2148,12 +2169,12 @@ impl Engine {
                                 .min(running.config.agent.max_output_bytes),
                         ),
                     );
-                    self.0.store.save_messages(&job.id, &messages)?;
+                    self.save_tape(&job.id, &messages).await?;
                 }
             }
             if !viewed_images.is_empty() {
                 messages.push(crate::vision::viewed_images_message(&viewed_images));
-                self.0.store.save_messages(&job.id, &messages)?;
+                self.save_tape(&job.id, &messages).await?;
             }
         }
         bail!("Task reached its {}-step limit. Review the changes and continue with a focused follow-up.",running.config.agent.max_steps)
