@@ -172,7 +172,7 @@ impl Runtime {
         match self {
             Self::Vendor(vendor) => engine
                 .store()
-                .session_meta(session_id, &format!("native_session:{}", vendor.id())),
+                .session_meta(session_id, &crate::store::keys::native_session(vendor.id())),
             // The native loop continues from the conversation's message tape.
             Self::Local => Ok(None),
         }

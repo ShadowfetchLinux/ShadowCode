@@ -328,7 +328,7 @@ impl VendorCatalog {
         self.persisted.lock().await.remove(&vendor);
         if let Some(store) = &self.store {
             store.delete_usage_snapshots(vendor.id())?;
-            store.clear_session_meta_prefix(&format!("native_session:{}", vendor.id()))?;
+            store.clear_session_meta_prefix(&crate::store::keys::native_session(vendor.id()))?;
         }
         Ok(())
     }
