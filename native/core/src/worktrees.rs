@@ -423,8 +423,9 @@ pub async fn remove(
 }
 
 /// Remove a disposable ShadowCode-owned checkout and delete its managed
-/// `shadowcode/<id>` branch. Only Compare uses this, for lanes whose result
-/// the user kept elsewhere or explicitly discarded. Unlike `remove`, build
+/// `shadowcode/<id>` branch. Compare uses this for lanes whose result the
+/// user kept elsewhere or explicitly discarded, and worktree tasks once their
+/// result was applied or discarded. Unlike `remove`, build
 /// outputs and other ignored files do not block removal, and a checkout that
 /// was already deleted outside ShadowCode has its registration cleaned up.
 /// The source checkout, its index and every other branch are never touched.
@@ -433,6 +434,27 @@ pub async fn dispose(
     paths: &AppPaths,
     source: &Path,
     id: &str,
+    cancel: CancellationToken,
+) -> Result<Option<String>> {
+    dispose_checkout(paths, source, id, true, cancel).await
+}
+
+/// `dispose`, but the managed `shadowcode/<id>` branch (holding a result the
+/// user chose to keep as a branch) stays.
+pub async fn release(
+    paths: &AppPaths,
+    source: &Path,
+    id: &str,
+    cancel: CancellationToken,
+) -> Result<Option<String>> {
+    dispose_checkout(paths, source, id, false, cancel).await
+}
+
+async fn dispose_checkout(
+    paths: &AppPaths,
+    source: &Path,
+    id: &str,
+    delete_branch: bool,
     cancel: CancellationToken,
 ) -> Result<Option<String>> {
     let _guard = tokio::select! {guard=CREATION.lock()=>guard,_=cancel.cancelled()=>anyhow::bail!("Worktree removal cancelled")};
@@ -514,23 +536,28 @@ pub async fn dispose(
     }
     // Only this record's own branch, whose name `read_record` verified.
     let reference = format!("refs/heads/{}", record.branch);
-    if git(
-        &record.source,
-        &["show-ref", "--verify", "--quiet", &reference],
-        cancel.clone(),
-    )
-    .await
-    .is_ok()
+    if delete_branch
+        && git(
+            &record.source,
+            &["show-ref", "--verify", "--quiet", &reference],
+            cancel.clone(),
+        )
+        .await
+        .is_ok()
     {
         if let Err(error) = git(&record.source, &["branch", "-D", &record.branch], cancel).await {
             note = Some(format!("Branch {} was kept: {error:#}", record.branch));
         }
     }
     record.state = "removed".into();
-    record.detail = format!(
-        "Disposable checkout removed; branch {} deleted",
-        record.branch
-    );
+    record.detail = if delete_branch {
+        format!(
+            "Disposable checkout removed; branch {} deleted",
+            record.branch
+        )
+    } else {
+        format!("Checkout removed; branch {} kept", record.branch)
+    };
     save(&records, &record)?;
     let archive = records.join("archive");
     paths::private_directory(&archive)?;

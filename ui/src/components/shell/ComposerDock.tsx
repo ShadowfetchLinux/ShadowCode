@@ -12,6 +12,7 @@ import { EffortControl, ModeToggle } from "../ComposerModes";
 import { QueuedTasks } from "../QueuedTasks";
 import type { Effort, TaskMode } from "../../lib/effort";
 import { UnifiedPicker } from "../UnifiedPicker";
+import { RunInWorktreeButton } from "../RunInWorktreeButton";
 import { TaskPlan } from "./Chrome";
 import {
   isApiKey,
@@ -70,6 +71,7 @@ export function ComposerDock({
   network,
   compare,
   modes,
+  worktree,
 }: {
   hidden: boolean;
   queue: {
@@ -107,6 +109,8 @@ export function ComposerDock({
     effortShown: boolean;
     onEffort: (effort: Effort) => void;
   };
+  /** "Run in new worktree" (hidden when `reason` says it cannot apply). */
+  worktree?: ComponentProps<typeof RunInWorktreeButton>;
 }) {
   return (
     <div className="composer-wrap" hidden={hidden}>
@@ -138,6 +142,7 @@ export function ComposerDock({
         }
         compare={
           <>
+            {worktree && <RunInWorktreeButton {...worktree} />}
             <button
               type="button"
               className="compare-btn"

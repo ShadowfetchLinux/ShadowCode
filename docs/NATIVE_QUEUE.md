@@ -16,9 +16,14 @@ at once.
 
 ## Conversations and navigation
 
-The queue belongs to the project. A new conversation in the same project waits
-for its earlier tasks; conversations in other projects can run independently,
-within the engine's four-project concurrency limit. Queue rows from another
+The queue belongs to the project's folder. A new conversation in the same
+project waits for its earlier tasks; conversations in other projects can run
+independently, within the engine's four-task concurrency limit. To run a task
+beside the running one instead of queueing it, press **Run now in worktree**
+(`Ctrl+Shift+Enter`): it starts in its own managed worktree of the project,
+which is a separate folder with its own one-task rule, and you apply, keep or
+discard its result afterwards ([user guide](USER_GUIDE.md#run-tasks-side-by-side)).
+Queue rows from another
 conversation include a link to it. The sidebar distinguishes waiting tasks from
 running tasks and does not label completed history as active.
 

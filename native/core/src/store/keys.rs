@@ -32,6 +32,14 @@ pub fn compare_scoreboard(workspace: &Path) -> String {
 pub fn rewind_undo(id: &str) -> String {
     format!("rewind_undo:{id}")
 }
+/// `native_meta`: one worktree task record (JSON `worktree_tasks::Record`).
+pub fn worktree_task_record(id: &str) -> String {
+    format!("worktree_task:{id}")
+}
+/// `native_meta`: a project's worktree task ids, newest first (JSON list).
+pub fn worktree_task_index(workspace: &Path) -> String {
+    format!("worktree_task_index:{}", workspace.display())
+}
 /// `native_meta`: set once `goals.db` from before 0.28 was imported.
 pub const LEGACY_GOALS_IMPORTED: &str = "legacy_goals_imported";
 /// `native_meta`: set once the pre-0.28 background process list was imported.
@@ -43,6 +51,11 @@ pub const EXECUTION_TARGET: &str = "execution_target";
 pub const COMPARE_ID: &str = "compare_id";
 /// `session_meta`: the model id of a compare lane conversation.
 pub const COMPARE_LANE: &str = "compare_lane";
+/// `session_meta`: the worktree task a conversation belongs to. Its turns
+/// run in that task's managed worktree until it is applied or discarded.
+pub const WORKTREE_TASK: &str = "worktree_task";
+/// `session_meta`: the project a worktree task's conversation belongs to.
+pub const WORKTREE_SOURCE: &str = "worktree_source";
 /// `session_meta`: the parent conversation of a subagent conversation.
 pub const SUBAGENT_PARENT: &str = "subagent_parent";
 /// `session_meta`: the subagent run a conversation belongs to.
@@ -89,6 +102,11 @@ mod tests {
         assert_eq!(
             compare_scoreboard(project),
             "compare_scoreboard:/home/u/project"
+        );
+        assert_eq!(worktree_task_record("ab12"), "worktree_task:ab12");
+        assert_eq!(
+            worktree_task_index(project),
+            "worktree_task_index:/home/u/project"
         );
         assert_eq!(native_session("codex"), "native_session:codex");
         assert_eq!(rewind_undo("ab12"), "rewind_undo:ab12");

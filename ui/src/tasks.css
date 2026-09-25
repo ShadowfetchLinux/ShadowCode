@@ -1,0 +1,307 @@
+/* Parallel tasks: worktree runs, conversation badges and menu, the context
+   & cost chip. Colours come from tokens.css. */
+
+/* Sidebar badges */
+.task-link .task-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.task-row.badge-approval .task-link,
+.task-row.badge-failed .task-link,
+.task-row.badge-unread .task-link {
+  color: var(--text);
+  font-weight: 500;
+}
+.task-link .badge-approval-icon {
+  color: var(--warn);
+  opacity: 1;
+}
+.task-row.badge-approval {
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+.task-link .badge-failed-icon {
+  color: var(--danger);
+  opacity: 1;
+}
+.unread-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.task-rename {
+  flex: 1;
+  margin: 3px 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Conversation context menu */
+.conversation-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+}
+.conversation-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  text-align: left;
+  color: var(--text);
+}
+.conversation-menu button:hover,
+.conversation-menu button:focus-visible {
+  background: var(--hover);
+}
+.conversation-menu .danger {
+  color: var(--danger);
+}
+.menu-confirm p {
+  margin: 6px 8px;
+  font-size: 12px;
+  color: var(--text-2);
+  max-width: 220px;
+}
+
+/* Run in new worktree */
+.worktree-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: var(--pill);
+  font-size: 12px;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+}
+.worktree-btn:hover {
+  background: var(--hover);
+}
+.worktree-btn.emphasis {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.worktree-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (max-width: 760px) {
+  .worktree-btn-text {
+    display: none;
+  }
+}
+.worktree-bar {
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.worktree-bar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+.worktree-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.worktree-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.worktree-files li {
+  display: flex;
+  gap: 8px;
+}
+.wt-status {
+  width: 12px;
+  font-weight: 600;
+}
+.wt-added {
+  color: var(--ok);
+}
+.wt-deleted {
+  color: var(--danger);
+}
+.wt-modified {
+  color: var(--warn);
+}
+.wt-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wt-counts {
+  color: var(--muted);
+}
+.worktree-conflicts {
+  padding: 8px 10px;
+  border-left: 3px solid var(--danger);
+  background: var(--del-bg);
+  border-radius: 4px;
+  color: var(--text);
+}
+.worktree-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.worktree-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+}
+.worktree-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--canvas);
+}
+.worktree-actions button.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.worktree-actions button:disabled {
+  opacity: 0.55;
+}
+
+/* Context & cost chip */
+.ctx-chip-wrap {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.statusline button.ctx-chip {
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--pill);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.ctx-chip:hover {
+  background: var(--hover);
+}
+.ctx-mini {
+  width: 32px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  display: inline-block;
+}
+.ctx-mini-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s;
+}
+.ctx-chip.ctx-warn .ctx-mini-fill {
+  background: var(--warn);
+}
+.ctx-chip.ctx-full .ctx-mini-fill {
+  background: var(--danger);
+}
+.ctx-chip.ctx-full {
+  border-color: var(--danger);
+}
+.ctx-source {
+  color: var(--muted);
+}
+.ctx-breakdown {
+  position: fixed;
+  right: 16px;
+  bottom: 38px;
+  z-index: 55;
+  width: min(340px, calc(100vw - 32px));
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
+  font-size: 12px;
+  white-space: normal;
+}
+.ctx-breakdown dl {
+  margin: 8px 0 0;
+  display: grid;
+  gap: 4px;
+}
+.ctx-breakdown dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ctx-breakdown dt {
+  color: var(--muted);
+}
+.ctx-breakdown dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text);
+}
+
+/* Settings › Appearance › notifications */
+.notify-fields {
+  border: 0;
+  padding: 0;
+  margin: 12px 0 0;
+}
+.notify-fields legend {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.notify-kinds {
+  margin-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

@@ -26,6 +26,8 @@ import type { PickerTarget } from "../../lib/picker";
 import { writeStore } from "../../lib/storage";
 import { invoke } from "../../lib/transport";
 import { trustRequestFor } from "../../lib/trust";
+import { chipInput } from "../../lib/usageChip";
+import { ContextChip } from "../ContextChip";
 
 /** The main column: banners, the Compare view or the conversation, the
  * composer and the status line. It only lays out what the app's hooks
@@ -78,6 +80,7 @@ export function Stage({
   toast,
   extras,
   reviewPanel,
+  worktreeBar,
 }: {
   conversation: ReturnType<typeof useConversation>;
   compare: ReturnType<typeof useCompare>;
@@ -130,6 +133,8 @@ export function Stage({
   extras: ComposerExtras;
   /** The full-width Review view, shown instead of the conversation. */
   reviewPanel?: ReactNode;
+  /** The open conversation's worktree (Apply / Keep as branch / Discard). */
+  worktreeBar?: ReactNode;
 }) {
   const { transcript, job, busy, connection, history } = conversation;
   const { switching, sessionId, modelChoice, runningChoice } = nav;
@@ -138,18 +143,7 @@ export function Stage({
   const composerLocked = submitting || switching || Boolean(shutdown);
   const access = composerAccess(cfg, status?.permissions.level, selectedTarget);
   const activeModel = job?.routing || transcript.routing;
-  const contextLimit =
-    activeModel && !activeModel.provider?.startsWith("cli:")
-      ? activeModel.context_limit
-      : 0;
-  const contextPercent = contextLimit
-    ? Math.min(
-        100,
-        Math.round(
-          ((transcript.usage.prompt_tokens || 0) / contextLimit) * 100,
-        ),
-      )
-    : 0;
+  const chip = chipInput(activeModel, selectedTarget, transcript);
   const empty =
     !transcript.items.length &&
     !commandCards.length &&
@@ -273,6 +267,7 @@ export function Stage({
             Latest activity
           </button>
         )}
+      {view === "chat" && !reviewPanel && worktreeBar}
       <ComposerDock
         hidden={view === "compare" || Boolean(reviewPanel)}
         queue={{
@@ -304,7 +299,9 @@ export function Stage({
             ? "Commands wait until idle"
             : task
               ? queueing
-                ? "↵ Queue"
+                ? actions.worktreeBlocked
+                  ? "↵ Queue"
+                  : "↵ Queue · Ctrl+Shift+↵ Run now in a worktree"
                 : "↵ Send"
               : "/ commands · @ files · ↑ earlier",
           busy,
@@ -316,6 +313,9 @@ export function Stage({
             hasContent || !selectedTarget ? actions.sendBlocked : null,
           stopDisabled: job?.status === "cancelling",
           onSubmit: () => void actions.submit(),
+          onSubmitWorktree: actions.canRunInWorktree
+            ? () => void actions.submit({ worktree: true })
+            : undefined,
           onStop: () => void controls.stop(),
           mentions: extras.mentions,
           onMention: extras.addMention,
@@ -365,6 +365,12 @@ export function Stage({
           locked: composerLocked,
           onOpen: compare.open,
         }}
+        worktree={{
+          reason: actions.worktreeBlocked,
+          enabled: actions.canRunInWorktree,
+          queueing,
+          onRun: () => void actions.submit({ worktree: true }),
+        }}
       />
       <StatusBar
         busy={busy}
@@ -375,8 +381,9 @@ export function Stage({
         allowance={allowance.data}
         allowanceOpen={allowanceOpen}
         onAllowance={onAllowance}
-        contextPercent={contextPercent}
-        totalTokens={transcript.usage.total_tokens || 0}
+        context={
+          <ContextChip input={chip} compaction={transcript.compaction} />
+        }
         version={health?.version || ""}
       />
     </main>

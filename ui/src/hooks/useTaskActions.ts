@@ -109,6 +109,10 @@ export type TaskActionContext = {
   pin: () => void;
   /** @-mentions, prompt history, effort and task mode. */
   extras?: ComposerExtras;
+  /** The project is a Git repository (worktree runs need one). */
+  gitRepo: boolean;
+  /** The open conversation already runs in its own worktree. */
+  inWorktree: boolean;
 };
 
 /** Sending: tasks, follow-ups, slash commands, consent, plan-limit
@@ -238,6 +242,9 @@ export function useTaskActions(c: TaskActionContext) {
     c.submittingRef.current = true;
     c.setSubmitting(true);
     c.setError("");
+    // A worktree task is a new conversation in another folder: it is
+    // opened once sending has finished.
+    let follow = "";
     try {
       const result = await api.startJob(body);
       if ("consent" in result) {
@@ -252,6 +259,16 @@ export function useTaskActions(c: TaskActionContext) {
       const started = result.job;
       if (submitTicket !== c.selection.current) {
         await c.refresh();
+        return;
+      }
+      if (body.worktree) {
+        for (const a of original?.attachments || [])
+          if (a.preview) URL.revokeObjectURL(a.preview);
+        c.toast(
+          "Started in a new worktree. It runs beside the project's other work; apply, keep or discard its result when it is done.",
+          "ok",
+        );
+        follow = started.session_id;
         return;
       }
       if (started.session_id !== c.selectedRef.current) {
@@ -289,6 +306,10 @@ export function useTaskActions(c: TaskActionContext) {
     } finally {
       c.setSubmitting(false);
       c.submittingRef.current = false;
+      if (follow) {
+        await c.openSession(follow);
+        await c.refresh().catch(() => undefined);
+      }
     }
   }
 
@@ -358,9 +379,22 @@ export function useTaskActions(c: TaskActionContext) {
     }
   }
 
-  async function submit() {
+  /** Why "Run in new worktree" is unavailable now, or null. */
+  const worktreeBlocked = !c.gitRepo
+    ? "Running in a new worktree needs a Git repository"
+    : c.inWorktree
+      ? "This conversation already runs in its own worktree"
+      : task.trim().startsWith("/")
+        ? "Slash commands run in the conversation"
+        : null;
+
+  async function submit(opts: { worktree?: boolean } = {}) {
     if (c.composerLocked || c.submittingRef.current || !hasContent) return;
-    if (c.commandWaiting) {
+    if (opts.worktree && worktreeBlocked) {
+      c.toast(worktreeBlocked, "info");
+      return;
+    }
+    if (c.commandWaiting && !opts.worktree) {
       c.setError(
         "Wait for this project's active work to finish before running a slash command. You can queue a message now.",
       );
@@ -426,12 +460,13 @@ export function useTaskActions(c: TaskActionContext) {
       {
         task: text || "Describe the attached image(s).",
         workspace: c.workspace || undefined,
-        session_id: c.sessionId || undefined,
         model: selectedTarget.id,
         purpose: extras ? purposeFor(extras.mode) : "coder",
-        queue: c.queueing,
         images,
         web: c.webAllowed && c.webEnabled,
+        ...(opts.worktree
+          ? { worktree: true }
+          : { session_id: c.sessionId || undefined, queue: c.queueing }),
         ...(extras?.effortShown && extras.effort !== "default"
           ? { effort: extras.effort }
           : {}),
@@ -444,6 +479,14 @@ export function useTaskActions(c: TaskActionContext) {
   return {
     sendBlocked,
     canSend,
+    worktreeBlocked,
+    /** Send is possible, and so is a worktree run (Ctrl+Shift+Enter). */
+    canRunInWorktree:
+      !c.composerLocked &&
+      hasContent &&
+      !sendBlocked &&
+      !worktreeBlocked &&
+      Boolean(selectedTarget),
     startTask,
     continueOnFallback,
     followLimit,

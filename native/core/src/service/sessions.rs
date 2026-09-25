@@ -238,6 +238,14 @@ impl Service {
         let (compare_id, compare_lane) = crate::compare::session_tags(&store, id)?;
         session["compare_id"] = json!(compare_id);
         session["compare_lane"] = json!(compare_lane);
+        // The worktree task this conversation runs in (as last saved; GET
+        // /api/worktree-tasks/{id} refreshes it).
+        session["worktree"] = match crate::worktree_tasks::session_task(&store, id)? {
+            Some(task) => crate::worktree_tasks::load(&store, &task)
+                .map(|record| record.to_json())
+                .unwrap_or(Value::Null),
+            None => Value::Null,
+        };
         session["subagent_parent"] = json!(store.session_meta(id, keys::SUBAGENT_PARENT)?);
         session["subagent_run"] = json!(store.session_meta(id, keys::SUBAGENT_RUN)?);
         let native: serde_json::Map<String, Value> = store

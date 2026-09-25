@@ -37,6 +37,11 @@ import { useNavigation } from "./hooks/useNavigation";
 import { useJobControls } from "./hooks/useJobControls";
 import { useDesktopEvents, useSidebar } from "./hooks/useWindow";
 import { useRowActions } from "./hooks/useRowActions";
+import { useConversationBadges } from "./hooks/useConversationBadges";
+import { useConversationMenu } from "./hooks/useConversationMenu";
+import { useNotificationLinks } from "./hooks/useNotificationLinks";
+import { useWorktreeTask } from "./hooks/useWorktreeTask";
+import { WorktreeBar } from "./components/WorktreeBar";
 import { isLocal, vendorKey, type PickerTarget } from "./lib/picker";
 import { limitsFrom, resolveFallback } from "./lib/allowance";
 import {
@@ -129,7 +134,10 @@ export default function App() {
     submittingRef,
     submitting,
     lanes: {
-      track: (id, detail) => compare.trackLane(id, detail),
+      track: (id, detail) => {
+        compare.trackLane(id, detail);
+        worktree.track(id, detail);
+      },
       showChat: () => compare.setView("chat"),
       note: (records) => compare.noteLanes(records),
     },
@@ -143,6 +151,24 @@ export default function App() {
   const { sessionId, switching, trust, modelChoice } = nav;
   const feed = useFeed(sessionId);
   const { jobs, approvals } = feed;
+  const conversationBadges = useConversationBadges({
+    jobs,
+    waiting: feed.waiting,
+    sessionId,
+    sessions,
+  });
+  const worktree = useWorktreeTask({
+    sessionId,
+    selectedRef: nav.selectedRef,
+    jobs,
+    openSession: nav.openSession,
+    refresh,
+    toast,
+  });
+  useNotificationLinks(sessionId, (id) => {
+    compare.setView("chat");
+    void nav.openSession(id);
+  });
 
   const queueing =
     busy ||
@@ -312,10 +338,26 @@ export default function App() {
       writeStore(draftKey(sessionId, workspace), null);
     },
   });
-  const projectPath = compare.projectPath;
+  // A worktree conversation belongs to its project.
+  const projectPath = worktree.task?.workspace || compare.projectPath;
   const listedProjects = ws.projects.filter(
     (p) => !compare.laneTrees.some((tree) => sameWorkspacePath(tree, p.path)),
   );
+  const conversations = useConversationMenu({
+    sessions,
+    projectPath,
+    projects: listedProjects,
+    sessionId,
+    selectedRef: nav.selectedRef,
+    openSession: (id) => {
+      compare.setView("chat");
+      return nav.openSession(id);
+    },
+    newSession: () => nav.newSession({ force: true }),
+    mostRecent: conversationBadges.mostRecent,
+    refresh,
+    toast,
+  });
 
   const actions = useTaskActions({
     task,
@@ -361,6 +403,8 @@ export default function App() {
     setRunningChoice: nav.setRunningChoice,
     pin: scroll.pin,
     extras,
+    gitRepo: git.repo,
+    inWorktree: Boolean(worktree.task),
   });
 
   const shortcuts: Record<ShortcutAction, () => void> = {
@@ -380,6 +424,9 @@ export default function App() {
     stop: () => void controls.stop(),
     export: () => exportSession(),
     help: () => setOverlay("help"),
+    "previous-conversation": conversations.previous,
+    "next-conversation": conversations.next,
+    "recent-conversation": conversations.recent,
   };
   useShortcuts(
     {
@@ -491,6 +538,10 @@ export default function App() {
           selected={sessionId}
           workspace={projectPath}
           jobs={jobs}
+          badges={conversationBadges.badges}
+          onAction={(action, session, title) =>
+            void conversations.act(action, session, title)
+          }
           onSelect={(id) => {
             compare.setView("chat");
             void nav.openSession(id);
@@ -586,6 +637,15 @@ export default function App() {
               onMemory={memory.update}
             />
           ) : undefined
+        }
+        worktreeBar={
+          worktree.task && (
+            <WorktreeBar
+              task={worktree.task}
+              acting={worktree.acting}
+              onAct={(action) => void worktree.act(action)}
+            />
+          )
         }
       />
       {panel && (

@@ -6,13 +6,13 @@
 //! the model. Grants live in memory and end with the task (`deny_task`).
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 use tokio_util::sync::CancellationToken;
 
 pub mod preview;
@@ -153,6 +153,8 @@ type GrantMap = Arc<Mutex<HashMap<String, Vec<Grant>>>>;
 pub struct ApprovalHub {
     pending: PendingMap,
     grants: GrantMap,
+    /// Where `approval.expiring` warnings go (the engine's broadcast).
+    notices: Option<broadcast::Sender<Value>>,
 }
 struct Ticket {
     id: String,
@@ -168,7 +170,41 @@ impl Drop for Ticket {
 /// Deny notes are kept short; they are one message to the model.
 const MAX_NOTE: usize = 2000;
 
+/// When a pending approval warns that it will soon be denied: after 80% of
+/// its time (8 of 10 minutes). Timeouts under a minute get no warning.
+pub fn warning_delay(timeout: Duration) -> Option<Duration> {
+    (timeout >= Duration::from_secs(60)).then(|| timeout.mul_f64(0.8))
+}
 impl ApprovalHub {
+    /// A hub that also broadcasts a transient `approval.expiring` event
+    /// (never stored) shortly before a pending approval times out.
+    pub fn with_notices(notices: broadcast::Sender<Value>) -> Self {
+        Self {
+            pending: PendingMap::default(),
+            grants: GrantMap::default(),
+            notices: Some(notices),
+        }
+    }
+    fn warn(&self, record: &Approval) {
+        let Some(notices) = &self.notices else {
+            return;
+        };
+        let mut payload = json!({
+            "approval_id": record.id,
+            "session_id": record.session_id,
+            "tool": record.tool,
+            "command": record.command,
+            "expires_at": record.expires_at,
+            "seconds_left": (record.expires_at - crate::now()).max(0.0).round(),
+        });
+        crate::redaction::redact_value(&mut payload);
+        let _ = notices.send(json!({
+            "type": "approval.expiring",
+            "session_id": record.session_id,
+            "task_id": record.task_id,
+            "payload": payload,
+        }));
+    }
     pub fn list(&self, session: Option<&str>) -> Vec<Approval> {
         let mut records: Vec<_> = self
             .pending
@@ -309,10 +345,22 @@ impl ApprovalHub {
                 },
             );
         on_pending(&record);
-        let result = tokio::select! {
-            _=cancel.cancelled()=>Answer::deny(),
-            _=tokio::time::sleep(timeout)=>Answer::deny(),
-            answer=receiver=>answer.unwrap_or_default(),
+        let expiry = tokio::time::sleep(timeout);
+        tokio::pin!(expiry);
+        let warning = tokio::time::sleep(warning_delay(timeout).unwrap_or(timeout));
+        tokio::pin!(warning);
+        let mut receiver = receiver;
+        let mut warned = warning_delay(timeout).is_none();
+        let result = loop {
+            tokio::select! {
+                _=cancel.cancelled()=>break Answer::deny(),
+                _=&mut expiry=>break Answer::deny(),
+                answer=&mut receiver=>break answer.unwrap_or_default(),
+                _=&mut warning, if !warned=>{
+                    warned = true;
+                    self.warn(&record);
+                }
+            }
         };
         drop(ticket);
         Ok(result)
@@ -502,5 +550,62 @@ mod tests {
             Answer::deny().denial(),
             "Permission was denied, cancelled, or expired"
         );
+    }
+}
+
+#[cfg(test)]
+mod expiry_tests {
+    use super::*;
+
+    #[test]
+    fn vendor_approvals_warn_two_minutes_before_they_expire() {
+        assert_eq!(
+            warning_delay(Duration::from_secs(600)),
+            Some(Duration::from_secs(480))
+        );
+        assert_eq!(warning_delay(Duration::from_secs(30)), None);
+        let (sender, mut receiver) = broadcast::channel(4);
+        let hub = ApprovalHub::with_notices(sender);
+        let now = crate::now();
+        hub.warn(&Approval {
+            id: "a1".into(),
+            session_id: "s1".into(),
+            task_id: "t1".into(),
+            tool: "vendor".into(),
+            arguments: Value::Null,
+            command: "curl -H 'Authorization: Bearer sk-live-0123456789abcdef0123' x".into(),
+            reason: String::new(),
+            pending: true,
+            created_at: now - 480.0,
+            expires_at: now + 120.0,
+            preview: Value::Null,
+            grant: String::new(),
+            note: false,
+        });
+        let event = receiver.try_recv().unwrap();
+        assert_eq!(event["type"], "approval.expiring");
+        assert_eq!(event["session_id"], "s1");
+        let left = event["payload"]["seconds_left"].as_f64().unwrap();
+        assert!((118.0..=120.0).contains(&left), "{left}");
+        assert!(!event["payload"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("sk-live-0123456789abcdef0123"));
+        // A hub without a broadcast (tests, tools) stays quiet.
+        ApprovalHub::default().warn(&Approval {
+            id: String::new(),
+            session_id: String::new(),
+            task_id: String::new(),
+            tool: String::new(),
+            arguments: Value::Null,
+            command: String::new(),
+            reason: String::new(),
+            pending: true,
+            created_at: 0.0,
+            expires_at: 0.0,
+            preview: Value::Null,
+            grant: String::new(),
+            note: false,
+        });
     }
 }
