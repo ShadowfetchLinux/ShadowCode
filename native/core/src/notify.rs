@@ -251,7 +251,10 @@ mod tests {
         assert_eq!(notice.body, "Waiting for you: cargo test --all");
         assert_eq!(notice.session_id, "s1");
         let tool_only = select(
-            &event("approval.requested", json!({"command":"","tool":"write_file"})),
+            &event(
+                "approval.requested",
+                json!({"command":"","tool":"write_file"}),
+            ),
             &Prefs::default(),
         )
         .unwrap();
@@ -372,7 +375,11 @@ mod tests {
         let hinted = json!({"type":"agent.completed","session_id":"s1","payload":hint(&original)});
         assert!(hinted["payload"]["private"].is_null());
         assert_eq!(
-            hinted["payload"]["summary"].as_str().unwrap().chars().count(),
+            hinted["payload"]["summary"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
             180
         );
         assert_eq!(

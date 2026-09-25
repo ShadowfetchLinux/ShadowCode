@@ -314,7 +314,11 @@ impl Service {
             None
         };
         let (run_in, session_id, queue) = match &worktree {
-            Some(record) => (record.worktree.clone(), Some(record.session_id.clone()), false),
+            Some(record) => (
+                record.worktree.clone(),
+                Some(record.session_id.clone()),
+                false,
+            ),
             None => (workspace.clone(), session_id, body.queue.is_true()),
         };
         let started = self

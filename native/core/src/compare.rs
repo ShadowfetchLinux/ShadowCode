@@ -419,14 +419,7 @@ pub(crate) async fn snapshot_for(
         });
     }
     let mut args = IDENTITY.to_vec();
-    args.extend([
-        "commit-tree",
-        &tree,
-        "-p",
-        &head,
-        "-m",
-        message,
-    ]);
+    args.extend(["commit-tree", &tree, "-p", &head, "-m", message]);
     let commit = git(source, &args, cancel).await?;
     Ok(Base {
         commit,

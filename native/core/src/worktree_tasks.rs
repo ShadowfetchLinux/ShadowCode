@@ -447,9 +447,13 @@ pub async fn apply(engine: &Engine, id: &str) -> Result<Record> {
         "Its worktree was deleted outside ShadowCode, so its result cannot be applied. Discard it instead."
     );
     // No task may run in the project, or in the worktree, while this runs.
-    let _project = engine.reserve_workspace(&record.workspace).map_err(|error| {
-        anyhow::anyhow!("{error:#}. Stop or wait for the task running in the project, then apply again.")
-    })?;
+    let _project = engine
+        .reserve_workspace(&record.workspace)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{error:#}. Stop or wait for the task running in the project, then apply again."
+            )
+        })?;
     let _checkout = engine.reserve_workspace(&record.worktree)?;
     let (head, files) = compare::commit_checkout(
         &record.worktree,
