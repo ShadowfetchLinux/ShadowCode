@@ -274,6 +274,14 @@ These rules apply to ShadowCode's own tools. Privileged commands (`sudo`, `su`,
 still ask. Destructive Git commands ask. Edits outside the project are refused.
 Plan and Review tasks are read-only.
 
+Approval cards show the diff of a file change or the full command and its
+folder. **Allow for this task** covers the same kind of action (all file
+edits, or one program and subcommand such as `cargo test`) until the task
+ends; chained, privileged and destructive commands always ask. **Deny with
+note** tells the agent why. After a task, **Review changes** shows only that
+task's files, with per-change Keep and Undo; **Rewind** asks first and can be
+undone.
+
 Vendor CLIs enforce their own sandbox. ShadowCode shows the approval requests
 they send and denies them automatically in read-only tasks. Each vendor
 decides which of its actions ask; the table above shows how its requests reach

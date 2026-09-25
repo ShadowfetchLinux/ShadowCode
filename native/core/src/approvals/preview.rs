@@ -50,12 +50,26 @@ pub fn file_change(path: &str, before: Option<&[u8]>, after: Option<&[u8]>) -> V
     })
 }
 
-fn files(changes: Vec<Value>) -> Value {
+/// Diff text kept across all files of one prompt: the preview is stored
+/// with the `approval.requested` event. Files past it keep their counts.
+const MAX_TOTAL_DIFF: usize = 256 * 1024;
+
+fn files(mut changes: Vec<Value>) -> Value {
     if changes.is_empty() {
-        Value::Null
-    } else {
-        json!({"kind":"files","files":changes})
+        return Value::Null;
     }
+    let mut budget = MAX_TOTAL_DIFF;
+    for change in &mut changes {
+        let size = change["diff"].as_str().map_or(0, str::len);
+        if size > budget {
+            change["diff"] = json!("");
+            change["truncated"] = json!(true);
+            budget = 0;
+        } else {
+            budget -= size;
+        }
+    }
+    json!({"kind":"files","files":changes})
 }
 
 pub fn command(command: &str, cwd: &Path) -> Value {

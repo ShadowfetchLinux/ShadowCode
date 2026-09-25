@@ -57,6 +57,11 @@ function FilePreview({ file }: { file: PreviewFile }) {
       </div>
       {file.binary ? (
         <p className="hint">Binary or very large file; no text preview.</p>
+      ) : !hunks.length && file.truncated ? (
+        <p className="hint">
+          This change is too large to preview here; the line counts are
+          complete.
+        </p>
       ) : (
         hunks.map((hunk, i) => {
           if (budget <= 0) return null;
