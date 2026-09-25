@@ -135,8 +135,8 @@
   text-transform: uppercase;
   color: var(--ok);
 }
-.diff-hunk.is-settled .diff-table {
-  opacity: 0.6;
+.diff-hunk.is-settled {
+  border-color: var(--ok);
 }
 .diff-table {
   width: 100%;

@@ -5,9 +5,10 @@ import type { ToastKind } from "./useToasts";
 
 /** Which task the full-width Review view shows, if any. */
 export function useReviewTarget(sessionId: string) {
-  const [target, setTarget] = useState<{ taskId: string; path?: string } | null>(
-    null,
-  );
+  const [target, setTarget] = useState<{
+    taskId: string;
+    path?: string;
+  } | null>(null);
   // Another conversation closes the review.
   useEffect(() => setTarget(null), [sessionId]);
   const open = useCallback(

@@ -216,7 +216,11 @@ const TranscriptRow = memo(function TranscriptRow({
         {item.who && <div className="who">{item.who}</div>}
         <Markdown>{item.text}</Markdown>
         {!item.live && (
-          <div className="agent-actions" role="group" aria-label="Answer actions">
+          <div
+            className="agent-actions"
+            role="group"
+            aria-label="Answer actions"
+          >
             <CopyButton
               text={item.text}
               onCopy={actions.onCopy}

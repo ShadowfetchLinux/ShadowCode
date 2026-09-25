@@ -6,8 +6,7 @@ import type { Mention } from "../lib/mentions";
 /** One row of the @ menu: a subagent (W1-F's `@agent` at the start of a
  * message) or a project file or folder to attach. */
 export type MentionOption =
-  | { kind: "agent"; agent: AgentInfo }
-  | { kind: "file" | "dir"; path: string };
+  { kind: "agent"; agent: AgentInfo } | { kind: "file" | "dir"; path: string };
 
 export const optionKey = (o: MentionOption) =>
   o.kind === "agent" ? `agent:${o.agent.name}` : `${o.kind}:${o.path}`;

@@ -56,7 +56,10 @@ export function useMessageActions({
   const editResend = useCallback(
     async (item: UserItem, text: string, undoFiles: boolean) => {
       if (busy) {
-        toast("Stop the running task before editing an earlier message.", "info");
+        toast(
+          "Stop the running task before editing an earlier message.",
+          "info",
+        );
         return;
       }
       if (!model) {
@@ -105,7 +108,17 @@ export function useMessageActions({
         "ok",
       );
     },
-    [busy, model, sessionId, items, rewindNow, openSession, startTask, request, toast],
+    [
+      busy,
+      model,
+      sessionId,
+      items,
+      rewindNow,
+      openSession,
+      startTask,
+      request,
+      toast,
+    ],
   );
 
   const retry = useCallback(

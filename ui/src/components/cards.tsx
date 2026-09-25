@@ -93,7 +93,6 @@ export function isMutatingTool(tool: string): boolean {
   return MUTATING.has(tool);
 }
 
-
 const BACKGROUND_LABELS = new Map([
   ["background_start", "Start background process"],
   ["background_list", "List background processes"],

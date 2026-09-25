@@ -6,7 +6,10 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { DiffHunk, LayoutToggle, type DiffLayout } from "./DiffView";
 import { Empty } from "./cards";
 import { hunkKey, useTaskReview } from "../hooks/useReview";
-import type { DrawerMemory, DrawerMemoryUpdate } from "../hooks/useDrawerMemory";
+import type {
+  DrawerMemory,
+  DrawerMemoryUpdate,
+} from "../hooks/useDrawerMemory";
 import type { ToastKind } from "../hooks/useToasts";
 import { languageOf } from "../lib/diff";
 import { readStore, writeStore } from "../lib/storage";
@@ -20,9 +23,7 @@ const STATUS: Record<string, string> = {
 };
 
 type Confirm =
-  | { kind: "file"; path: string }
-  | { kind: "all"; count: number }
-  | null;
+  { kind: "file"; path: string } | { kind: "all"; count: number } | null;
 
 /** The files one task changed, full width: a file list, a diff viewer
  * (unified or split, highlighted), Keep or Undo per hunk and per file, and
@@ -76,11 +77,7 @@ export function ReviewView({
   return (
     <section className="review-view" aria-label="Review changes">
       <header className="review-head">
-        <button
-          type="button"
-          className="ghost review-back"
-          onClick={onClose}
-        >
+        <button type="button" className="ghost review-back" onClick={onClose}>
           <ArrowLeft size={14} aria-hidden="true" /> Back to conversation
         </button>
         <h2>Review changes</h2>
@@ -121,8 +118,8 @@ export function ReviewView({
       </header>
       {readOnly && tab === "task" && (
         <p className="notice review-readonly" role="status">
-          A task is running in this project, so the review is read-only. You
-          can undo changes when it finishes.
+          A task is running in this project, so the review is read-only. You can
+          undo changes when it finishes.
         </p>
       )}
       {tab === "git" ? (
@@ -156,7 +153,9 @@ export function ReviewView({
                 type="button"
                 key={file.path}
                 className={`review-file ${review.selected === file.path ? "active" : ""}`}
-                aria-current={review.selected === file.path ? "true" : undefined}
+                aria-current={
+                  review.selected === file.path ? "true" : undefined
+                }
                 onClick={() => review.setSelected(file.path)}
               >
                 <span className={`review-status is-${file.status}`}>

@@ -8,11 +8,7 @@ import {
 } from "../lib/effort";
 import type { Mention } from "../lib/mentions";
 import type { PickerTarget } from "../lib/picker";
-import {
-  pushHistory,
-  readHistory,
-  stepHistory,
-} from "../lib/promptHistory";
+import { pushHistory, readHistory, stepHistory } from "../lib/promptHistory";
 
 /** ↑/↓ prompt recall for one project. `older`/`newer` return the text to
  * show, or null when there is nothing further. */
@@ -91,7 +87,8 @@ export function useComposerExtras({
     [],
   );
   const removeMention = useCallback(
-    (path: string) => setMentions((list) => list.filter((m) => m.path !== path)),
+    (path: string) =>
+      setMentions((list) => list.filter((m) => m.path !== path)),
     [],
   );
   const setEffort = useCallback(

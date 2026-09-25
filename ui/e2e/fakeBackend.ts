@@ -566,8 +566,12 @@ export function installFakeBackend(options: FakeOptions = {}) {
     const b = (after || "").split("\n");
     if (before === null || after === null || a.length !== b.length) {
       const lines = [
-        ...(before ? a.filter(Boolean).map((text) => ({ kind: "del", text })) : []),
-        ...(after ? b.filter(Boolean).map((text) => ({ kind: "add", text })) : []),
+        ...(before
+          ? a.filter(Boolean).map((text) => ({ kind: "del", text }))
+          : []),
+        ...(after
+          ? b.filter(Boolean).map((text) => ({ kind: "add", text }))
+          : []),
       ];
       return lines.length
         ? [
@@ -606,7 +610,8 @@ export function installFakeBackend(options: FakeOptions = {}) {
   }
   function reviewFile(tid: string, path: string) {
     const before = state.checkpoints[tid]?.[path];
-    if (before === undefined) throw new Error(`This task did not change ${path}`);
+    if (before === undefined)
+      throw new Error(`This task did not change ${path}`);
     const now = state.files[path] ?? null;
     const hunks = lineHunks(before, now);
     let added = 0;
@@ -631,7 +636,11 @@ export function installFakeBackend(options: FakeOptions = {}) {
       removed,
       binary: false,
       hash: String(now),
-      hunks: hunks.map(({ id, header, lines }: Json) => ({ id, header, lines })),
+      hunks: hunks.map(({ id, header, lines }: Json) => ({
+        id,
+        header,
+        lines,
+      })),
     };
   }
   /** The fake task's edit: two separate one-line changes in src/app.ts. */
@@ -2197,7 +2206,9 @@ export function installFakeBackend(options: FakeOptions = {}) {
     if ((m = path.match(/^\/api\/review\/tasks\/([^/]+)\/undo$/))) {
       const tid = m[1];
       if (busyProject())
-        throw new Error("Wait for the running task to finish before undoing changes");
+        throw new Error(
+          "Wait for the running task to finish before undoing changes",
+        );
       const before = state.checkpoints[tid]?.[body.path];
       if (before === undefined)
         throw new Error(`This task did not change ${body.path}`);
@@ -2206,7 +2217,9 @@ export function installFakeBackend(options: FakeOptions = {}) {
           (h: Json) => h.id === body.hunk,
         );
         if (!hunk || hunk.start < 0)
-          throw new Error("This change is no longer in the file. Refresh the review");
+          throw new Error(
+            "This change is no longer in the file. Refresh the review",
+          );
         const lines = (state.files[body.path] || "").split("\n");
         const old = (before || "").split("\n");
         for (let i = hunk.start; i < hunk.start + hunk.count; i++)

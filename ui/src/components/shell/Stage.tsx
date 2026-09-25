@@ -261,18 +261,18 @@ export function Stage({
       {view === "chat" &&
         !reviewPanel &&
         (!scroll.atBottom || history.viewing) && (
-        <button
-          type="button"
-          className="jump-latest"
-          onClick={() => {
-            if (history.viewing) history.latest();
-            scroll.jumpToLatest();
-          }}
-        >
-          <ArrowDown size={14} aria-hidden="true" />
-          Latest activity
-        </button>
-      )}
+          <button
+            type="button"
+            className="jump-latest"
+            onClick={() => {
+              if (history.viewing) history.latest();
+              scroll.jumpToLatest();
+            }}
+          >
+            <ArrowDown size={14} aria-hidden="true" />
+            Latest activity
+          </button>
+        )}
       <ComposerDock
         hidden={view === "compare" || Boolean(reviewPanel)}
         queue={{

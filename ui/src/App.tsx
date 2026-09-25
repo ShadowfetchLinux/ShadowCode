@@ -395,7 +395,17 @@ export default function App() {
   );
 
   const review = useReviewTarget(sessionId);
-  const rewinding = useRewind({ busy, refresh, toast });
+  /** After a rewind or a review undo while no task streams: the project
+   * state and the conversation's new rows (the divider, the notes). */
+  const refreshAfterFiles = useStableCallback(async () => {
+    await refresh().catch(() => undefined);
+    const sid = nav.selectedRef.current;
+    if (!sid || busy) return;
+    const detail = await api.session(sid).catch(() => null);
+    if (detail && nav.selectedRef.current === sid && !submittingRef.current)
+      conversation.load(detail, jobRef.current, true);
+  });
+  const rewinding = useRewind({ busy, refresh: refreshAfterFiles, toast });
   const messages = useMessageActions({
     items: transcript.items,
     sessionId,
@@ -422,8 +432,7 @@ export default function App() {
     openSession: nav.openSession,
   });
   const onDecide = useStableCallback(
-    (id: string, answer: ApprovalDecision) =>
-      void controls.decide(id, answer),
+    (id: string, answer: ApprovalDecision) => void controls.decide(id, answer),
   );
   const fallback = useMemo(
     () => resolveFallback(limitsFrom(cfg), allowance.data, pickerTargets),
@@ -576,7 +585,7 @@ export default function App() {
               busy={busy}
               onClose={review.close}
               toast={toast}
-              refresh={refresh}
+              refresh={refreshAfterFiles}
               onAskAgent={(prompt) => {
                 setTask(prompt);
                 review.close();

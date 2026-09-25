@@ -43,7 +43,10 @@ export function mentionsInText(text: string, chips: Mention[]): Mention[] {
     while (at >= 0) {
       const before = at === 0 ? " " : text[at - 1];
       const next = text[at + token.length];
-      if (/\s/.test(before) && (next === undefined || /\s|[.,;:!?)]/.test(next)))
+      if (
+        /\s/.test(before) &&
+        (next === undefined || /\s|[.,;:!?)]/.test(next))
+      )
         return true;
       at = text.indexOf(token, at + 1);
     }

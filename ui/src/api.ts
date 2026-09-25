@@ -1242,9 +1242,7 @@ export const api = {
     get<{
       items: { path: string; kind: "file" | "dir" }[];
       truncated: boolean;
-    }>(
-      `/api/workspace/mentions?q=${encodeURIComponent(query)}&limit=${limit}`,
-    ),
+    }>(`/api/workspace/mentions?q=${encodeURIComponent(query)}&limit=${limit}`),
   /** The files one task changed (per-task review). */
   review: (taskId: string) =>
     get<{

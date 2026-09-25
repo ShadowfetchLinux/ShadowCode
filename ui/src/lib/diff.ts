@@ -219,7 +219,8 @@ export function highlight(text: string, language?: string): Token[] {
     const quote = lang.strings.find((q) => rest.startsWith(q));
     if (quote) {
       let j = 1;
-      while (j < rest.length && rest[j] !== quote) j += rest[j] === "\\" ? 2 : 1;
+      while (j < rest.length && rest[j] !== quote)
+        j += rest[j] === "\\" ? 2 : 1;
       const length = Math.min(j + 1, rest.length);
       flush();
       tokens.push({ text: rest.slice(0, length), kind: "str" });
