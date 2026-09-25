@@ -304,7 +304,7 @@ fn active(status: &str) -> bool {
     matches!(status, "" | "queued" | "running" | "paused" | "cancelling")
 }
 
-async fn git_with(
+pub(crate) async fn git_with(
     dir: &Path,
     args: &[&str],
     env: &[(&str, &str)],
@@ -331,7 +331,7 @@ async fn git_with(
     }
     process::run(spec, cancel.clone(), None).await
 }
-async fn git(dir: &Path, args: &[&str], cancel: &CancellationToken) -> Result<String> {
+pub(crate) async fn git(dir: &Path, args: &[&str], cancel: &CancellationToken) -> Result<String> {
     git_env(dir, args, &[], cancel).await
 }
 async fn git_env(
@@ -357,13 +357,31 @@ async fn git_env(
 /// copy of the index. Only new Git objects are written; the source index and
 /// working tree are left exactly as they were.
 async fn snapshot(scratch: &Path, source: &Path, cancel: &CancellationToken) -> Result<Base> {
+    snapshot_for(
+        scratch,
+        source,
+        "comparing models",
+        "ShadowCode compare base",
+        cancel,
+    )
+    .await
+}
+/// `snapshot` for another feature: `action` completes "… before <action>"
+/// in its errors and `message` is the base commit's message.
+pub(crate) async fn snapshot_for(
+    scratch: &Path,
+    source: &Path,
+    action: &str,
+    message: &str,
+    cancel: &CancellationToken,
+) -> Result<Base> {
     let head = git(source, &["rev-parse", "--verify", "HEAD^{commit}"], cancel)
         .await
-        .context("Make a first commit in this repository before comparing models")?;
+        .with_context(|| format!("Make a first commit in this repository before {action}"))?;
     let unmerged = git(source, &["ls-files", "--unmerged", "-z"], cancel).await?;
     ensure!(
         unmerged.is_empty(),
-        "Resolve merge conflicts in the project before comparing models"
+        "Resolve merge conflicts in the project before {action}"
     );
     let real_index = PathBuf::from(
         git(
@@ -407,7 +425,7 @@ async fn snapshot(scratch: &Path, source: &Path, cancel: &CancellationToken) -> 
         "-p",
         &head,
         "-m",
-        "ShadowCode compare base",
+        message,
     ]);
     let commit = git(source, &args, cancel).await?;
     Ok(Base {
@@ -419,7 +437,7 @@ async fn snapshot(scratch: &Path, source: &Path, cancel: &CancellationToken) -> 
 
 /// Diffstat of a lane against its base: committed and uncommitted tracked
 /// changes plus untracked (not ignored) files.
-async fn diffstat(
+pub(crate) async fn diffstat(
     lane: &Path,
     base: &str,
     cancel: &CancellationToken,
@@ -696,17 +714,27 @@ fn resolve_models(
 }
 
 async fn repository_root(workspace: &Path, cancel: &CancellationToken) -> Result<()> {
+    repository_root_for(workspace, "Compare needs", "comparing models", cancel).await
+}
+/// `workspace` is a Git repository's root: "<needs> a Git repository" and
+/// "Open the repository root before <action>" otherwise.
+pub(crate) async fn repository_root_for(
+    workspace: &Path,
+    needs: &str,
+    action: &str,
+    cancel: &CancellationToken,
+) -> Result<()> {
     let top = git(workspace, &["rev-parse", "--show-toplevel"], cancel)
         .await
-        .context("Compare needs a Git repository")?;
+        .with_context(|| format!("{needs} a Git repository"))?;
     ensure!(
         Path::new(&top).canonicalize()? == workspace,
-        "Open the repository root before comparing models"
+        "Open the repository root before {action}"
     );
     Ok(())
 }
 
-fn set_trust(engine: &Engine, lanes: &[PathBuf], trusted: bool) -> Result<()> {
+pub(crate) fn set_trust(engine: &Engine, lanes: &[PathBuf], trusted: bool) -> Result<()> {
     Config::update(engine.paths(), |cfg| {
         if trusted {
             for lane in lanes {
@@ -954,7 +982,7 @@ pub async fn scoreboard(engine: &Engine, workspace: &Path) -> Result<Value> {
 }
 
 /// Paths named in `git apply` errors (conflicting files).
-fn conflicting_paths(stderr: &str) -> Vec<String> {
+pub(crate) fn conflicting_paths(stderr: &str) -> Vec<String> {
     let mut paths = Vec::new();
     for line in stderr.lines() {
         let Some(rest) = line.strip_prefix("error: ") else {
@@ -972,6 +1000,135 @@ fn conflicting_paths(stderr: &str) -> Vec<String> {
         }
     }
     paths
+}
+
+/// Commit everything in a disposable checkout (tracked and untracked, not
+/// ignored) on its own managed branch — never one of the user's — and list
+/// the files that differ from `base`. Returns (head commit, files).
+pub(crate) async fn commit_checkout(
+    checkout: &Path,
+    base: &str,
+    message: &str,
+    cancel: &CancellationToken,
+) -> Result<(String, Vec<String>)> {
+    git(checkout, &["add", "--all"], cancel).await?;
+    let staged = git_with(
+        checkout,
+        &["diff", "--cached", "--quiet", "--no-ext-diff"],
+        &[],
+        cancel,
+    )
+    .await?;
+    if !staged.ok {
+        let mut args = IDENTITY.to_vec();
+        args.extend(["commit", "--quiet", "--no-verify", "-m", message]);
+        git(checkout, &args, cancel).await?;
+    }
+    let head = git(checkout, &["rev-parse", "--verify", "HEAD"], cancel).await?;
+    let files: Vec<String> = git(
+        checkout,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            base,
+            &head,
+            "--",
+        ],
+        cancel,
+    )
+    .await?
+    .split('\0')
+    .filter(|s| !s.is_empty())
+    .map(str::to_owned)
+    .collect();
+    Ok((head, files))
+}
+
+/// `git apply --check` refused a result; nothing was written.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Refused {
+    /// Files Git named as conflicting.
+    pub conflicts: Vec<String>,
+    /// Git's own words, for when it named no file.
+    pub detail: String,
+}
+impl Refused {
+    /// " in a, b" or " (Git's message)".
+    pub fn described(&self) -> String {
+        if self.conflicts.is_empty() {
+            format!(" ({})", self.detail)
+        } else {
+            format!(" in {}", self.conflicts.join(", "))
+        }
+    }
+}
+
+/// Apply `base..head` of `checkout` to `target`'s working tree (never the
+/// index, never a commit), so the user reviews it in the normal Changes
+/// view. `git apply --check` runs first; when it refuses, nothing is written
+/// and the refusal is returned.
+pub(crate) async fn apply_checkout(
+    scratch: &Path,
+    checkout: &Path,
+    target: &Path,
+    base: &str,
+    head: &str,
+    cancel: &CancellationToken,
+) -> Result<Option<Refused>> {
+    let temporary = tempfile::tempdir_in(scratch)?;
+    let patch = temporary.path().join("result.patch");
+    let output = format!(
+        "--output={}",
+        patch.to_str().context("Patch path must be UTF-8")?
+    );
+    git(
+        checkout,
+        &[
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            &output,
+            base,
+            head,
+            "--",
+        ],
+        cancel,
+    )
+    .await?;
+    let patch_path = patch.to_str().context("Patch path must be UTF-8")?;
+    let check = git_with(
+        target,
+        &[
+            "apply",
+            "--check",
+            "--binary",
+            "--whitespace=nowarn",
+            "--",
+            patch_path,
+        ],
+        &[],
+        cancel,
+    )
+    .await?;
+    if !check.ok {
+        return Ok(Some(Refused {
+            conflicts: conflicting_paths(&check.stderr),
+            detail: check.stderr.trim().to_owned(),
+        }));
+    }
+    git(
+        target,
+        &["apply", "--binary", "--whitespace=nowarn", "--", patch_path],
+        cancel,
+    )
+    .await
+    .context("Applying the changes failed; review the project's Changes")?;
+    Ok(None)
 }
 
 pub async fn keep(engine: &Engine, id: &str, model: &str) -> Result<Record> {
@@ -1004,39 +1161,13 @@ pub async fn keep(engine: &Engine, id: &str, model: &str) -> Result<Record> {
     // No agent task may run in the source while its working tree changes.
     let _reservation = engine.reserve_workspace(&record.workspace)?;
     // Commit the lane's result on its managed branch (never the user's).
-    git(&lane.worktree, &["add", "--all"], &cancel).await?;
-    let staged = git_with(
+    let (head, files) = commit_checkout(
         &lane.worktree,
-        &["diff", "--cached", "--quiet", "--no-ext-diff"],
-        &[],
+        &lane.base_commit,
+        &format!("ShadowCode compare result: {}", lane.name),
         &cancel,
     )
     .await?;
-    if !staged.ok {
-        let message = format!("ShadowCode compare result: {}", lane.name);
-        let mut args = IDENTITY.to_vec();
-        args.extend(["commit", "--quiet", "--no-verify", "-m", &message]);
-        git(&lane.worktree, &args, &cancel).await?;
-    }
-    let head = git(&lane.worktree, &["rev-parse", "--verify", "HEAD"], &cancel).await?;
-    let files: Vec<String> = git(
-        &lane.worktree,
-        &[
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            &lane.base_commit,
-            &head,
-            "--",
-        ],
-        &cancel,
-    )
-    .await?
-    .split('\0')
-    .filter(|s| !s.is_empty())
-    .map(str::to_owned)
-    .collect();
     ensure!(
         !files.is_empty() || lane.status == "completed",
         "{} finished as {} without changes; there is nothing to keep",
@@ -1044,65 +1175,23 @@ pub async fn keep(engine: &Engine, id: &str, model: &str) -> Result<Record> {
         lane.status
     );
     if !files.is_empty() {
-        let temporary = tempfile::tempdir_in(&engine.paths().data)?;
-        let patch = temporary.path().join("lane.patch");
-        let output = format!(
-            "--output={}",
-            patch.to_str().context("Patch path must be UTF-8")?
-        );
-        git(
+        // Working tree only: no --index, no commit.
+        let refused = apply_checkout(
+            &engine.paths().data,
             &lane.worktree,
-            &[
-                "diff",
-                "--binary",
-                "--full-index",
-                "--no-renames",
-                "--no-ext-diff",
-                "--no-textconv",
-                &output,
-                &lane.base_commit,
-                &head,
-                "--",
-            ],
-            &cancel,
-        )
-        .await?;
-        let patch_path = patch.to_str().context("Patch path must be UTF-8")?;
-        let check = git_with(
             &record.workspace,
-            &[
-                "apply",
-                "--check",
-                "--binary",
-                "--whitespace=nowarn",
-                "--",
-                patch_path,
-            ],
-            &[],
+            &lane.base_commit,
+            &head,
             &cancel,
         )
         .await?;
-        if !check.ok {
-            let conflicts = conflicting_paths(&check.stderr);
+        if let Some(refused) = refused {
             bail!(
                 "{}'s changes no longer apply: the project changed since the comparison started{}. Nothing was changed and every lane is kept; update or revert those files, then keep again.",
                 lane.name,
-                if conflicts.is_empty() {
-                    format!(" ({})", check.stderr.trim())
-                } else {
-                    format!(" in {}", conflicts.join(", "))
-                }
+                refused.described()
             );
         }
-        // Working tree only: no --index, no commit. The user reviews the
-        // result in the normal Changes view.
-        git(
-            &record.workspace,
-            &["apply", "--binary", "--whitespace=nowarn", "--", patch_path],
-            &cancel,
-        )
-        .await
-        .context("Applying the kept changes failed; review the project's Changes")?;
     }
     record.winner = Some(lane.model.clone());
     record.applied_files = files;

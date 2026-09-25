@@ -20,6 +20,9 @@ struct StartBody {
     handoff_consent: Flag,
     images: Option<Value>,
     permission_limit: Option<Value>,
+    /// Start a new conversation in a fresh managed worktree of the project
+    /// (`crate::worktree_tasks`); `session_id` and `queue` are ignored.
+    worktree: Flag,
 }
 
 /// POST /api/jobs/test.
@@ -281,29 +284,71 @@ impl Service {
             .flatten()
             .filter_map(|v| v.as_str().map(str::to_owned))
             .collect();
+        let mut limit: Option<crate::config::PermissionLevel> = body
+            .permission_limit
+            .clone()
+            .filter(|v| !v.is_null())
+            .map(serde_json::from_value)
+            .transpose()?;
+        // "Run in new worktree": a new conversation in a fresh worktree of
+        // this project, which may run beside a task in the main checkout.
+        let worktree = if body.worktree.is_true() {
+            crate::worktree_tasks::ensure_one_local_model(&self.engine, target_id.as_deref())?;
+            let record = crate::worktree_tasks::prepare(
+                &self.engine,
+                &workspace,
+                body.task.as_str(),
+                &images,
+                model
+                    .as_ref()
+                    .map_or(cfg.model.default.as_str(), |m| m.default.as_str()),
+            )
+            .await?;
+            // The worktree's own config never widens the project's authority.
+            limit = Some(match limit {
+                Some(limit) => cfg.permissions.level.restricted_to(limit),
+                None => cfg.permissions.level.clone(),
+            });
+            Some(record)
+        } else {
+            None
+        };
+        let (run_in, session_id, queue) = match &worktree {
+            Some(record) => (record.worktree.clone(), Some(record.session_id.clone()), false),
+            None => (workspace.clone(), session_id, body.queue.is_true()),
+        };
         let started = self
             .engine
             .start_consented_owned(
                 StartRequest {
-                    workspace: workspace.clone(),
+                    workspace: run_in,
                     task: body.task.as_str().into(),
                     session_id,
                     model,
                     mode: mode.into(),
-                    queue: body.queue.is_true(),
+                    queue,
                     images,
                     web: body.web.is_true(),
                 },
                 purpose,
-                body.permission_limit
-                    .clone()
-                    .filter(|v| !v.is_null())
-                    .map(serde_json::from_value)
-                    .transpose()?,
+                limit,
                 self.job_owner.as_ref(),
                 body.handoff_consent.is_true(),
             )
             .await;
+        let (started, worktree) = match (started, worktree) {
+            (Ok(job), Some(record)) => {
+                match crate::worktree_tasks::started(&self.engine, record, &job).await {
+                    Ok(record) => (Ok(job), Some(record)),
+                    Err(error) => (Err(error), None),
+                }
+            }
+            (Err(error), Some(record)) => {
+                crate::worktree_tasks::abandon(&self.engine, record).await;
+                (Err(error), None)
+            }
+            (started, None) => (started, None),
+        };
         let job = match started {
             Ok(job) => job,
             Err(error) => {
@@ -325,17 +370,22 @@ impl Service {
         };
         if let Some(id) = target_id.filter(|_| !body.model.is_empty()) {
             // Remembered for "keep going on a local model" when a plan runs out.
+            // Per project: a worktree task remembers it for its project.
             if id.starts_with("local:gguf:") {
-                store.set_native_meta(&keys::last_local_target(&job.workspace), &id)?;
+                store.set_native_meta(&keys::last_local_target(&workspace), &id)?;
             }
             store.set_session_meta(&job.session_id, keys::EXECUTION_TARGET, &id)?;
-            store.set_native_meta(&keys::execution_target(&job.workspace), &id)?;
+            store.set_native_meta(&keys::execution_target(&workspace), &id)?;
         }
         self.select_if(
             &job.workspace,
             Some(job.session_id.clone()),
             Some(selection.generation),
         )?;
-        Ok(json!(job))
+        let mut answer = json!(job);
+        if let Some(record) = worktree {
+            answer["worktree_task"] = record.to_json();
+        }
+        Ok(answer)
     }
 }

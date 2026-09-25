@@ -236,6 +236,13 @@ impl Store {
             .optional()?;
         Ok(value)
     }
+    pub fn delete_session_meta(&self, session_id: &str, key: &str) -> Result<()> {
+        self.lock()?.execute(
+            "DELETE FROM session_meta WHERE session_id=? AND key=?",
+            params![session_id, key],
+        )?;
+        Ok(())
+    }
     pub fn clear_session_meta_prefix(&self, key_prefix: &str) -> Result<usize> {
         let connection = self.lock()?;
         let pattern = format!("{}%", key_prefix.replace('%', "\\%"));
@@ -473,7 +480,8 @@ impl Store {
     /// The session list the app shows. Compare lane conversations (sessions
     /// with a `compare_id` meta row) are left out unless `include_compare`;
     /// every row carries `compare_id` and `compare_lane` (null for ordinary
-    /// conversations).
+    /// conversations). A worktree task's conversation carries `worktree_task`
+    /// and `worktree_source` (its project) and is listed under that project.
     pub fn sessions_listed(
         &self,
         search: &str,
@@ -490,11 +498,35 @@ impl Store {
         );
         self.query("SELECT s.*,
             (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_id') AS compare_id,
-            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_lane') AS compare_lane
-            FROM sessions s WHERE (? IS NULL OR s.workspace=?) AND (s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_lane') AS compare_lane,
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='worktree_task') AS worktree_task,
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='worktree_source') AS worktree_source
+            FROM sessions s WHERE (? IS NULL OR s.workspace=?
+                OR EXISTS(SELECT 1 FROM session_meta w WHERE w.session_id=s.id AND w.key='worktree_source' AND w.value=?))
+            AND (s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
             OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '!'))
             AND (? OR NOT EXISTS(SELECT 1 FROM session_meta c WHERE c.session_id=s.id AND c.key='compare_id'))
-            ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,include_compare,limit.clamp(1,10000)])
+            ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,include_compare,limit.clamp(1,10000)])
+    }
+    /// Move a conversation to another folder (a worktree task's conversation
+    /// returns to its project when the worktree is removed). The vendor CLI
+    /// session ids are forgotten: they belong to the old folder.
+    pub fn move_session(&self, sid: &str, workspace: &Path) -> Result<()> {
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        ensure!(
+            tx.execute(
+                "UPDATE sessions SET workspace=?,updated_at=? WHERE id=?",
+                params![workspace.to_string_lossy(), now(), sid]
+            )? == 1,
+            "Session not found"
+        );
+        tx.execute(
+            "DELETE FROM session_meta WHERE session_id=? AND key LIKE 'native\\_session:%' ESCAPE '\\'",
+            [sid],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
     pub fn rename_session(&self, sid: &str, title: &str) -> Result<()> {
         ensure!(title.len() <= 500, "Task title is too long");

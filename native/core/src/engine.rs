@@ -189,7 +189,7 @@ impl Engine {
         Ok(Self(Arc::new(Inner {
             paths,
             store,
-            approvals: ApprovalHub::default(),
+            approvals: ApprovalHub::with_notices(sender.clone()),
             sender,
             queues: Mutex::new(QueueState::default()),
             workers: Mutex::new(Vec::new()),
@@ -274,6 +274,7 @@ impl Engine {
             !queues.manual.contains_key(workspace),
             "Wait for the manual operation to finish before deleting this session"
         );
+        crate::worktree_tasks::ensure_deletable(&self.0.store, id)?;
         self.0.store.delete_session(id)
     }
     pub fn reserve_workspace(&self, workspace: &Path) -> Result<WorkspaceReservation> {

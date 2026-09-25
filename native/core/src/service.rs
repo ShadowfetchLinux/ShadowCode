@@ -63,6 +63,7 @@ mod model_catalog;
 mod sessions;
 mod settings;
 mod workspace;
+mod worktree_tasks;
 mod worktrees;
 use call::{Call, Flag, Loose, Text};
 pub use git::parse_hunks;
@@ -183,13 +184,16 @@ impl Service {
         if expected.is_some_and(|generation| generation != selection.generation) {
             return Ok(());
         }
-        // A Compare lane's worktree is temporary: it is selected while its
-        // conversation is open but never becomes a project or the relaunch
-        // folder, which would go stale once the comparison is kept.
+        // A Compare lane's or worktree task's worktree is temporary: it is
+        // selected while its conversation is open but never becomes a
+        // project or the relaunch folder, which would go stale once the
+        // comparison is kept or the task applied.
         let lane = match &session {
-            Some(id) => crate::compare::session_tags(&self.engine.store(), id)?
-                .0
-                .is_some(),
+            Some(id) => {
+                let store = self.engine.store();
+                crate::compare::session_tags(&store, id)?.0.is_some()
+                    || crate::worktree_tasks::session_task(&store, id)?.is_some()
+            }
             None => false,
         };
         if !lane {
@@ -224,6 +228,7 @@ impl Service {
         match call.family() {
             "compare" | "compares" => self.compare(&call).await,
             "worktrees" | "parallel" | "sandbox" => self.worktree_routes(&call).await,
+            "worktree-tasks" => self.worktree_task_routes(&call).await,
             "sessions" | "projects" | "events" | "resolve" => {
                 self.blocking(&call, Self::session_routes).await
             }
