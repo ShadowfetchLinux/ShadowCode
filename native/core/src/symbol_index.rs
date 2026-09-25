@@ -303,6 +303,30 @@ fn walk_sources(root: &Path, limit: usize) -> (Vec<PathBuf>, bool) {
     (out, true)
 }
 
+/// True when the project has at least one file a grammar can parse (stops at
+/// the first one; bounded like a scan).
+pub fn has_sources(root: &Path) -> bool {
+    ignore::WalkBuilder::new(root)
+        .follow_links(false)
+        .max_depth(Some(32))
+        .filter_entry(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            entry.depth() == 0
+                || (!name.starts_with('.')
+                    && !matches!(
+                        name.as_ref(),
+                        "node_modules" | "target" | "dist" | "build" | "vendor"
+                    ))
+        })
+        .build()
+        .take(MAX_WALK_ENTRIES)
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry.file_type().is_some_and(|kind| kind.is_file())
+                && langs::lang_for(entry.path()).is_some()
+        })
+}
+
 enum Indexed {
     Skipped,
     Unchanged,
@@ -473,7 +497,7 @@ pub fn ensure_index(root: &Path, touched: &[String], scan: bool) -> Result<Value
     }
     // Remove stale entries for deleted, renamed, oversized, ignored or secret
     // files. A complete scan is authoritative; otherwise check metadata.
-    if !(wants_scan && recent_scan) {
+    {
         let stored: Vec<String> = conn
             .prepare("SELECT path FROM files")?
             .query_map([], |row| row.get(0))?

@@ -346,7 +346,12 @@ impl Env {
         if crate::redaction::is_secret_path(rel) {
             return None;
         }
-        let full = self.root.join(rel);
+        // Symlinks may not lead out of the project.
+        let full = self.root.join(rel).canonicalize().ok()?;
+        let root = self.root.canonicalize().ok()?;
+        if !full.starts_with(&root) {
+            return None;
+        }
         let metadata = std::fs::metadata(&full).ok()?;
         if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
             return None;

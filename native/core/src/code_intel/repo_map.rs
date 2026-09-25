@@ -334,6 +334,11 @@ pub async fn system_note(
     if budget < 256 {
         return None;
     }
+    // No source files, no map: skip the index entirely (cheap, and it keeps
+    // task start instant in empty or non-code folders).
+    if !crate::symbol_index::has_sources(&root) {
+        return None;
+    }
     let focus = crate::symbol_index::recent_edits(&root, 12);
     let work = tokio::task::spawn_blocking(move || build(&root, &focus, &task, budget));
     let map = tokio::time::timeout(Duration::from_secs(4), work)

@@ -132,6 +132,7 @@ impl ToolExecutor {
     }
     pub fn schemas(&self) -> Vec<Value> {
         let mut schemas = schemas();
+        schemas.extend(intel_schemas());
         if self.config.permissions.web {
             // Offered only when the task's web flag is on and the network
             // mode is online; otherwise the model is not shown the tools.
@@ -1241,6 +1242,17 @@ pub fn web_schemas() -> Vec<Value> {
     ]
 }
 
+/// repo_map and search_code, offered by ToolExecutor::schemas() (never to the
+/// small-context core catalog).
+pub fn intel_schemas() -> Vec<Value> {
+    let s = json!({"type":"string"});
+    let n = json!({"type":"integer"});
+    vec![
+        json!({"type":"function","function":{"name":"repo_map","description":"Ranked outline of key definitions; focus with paths or a query","parameters":{"type":"object","properties":{"query":s,"paths":{"type":"array","items":s},"max_tokens":n},"required":[],"additionalProperties":false}}}),
+        json!({"type":"function","function":{"name":"search_code","description":"Search code by keywords or meaning; returns ranked line ranges","parameters":{"type":"object","properties":{"query":s,"path":s,"max_hits":n},"required":["query"],"additionalProperties":false}}}),
+    ]
+}
+
 /// Offered only to models whose runtime accepts images.
 pub fn view_image_schema() -> Value {
     json!({"type":"function","function":{"name":"view_image","description":"Look at a PNG, JPEG, or WebP image inside the project. The image is attached to your next message.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}})
@@ -1262,8 +1274,6 @@ pub fn schemas() -> Vec<Value> {
         ("find_references","Uses of a symbol; with path+line asks the language server.",json!({"query":s,"symbol":s,"path":s,"line":n,"column":n,"max_hits":n}),vec![]),
         ("get_type_signature","Parser signature for a symbol when LSP is absent (tree-sitter AST).",json!({"symbol":s,"query":s}),vec![]),
         ("get_diagnostics","Current errors/warnings for a file from its language server.",json!({"path":s}),vec!["path"]),
-        ("repo_map","Ranked outline of key definitions; focus with paths or a query.",json!({"query":s,"paths":{"type":"array","items":s},"max_tokens":n}),vec![]),
-        ("search_code","Search code by keywords or meaning; returns ranked line ranges",json!({"query":s,"path":s,"max_hits":n}),vec!["query"]),
         ("mcp_sqlite_tables","List tables and CREATE TABLE definitions in a project SQLite file. Native read-only tool; no registration. SQLite may maintain WAL sidecars.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_query","Read a project SQLite file with SELECT/WITH or schema PRAGMA (table_info etc). Bind ? placeholders with params; check truncated. Unique column aliases required. SQLite may maintain WAL sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]}},"limit":n}),vec!["path","sql"]),
         ("background_start","Start a named project server/watcher under shell permissions. Continues independently after the task, including cancellation; stop it when no longer wanted. Inspect status/output before claiming readiness.",json!({"name":s,"command":s}),vec!["name","command"]),

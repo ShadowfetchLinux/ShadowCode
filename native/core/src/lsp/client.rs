@@ -231,7 +231,7 @@ impl Shared {
             .collect::<Vec<_>>())
     }
 
-    async fn handle(&self, message: Value) {
+    fn handle(self: &Arc<Self>, message: Value) {
         if std::env::var_os("SHADOWCODE_LSP_TRACE").is_some() {
             eprintln!(
                 "LSP<< {}",
@@ -266,7 +266,12 @@ impl Shared {
                     Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
                     Err(error) => json!({"jsonrpc": "2.0", "id": id, "error": error}),
                 };
-                let _ = write_frame(&self.writer, &reply).await;
+                // Never block the reader on stdin: a server busy writing to
+                // its stdout would otherwise deadlock against a long didOpen.
+                let shared = self.clone();
+                tokio::spawn(async move {
+                    let _ = write_frame(&shared.writer, &reply).await;
+                });
             }
             (Some(method), None) => match method {
                 "textDocument/publishDiagnostics" => self.store(&message["params"]),
@@ -392,7 +397,7 @@ impl Client {
                 let mut reader = BufReader::new(stdout);
                 let reason = loop {
                     match read_frame(&mut reader).await {
-                        Ok(Some(message)) => shared.handle(message).await,
+                        Ok(Some(message)) => shared.handle(message),
                         Ok(None) => break "The language server closed its output".to_owned(),
                         Err(error) => break format!("Language server protocol error: {error:#}"),
                     }

@@ -134,6 +134,16 @@ Search's public API instead. If that fails too, it returns `blocked: true`
 with both reasons and no results, and the model is told that nothing was
 retrieved.
 
+## Embedding models for code search
+
+The same runtime also serves the optional embedding models behind
+`search_code`'s search by meaning (BGE small, 35 MB, or Nomic Embed Text,
+139 MB). They are separate from your chat models: installed only from
+**Settings › Code intelligence**, verified against a pinned SHA-256, and run
+as a second `llama-server --embedding` process on 127.0.0.1 that stops after
+5 idle minutes. Loading or unloading a chat model does not affect it. See
+[code intelligence](CODE_INTELLIGENCE.md#embedding-models).
+
 ## Configuration
 
 These settings are the `local_engine` section of `config.yaml`. **Settings ›

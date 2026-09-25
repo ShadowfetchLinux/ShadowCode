@@ -946,6 +946,24 @@ div.activity-step {
   padding: 6px 0;
   border-bottom: 1px solid var(--border);
 }
+.code-intel-languages {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.code-intel-languages li {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.code-intel-languages li .hint {
+  margin: 2px 0 0;
+}
 .advanced-tabs {
   display: flex;
   flex-wrap: wrap;

@@ -248,6 +248,71 @@ used in the project, else the first ready local model with tool support.
 See [Compare](COMPARE.md) for `POST /api/compare`, `GET /api/compare/<id>`,
 `GET /api/compares`, `keep`, `discard`, `cancel` and the scoreboard.
 
+## Code intelligence
+
+Language servers, the code index, search, the repo map and embedding models
+([code intelligence](CODE_INTELLIGENCE.md)). Routes act on the selected
+project. Downloads are refused in offline mode.
+
+`GET /api/code-intel/status` →
+
+```
+{
+  config: CodeIntelSettings,          // effective code_intel settings
+  config_error: string|null,          // set when config.yaml's section is invalid (defaults in use)
+  offline: boolean,
+  languages: [{ language: "rust"|"typescript"|"python"|"go"|"c", label, enabled,
+                available, server?, path?, source?: "config"|"managed"|"path",
+                note?, install_hint?, managed_package: "typescript"|"python"|null }],
+  servers: [{ root, language, server, program, state: "ready"|"loading"|"backoff"|"stopped"|"idle"|"busy",
+              pid, idle_sec, starts, failures, last_error }],
+  managed: [{ id: "typescript"|"python", label, packages: ["name@version"], approx_bytes,
+              installed, installed_bytes: number|null, versions: [{name, version|null}], path,
+              progress: {state: "installing"|"installed"|"error", error, log}|null }],
+  managed_dir, npm: { available, path, node },
+  index: { files, symbols, references, chunks, languages: {[lang]: files}, max_files } | null,
+  embeddings: { models: EmbeddingModel[], active: string|null, runtime: string|null,
+                server: {model, pid, idle_sec}|null,
+                coverage: {embedded, chunks}|null,
+                backfill: {state: "running"|"done"|"error", embedded, error}|null }
+}
+CodeIntelSettings = { lsp, diagnostics_on_edit, diagnostics_wait_ms, lsp_idle_minutes, max_servers,
+                      servers: {[language]: {command, args}}, repo_map_tokens, semantic_search, embedding_model }
+EmbeddingModel = { id, name, summary, bytes, license, sha256, url, dims, installed, active,
+                   progress: {state: "downloading"|"verifying"|"installed"|"error", done, total, error}|null }
+```
+
+- `POST /api/code-intel/config {…some CodeIntelSettings fields}` → `{ok, config}`.
+  Unknown or mistyped fields and out-of-range values are errors. Turning `lsp`
+  off stops running servers.
+- `POST /api/code-intel/install {package: "typescript"|"python"}` →
+  `{ok, started, managed}`; the npm install runs in the background (poll
+  status). `POST /api/code-intel/uninstall {package}` → `{ok, removed, managed}`.
+- `POST /api/code-intel/servers/stop` → `{ok, stopped, embedding_server_stopped}`.
+- `POST /api/code-intel/embeddings/install {model}` → `{ok, started, models}`;
+  downloads in the background, verifies size and SHA-256, then makes the
+  model active if none was chosen and embeds the project.
+  `POST /api/code-intel/embeddings/remove {model}` → `{ok, removed, models}`.
+- `POST /api/code-intel/reindex` → `{ok, index, embedding_started}`.
+- `POST /api/code-intel/search {query, path?, max_hits?}` → the `search_code`
+  result: `{ok, query, mode: "bm25"|"hybrid", count, hits: [{path, start_line,
+  end_line, score, preview, symbols?, bm25?, similarity?}], semantic, note}`.
+- `GET /api/code-intel/repo-map?tokens=&query=` → `{ok, map, files, symbols,
+  tokens_estimate, focus, note}`.
+
+Native tools: edit results (`write_file`, `edit_file`, `apply_patch`) may
+carry `diagnostics: {new_errors: [{path, line, column, severity, message,
+source?, code?}], checked: [path], servers?, pending?, unverified?,
+unavailable?, truncated?, note}`. New tools `repo_map {query?, paths?,
+max_tokens?}` and `search_code {query, path?, max_hits?}` are read-only.
+`goto_definition` / `find_references` accept `path`, `line`, `column`
+(1-based) and then answer `{ok, source: "lsp:<server>", count, truncated,
+locations: [{path, line, column, preview}], note}`; without a position, or
+when no server answers, they keep the tree-sitter shape (plus `lsp_note`).
+`get_diagnostics {path}` answers `{ok, path, server, errors, total,
+truncated, diagnostics: [...], note}` from the language server, or
+`{ok: false, pending: true, error}` while it loads.
+
 ## Local models
 
 `GET /api/local-models` → `LocalCatalog`:
