@@ -19,11 +19,30 @@ pub struct ToolCall {
     pub name: String,
     pub arguments: Value,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Token and cost accounting for one model request, or a sum of them (a job,
+/// a session). `prompt_tokens` is the input and includes `cached_tokens`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+    /// Input tokens the provider served from its prompt cache.
+    pub cached_tokens: u64,
+    /// Input tokens the provider wrote to its prompt cache, when reported.
+    pub cache_write_tokens: u64,
+    /// US dollars; `None` when no cost is known.
+    pub cost_usd: Option<f64>,
+    /// The cost is not entirely provider- or vendor-reported: it was worked
+    /// out from the published price list, or some turns had no cost.
+    pub cost_estimated: bool,
+    /// Some token counts were estimated by ShadowCode, not reported.
+    pub estimated: bool,
+    /// Who reported the numbers: `provider` (API response), `local` (a model
+    /// on this computer), `vendor` (a subscription CLI), `mixed`, or empty.
+    pub source: String,
+    /// Model requests (or vendor turns) counted in this total.
+    pub turns: u64,
 }
 impl Usage {
     pub fn add(&mut self, other: &Self) {
@@ -32,6 +51,42 @@ impl Usage {
             .completion_tokens
             .saturating_add(other.completion_tokens);
         self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
+        self.cached_tokens = self.cached_tokens.saturating_add(other.cached_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(other.cache_write_tokens);
+        let partial = (self.turns > 0 && self.cost_usd.is_none() && other.cost_usd.is_some())
+            || (other.turns > 0 && other.cost_usd.is_none() && self.cost_usd.is_some());
+        self.cost_usd = match (self.cost_usd, other.cost_usd) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, b) => a.or(b),
+        };
+        self.cost_estimated |= other.cost_estimated || partial;
+        self.estimated |= other.estimated;
+        self.source = if self.turns == 0 || self.source.is_empty() {
+            other.source.clone()
+        } else if other.turns == 0 || other.source.is_empty() || other.source == self.source {
+            std::mem::take(&mut self.source)
+        } else {
+            "mixed".into()
+        };
+        self.turns = self.turns.saturating_add(other.turns);
+    }
+    /// Remove an earlier total (for a task that is being re-finished).
+    pub fn subtract(&mut self, other: &Self) {
+        self.prompt_tokens = self.prompt_tokens.saturating_sub(other.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_sub(other.completion_tokens);
+        self.total_tokens = self.total_tokens.saturating_sub(other.total_tokens);
+        self.cached_tokens = self.cached_tokens.saturating_sub(other.cached_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_sub(other.cache_write_tokens);
+        if let (Some(a), Some(b)) = (self.cost_usd, other.cost_usd) {
+            self.cost_usd = Some((a - b).max(0.0));
+        }
+        self.turns = self.turns.saturating_sub(other.turns);
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -210,7 +265,13 @@ impl ModelClient {
             }
             body
         } else {
+            let mut messages = messages;
+            crate::prompt_cache::apply(&self.config, &mut messages);
             let mut body = json!({"model":self.config.name,"messages":messages,"stream":true,"stream_options":{"include_usage":true},"max_tokens":max_tokens});
+            if self.config.provider == crate::openrouter::PROVIDER {
+                // Ask OpenRouter for the request's cost in `usage.cost`.
+                body["usage"] = json!({"include": true});
+            }
             if !tools.is_empty() {
                 body["tools"] = if self.config.provider == "llamacpp" {
                     json!(tools
@@ -244,6 +305,21 @@ impl ModelClient {
         messages: &[Value],
         tools: &[Value],
         cancel: CancellationToken,
+        text: F,
+    ) -> Result<ChatResponse>
+    where
+        F: FnMut(&str) + Send,
+    {
+        self.chat_bounded(messages, tools, cancel, None, text).await
+    }
+    /// [`Self::chat`] with the response capped at `max_tokens` (for short
+    /// internal requests such as a compaction summary).
+    pub async fn chat_bounded<F>(
+        &self,
+        messages: &[Value],
+        tools: &[Value],
+        cancel: CancellationToken,
+        max_tokens: Option<usize>,
         mut text: F,
     ) -> Result<ChatResponse>
     where
@@ -268,7 +344,8 @@ impl ModelClient {
             )
         };
         let response_tokens =
-            crate::context::response_budget(messages, tools, self.config.context_limit)?;
+            crate::context::response_budget(messages, tools, self.config.context_limit)?
+                .min(max_tokens.unwrap_or(usize::MAX).max(1));
         let body = self.request_body(messages, tools, response_tokens);
         let mut request = self.client.post(&url).json(&body);
         if self.config.provider == crate::openrouter::PROVIDER {
@@ -287,6 +364,7 @@ impl ModelClient {
         let status = response.status();
         if !status.is_success() {
             let code = status.as_u16();
+            let retry_after = crate::retry::retry_after(response.headers());
             // Local runtimes explain rejections (for example a prompt larger
             // than the context window); show a bounded excerpt.
             let detail = if is_loopback_endpoint(&url) {
@@ -304,15 +382,21 @@ impl ModelClient {
             } else {
                 String::new()
             };
-            bail!(
-                "Model provider returned HTTP {code}{}{detail}",
-                match code {
-                    401 | 403 => "; check the API key",
-                    404 => "; check the endpoint and model name",
-                    429 => "; provider rate limit reached",
-                    _ => "",
-                }
-            );
+            return Err(anyhow::Error::new(crate::retry::ModelFailure::Http {
+                status: code,
+                retry_after,
+                local: is_loopback_endpoint(&url),
+                message: format!(
+                    "Model provider returned HTTP {code}{}{detail}",
+                    match code {
+                        401 | 403 => "; check the API key",
+                        404 => "; check the endpoint and model name",
+                        429 => "; provider rate limit reached",
+                        503 | 529 => "; provider overloaded",
+                        _ => "",
+                    }
+                ),
+            }));
         }
         let json_response = response
             .headers()
@@ -324,7 +408,7 @@ impl ModelClient {
         let mut raw = Vec::new();
         let mut bytes = 0;
         loop {
-            let next = tokio::select! {_=cancel.cancelled()=>bail!("Model request cancelled"),next=tokio::time::timeout(Duration::from_secs(120),stream.next())=>next.context("Model response stalled for 120 seconds")?};
+            let next = tokio::select! {_=cancel.cancelled()=>bail!("Model request cancelled"),next=tokio::time::timeout(Duration::from_secs(120),stream.next())=>next.map_err(|_| crate::retry::ModelFailure::Stalled{message:"Model response stalled for 120 seconds".into()})?};
             let Some(chunk) = next else { break };
             let chunk = chunk.context("Model stream disconnected before completion")?;
             bytes += chunk.len();
@@ -481,10 +565,21 @@ impl StreamDecoder {
         Ok(out)
     }
     fn chunk(&mut self, value: Value, out: &mut Vec<String>) -> Result<()> {
-        ensure!(
-            value.get("error").is_none(),
-            "Provider reported an error while generating"
-        );
+        if let Some(error) = value.get("error").filter(|e| !e.is_null()) {
+            let code = error["code"]
+                .as_u64()
+                .or_else(|| error["code"].as_str().and_then(|c| c.parse().ok()))
+                .and_then(|c| u16::try_from(c).ok());
+            let detail = error["message"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| error.to_string());
+            return Err(anyhow::Error::new(crate::retry::ModelFailure::Stream {
+                code,
+                detail: crate::tools::truncate(&detail, 300).to_owned(),
+                message: "Provider reported an error while generating".into(),
+            }));
+        }
         let message = if self.ollama {
             &value["message"]
         } else {
@@ -560,6 +655,7 @@ impl StreamDecoder {
                 self.response.usage.prompt_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);
                 self.response.usage.completion_tokens =
                     usage["completion_tokens"].as_u64().unwrap_or(0);
+                read_cache_and_cost(usage, &mut self.response.usage);
             }
         }
         self.response.usage.total_tokens = self
@@ -626,10 +722,14 @@ impl StreamDecoder {
         Ok(())
     }
     pub fn finish(mut self) -> Result<ChatResponse> {
-        ensure!(
-            self.seen_finish,
-            "Model stream ended without a finish marker; no tools were executed"
-        );
+        if !self.seen_finish {
+            return Err(anyhow::Error::new(
+                crate::retry::ModelFailure::Disconnected {
+                    message: "Model stream ended without a finish marker; no tools were executed"
+                        .into(),
+                },
+            ));
+        }
         ensure!(
             !matches!(
                 self.response.finish_reason.as_str(),
@@ -658,6 +758,25 @@ impl StreamDecoder {
             });
         }
         Ok(self.response)
+    }
+}
+
+/// Prompt-cache and cost fields from an OpenAI-style `usage` object:
+/// `prompt_tokens_details.cached_tokens` (OpenAI, OpenRouter, recent
+/// llama.cpp), `prompt_cache_hit_tokens` (DeepSeek), and OpenRouter's
+/// `cost` (US dollars) and `prompt_tokens_details.cache_write_tokens`.
+pub fn read_cache_and_cost(usage: &Value, into: &mut Usage) {
+    let details = &usage["prompt_tokens_details"];
+    into.cached_tokens = details["cached_tokens"]
+        .as_u64()
+        .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
+        .unwrap_or(0);
+    into.cache_write_tokens = details["cache_write_tokens"].as_u64().unwrap_or(0);
+    if let Some(cost) = usage["cost"]
+        .as_f64()
+        .filter(|c| c.is_finite() && *c >= 0.0)
+    {
+        into.cost_usd = Some(cost);
     }
 }
 

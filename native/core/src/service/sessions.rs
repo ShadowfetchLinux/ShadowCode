@@ -140,7 +140,7 @@ impl Service {
             ("GET", Some("cost")) => {
                 let tasks: Vec<_> = store.tasks(sid, 10000)?.into_iter().map(|task| json!({"task_id":task["id"],"prompt":task["prompt"],"status":task["status"],"usage":task["usage_json"].as_str().and_then(|v|serde_json::from_str::<Value>(v).ok()).unwrap_or(json!({}))})).collect();
                 Ok(
-                    json!({"session_id":sid,"tasks":tasks,"usage":session["usage_json"].as_str().and_then(|v|serde_json::from_str::<Value>(v).ok()).unwrap_or(json!({})),"cost":null,"note":"Provider pricing is not configured; token usage is shown."}),
+                    json!({"session_id":sid,"tasks":tasks,"usage":session["usage"],"cost":session["usage"]["cost_usd"],"cost_estimated":session["usage"]["cost_estimated"],"note":crate::usage::describe(&crate::usage::parse(&session["usage"]))}),
                 )
             }
             ("GET", Some("pins")) => Ok(json!({"pins":store.pins(sid)?})),

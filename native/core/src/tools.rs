@@ -127,7 +127,12 @@ impl ToolExecutor {
         self
     }
     pub fn schemas(&self) -> Vec<Value> {
-        let mut schemas = schemas();
+        self.schemas_for(DescriptionTier::Short)
+    }
+    /// The catalog with descriptions sized for the model (see
+    /// [`crate::autonomy::description_tier`]).
+    pub fn schemas_for(&self, tier: DescriptionTier) -> Vec<Value> {
+        let mut schemas = schemas_tiered(tier);
         if self.config.permissions.web {
             // Offered only when the task's web flag is on and the network
             // mode is online; otherwise the model is not shown the tools.
@@ -1153,7 +1158,23 @@ pub fn view_image_schema() -> Value {
     json!({"type":"function","function":{"name":"view_image","description":"Look at a PNG, JPEG, or WebP image inside the project. The image is attached to your next message.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}})
 }
 
+/// How much of each native tool description a model is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DescriptionTier {
+    /// At most 64 bytes each, so 4K-context local models keep a usable
+    /// response window.
+    Short,
+    /// The complete descriptions, for large-context and hosted models.
+    Full,
+}
+
+/// Short descriptions (the catalog small local models see).
 pub fn schemas() -> Vec<Value> {
+    schemas_tiered(DescriptionTier::Short)
+}
+
+pub fn schemas_tiered(tier: DescriptionTier) -> Vec<Value> {
     let s = json!({"type":"string"});
     let n = json!({"type":"integer"});
     let b = json!({"type":"boolean"});
@@ -1191,7 +1212,12 @@ pub fn schemas() -> Vec<Value> {
         ("git_commit","Commit staged changes after approval. Hooks and signing are disabled; no push.",json!({"message":s}),vec!["message"]),
         ("update_plan","Update the visible plan. Only one step may be in progress; mark completed only with evidence.",json!({"goal":s,"steps":{"type":"array","items":{"type":"object","properties":{"id":s,"title":s,"status":{"type":"string","enum":["pending","in_progress","completed","blocked","failed"]},"detail":s},"required":["title","status"]}}}),vec!["steps"]),
     ];
-    // Keep the catalog usable for 4K local models; argument names and focused
-    // descriptions carry the important contract while full docs remain in source.
-    specs.into_iter().map(|(name,description,properties,required)|json!({"type":"function","function":{"name":name,"description":truncate(description, 64),"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
+    // Short keeps the catalog usable for 4K local models: argument names and
+    // focused descriptions carry the important contract. Larger models get the
+    // complete text.
+    let limit = match tier {
+        DescriptionTier::Short => 64,
+        DescriptionTier::Full => usize::MAX,
+    };
+    specs.into_iter().map(|(name,description,properties,required)|json!({"type":"function","function":{"name":name,"description":truncate(description, limit),"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})).collect()
 }

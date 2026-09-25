@@ -787,7 +787,11 @@ async fn native_loop_fires_compaction_and_provider_error_hooks() {
         log.lines().collect::<Vec<_>>(),
         ["on_compaction", "on_error"]
     );
-    assert_eq!(server.requests.lock().unwrap().len(), 3);
+    // The third turn asks for a compaction summary first (that request fails
+    // too, so the built-in digest is used), then makes its failing request.
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[2].get("tools").is_none(), "summary request");
     service.engine.shutdown().await.unwrap();
 }
 

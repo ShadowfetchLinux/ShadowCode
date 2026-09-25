@@ -243,7 +243,11 @@ impl CodexAppServerAdapter {
                 // call once and never re-adds earlier turns.
                 let last = &params["tokenUsage"]["last"];
                 match (last["inputTokens"].as_u64(), last["outputTokens"].as_u64()) {
-                    (Some(input), Some(output)) => Step::update(Update::Usage { input, output }),
+                    (Some(input), Some(output)) => Step::update(Update::Usage {
+                        input,
+                        output,
+                        cached: last["cachedInputTokens"].as_u64().unwrap_or(0),
+                    }),
                     _ => Step::default(),
                 }
             }
@@ -785,7 +789,11 @@ impl CliAdapter for CodexExecAdapter {
                     usage["input_tokens"].as_u64(),
                     usage["output_tokens"].as_u64(),
                 ) {
-                    step.updates.push(Update::Usage { input, output });
+                    step.updates.push(Update::Usage {
+                        input,
+                        output,
+                        cached: usage["cached_input_tokens"].as_u64().unwrap_or(0),
+                    });
                 }
                 step.updates.push(Update::TurnCompleted {
                     text: None,

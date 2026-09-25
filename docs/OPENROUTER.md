@@ -56,6 +56,17 @@ way. Turn on **Web** in the composer to give the task `web_fetch` and
 Switching a conversation from a local model to OpenRouter sends earlier turns
 to the cloud, so ShadowCode asks first, as it does for subscriptions.
 
+## Cost and caching
+
+ShadowCode asks OpenRouter for each request's cost and adds it up per job and
+per conversation (`/cost` shows the totals). When a response carries no cost,
+the model's listed prices are used and the total is marked as an estimate.
+Claude and Gemini models get prompt-cache markers, so the unchanging start of
+each request (instructions and tool list, and for Claude the conversation so
+far) is billed at the cheaper cached rate on later steps. Cached tokens are
+shown with the usage. Rate limits and overloaded providers are retried
+automatically (see the [user guide](USER_GUIDE.md)).
+
 ## Offline and failures
 
 - **Offline mode** turns the rows off and sends nothing to OpenRouter.
