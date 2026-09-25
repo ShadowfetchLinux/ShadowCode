@@ -15,6 +15,7 @@ import {
 } from "./activity";
 import type { UsageSnapshot } from "./picker";
 import { CONTINUATION } from "./allowance";
+import { applySubagentEvent, isSubagentEvent } from "./subagents";
 
 const ROUTE_PRODUCTS: Record<string, string> = {
   "cli:codex": "Codex",
@@ -157,6 +158,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       [taskId]: update(activity[taskId] || emptyActivity(taskId)),
     };
   };
+  if (isSubagentEvent(event.type)) {
+    items = applySubagentEvent(items, event);
+  }
   if (event.type === "history.omitted") {
     items = [...items, { kind: "note", taskId, text, warning: true }];
   }

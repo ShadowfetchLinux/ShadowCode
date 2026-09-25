@@ -25,6 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
+mod agents;
 mod commands;
 mod compare;
 #[cfg(unix)]
@@ -212,6 +213,9 @@ impl Service {
             return self
                 .compare(request.method.as_str(), &parts, &query, body)
                 .await;
+        }
+        if matches!(parts.get(1), Some(&"agents" | &"subagents")) {
+            return self.agents(request.method.as_str(), &parts, &query);
         }
         match (request.method.as_str(), path) {
             ("GET", "/api/worktrees") => {
@@ -1179,7 +1183,7 @@ impl Service {
             }
             ("GET", "/api/sessions") => {
                 return Ok(
-                    json!({"sessions":store.sessions_listed(q("q"),query_limit(&query,100,10000),(!q("workspace").is_empty()).then(||Path::new(q("workspace"))),matches!(q("include_compare"),"true"|"1"))?}),
+                    json!({"sessions":store.sessions_listed_with(q("q"),query_limit(&query,100,10000),(!q("workspace").is_empty()).then(||Path::new(q("workspace"))),matches!(q("include_compare"),"true"|"1"),matches!(q("include_subagents"),"true"|"1"))?}),
                 )
             }
             ("GET", "/api/goals") => {
@@ -2155,6 +2159,8 @@ impl Service {
         let (compare_id, compare_lane) = crate::compare::session_tags(&store, id)?;
         session["compare_id"] = json!(compare_id);
         session["compare_lane"] = json!(compare_lane);
+        session["subagent_parent"] = json!(store.session_meta(id, "subagent_parent")?);
+        session["subagent_run"] = json!(store.session_meta(id, "subagent_run")?);
         let native: serde_json::Map<String, Value> = store
             .session_meta_prefixed(id, "native_session:")?
             .into_iter()

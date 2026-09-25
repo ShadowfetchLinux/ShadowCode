@@ -1,4 +1,5 @@
 import type { Approval, CommandResult } from "../api";
+import type { SubagentRun } from "../lib/subagents";
 import { Markdown } from "./Markdown";
 
 export type ChatItem =
@@ -38,6 +39,8 @@ export type ChatItem =
       /** A follow-up was started from this card. */
       resolved?: boolean;
     }
+  /** A subagent run started by this task (subagent.* events). */
+  | { kind: "subagent"; taskId?: string; text: string; run: SubagentRun }
   /** Provider change inside one conversation (agent.handoff). */
   | { kind: "divider"; text: string; taskId?: string }
   /** Final card for a finished task; content comes from transcript.activity. */

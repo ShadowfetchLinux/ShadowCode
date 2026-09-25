@@ -36,6 +36,7 @@ import {
   type StartJobRequest,
 } from "./api";
 import { ApprovalCard, CommandCardView, OpCard } from "./components/cards";
+import { SubagentCard } from "./components/SubagentCard";
 import { Drawer, type DrawerTab } from "./components/Drawer";
 import { Sidebar } from "./components/Sidebar";
 import { Markdown } from "./components/Markdown";
@@ -2077,6 +2078,12 @@ export default function App() {
                       >
                         {item.text}
                       </div>
+                    ) : item.kind === "subagent" ? (
+                      <SubagentCard
+                        key={i}
+                        run={item.run}
+                        onOpen={(id) => void openSession(id)}
+                      />
                     ) : item.kind === "divider" ? (
                       <div key={i} className="msg-divider" role="separator">
                         <span>{item.text}</span>

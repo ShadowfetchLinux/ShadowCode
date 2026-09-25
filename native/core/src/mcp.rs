@@ -32,6 +32,7 @@ pub mod registry;
 pub mod runner;
 pub mod server;
 mod transport;
+pub mod vendor;
 use transport::BoundedStdio;
 
 #[derive(Clone, Debug)]

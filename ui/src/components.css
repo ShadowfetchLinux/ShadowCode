@@ -1566,3 +1566,139 @@ div.activity-step {
     flex-basis: 100%;
   }
 }
+
+/* Subagent runs inside the parent transcript. */
+.subagent-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  margin: 6px 0;
+  min-width: 0;
+}
+.subagent-card.tone-warn {
+  border-color: var(--warn);
+}
+.subagent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.subagent-head:hover {
+  background: var(--hover);
+}
+.subagent-chevron {
+  flex: none;
+  transition: transform 0.15s ease;
+}
+.subagent-chevron.is-open {
+  transform: rotate(90deg);
+}
+.subagent-name {
+  flex: none;
+}
+.subagent-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.subagent-meta {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.subagent-status {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.subagent-status.tone-ok {
+  color: var(--ok);
+}
+.subagent-status.tone-warn {
+  color: var(--warn);
+}
+.subagent-body {
+  padding: 4px 12px 10px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  min-width: 0;
+}
+.subagent-prompt {
+  margin: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.subagent-prompt span {
+  font-weight: 600;
+  color: var(--muted);
+  margin-right: 4px;
+}
+.subagent-summary {
+  min-width: 0;
+}
+.subagent-error {
+  margin: 0;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+.subagent-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.subagent-files li {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+.subagent-files code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-stat .add {
+  color: var(--ok);
+}
+.subagent-stat .del {
+  color: var(--danger);
+}
+.subagent-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.subagent-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.subagent-foot button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
