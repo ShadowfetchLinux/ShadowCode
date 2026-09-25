@@ -63,6 +63,8 @@ mod inspection;
 mod jobs;
 mod memory;
 mod model_catalog;
+#[cfg(target_os = "linux")]
+mod preview;
 mod sandbox;
 mod sessions;
 mod settings;
@@ -99,6 +101,9 @@ pub struct Service {
     job_owner: Option<JobOwner>,
     /// This view's interactive terminals (a forked view starts with none).
     terminals: Arc<crate::terminal::Terminals>,
+    /// Loopback proxies for the in-app preview, shared by every view.
+    #[cfg(target_os = "linux")]
+    previews: Arc<crate::preview::Previews>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -127,6 +132,8 @@ impl Service {
             remember_selection: true,
             job_owner: None,
             terminals,
+            #[cfg(target_os = "linux")]
+            previews: Arc::default(),
         })
     }
     /// A transport client shares the engine, but has its own navigation state.
@@ -157,6 +164,8 @@ impl Service {
             job_owner: None,
             // An attached window's terminals live as long as its view.
             terminals: Arc::new(crate::terminal::Terminals::new(self.engine.notifier())),
+            #[cfg(target_os = "linux")]
+            previews: self.previews.clone(),
         })
     }
     pub(crate) fn with_job_owner(mut self, owner: JobOwner) -> Self {
@@ -247,6 +256,8 @@ impl Service {
             "terminals" => self.terminal_routes(&call).await,
             "git" => self.forge_routes(&call).await,
             "background" => self.background_routes(&call).await,
+            #[cfg(target_os = "linux")]
+            "preview" => self.preview_routes(&call).await,
             "code-intel" => self.code_intel_routes(&call).await,
             "workspace" => self.workspace_routes(&call).await,
             "config" | "routing" | "onboarding" | "health" | "version" | "doctor" | "guardian" => {

@@ -4,6 +4,7 @@ import { api, type FileEntry, type Session } from "../api";
 import { Empty } from "./cards";
 import { ChangesTab } from "./ChangesTab";
 import { BranchPanel } from "./BranchPanel";
+import { PreviewPanel } from "./PreviewPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { ToolsTab, type ToolsView } from "./ToolsTab";
 import { exportSession } from "../lib/transport";
@@ -15,12 +16,13 @@ import {
 
 /** The optional right-hand drawer: the readable diff of current changes,
  * Git (commit, push, pull requests), the user's own terminals, files,
- * conversations, and Tools used while working (goals, background processes,
+ * conversations, the Preview of the project's dev server (with element
+ * picking), and Tools used while working (goals, background processes,
  * worktrees). Work in a tab (the open file, a commit message, the terminal in
  * front) lives in `memory`, owned by the app, so switching tabs keeps it; the
  * terminals themselves run in the engine. */
 export type DrawerTab =
-  "changes" | "git" | "terminal" | "files" | "sessions" | ToolsView;
+  "changes" | "git" | "terminal" | "preview" | "files" | "sessions" | ToolsView;
 const TOOLS: readonly DrawerTab[] = ["goals", "background", "worktrees"];
 export const isToolTab = (tab: DrawerTab): tab is ToolsView =>
   TOOLS.includes(tab);
@@ -28,6 +30,7 @@ export const DRAWER_TABS: { id: DrawerTab | "tools"; label: string }[] = [
   { id: "changes", label: "Changes" },
   { id: "git", label: "Git" },
   { id: "terminal", label: "Terminal" },
+  { id: "preview", label: "Preview" },
   { id: "files", label: "Files" },
   { id: "sessions", label: "Sessions" },
   { id: "tools", label: "Tools" },
@@ -118,6 +121,14 @@ export function Drawer({
         )}
         {tab === "terminal" && (
           <TerminalPanel
+            workspace={workspace}
+            toast={toast}
+            memory={memory}
+            onMemory={onMemory}
+          />
+        )}
+        {tab === "preview" && (
+          <PreviewPanel
             workspace={workspace}
             toast={toast}
             memory={memory}

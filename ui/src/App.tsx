@@ -28,6 +28,7 @@ import { useDrawerMemory } from "./hooks/useDrawerMemory";
 import { useStableCallback } from "./hooks/useStableCallback";
 import { useTaskActions, type Consent } from "./hooks/useTaskActions";
 import { useAttachments } from "./hooks/useAttachments";
+import { pendingAttachments } from "./lib/pendingAttachments";
 import { useNavigation } from "./hooks/useNavigation";
 import { useJobControls } from "./hooks/useJobControls";
 import { useDesktopEvents, useSidebar } from "./hooks/useWindow";
@@ -86,6 +87,8 @@ export default function App() {
     void allowance.reload();
   };
   const memory = useDrawerMemory(workspace);
+  // Picked elements belong to the project they were picked in.
+  useEffect(() => pendingAttachments.clear(), [workspace]);
   useTheme(
     ws.configLoaded
       ? String((cfg.ui as { theme?: string } | undefined)?.theme || "system")
@@ -446,7 +449,7 @@ export default function App() {
 
   return (
     <div
-      className={`app ${sidebar ? "with-sidebar" : ""} ${panel ? "drawer-open" : ""}`}
+      className={`app ${sidebar ? "with-sidebar" : ""} ${panel ? "drawer-open" : ""} ${panel === "preview" ? "drawer-preview" : ""}`}
     >
       {sidebar && (
         <Sidebar
@@ -579,6 +582,8 @@ export default function App() {
           if (!consent) return;
           setTask(consent.original.task);
           setAttachments(consent.original.attachments);
+          if (consent.original.context)
+            pendingAttachments.restore(consent.original.context);
           setConsent(null);
           promptRef.current?.focus();
         }}

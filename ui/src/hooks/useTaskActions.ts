@@ -13,6 +13,12 @@ import type { DrawerTab } from "../components/Drawer";
 import type { AdvancedTab, SettingsSection } from "../components/Settings";
 import { continuationTask, type Fallback } from "../lib/allowance";
 import { sendBlockedByImages, type Attachment } from "../lib/attachments";
+import {
+  contextPrompt,
+  pendingAttachments,
+  usePendingAttachments,
+  type ContextAttachment,
+} from "../lib/pendingAttachments";
 import { isReady, type PickerTarget } from "../lib/picker";
 import { draftKey, isSessionCommand, writeStore } from "../lib/storage";
 import { invoke } from "../lib/transport";
@@ -36,10 +42,19 @@ const DRAWERS: Record<string, DrawerTab> = {
   changes: "changes",
   files: "files",
   terminal: "terminal",
+  preview: "preview",
   git: "git",
   goals: "goals",
   background: "background",
   worktrees: "worktrees",
+};
+
+/** What the composer held when a message was sent, restored if sending
+ * fails or is cancelled. `context` is what came from pendingAttachments. */
+export type ComposerContent = {
+  task: string;
+  attachments: Attachment[];
+  context?: readonly ContextAttachment[];
 };
 
 /** A cloud route asked for consent before the conversation leaves this
@@ -47,7 +62,7 @@ const DRAWERS: Record<string, DrawerTab> = {
 export type Consent = {
   request: ConsentRequest;
   body: StartJobRequest;
-  original: { task: string; attachments: Attachment[] };
+  original: ComposerContent;
 };
 type Trust = {
   path: string;
@@ -111,6 +126,7 @@ export type TaskActionContext = {
 export function useTaskActions(c: TaskActionContext) {
   const { task, attachments, selectedTarget, modelChoice, pickerLoaded } = c;
   const { canAttachImages } = c;
+  const pending = usePendingAttachments();
   const sendBlocked = useMemo(() => {
     if (task.trim().startsWith("/")) return null;
     if (!pickerLoaded) return null;
@@ -133,7 +149,9 @@ export function useTaskActions(c: TaskActionContext) {
     attachments,
     canAttachImages,
   ]);
-  const hasContent = Boolean(task.trim() || attachments.length);
+  const hasContent = Boolean(
+    task.trim() || attachments.length || pending.length,
+  );
   const canSend =
     !c.composerLocked &&
     !c.commandWaiting &&
@@ -227,7 +245,7 @@ export function useTaskActions(c: TaskActionContext) {
    * the task did not come from the composer (Continue on …). */
   async function startTask(
     body: StartJobRequest,
-    original: { task: string; attachments: Attachment[] } | null,
+    original: ComposerContent | null,
   ) {
     const submitTicket = c.selection.current;
     c.submittingRef.current = true;
@@ -275,6 +293,7 @@ export function useTaskActions(c: TaskActionContext) {
       if (original) {
         c.setTask(original.task);
         c.setAttachments(original.attachments);
+        if (original.context) pendingAttachments.restore(original.context);
       }
       c.setError(String(e));
       c.toast(String(e), "err");
@@ -375,7 +394,7 @@ export function useTaskActions(c: TaskActionContext) {
       c.setError("");
       return;
     }
-    const original = { task, attachments };
+    const original: ComposerContent = { task, attachments };
     if (task.trim().startsWith("/")) {
       c.setTask("");
       c.pin();
@@ -403,8 +422,11 @@ export function useTaskActions(c: TaskActionContext) {
     const texts = attachments
       .filter((a) => a.kind === "text")
       .map((a) => a.path);
+    original.context = pendingAttachments.take();
+    const context = contextPrompt(original.context);
     const text = (
       task.trim() +
+      (context ? `\n\n${context}` : "") +
       (texts.length ? `\n\nAttached paths: ${texts.join(", ")}` : "") +
       (images.length ? `\n\nAttached images: ${images.join(", ")}` : "")
     ).trim();

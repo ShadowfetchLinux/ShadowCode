@@ -25,6 +25,8 @@ import {
   pastedImages,
   type Attachment,
 } from "../lib/attachments";
+import { usePendingAttachments } from "../lib/pendingAttachments";
+import { ContextChips } from "./ContextChips";
 
 export type SlashCommand = {
   name: string;
@@ -86,6 +88,8 @@ export function Composer({
   compare?: ReactNode;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  // Picked elements and console errors from the Preview tab.
+  const context = usePendingAttachments();
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashOpen, setSlashOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -172,7 +176,7 @@ export function Composer({
           onSubmit();
         }}
       >
-        {attachments.length > 0 && (
+        {(attachments.length > 0 || context.length > 0) && (
           <ul className="chips" aria-label="Attachments">
             {attachments.map((a) => (
               <li key={a.path} className="path-chip">
@@ -192,6 +196,7 @@ export function Composer({
                 </button>
               </li>
             ))}
+            <ContextChips items={context} />
           </ul>
         )}
         <textarea
