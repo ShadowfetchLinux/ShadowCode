@@ -1,0 +1,12 @@
+# Build flags for whisper.cpp inside whisper-rs-sys (voice input). Its build
+# script forwards every GGML_* variable to CMake. GGML_NATIVE is ON by default
+# there, which compiles for this machine's CPU and would crash the packaged app
+# on older ones; build for x86-64 with AVX2/FMA/F16C instead (Haswell, 2013+).
+# `voice::whisper::cpu_supported` checks those features before whisper runs.
+[env]
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_CCACHE = "OFF"
