@@ -238,8 +238,22 @@ async function setWindow({ width, height }) {
   await until(`Window ${width}px (inner ${await execute("return window.innerWidth+'x'+window.innerHeight")})`, async () => Math.abs((await execute("return window.innerWidth")) - width) < 40, 8000);
   await delay(300);
 }
+/** Brightness of the page background (0 black … 1 white), as rendered. */
+const pageLuminance = () => execute("const [r,g,b]=getComputedStyle(document.body).backgroundColor.match(/[\\d.]+/g).map(Number);return (0.2126*r+0.7152*g+0.0722*b)/255");
+/** The page really shows `theme` (its computed background), not just the
+ * attribute: WebKit on a dark desktop reports prefers-color-scheme: dark. */
+async function expectTheme(theme, where) {
+  await until(`${where}: ${theme} theme applied`, async () => {
+    const luminance = await pageLuminance();
+    return theme === "dark" ? luminance < 0.25 : luminance > 0.75;
+  }, 5000);
+}
+/** Choose the appearance as Settings does (saved in the config, so config
+ * re-reads and reloads keep it), apply it now, and check it took. */
 async function setTheme(theme) {
-  await execute("document.documentElement.dataset.theme=arguments[0]", [theme]);
+  await api("PUT", "/api/config", { values: { ui: { theme } } });
+  await execute("try{localStorage.setItem('shadow:theme',arguments[0])}catch(e){}document.documentElement.dataset.theme=arguments[0]", [theme]);
+  await expectTheme(theme, `setTheme(${theme})`);
   await delay(250);
 }
 async function settle() {
@@ -250,6 +264,8 @@ async function settle() {
 const shots = [];
 async function screenshot(name) {
   await settle();
+  // Screenshots are light unless named "-dark".
+  await expectTheme(/-dark$/.test(name) ? "dark" : "light", `Screenshot ${name}`);
   const file = path.join(artifacts, `${name}.png`);
   await writeFile(file, Buffer.from(await wd("GET", `/session/${session}/screenshot`), "base64"));
   shots.push(file);
@@ -339,6 +355,7 @@ try {
   assert.deepEqual(await execute("return [...document.querySelectorAll('.wizard input, .wizard select, .wizard textarea')].map(e=>e.type||e.tagName)"), ["text", "radio", "radio"], "Onboarding asks only for the folder and the permission mode");
   assert.equal(await execute("return document.querySelector('input[name=onboarding-mode]:checked').closest('label').textContent.includes('Ask before actions')"), true, "Ask before actions is the default");
   await fill("#onboarding-folder", project);
+  await setTheme("light");
   await screenshot("onboarding");
   await accessibility("onboarding");
   await clickButton("Trust and open");
@@ -349,6 +366,8 @@ try {
   const cfgValues = config.values || config.config || config;
   assert.equal(cfgValues.permissions?.mode, "ask", "Onboarding saved Ask before actions");
   note("first run: folder, trust and permission mode (Ask before actions), no model step");
+  // Onboarding saves "system"; the screenshots below choose explicitly.
+  await setTheme("light");
 
   // Quiet welcome.
   const readyAt = Date.now();
@@ -489,6 +508,7 @@ try {
   await until("Picker keeps the conversation's local row after reload", async () => (await execute("return document.querySelector('.unified-picker-trigger').getAttribute('aria-label')")) === `Model for this task: ${localTarget.name}`);
   assert.equal(await execute("return document.querySelector('.unified-picker-current').textContent"), localTarget.name.replace(/ · This computer$/, ""), "The Local badge replaces the suffix");
   await screenshot("reloaded");
+  assert.equal(await execute("return document.documentElement.dataset.theme"), "light", "The saved light theme survives a reload");
   note("reload restores the conversation, summary card and the conversation's model");
 
   // ------------------------------------------------------------ settings
@@ -592,6 +612,7 @@ try {
   await execute("document.querySelector('.unified-picker-search input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
   await setWindow(WIDE);
   note("520 px compact layout without horizontal scroll, light and dark axe clean");
+  note("light screenshots render light and dark ones dark (computed page background)");
 
   // ------------------------------------------------------------ quit
   const children = await descendants(appPid);

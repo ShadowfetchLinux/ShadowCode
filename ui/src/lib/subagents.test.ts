@@ -78,6 +78,11 @@ describe("subagent runs in the parent transcript", () => {
       },
     ]);
     expect(beta.patch && beta.applied).toBe(true);
+    // Updated cards keep their row key (so an open card stays open).
+    const keys = state.items
+      .filter((i) => i.kind === "subagent")
+      .map((i) => i.key);
+    expect(keys).toEqual(["s:r1", "s:r2"]);
     // The cards keep their place in the conversation.
     expect(state.items.map((i) => i.kind)).toEqual([
       "user",

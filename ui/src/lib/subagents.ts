@@ -124,6 +124,8 @@ export function applySubagentEvent(
     return items;
   }
   const item: ChatItem = {
+    // An updated card keeps its row key, so it stays open while it updates.
+    ...(index >= 0 && items[index].key ? { key: items[index].key } : {}),
     kind: "subagent",
     taskId: event.task_id || undefined,
     text: `@${run.agent}: ${run.summary || run.description || run.prompt}`,

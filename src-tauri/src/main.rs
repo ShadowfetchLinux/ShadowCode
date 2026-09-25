@@ -309,9 +309,10 @@ fn run() -> Result<()> {
                         Ok(event) => {
                             // Broadcast is only a wakeup. The UI fetches committed
                             // rows in SQLite cursor order, including after lag.
+                            // The type lets the approvals/jobs feed skip stream noise.
                             let _ = handle.emit(
                                 "shadowcode:events",
-                                json!({"session_id":event["session_id"]}),
+                                json!({"session_id":event["session_id"],"type":event["type"]}),
                             );
                             if event["type"] == "view.disconnected" {
                                 {

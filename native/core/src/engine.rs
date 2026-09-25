@@ -649,7 +649,18 @@ impl Engine {
             workers.retain(|worker| !worker.is_finished());
             workers.push(worker);
         }
+        self.job_changed(&job);
         Ok(job)
+    }
+    /// A transient `job.changed` wake-up for the window's feed (queued and
+    /// cancelling have no durable event of their own). Never stored.
+    fn job_changed(&self, job: &Job) {
+        let _ = self.0.sender.send(json!({
+            "type": "job.changed",
+            "session_id": job.session_id,
+            "task_id": job.task_id,
+            "payload": {"job_id": job.id, "status": job.status}
+        }));
     }
     pub fn job(&self, id: &str) -> Result<Option<Job>> {
         if let Some(job) = self.running(id)? {
@@ -844,6 +855,7 @@ impl Engine {
             if matches!(record.status.as_str(), "queued" | "running") {
                 record.status = "cancelling".into();
                 self.0.store.save_job(&json!(*record))?;
+                self.job_changed(&record);
             }
             record.task_id.clone()
         };
