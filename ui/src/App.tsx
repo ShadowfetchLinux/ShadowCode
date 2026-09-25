@@ -30,9 +30,7 @@ import { useStableCallback } from "./hooks/useStableCallback";
 import { useTaskActions, type Consent } from "./hooks/useTaskActions";
 import { useAttachments } from "./hooks/useAttachments";
 import { useComposerExtras } from "./hooks/useComposerExtras";
-import { useRewind } from "./hooks/useRewind";
-import { useReviewTarget } from "./hooks/useReview";
-import { useMessageActions } from "./hooks/useMessageActions";
+import { useConversationEdits } from "./hooks/useConversationEdits";
 import { ReviewView } from "./components/ReviewView";
 import { RewindDialog } from "./components/RewindDialog";
 import { useNavigation } from "./hooks/useNavigation";
@@ -395,30 +393,22 @@ export default function App() {
     (action) => shortcuts[action](),
   );
 
-  const review = useReviewTarget(sessionId);
-  /** After a rewind or a review undo while no task streams: the project
-   * state and the conversation's new rows (the divider, the notes). */
-  const refreshAfterFiles = useStableCallback(async () => {
-    await refresh().catch(() => undefined);
-    const sid = nav.selectedRef.current;
-    if (!sid || busy) return;
-    const detail = await api.session(sid).catch(() => null);
-    if (detail && nav.selectedRef.current === sid && !submittingRef.current)
-      conversation.load(detail, jobRef.current, true);
-  });
-  const rewinding = useRewind({ busy, refresh: refreshAfterFiles, toast });
-  const messages = useMessageActions({
-    items: transcript.items,
-    sessionId,
-    workspace,
-    model: selectedTarget?.id || "",
-    busy: busy || submitting,
-    queueing,
-    openSession: nav.openSession,
-    startTask: actions.startTask,
-    rewindNow: rewinding.rewindNow,
-    toast,
-  });
+  const { review, rewinding, messages, refreshAfterFiles } =
+    useConversationEdits({
+      conversation,
+      jobRef,
+      selectedRef: nav.selectedRef,
+      submittingRef,
+      sessionId,
+      workspace,
+      target: selectedTarget,
+      busy: busy || submitting,
+      queueing,
+      openSession: nav.openSession,
+      startTask: actions.startTask,
+      refresh,
+      toast,
+    });
   const rowActions = useRowActions({
     setTranscript: conversation.setTranscript,
     reviewChanges,
@@ -653,6 +643,7 @@ export default function App() {
           if (!consent) return;
           setTask(consent.original.task);
           setAttachments(consent.original.attachments);
+          for (const m of consent.body.mentions || []) extras.addMention(m);
           setConsent(null);
           promptRef.current?.focus();
         }}
