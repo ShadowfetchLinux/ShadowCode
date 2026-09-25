@@ -178,10 +178,50 @@ it("Permissions: saves only permissions and network groups", async () => {
     string,
     unknown
   >;
-  expect(Object.keys(values).sort()).toEqual(["network", "permissions"]);
+  expect(Object.keys(values).sort()).toEqual([
+    "network",
+    "permissions",
+    "sandbox",
+  ]);
   expect(values).toMatchObject({
-    permissions: { mode: "allow_edits", level: "workspace" },
-    network: { mode: "offline" },
+    permissions: { mode: "allow_edits", level: "workspace", network: false },
+    network: { mode: "offline", shell: "off", allow: [] },
+    sandbox: { require: false },
+  });
+});
+
+it("Permissions: Require sandbox and the shell host allow-list", async () => {
+  const onSave = vi.fn(async () => {});
+  render(
+    <PermissionsPage
+      cfg={{
+        permissions: { mode: "ask", level: "workspace", network: true },
+        network: { mode: "online", shell: "on", allow: [] },
+        sandbox: { require: false },
+      }}
+      onSave={onSave}
+    />,
+  );
+  expect(await screen.findByRole("status")).toHaveProperty(
+    "textContent",
+    expect.stringContaining("Sandbox active (bubblewrap)"),
+  );
+  expect(screen.queryByLabelText("Allowed hosts")).toBeNull();
+  fireEvent.click(screen.getByLabelText(/Require sandbox/));
+  fireEvent.click(screen.getByLabelText(/Only allowed hosts/));
+  fireEvent.change(screen.getByLabelText("Allowed hosts"), {
+    target: { value: "crates.io\n *.githubusercontent.com \n\nlocalhost:3000" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onSave).toHaveBeenCalled());
+  expect((onSave.mock.calls[0] as unknown[])[0]).toMatchObject({
+    permissions: { network: true },
+    network: {
+      mode: "online",
+      shell: "allowlist",
+      allow: ["crates.io", "*.githubusercontent.com", "localhost:3000"],
+    },
+    sandbox: { require: true },
   });
 });
 

@@ -113,6 +113,82 @@ export type OllamaModel = {
   already_added: boolean;
 };
 
+/** Settings › Code intelligence (`/api/code-intel/*`). */
+export type CodeIntelSettings = {
+  lsp: boolean;
+  diagnostics_on_edit: boolean;
+  diagnostics_wait_ms: number;
+  lsp_idle_minutes: number;
+  max_servers: number;
+  repo_map_tokens: number;
+  semantic_search: boolean;
+  embedding_model: string;
+  servers: Record<string, { command: string; args: string[] }>;
+};
+export type CodeIntelLanguage = {
+  language: string;
+  label: string;
+  available: boolean;
+  enabled: boolean;
+  server?: string;
+  path?: string;
+  source?: "config" | "managed" | "path";
+  note?: string;
+  install_hint?: string;
+  managed_package?: string | null;
+};
+export type CodeIntelManaged = {
+  id: string;
+  label: string;
+  packages: string[];
+  approx_bytes: number;
+  installed: boolean;
+  installed_bytes: number | null;
+  progress: { state: string; error?: string | null } | null;
+};
+export type EmbeddingModel = {
+  id: string;
+  name: string;
+  summary: string;
+  bytes: number;
+  license: string;
+  installed: boolean;
+  active: boolean;
+  progress: {
+    state: string;
+    done: number;
+    total: number;
+    error?: string | null;
+  } | null;
+};
+export type CodeIntelStatus = {
+  config: CodeIntelSettings;
+  config_error?: string | null;
+  offline: boolean;
+  languages: CodeIntelLanguage[];
+  servers: {
+    root: string;
+    language: string;
+    server?: string;
+    state: string;
+    last_error?: string | null;
+  }[];
+  managed: CodeIntelManaged[];
+  npm: { available: boolean; path?: string | null; node?: string | null };
+  index: {
+    files: number;
+    symbols: number;
+    chunks: number;
+    languages: Record<string, number>;
+  } | null;
+  embeddings: {
+    models: EmbeddingModel[];
+    active: string | null;
+    runtime: string | null;
+    coverage: { embedded: number; chunks: number } | null;
+    backfill: { state: string; embedded: number; error?: string | null } | null;
+  };
+};
 export type LocalCatalog = {
   hardware?: {
     cpu_cores?: number;
@@ -364,6 +440,15 @@ export type HistoryPage = {
   first_cursor: number;
   event_cursor: number;
   has_older: boolean;
+};
+/** An agent definition for subagents (GET /api/agents). */
+export type AgentInfo = {
+  name: string;
+  description: string;
+  mode: "read-only" | "write";
+  model?: string | null;
+  source: "builtin" | "project" | "user";
+  path: string;
 };
 export type EventRow = {
   id?: number;
@@ -685,6 +770,20 @@ export type StartCompareRequest = {
   web?: boolean;
 };
 
+/** GET /api/sandbox/status: shell isolation this computer provides. */
+export type SandboxStatus = {
+  effective: "bubblewrap" | "landlock" | "none" | "blocked";
+  bubblewrap: { installed: boolean; works: boolean; detail: string };
+  landlock_abi: number;
+  network_namespace: { available: boolean; detail: string };
+  require: boolean;
+  shell_network: "off" | "on" | "allowlist";
+  allow: string[];
+  home_read_only: string[];
+  home_skipped: string[];
+  never_mounted: string[];
+};
+
 const get = <T>(path: string) => request<T>(path);
 
 async function send<T>(
@@ -905,6 +1004,47 @@ export const api = {
     ),
   unloadLocalModel: () =>
     send<{ ok: boolean }>("/api/local-models/unload", "POST", {}),
+  codeIntelStatus: () => get<CodeIntelStatus>("/api/code-intel/status"),
+  saveCodeIntel: (values: Partial<CodeIntelSettings>) =>
+    send<{ ok: boolean; config: CodeIntelSettings }>(
+      "/api/code-intel/config",
+      "POST",
+      values,
+    ),
+  installLanguageServer: (packageId: string) =>
+    send<{ ok: boolean; started: boolean }>("/api/code-intel/install", "POST", {
+      package: packageId,
+    }),
+  removeLanguageServer: (packageId: string) =>
+    send<{ ok: boolean; removed: boolean }>(
+      "/api/code-intel/uninstall",
+      "POST",
+      { package: packageId },
+    ),
+  stopLanguageServers: () =>
+    send<{ ok: boolean; stopped: number }>(
+      "/api/code-intel/servers/stop",
+      "POST",
+      {},
+    ),
+  installEmbeddingModel: (model: string) =>
+    send<{ ok: boolean; started: boolean }>(
+      "/api/code-intel/embeddings/install",
+      "POST",
+      { model },
+    ),
+  removeEmbeddingModel: (model: string) =>
+    send<{ ok: boolean; removed: boolean }>(
+      "/api/code-intel/embeddings/remove",
+      "POST",
+      { model },
+    ),
+  reindexCode: () =>
+    send<{ ok: boolean; embedding_started: boolean }>(
+      "/api/code-intel/reindex",
+      "POST",
+      {},
+    ),
   setSessionTarget: (sessionId: string, targetId: string) =>
     send<{ ok: boolean }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/target`,
@@ -938,6 +1078,7 @@ export const api = {
   deleteSession: (id: string) =>
     send<{ ok: boolean }>(`/api/sessions/${id}`, "DELETE"),
   doctor: () => get<DoctorReport>("/api/doctor"),
+  sandboxStatus: () => get<SandboxStatus>("/api/sandbox/status"),
   goals: () => get<{ goals: Goal[] }>("/api/goals"),
   createGoal: (instruction: string, run: boolean, session_id?: string) =>
     send<Goal>("/api/goals", "POST", {
@@ -1265,6 +1406,7 @@ export const api = {
       "POST",
       { workspace: "", title },
     ),
+  agents: () => get<{ agents: AgentInfo[]; issues: string[] }>("/api/agents"),
   commands: () =>
     get<{
       commands: {

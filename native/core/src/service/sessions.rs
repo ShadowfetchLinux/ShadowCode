@@ -28,7 +28,7 @@ impl Service {
             ("POST", "/api/projects" | "/api/projects/trust") => return self.open_project(call),
             ("GET", "/api/sessions") => {
                 return Ok(
-                    json!({"sessions":store.sessions_listed(call.q("q"),call.limit(100,10000),(!call.q("workspace").is_empty()).then(||Path::new(call.q("workspace"))),matches!(call.q("include_compare"),"true"|"1"))?}),
+                    json!({"sessions":store.sessions_listed_with(call.q("q"),call.limit(100,10000),(!call.q("workspace").is_empty()).then(||Path::new(call.q("workspace"))),matches!(call.q("include_compare"),"true"|"1"),matches!(call.q("include_subagents"),"true"|"1"))?}),
                 )
             }
             ("POST", "/api/sessions") => {
@@ -239,6 +239,8 @@ impl Service {
                 .unwrap_or(Value::Null),
             None => Value::Null,
         };
+        session["subagent_parent"] = json!(store.session_meta(id, keys::SUBAGENT_PARENT)?);
+        session["subagent_run"] = json!(store.session_meta(id, keys::SUBAGENT_RUN)?);
         let native: serde_json::Map<String, Value> = store
             .session_meta_prefixed(id, keys::NATIVE_SESSION_PREFIX)?
             .into_iter()

@@ -1,5 +1,5 @@
-//! `/api/worktrees…`, `/api/parallel…` and `/api/sandbox…` routes: managed
-//! Git worktrees and the prepared parallel checkouts. The engine side lives
+//! `/api/worktrees…` and `/api/parallel…` routes: managed Git worktrees and
+//! the prepared parallel checkouts. The engine side lives
 //! in `crate::worktrees` and `crate::parallel`.
 use super::*;
 use crate::worktrees;
@@ -192,9 +192,6 @@ impl Service {
                 | "/api/parallel/verify"
                 | "/api/parallel/cleanup",
             ) => self.parallel_action(call).await,
-            ("POST", "/api/sandbox/discard-scratch") => {
-                crate::sandbox::discard_scratch(&PathBuf::from(call.text("path")))
-            }
             _ => Err(call.unavailable()),
         }
     }

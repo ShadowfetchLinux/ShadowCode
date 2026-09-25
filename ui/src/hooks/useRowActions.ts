@@ -15,6 +15,7 @@ export type RowHandlers = {
   chooseModel: () => void;
   openLocal: () => void;
   fork: (eventId: number) => Promise<void>;
+  openSession: (sessionId: string) => Promise<void>;
 };
 
 /** Transcript row callbacks with stable identities (they call the latest
@@ -44,6 +45,8 @@ export function useRowActions(handlers: RowHandlers): RowActions {
       onChooseModel: () => latest.current.chooseModel(),
       onOpenLocal: () => latest.current.openLocal(),
       onFork: (eventId: number) => void latest.current.fork(eventId),
+      onOpenSession: (sessionId: string) =>
+        void latest.current.openSession(sessionId),
     }),
     [],
   );

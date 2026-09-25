@@ -356,7 +356,11 @@ async fn git_env(
 /// untracked files that are not ignored) as one commit, using a temporary
 /// copy of the index. Only new Git objects are written; the source index and
 /// working tree are left exactly as they were.
-async fn snapshot(scratch: &Path, source: &Path, cancel: &CancellationToken) -> Result<Base> {
+pub(crate) async fn snapshot(
+    scratch: &Path,
+    source: &Path,
+    cancel: &CancellationToken,
+) -> Result<Base> {
     snapshot_for(
         scratch,
         source,

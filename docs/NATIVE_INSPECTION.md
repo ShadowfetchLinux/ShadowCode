@@ -124,13 +124,18 @@ path instead of treating its command text as human approval.
 
 ## AST symbol tools
 
-Rust and TypeScript/TSX definitions, signatures, references and syntactic call
-sites use tree-sitter and ordinary SQLite tables in a private process cache.
-Reads do not create `.shadow` or write an index into the project. The cache is
-rebuilt after restart, hashes source contents, and removes stale file records.
+Rust, TypeScript/TSX, JavaScript, Python, Go, C, C++ and Java definitions,
+signatures, references and syntactic call sites use tree-sitter and ordinary
+SQLite tables in a private process cache. Reads do not create `.shadow` or
+write an index into the project. The cache is rebuilt after restart, skips
+files whose size and modification time did not change, and removes stale file
+records.
 
-Scans are bounded to 200 source files, 512 KB per file, 32 directory levels and
-20,000 visited entries. Ignored/build directories, secret paths and symlinks
+Scans are bounded to 3,000 files, 512 KB per file, 32 directory levels and
+40,000 visited entries. Ignored/build directories, secret paths and symlinks
 outside the workspace are excluded. Results may be incomplete in large projects.
 Exact definitions rank before substring matches. Call sites are syntactic matches;
 receiver types and cross-project references are not resolved like a language server.
+With a `path` and `line`, `goto_definition` and `find_references` ask the
+project's language server instead; see [code intelligence](CODE_INTELLIGENCE.md),
+which also covers `get_diagnostics`, `repo_map` and `search_code`.

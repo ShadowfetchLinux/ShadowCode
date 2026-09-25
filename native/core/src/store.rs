@@ -480,14 +480,29 @@ impl Store {
     /// The session list the app shows. Compare lane conversations (sessions
     /// with a `compare_id` meta row) are left out unless `include_compare`;
     /// every row carries `compare_id` and `compare_lane` (null for ordinary
-    /// conversations). A worktree task's conversation carries `worktree_task`
-    /// and `worktree_source` (its project) and is listed under that project.
+    /// conversations). Subagent conversations are always left out here; see
+    /// `sessions_listed_with`. A worktree task's conversation carries
+    /// `worktree_task` and `worktree_source` (its project) and is listed under
+    /// that project.
     pub fn sessions_listed(
         &self,
         search: &str,
         limit: usize,
         workspace: Option<&Path>,
         include_compare: bool,
+    ) -> Result<Vec<Value>> {
+        self.sessions_listed_with(search, limit, workspace, include_compare, false)
+    }
+    /// `sessions_listed`, optionally including subagent conversations
+    /// (sessions with a `subagent_parent` meta row). Every row carries
+    /// `subagent_parent` (null for ordinary conversations).
+    pub fn sessions_listed_with(
+        &self,
+        search: &str,
+        limit: usize,
+        workspace: Option<&Path>,
+        include_compare: bool,
+        include_subagents: bool,
     ) -> Result<Vec<Value>> {
         let needle = format!(
             "%{}%",
@@ -500,13 +515,15 @@ impl Store {
             (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_id') AS compare_id,
             (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_lane') AS compare_lane,
             (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='worktree_task') AS worktree_task,
-            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='worktree_source') AS worktree_source
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='worktree_source') AS worktree_source,
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='subagent_parent') AS subagent_parent
             FROM sessions s WHERE (? IS NULL OR s.workspace=?
                 OR EXISTS(SELECT 1 FROM session_meta w WHERE w.session_id=s.id AND w.key='worktree_source' AND w.value=?))
             AND (s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
             OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '!'))
             AND (? OR NOT EXISTS(SELECT 1 FROM session_meta c WHERE c.session_id=s.id AND c.key='compare_id'))
-            ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,include_compare,limit.clamp(1,10000)])
+            AND (? OR NOT EXISTS(SELECT 1 FROM session_meta a WHERE a.session_id=s.id AND a.key='subagent_parent'))
+            ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,include_compare,include_subagents,limit.clamp(1,10000)])
     }
     /// Move a conversation to another folder (a worktree task's conversation
     /// returns to its project when the worktree is removed). The vendor CLI

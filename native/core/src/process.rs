@@ -25,6 +25,9 @@ pub struct ProcessSpec {
     pub timeout: Duration,
     pub output_limit: usize,
     pub env: BTreeMap<String, String>,
+    /// Sandbox work between fork and exec (network namespace, Landlock), and
+    /// the allow-list proxy served while the process runs.
+    pub child: Option<crate::sandbox::ChildSetup>,
 }
 impl ProcessSpec {
     pub fn shell(command: &str, cwd: PathBuf, timeout: Duration) -> Self {
@@ -35,6 +38,7 @@ impl ProcessSpec {
             timeout,
             output_limit: 256_000,
             env: BTreeMap::new(),
+            child: None,
         }
     }
     pub fn command(program: &str, args: &[&str], cwd: PathBuf) -> Self {
@@ -45,6 +49,7 @@ impl ProcessSpec {
             timeout: Duration::from_secs(30),
             output_limit: 256_000,
             env: BTreeMap::new(),
+            child: None,
         }
     }
 }
@@ -244,12 +249,17 @@ async fn run_internal(
     #[cfg(unix)]
     command.process_group(0);
     #[cfg(target_os = "linux")]
+    let setup = spec.child.clone();
+    #[cfg(target_os = "linux")]
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             // Propagate cancellation to shell-created descendants when their
             // owning process exits, preventing orphaned local-model tasks.
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
                 return Err(std::io::Error::last_os_error());
+            }
+            if let Some(setup) = &setup {
+                setup.enter()?;
             }
             Ok(())
         });
@@ -259,6 +269,11 @@ async fn run_internal(
         .with_context(|| format!("Could not start {}", spec.program))?;
     let pid = child.id().context("Command has no process ID")?;
     let mut group = ProcessGroup(pid);
+    // Dropped (stopping the proxy) when this function returns.
+    let _proxy = match &spec.child {
+        Some(setup) => setup.after_spawn()?,
+        None => None,
+    };
     if let Some(monitor) = &monitor {
         let mut state = monitor
             .0

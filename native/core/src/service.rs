@@ -47,8 +47,10 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 mod accounts;
+mod agents;
 mod background;
 mod call;
+mod code_intel;
 mod commands;
 mod compare;
 mod extensions;
@@ -60,6 +62,7 @@ mod inspection;
 mod jobs;
 mod memory;
 mod model_catalog;
+mod sandbox;
 mod sessions;
 mod settings;
 mod workspace;
@@ -227,8 +230,10 @@ impl Service {
         self.check_worktree_project(&call)?;
         match call.family() {
             "compare" | "compares" => self.compare(&call).await,
-            "worktrees" | "parallel" | "sandbox" => self.worktree_routes(&call).await,
+            "agents" | "subagents" => self.blocking(&call, Self::agent_routes).await,
+            "worktrees" | "parallel" => self.worktree_routes(&call).await,
             "worktree-tasks" => self.worktree_task_routes(&call).await,
+            "sandbox" => self.sandbox_routes(&call).await,
             "sessions" | "projects" | "events" | "resolve" => {
                 self.blocking(&call, Self::session_routes).await
             }
@@ -236,6 +241,7 @@ impl Service {
             "goals" => self.goal_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "background" => self.background_routes(&call).await,
+            "code-intel" => self.code_intel_routes(&call).await,
             "workspace" => self.workspace_routes(&call).await,
             "config" | "routing" | "onboarding" | "health" | "version" | "doctor" | "guardian" => {
                 self.settings_routes(&call).await

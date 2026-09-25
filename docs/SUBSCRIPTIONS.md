@@ -147,12 +147,29 @@ never uses it once a turn has started or when images are attached.
   stopped and the task fails.
 - **Pause and steer.** Pausing interrupts the vendor turn where the protocol
   allows it. The steering note is sent as the next prompt.
-- **No rewind.** Vendor CLIs write files with their own tools, so ShadowCode's
-  checkpoints don't cover those edits. Review them in the Changes drawer, and
-  undo them with Git.
+- **Rewind.** Before each turn (not in Plan/Review), ShadowCode checkpoints
+  the project. In a Git repository, that is a commit built in a temporary
+  index under `refs/shadowcode/checkpoints/<session>/<n>`. In other folders,
+  a bounded copy is taken. After the turn, every project file the CLI changed
+  is recorded in the task's checkpoint, so **Rewind** restores it once the
+  turn has ended. The same limits as for shell commands apply: Git-ignored
+  files, files over 4 MB, symlinks and Git history aren't restored. A folder
+  without Git that is too large for the copy gets a warning instead. Edits
+  you make yourself in those files during the turn are rewound too. The
+  vendor's own conversation isn't told about a rewind. Set
+  `checkpoints.vendor: false` to turn this off.
 - **Switching providers.** A move between providers hands over at most 12,000
   characters of earlier turns, after you consent. See the
   [user guide](USER_GUIDE.md#switch-models-mid-conversation).
+- **MCP servers.** The MCP servers you enabled for the project are passed to
+  the vendor for each run, in addition to the vendor's own MCP settings:
+  Cursor, Grok and Antigravity receive them in ACP `session/new` and
+  `session/load`, Claude Code through `--mcp-config`, Codex through
+  `-c mcp_servers.<name>.command/args/url`. Nothing is written to the vendor's
+  configuration files. Servers that need stored secrets or literal
+  environment values are not shared, and Plan/Review tasks share none.
+  `mcp.share_with_cli_agents: false` turns this off. See
+  [Subagents](SUBAGENTS.md#mcp-servers).
 
 ## Settings
 

@@ -162,6 +162,26 @@ describe("activity timeline from real events", () => {
     expect(state.activity.t1.verification?.status).toBe("vendor_owned");
   });
 
+  it("a vendor turn with a project checkpoint can be rewound", () => {
+    const reported = replay([
+      ev("agent.started", { task: "Edit" }),
+      ev("files.changed", { paths: ["notes.txt"] }),
+      ev("agent.completed", { summary: "Done", success: true }),
+    ]);
+    expect(reported.activity.t1.checkpointed).toBeFalsy();
+    const recorded = replay([
+      ev("agent.started", { task: "Edit" }),
+      ev("checkpoint.updated", {
+        source: "vendor",
+        paths: ["notes.txt", "old.txt"],
+        changed: ["notes.txt", "old.txt"],
+      }),
+      ev("agent.completed", { summary: "Done", success: true }),
+    ]);
+    expect(recorded.activity.t1.checkpointed).toBe(true);
+    expect(recorded.activity.t1.changed).toEqual(["notes.txt", "old.txt"]);
+  });
+
   it("approvals, web sources, handoff and limit events", () => {
     const events = [
       ev("agent.started", { task: "Look it up" }),

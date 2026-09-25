@@ -1810,6 +1810,23 @@ export function installFakeBackend(options: FakeOptions = {}) {
       }
       return state.config;
     }
+    if (method === "GET" && path === "/api/sandbox/status")
+      return {
+        effective: "bubblewrap",
+        bubblewrap: {
+          installed: true,
+          works: true,
+          detail: "bubblewrap works",
+        },
+        landlock_abi: 6,
+        network_namespace: { available: true, detail: "ok" },
+        require: Boolean(state.config.sandbox?.require),
+        shell_network: state.config.network?.shell || "on",
+        allow: state.config.network?.allow || [],
+        home_read_only: ["/home/dev/.cargo"],
+        home_skipped: [],
+        never_mounted: [".ssh", ".config"],
+      };
     if (path === "/api/workspace/status")
       return {
         workspace,

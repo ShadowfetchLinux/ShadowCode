@@ -248,6 +248,71 @@ used in the project, else the first ready local model with tool support.
 See [Compare](COMPARE.md) for `POST /api/compare`, `GET /api/compare/<id>`,
 `GET /api/compares`, `keep`, `discard`, `cancel` and the scoreboard.
 
+## Code intelligence
+
+Language servers, the code index, search, the repo map and embedding models
+([code intelligence](CODE_INTELLIGENCE.md)). Routes act on the selected
+project. Downloads are refused in offline mode.
+
+`GET /api/code-intel/status` →
+
+```
+{
+  config: CodeIntelSettings,          // effective code_intel settings
+  config_error: string|null,          // set when config.yaml's section is invalid (defaults in use)
+  offline: boolean,
+  languages: [{ language: "rust"|"typescript"|"python"|"go"|"c", label, enabled,
+                available, server?, path?, source?: "config"|"managed"|"path",
+                note?, install_hint?, managed_package: "typescript"|"python"|null }],
+  servers: [{ root, language, server, program, state: "ready"|"loading"|"backoff"|"stopped"|"idle"|"busy",
+              pid, idle_sec, starts, failures, last_error }],
+  managed: [{ id: "typescript"|"python", label, packages: ["name@version"], approx_bytes,
+              installed, installed_bytes: number|null, versions: [{name, version|null}], path,
+              progress: {state: "installing"|"installed"|"error", error, log}|null }],
+  managed_dir, npm: { available, path, node },
+  index: { files, symbols, references, chunks, languages: {[lang]: files}, max_files } | null,
+  embeddings: { models: EmbeddingModel[], active: string|null, runtime: string|null,
+                server: {model, pid, idle_sec}|null,
+                coverage: {embedded, chunks}|null,
+                backfill: {state: "running"|"done"|"error", embedded, error}|null }
+}
+CodeIntelSettings = { lsp, diagnostics_on_edit, diagnostics_wait_ms, lsp_idle_minutes, max_servers,
+                      servers: {[language]: {command, args}}, repo_map_tokens, semantic_search, embedding_model }
+EmbeddingModel = { id, name, summary, bytes, license, sha256, url, dims, installed, active,
+                   progress: {state: "downloading"|"verifying"|"installed"|"error", done, total, error}|null }
+```
+
+- `POST /api/code-intel/config {…some CodeIntelSettings fields}` → `{ok, config}`.
+  Unknown or mistyped fields and out-of-range values are errors. Turning `lsp`
+  off stops running servers.
+- `POST /api/code-intel/install {package: "typescript"|"python"}` →
+  `{ok, started, managed}`; the npm install runs in the background (poll
+  status). `POST /api/code-intel/uninstall {package}` → `{ok, removed, managed}`.
+- `POST /api/code-intel/servers/stop` → `{ok, stopped, embedding_server_stopped}`.
+- `POST /api/code-intel/embeddings/install {model}` → `{ok, started, models}`;
+  downloads in the background, verifies size and SHA-256, then makes the
+  model active if none was chosen and embeds the project.
+  `POST /api/code-intel/embeddings/remove {model}` → `{ok, removed, models}`.
+- `POST /api/code-intel/reindex` → `{ok, index, embedding_started}`.
+- `POST /api/code-intel/search {query, path?, max_hits?}` → the `search_code`
+  result: `{ok, query, mode: "bm25"|"hybrid", count, hits: [{path, start_line,
+  end_line, score, preview, symbols?, bm25?, similarity?}], semantic, note}`.
+- `GET /api/code-intel/repo-map?tokens=&query=` → `{ok, map, files, symbols,
+  tokens_estimate, focus, note}`.
+
+Native tools: edit results (`write_file`, `edit_file`, `apply_patch`) may
+carry `diagnostics: {new_errors: [{path, line, column, severity, message,
+source?, code?}], checked: [path], servers?, pending?, unverified?,
+unavailable?, truncated?, note}`. New tools `repo_map {query?, paths?,
+max_tokens?}` and `search_code {query, path?, max_hits?}` are read-only.
+`goto_definition` / `find_references` accept `path`, `line`, `column`
+(1-based) and then answer `{ok, source: "lsp:<server>", count, truncated,
+locations: [{path, line, column, preview}], note}`; without a position, or
+when no server answers, they keep the tree-sitter shape (plus `lsp_note`).
+`get_diagnostics {path}` answers `{ok, path, server, errors, total,
+truncated, diagnostics: [...], note}` from the language server, or
+`{ok: false, pending: true, error}` while it loads.
+
 ## Local models
 
 `GET /api/local-models` → `LocalCatalog`:
@@ -479,6 +544,39 @@ Usage = {
   get the complete native tool descriptions; smaller ones get descriptions cut
   to 64 bytes.
 
+||||||| f942214
+
+## Subagents and agent definitions
+
+See [SUBAGENTS.md](SUBAGENTS.md) for behaviour and definition files.
+
+- `GET /api/agents?workspace=` → `{agents, shadowed, issues, dirs, settings, user_dir, workspace}`.
+  `agents[]`: `{name, description, model, tools, deny, mode: "read-only"|"write",
+  max_turns, source: "builtin"|"project"|"user", path, hash, ignored, instructions_preview}`.
+  `settings` is the effective `subagents` config.
+- `GET /api/subagents?session_id=` → `{runs}` (runs started from that
+  conversation, oldest first); `GET /api/subagents/{run_id}` → one run
+  `{id, agent, description, prompt, mode, model, parent_session, parent_task,
+  parent_job, job_id, session_id, status, summary, error, files[{path, status,
+  additions, deletions, binary}], files_truncated, binary_files, patch, applied,
+  usage, steps, depth, notes, created_at, finished_at}`.
+- `GET /api/sessions` hides subagent conversations unless
+  `include_subagents=true`; rows carry `subagent_parent`.
+  `GET /api/sessions/{id}` adds `subagent_parent` and `subagent_run`.
+- Events (parent conversation): `subagent.started {run_id, agent, description,
+  prompt, mode, model, job_id, session_id, depth}`, `subagent.finished {run_id,
+  agent, description, mode, model, status, summary, error, job_id, session_id,
+  files, files_truncated, binary_files, patch, usage, steps, notes, duration_s}`,
+  `subagent.applied {run_id, agent, paths}`. `context.attached` gains
+  `origin: "nested_guidance"`. `mcp.warning {server?, text}`.
+- Native tools: `spawn_agent {agent?, prompt, description?, model?, write?}` or
+  `{tasks: [...]}` (at most 8); `apply_agent_changes {run_id}` (runs as
+  `apply_patch`); `load_skill {name}`; approved MCP tools as
+  `mcp__<server>__<tool>` (run as `mcp_call`). A subagent's approvals carry the
+  parent's `session_id` and a reason starting `Subagent <name>:`.
+- Slash commands (`GET /api/commands`) include `.claude/commands/*.md`;
+  `arg_spec` is the command's `argument-hint` when set.
+
 ## Approvals and jobs feed
 
 The window no longer polls approvals and jobs. It reads one feed when the
@@ -639,6 +737,44 @@ Details (safety branch):
   when `allow_root`; never allowed silently. Destructive Git commands in the
   shell always ask. Network shell commands are denied offline.
 
+### Shell sandbox and checkpoints (0.32)
+
+- `sandbox: { require: bool = false, home_binds: string[], landlock: bool = true }`.
+  `home_binds` are paths relative to the home folder, mounted read-only in
+  the bubblewrap sandbox (default `.cargo .rustup .nvm .npm .cache/pip
+  .local/bin .gitconfig .pyenv .bun .deno`). PUT rejects absolute paths, `..`,
+  and anything equal to, inside or containing `.ssh .aws .gnupg .config
+  .local/share .netrc .docker .kube .password-store .pki .azure .npmrc
+  .pypirc .git-credentials .mozilla .var`. `require: true`: without
+  bubblewrap, `exec` fails with "The command did not run: 'Require sandbox'
+  is on …". `landlock`: without bubblewrap (and `require` off), commands
+  run under Landlock when the kernel has it.
+- `network.shell: "on" | "off" | "allowlist"` (default `on`) and
+  `network.allow: string[]` (at most 128; `host`, `*.domain`, `host:port`,
+  `[v6]:port`; without a port, 80 and 443). The effective shell network is
+  `off` whenever `permissions.network` is false or `network.mode` is
+  `offline`. Settings writes `permissions.network = (shell != "off")`
+  together with `network.shell`. `allowlist` needs bubblewrap; without it,
+  `exec` fails closed. Invalid `network.allow` entries are rejected by PUT.
+- `checkpoints: { shell: bool = true, vendor: bool = true, keep: 1..10000 = 200,
+  max_copy_files: <= 200000 = 5000, max_copy_bytes: <= 1 GiB = 64 MiB }`.
+- `GET /api/sandbox/status` → `{ effective: "bubblewrap" | "landlock" |
+  "none" | "blocked", bubblewrap: {installed, works, detail}, landlock_abi,
+  network_namespace: {available, detail}, require, shell_network, allow,
+  home_read_only: string[], home_skipped: string[], never_mounted: string[] }`.
+- The `exec` tool result carries `sandbox: {mode: "bubblewrap" | "landlock" |
+  "none", network, allow, home_read_only, home_skipped, proxy?: {reached,
+  blocked}, …}` and `checkpoint: {method: "git" | "copy" | "none", paths,
+  skipped: [{path, reason}], unavailable, ref, warning?}`.
+- Events: `agent.warning {text, kind: "sandbox"}` once per conversation when a
+  command runs without bubblewrap; `agent.warning {text, kind: "checkpoint"}`
+  when a vendor turn's changes can't all be rewound;
+  `checkpoint.updated {…summary, source: "shell" | "vendor", changed: string[]}`
+  after a shell command or vendor turn changed project files.
+- `POST /api/jobs/{id}/rewind` and `POST /api/checkpoints/tasks/{task}/restore`
+  now also restore files changed by shell commands and subscription CLI turns.
+  For a running vendor job the rewind is refused; rewind after the turn ends.
+
 ## Web tools (native agent)
 
 - `POST /api/jobs {web: true}` offers `web_fetch {url}` and
@@ -662,8 +798,8 @@ Details (safety branch):
   `tool.started`, `tool.completed`, `approval.requested` and
   `command.completed` payloads are stored redacted.
 - `checkpoint.restored {task_id, paths}` is written for
-  `POST /api/checkpoints/tasks/{task}/restore` and for rewinds of native
-  jobs; after a finished task is restored the session's next turn also sees a
+  `POST /api/checkpoints/tasks/{task}/restore` and for job rewinds (native and subscription
+  jobs); after a finished task is restored the session's next turn also sees a
   process note that the edits are no longer on disk.
 - `POST /api/workspace/attach` and `/attach-image` work in read-only
   projects (trust still required); files go to `.shadow/attachments/`.

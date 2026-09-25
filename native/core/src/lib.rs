@@ -1,4 +1,5 @@
 //! Native application engine shared by the desktop, CLI, and MCP transports.
+pub mod agents;
 pub mod allowance;
 pub mod approvals;
 pub mod autonomy;
@@ -7,6 +8,7 @@ pub mod checkpoint;
 #[cfg(unix)]
 pub mod cli;
 pub mod cli_agent;
+pub mod code_intel;
 pub mod compaction;
 pub mod compare;
 pub mod config;
@@ -18,11 +20,13 @@ pub mod events;
 pub mod gguf;
 pub mod guardian;
 pub mod hooks;
+pub mod instructions;
 pub mod intelligence;
 #[cfg(unix)]
 pub mod lifecycle;
 pub mod local_engine;
 pub mod local_runtime;
+pub mod lsp;
 #[cfg(unix)]
 pub mod mcp;
 pub mod memory;
@@ -50,6 +54,7 @@ pub mod service;
 pub mod sqlite;
 pub mod steering;
 pub mod store;
+pub mod subagents;
 pub mod symbol_index;
 pub mod system_info;
 pub mod tools;

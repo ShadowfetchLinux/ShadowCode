@@ -36,6 +36,8 @@ pub fn read_only(tool: &str) -> bool {
             | "find_references"
             | "get_diagnostics"
             | "get_type_signature"
+            | "repo_map"
+            | "search_code"
             | "mcp_sqlite_tables"
             | "mcp_sqlite_query"
             | "background_list"
@@ -47,6 +49,9 @@ pub fn read_only(tool: &str) -> bool {
             | "update_todos"
             | "web_fetch"
             | "web_search"
+            // Subagents: a child's own permissions decide what it may do.
+            | "spawn_agent"
+            | "load_skill"
     )
 }
 
@@ -249,6 +254,6 @@ pub fn vendor_notes(config: &Config) -> Value {
         "cursor": "Cursor sends ACP permission requests that ShadowCode shows for approval; Plan/Review uses Cursor's plan mode when the agent offers it. Actions Cursor does not ask about are outside ShadowCode's control.",
         "grok": "Grok sends ACP permission requests that ShadowCode shows for approval. Grok advertises no read-only mode, so Plan/Review is not enforced by the runtime.",
         "antigravity": "Antigravity runs through Google's ACP agent server and asks ShadowCode before running commands or editing files, as Cursor and Grok do.",
-        "network": "Network limits and the sudo block apply to ShadowCode's own tools only. Vendor CLIs use their own network access and sandbox."
+        "network": "Network limits, the shell sandbox and the sudo block apply to ShadowCode's own tools only. Vendor CLIs use their own network access and sandbox; their file changes are still checkpointed for Rewind."
     })
 }

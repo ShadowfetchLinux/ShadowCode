@@ -15,6 +15,11 @@ import {
   X,
 } from "lucide-react";
 import {
+  AgentMentionMenu,
+  mentionQuery,
+  useAgentOptions,
+} from "./AgentMentions";
+import {
   IMAGE_ACCEPT,
   TEXT_ACCEPT,
   pastedImages,
@@ -90,6 +95,20 @@ export function Composer({
   const hits = slashOpen
     ? commands.filter((c) => c.name.startsWith(task.slice(1))).slice(0, 8)
     : [];
+  // `@name` at the start of a message names a subagent.
+  const mention = mentionQuery(task);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionClosed, setMentionClosed] = useState(false);
+  const agents = useAgentOptions(mention !== null);
+  const agentHits =
+    mention === null || mentionClosed
+      ? []
+      : agents.filter((a) => a.name.startsWith(mention)).slice(0, 8);
+  const pickAgent = (name: string) => {
+    onTask(`@${name} `);
+    setMentionClosed(true);
+    promptRef.current?.focus();
+  };
   useEffect(() => {
     const el = promptRef.current;
     if (el) {
@@ -117,6 +136,13 @@ export function Composer({
           onAttach(Array.from(e.dataTransfer.files));
       }}
     >
+      {agentHits.length > 0 && (
+        <AgentMentionMenu
+          hits={agentHits}
+          index={Math.min(mentionIndex, agentHits.length - 1)}
+          onPick={(agent) => pickAgent(agent.name)}
+        />
+      )}
       {slashOpen && (
         <div className="slash-menu" role="listbox" aria-label="Slash commands">
           {hits.length ? (
@@ -181,6 +207,8 @@ export function Composer({
           onChange={(e) => {
             onTask(e.target.value);
             setSlashIndex(0);
+            setMentionIndex(0);
+            setMentionClosed(false);
             setSlashOpen(/^\/\S*$/.test(e.target.value));
           }}
           onPaste={(e) => {
@@ -191,6 +219,26 @@ export function Composer({
             }
           }}
           onKeyDown={(e) => {
+            if (agentHits.length) {
+              const count = agentHits.length;
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                setMentionIndex(
+                  (i) => (i + (e.key === "ArrowDown" ? 1 : count - 1)) % count,
+                );
+                return;
+              }
+              if (e.key === "Tab") {
+                e.preventDefault();
+                pickAgent(agentHits[Math.min(mentionIndex, count - 1)].name);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setMentionClosed(true);
+                return;
+              }
+            }
             if (slashOpen && hits.length) {
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                 e.preventDefault();

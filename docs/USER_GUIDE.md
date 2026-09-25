@@ -60,7 +60,10 @@ Type in the composer and press `Enter`. `Shift+Enter` adds a line.
 - **Permission mode.** The mode control in the composer shows the current mode
   and how the selected vendor applies it.
 - **Slash commands.** Type `/` to browse them. `/plan` and `/review` start
-  read-only tasks. `/model` opens the picker.
+  read-only tasks. `/model` opens the picker. Claude Code commands in
+  `.claude/commands/` appear here too.
+- **Agents.** Start a message with `@explore`, `@plan`, `@review`, `@general`
+  or a project agent's name to run that subagent first. Type `@` to list them.
 
 If a task is already running, pressing `Enter` queues the message as a
 follow-up.
@@ -97,6 +100,21 @@ anything. The card appears in the conversation as soon as the agent asks.
 An unanswered vendor approval is denied after 10 minutes
 (`cli_agents.approval_timeout_sec`).
 
+### Subagents
+
+With a local or OpenRouter model, the agent can hand focused work to
+subagents: `explore` searches, `plan` plans, `review` reviews (all
+read-only), and `general` edits files in its own Git worktree. Several can run
+at once. Each run shows as a card in the conversation; click it for the
+result and changed files, or **Open transcript** for its own conversation.
+A write subagent's changes reach your project only when the main agent
+applies its diff, with your usual edit approval. Approvals a subagent needs
+appear in this conversation, labelled with its name.
+
+Projects can add their own agents in `.shadow/agents/`, `.claude/agents/` or
+`.opencode/agent/`, and ShadowCode reads `CLAUDE.md`, nested `AGENTS.md` files,
+Cursor rules and Claude Code skills. See [Subagents](SUBAGENTS.md).
+
 ### Stop, pause and steer
 
 - **Stop** (`Ctrl+.`) cancels the task. For a vendor CLI, ShadowCode ends the
@@ -125,11 +143,21 @@ reply.
   while you switch between them or close the drawer: terminal output, the
   file open in Files and an unsent commit message stay until you open
   another project.
-- **Rewind** undoes every file change the task made with ShadowCode's own
-  tools. Stop the task first. Rewind doesn't undo shell commands or Git
-  history. It isn't offered for vendor CLI tasks, because the vendor writes
-  files with its own tools. Use the Changes drawer or Git to undo those. After
-  a rewind, the next turn is told that those edits are no longer on disk.
+- **Rewind** undoes every change the task made to project files. That
+  includes ShadowCode's own file tools, files changed by the task's shell
+  commands, and files a subscription CLI (Codex, Claude Code, Cursor, Grok,
+  Antigravity) changed during the turn. Before each shell command and each
+  subscription turn, ShadowCode takes a checkpoint of the project. In a Git
+  repository it is a hidden commit under `refs/shadowcode/checkpoints/`; your
+  branch, index and staged changes are untouched. In a folder without Git it
+  is a copy, for folders up to 5,000 files and 64 MB. A larger folder
+  shows *Rewind does not cover this command*. Stop the task first (for a
+  subscription, wait for the turn to end). Rewind doesn't restore Git-ignored
+  files, files over 4 MB, symlinks, Git history or branches, or anything
+  outside the project. It refuses, and changes nothing, if a file was edited
+  again after the task. After a rewind, the next turn is told that those edits
+  are no longer on disk. A subscription's own conversation isn't told, so
+  mention it in your next message.
 
 ## Switch models mid-conversation
 
@@ -271,6 +299,25 @@ from the model's prices; models on this computer show `$0 · local`. Click it
 for input, output and cached tokens, cost, model requests and the last
 compaction.
 
+## Code intelligence
+
+With a local or OpenRouter model, ShadowCode helps the agent understand the
+project (**Settings › Code intelligence**):
+
+- **Errors after each edit.** If a language server is installed for the file
+  (rust-analyzer, typescript-language-server, pyright, gopls or clangd), the
+  agent is told about errors its edit introduced, not ones that were already
+  there. Servers run without building or running project code. The TypeScript
+  and Python servers can be installed from Settings with one click (about
+  25 MB and 19 MB); nothing downloads on its own.
+- **A map of the code.** Each task starts with a short, ranked outline of the
+  project's main definitions, favoring files you name and files the agent
+  recently edited. Choose its size, or turn it off, in Settings.
+- **Code search.** The agent can search code by keywords. Install a small
+  embedding model (35 MB or 139 MB) in Settings to also search by meaning.
+
+Details: [code intelligence](CODE_INTELLIGENCE.md).
+
 ## Offline and web-off
 
 In **Settings › Permissions & network**:
@@ -282,6 +329,37 @@ In **Settings › Permissions & network**:
   or usage, and a cloud job is refused with
   "Offline mode: choose a model that runs on this computer". Shell commands
   that reach the network (for example `curl`, `npm` or `pip`) are denied.
+
+## The shell sandbox
+
+ShadowCode runs shell commands from local and OpenRouter models in a sandbox
+when [bubblewrap](https://github.com/containers/bubblewrap) is installed
+(`sudo apt install bubblewrap`). Inside it:
+
+- Your **home folder is empty**. Only toolchain folders (`~/.cargo`,
+  `~/.rustup`, `~/.nvm`, `~/.npm`, `~/.cache/pip`, `~/.local/bin`,
+  `~/.gitconfig`, `~/.pyenv`, `~/.bun`, `~/.deno`) are visible, and they are
+  read-only. SSH keys, cloud credentials, `~/.config` (including ShadowCode's
+  API keys) and `~/.local/share` are never visible. To change the list, edit
+  `sandbox.home_binds` in `~/.config/shadow-agent/config.yaml`. Credential
+  folders are refused there.
+- **Only the project is writable.** Files written elsewhere in the home
+  folder vanish when the command ends.
+- **Network**, under **Shell commands** in **Settings › Permissions &
+  network**: *No network*, *Full network*, or *Only allowed hosts*. With
+  *Only allowed hosts*, list one host per line (`crates.io`,
+  `*.githubusercontent.com`, `localhost:3000`). Web requests from tools that
+  use the standard proxy variables (curl, pip, npm, cargo, git) reach only
+  those hosts. Anything else, including direct connections and DNS, fails.
+  A blocked request gets `403` with the host named. The tool result lists
+  what was reached and blocked.
+
+The **Shell commands** section says which sandbox this computer provides.
+Without bubblewrap, commands run under Landlock file limits when the kernel
+supports them, and the conversation shows a warning once. Turn on **Require
+sandbox** to refuse shell commands instead. *Only allowed hosts* always needs
+bubblewrap: without it, commands are refused rather than run unfiltered.
+Subscription CLIs use their own sandboxes, not this one.
 
 ## Continue, organize and recover
 
@@ -338,8 +416,15 @@ In **Settings › Permissions & network**:
   the error on **Settings › Local models**.
 - **The AppImage won't mount.** Run it with `--appimage-extract-and-run`. FUSE
   is optional.
+- **A command fails with "Require sandbox is on".** Install bubblewrap, or turn
+  off **Require sandbox**. If bubblewrap is installed but still reported
+  unavailable, your system may block unprivileged user namespaces. Ubuntu
+  24.04 ships an AppArmor profile that allows them for `bwrap`.
+- **A command can't find a tool from your home folder.** Add its folder to
+  `sandbox.home_binds`, for example `go` or `.sdkman`.
 - **You need stronger isolation.** Use a container or a separate Linux account.
-  Shell commands run with your user's privileges.
+  Shell commands run with your user's privileges, and the sandbox limits what
+  they can see, not what that user may do.
 
 Settings and history live in `~/.config/shadow-agent` and
 `~/.local/state/shadow-agent`. Back up both before moving to another machine.

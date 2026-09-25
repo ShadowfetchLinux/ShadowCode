@@ -16,6 +16,7 @@ import {
 } from "./activity";
 import type { UsageSnapshot } from "./picker";
 import { CONTINUATION } from "./allowance";
+import { applySubagentEvent, isSubagentEvent } from "./subagents";
 import { keyRows } from "./rowKeys";
 
 const ROUTE_PRODUCTS: Record<string, string> = {
@@ -174,6 +175,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       [taskId]: update(activity[taskId] || emptyActivity(taskId)),
     };
   };
+  if (isSubagentEvent(event.type)) {
+    items = applySubagentEvent(items, event);
+  }
   if (event.type === "history.omitted") {
     items = [...items, { kind: "note", taskId, text, warning: true }];
   }
@@ -294,7 +298,11 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     }));
   }
   if (event.type === "checkpoint.updated") {
-    touch((a) => ({ ...a, changed: addChanged(a.changed, p.paths) }));
+    touch((a) => ({
+      ...a,
+      checkpointed: true,
+      changed: addChanged(a.changed, p.paths),
+    }));
   }
   if (event.type === "checkpoint.restored") {
     const paths = Array.isArray(p.paths) ? p.paths : [];

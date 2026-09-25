@@ -4,7 +4,76 @@ use crate::{
 };
 use anyhow::{ensure, Result};
 use rusqlite::params;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+pub mod capture;
+
+/// Checkpoints of the whole project around shell commands and vendor CLI
+/// turns (`checkpoints` in the configuration).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CheckpointConfig {
+    /// Capture before every native `exec` command that can write.
+    pub shell: bool,
+    /// Capture before every subscription CLI turn (Codex, Claude, ...).
+    pub vendor: bool,
+    /// Git checkpoint refs kept per repository under refs/shadowcode/checkpoints.
+    pub keep: usize,
+    /// Folders without Git: at most this many files are copied...
+    pub max_copy_files: usize,
+    /// ...totalling at most this many bytes; larger folders are not covered.
+    pub max_copy_bytes: u64,
+}
+impl Default for CheckpointConfig {
+    fn default() -> Self {
+        Self {
+            shell: true,
+            vendor: true,
+            keep: 200,
+            max_copy_files: 5_000,
+            max_copy_bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+impl CheckpointConfig {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=10_000).contains(&self.keep),
+            "checkpoints.keep must be between 1 and 10000"
+        );
+        ensure!(
+            self.max_copy_files <= 200_000,
+            "checkpoints.max_copy_files must be at most 200000"
+        );
+        ensure!(
+            self.max_copy_bytes <= 1024 * 1024 * 1024,
+            "checkpoints.max_copy_bytes must be at most 1 GiB"
+        );
+        Ok(())
+    }
+}
+
+/// Record a change that already happened (a shell command or a vendor CLI
+/// wrote the file): the content before it, taken from a workspace checkpoint,
+/// and the hash of what is on disk now. The first recorded original of a path
+/// in a task is kept, so rewind returns to the state before the task.
+pub fn record_external(
+    store: &Store,
+    workspace: &Workspace,
+    task: &str,
+    path: &str,
+    before: Option<&[u8]>,
+    before_mode: Option<u32>,
+    current_hash: Option<&str>,
+) -> Result<()> {
+    let path = workspace.relative(path)?.to_string_lossy().into_owned();
+    let before_hash = before.map(hash).unwrap_or_else(|| "missing".into());
+    store.execute("INSERT INTO file_changes(task_id,workspace,path,before_bytes,before_mode,after_hash,observed_hash) VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(task_id,workspace,path) DO UPDATE SET after_hash=excluded.after_hash,observed_hash=excluded.observed_hash,restored=0",
+        params![task,workspace.path.to_string_lossy(),path,before,before_mode,current_hash.unwrap_or("missing"),before_hash])?;
+    Ok(())
+}
 
 /// Record the original once and the intended current content before each write.
 /// A crash before the write is a no-op; a crash afterwards remains rewindable.

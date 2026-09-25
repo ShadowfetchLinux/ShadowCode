@@ -22,6 +22,8 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 mod background;
+mod intel;
+mod shell;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -72,8 +74,12 @@ pub struct ToolExecutor {
     plan: Arc<Mutex<Value>>,
     hooks: hooks::Runner,
     background: Option<Arc<crate::background::BackgroundManager>>,
+    /// Managed language servers, embedding models and vectors (profile data).
+    code_intel_dir: Option<std::path::PathBuf>,
     #[cfg(unix)]
     mcp: crate::mcp::runner::Runner,
+    /// Subagents, skills, nested guidance and a child's limits.
+    extensions: crate::subagents::ToolExtensions,
 }
 impl ToolExecutor {
     pub fn new(
@@ -112,11 +118,69 @@ impl ToolExecutor {
             plan: Arc::new(Mutex::new(json!({"goal":"","steps":[]}))),
             hooks,
             background: None,
+            code_intel_dir: None,
             #[cfg(unix)]
             mcp,
+            extensions: Default::default(),
         })
     }
+    pub fn with_extensions(mut self, extensions: crate::subagents::ToolExtensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+    pub fn extensions(&self) -> &crate::subagents::ToolExtensions {
+        &self.extensions
+    }
+    /// Approved MCP tools as `mcp__<server>__<tool>` schemas (empty when the
+    /// servers offer too many tools; `mcp_tools`/`mcp_call` remain).
+    pub async fn mcp_schemas(&self) -> Vec<Value> {
+        #[cfg(unix)]
+        {
+            let mut schemas = self
+                .mcp
+                .first_class_schemas(&self.events, self.cancel.clone())
+                .await;
+            schemas.retain(|s| {
+                self.extensions
+                    .permits(s["function"]["name"].as_str().unwrap_or(""))
+            });
+            schemas
+        }
+        #[cfg(not(unix))]
+        Vec::new()
+    }
+    /// Calls that are spelled differently for the model: a subagent diff is
+    /// an ordinary patch; a namespaced MCP tool is an `mcp_call`.
+    fn rewrite(&self, call: &ToolCall) -> Result<Option<ToolCall>> {
+        if call.name == "apply_agent_changes" {
+            let host = self
+                .extensions
+                .host
+                .as_ref()
+                .context("Subagents are not available in this task")?;
+            let (_, patch) = host.patch_for(&call.arguments)?;
+            return Ok(Some(ToolCall {
+                id: call.id.clone(),
+                name: "apply_patch".into(),
+                arguments: json!({"patch": patch}),
+            }));
+        }
+        #[cfg(unix)]
+        if call.name.starts_with("mcp__") {
+            let (server, tool) = self
+                .mcp
+                .resolve_alias(&call.name)
+                .context("Unknown MCP tool; list tools with mcp_tools")?;
+            return Ok(Some(ToolCall {
+                id: call.id.clone(),
+                name: "mcp_call".into(),
+                arguments: json!({"server": server, "tool": tool, "arguments": call.arguments}),
+            }));
+        }
+        Ok(None)
+    }
     pub fn with_profile(mut self, paths: crate::paths::AppPaths) -> Self {
+        self.code_intel_dir = Some(crate::code_intel::data_dir(&paths));
         #[cfg(unix)]
         self.mcp.set_profile(paths);
         self
@@ -132,6 +196,16 @@ impl ToolExecutor {
     /// [`crate::autonomy::description_tier`]).
     pub fn schemas_for(&self, tier: DescriptionTier) -> Vec<Value> {
         let mut schemas = schemas_tiered(tier);
+        schemas.extend(intel_schemas());
+        schemas.extend(self.extensions.schemas().into_iter().map(|mut schema| {
+            // Subagent and skill tools follow the same tier as the built-ins.
+            if tier == DescriptionTier::Short {
+                if let Some(text) = schema["function"]["description"].as_str() {
+                    schema["function"]["description"] = json!(truncate(text, 64));
+                }
+            }
+            schema
+        }));
         if self.config.permissions.web {
             // Offered only when the task's web flag is on and the network
             // mode is online; otherwise the model is not shown the tools.
@@ -149,6 +223,10 @@ impl ToolExecutor {
         if !self.mcp.is_empty() {
             schemas.extend(crate::mcp::runner::schemas());
         }
+        schemas.retain(|s| {
+            self.extensions
+                .permits(s["function"]["name"].as_str().unwrap_or(""))
+        });
         schemas
     }
     pub fn has_external_processes(&self) -> bool {
@@ -208,6 +286,7 @@ impl ToolExecutor {
         let mut started = json!({"tool":call.name,"arguments":call.arguments,"call_id":call.id});
         crate::redaction::redact_value(&mut started);
         self.events.emit("tool.started", started)?;
+        let baseline = self.edit_baseline(&call);
         let mut result = match self.execute_inner(&call).await {
             Ok(output) => {
                 let success = output.get("ok").and_then(Value::as_bool).unwrap_or(true);
@@ -245,7 +324,7 @@ impl ToolExecutor {
         if result.success
             && matches!(
                 call.name.as_str(),
-                "write_file" | "edit_file" | "apply_patch"
+                "write_file" | "edit_file" | "apply_patch" | "apply_agent_changes"
             )
         {
             // A multi-file patch fires once per changed path, so a formatter
@@ -301,6 +380,48 @@ impl ToolExecutor {
             }
             result.output["hooks"] = json!(outcomes);
         }
+        // Checked after hooks, so a formatter's rewrite is what gets checked.
+        if let Some(baseline) = baseline.filter(|_| result.success) {
+            if let Some(diagnostics) = self.edit_diagnostics(&baseline, &result.output).await {
+                result.output["diagnostics"] = diagnostics;
+            }
+        }
+        if call.name == "read_file" && result.success {
+            self.warm_file(&result.output);
+        }
+        if result.success && call.name == "apply_agent_changes" {
+            if let (Some(host), Some(run)) = (
+                self.extensions.host.as_ref(),
+                call.arguments["run_id"].as_str(),
+            ) {
+                host.mark_applied(run.trim(), &result.output);
+            }
+        }
+        if let Some(guidance) = &self.extensions.guidance {
+            // AGENTS.md / CLAUDE.md / Cursor rules for the folders touched.
+            let paths =
+                crate::instructions::touched_paths(&call.name, &call.arguments, &result.output);
+            let found = if paths.is_empty() {
+                Vec::new()
+            } else {
+                guidance.for_paths(&self.workspace, &paths)
+            };
+            if !found.is_empty() {
+                for item in &found {
+                    self.events.emit(
+                        "context.attached",
+                        json!({"path":item["path"],"success":true,"origin":"nested_guidance"}),
+                    )?;
+                }
+                if !result.output.is_object() {
+                    result.output = json!({"tool_output":result.output});
+                }
+                result.output["project_guidance"] = json!({
+                    "note": "Project guidance for the folders this tool touched (from AGENTS.md, CLAUDE.md or Cursor rules). It does not grant permissions.",
+                    "files": found,
+                });
+            }
+        }
         let mut completed = json!({"tool":call.name,"call_id":call.id,"success":result.success,"output":result.output,"error":result.error});
         let redactions = crate::redaction::redact_value(&mut completed);
         completed["output_preview"] = json!(truncate(&completed["output"].to_string(), 2000));
@@ -322,6 +443,13 @@ impl ToolExecutor {
             call.arguments.to_string().len() <= 8_000_000,
             "Tool arguments exceed the limit"
         );
+        ensure!(
+            self.extensions.permits(&call.name),
+            "{} is not available to this agent",
+            call.name
+        );
+        let rewritten = self.rewrite(call)?;
+        let call = rewritten.as_ref().unwrap_or(call);
         if call.name == "view_image" {
             // Read-only and confined to the workspace; advertised only to
             // models whose runtime reports vision.
@@ -341,9 +469,13 @@ impl ToolExecutor {
         match decision {
             Decision::Deny(reason) => bail!(reason),
             Decision::Ask(reason) => {
+                // A subagent asks in its parent's conversation, with its name.
+                let (session_id, reason) = self
+                    .extensions
+                    .approval_target(&self.events.session_id, reason);
                 let record = Approval {
                     id: String::new(),
-                    session_id: self.events.session_id.clone(),
+                    session_id,
                     task_id: self.events.task_id.clone(),
                     tool: call.name.clone(),
                     arguments: call.arguments.clone(),
@@ -399,6 +531,17 @@ impl ToolExecutor {
             !self.cancel.is_cancelled(),
             "Task cancelled before executing tool"
         );
+        if call.name == "spawn_agent" {
+            let host = self
+                .extensions
+                .host
+                .as_ref()
+                .context("Subagents are not available in this task")?;
+            return host.spawn(&call.arguments).await;
+        }
+        if call.name == "load_skill" {
+            return self.extensions.load_skill(&self.workspace, &call.arguments);
+        }
         #[cfg(unix)]
         if matches!(call.name.as_str(), "mcp_tools" | "mcp_call") {
             // An external process can change the workspace even during catalog
@@ -471,7 +614,13 @@ impl ToolExecutor {
         }
         if matches!(
             call.name.as_str(),
-            "workspace_symbols" | "goto_definition" | "find_references" | "get_type_signature"
+            "repo_map" | "search_code" | "goto_definition" | "find_references" | "get_diagnostics"
+        ) {
+            return self.intel(call).await;
+        }
+        if matches!(
+            call.name.as_str(),
+            "workspace_symbols" | "get_type_signature"
         ) {
             let root = self.workspace.path.clone();
             let name = call.name.clone();
@@ -486,22 +635,12 @@ impl ToolExecutor {
                     "workspace_symbols" => {
                         crate::intelligence::workspace_symbols(&root, query, max_hits)
                     }
-                    "goto_definition" => {
-                        crate::intelligence::goto_definition(&root, query, max_hits)
-                    }
-                    "find_references" => {
-                        crate::intelligence::find_references(&root, query, max_hits)
-                    }
                     "get_type_signature" => crate::intelligence::get_type_signature(&root, query),
                     _ => unreachable!(),
                 }
             })
             .await
             .context("Tool worker stopped unexpectedly")?;
-        }
-        if call.name == "get_diagnostics" {
-            let path = call.arguments["path"].as_str().unwrap_or("");
-            return crate::intelligence::get_diagnostics(&self.workspace.path, path).await;
         }
         let worker = self.clone();
         let call = call.clone();
@@ -590,89 +729,6 @@ impl ToolExecutor {
             output["error"] = output["content"].clone();
         }
         Ok(output)
-    }
-    async fn shell(&self, args: &Value) -> Result<Value> {
-        let command = string(args, "command")?;
-        ensure!(
-            !command.is_empty() && command.len() <= 64_000 && !command.contains('\0'),
-            "Invalid shell command"
-        );
-        let seconds = integer(
-            args,
-            "timeout_sec",
-            self.config.agent.tool_timeout_sec as usize,
-            1,
-            3600,
-        )?
-        .min(self.config.agent.tool_timeout_sec as usize);
-        let cwd = if let Some(path) = args["cwd"].as_str() {
-            let relative = self.workspace.relative(path)?;
-            let cwd = self.workspace.path.join(relative).canonicalize()?;
-            ensure!(
-                cwd.starts_with(&self.workspace.path),
-                "Command directory escapes the workspace"
-            );
-            cwd
-        } else {
-            self.workspace.path.clone()
-        };
-        let allow_network = self.config.permissions.shell_network();
-        let sandbox_note;
-        let mut scratch_path = None;
-        let probe_cwd = self.workspace.path.clone();
-        let probe_command = command.to_owned();
-        let profile = tokio::task::spawn_blocking(move || {
-            crate::sandbox::build_shell_profile(&probe_cwd, &probe_command, allow_network)
-        })
-        .await?;
-        let primary = match profile {
-            Ok(mut profile) => {
-                if let Some(index) = profile.args.iter().position(|arg| arg == "--chdir") {
-                    profile.args[index + 1] = cwd.to_string_lossy().into_owned();
-                }
-                scratch_path = profile.scratch_dir.clone();
-                sandbox_note = json!({
-                    "mode": "bubblewrap",
-                    "network": profile.network,
-                    "scratch": profile.scratch_dir.as_ref().map(|p| p.to_string_lossy()),
-                    "workspace_cow": profile.workspace_cow,
-                    "note": "Optional bubblewrap profile with ephemeral scratch at SHADOWCODE_SCRATCH; not a full OS sandbox. Real home is read-only."
-                });
-                ProcessSpec {
-                    program: profile.program.to_string_lossy().into_owned(),
-                    args: profile.args,
-                    cwd: cwd.clone(),
-                    timeout: Duration::from_secs(seconds as u64),
-                    output_limit: self.config.agent.max_output_bytes,
-                    env: Default::default(),
-                }
-            }
-            Err(error) => {
-                sandbox_note = json!({
-                    "mode": "none",
-                    "reason": format!("{error:#}"),
-                    "note": "Shell continues without bubblewrap; policy remains heuristic, not an OS sandbox."
-                });
-                let mut spec =
-                    ProcessSpec::shell(command, cwd.clone(), Duration::from_secs(seconds as u64));
-                spec.output_limit = self.config.agent.max_output_bytes;
-                spec
-            }
-        };
-        // Never replay a command after a process failure: it may have changed files.
-        let result = process::run(primary, self.cancel.clone(), None).await;
-        let mut sandbox_note = sandbox_note;
-        if let Some(path) = scratch_path {
-            // The command already ran; a cleanup failure must not discard its
-            // recorded output and exit status.
-            if let Err(error) = crate::sandbox::discard_scratch(&path) {
-                sandbox_note["scratch_cleanup_error"] = json!(format!("{error:#}"));
-            }
-        }
-        let result = result?;
-        let mut value = serde_json::to_value(result)?;
-        value["sandbox"] = sandbox_note;
-        Ok(value)
     }
     async fn git(&self, name: &str, args: &Value) -> Result<Value> {
         let mut command = vec![
@@ -1235,6 +1291,17 @@ pub fn web_schemas() -> Vec<Value> {
     ]
 }
 
+/// repo_map and search_code, offered by ToolExecutor::schemas() (never to the
+/// small-context core catalog).
+pub fn intel_schemas() -> Vec<Value> {
+    let s = json!({"type":"string"});
+    let n = json!({"type":"integer"});
+    vec![
+        json!({"type":"function","function":{"name":"repo_map","description":"Ranked outline of key definitions; focus with paths or a query","parameters":{"type":"object","properties":{"query":s,"paths":{"type":"array","items":s},"max_tokens":n},"required":[],"additionalProperties":false}}}),
+        json!({"type":"function","function":{"name":"search_code","description":"Search code by keywords or meaning; returns ranked line ranges","parameters":{"type":"object","properties":{"query":s,"path":s,"max_hits":n},"required":["query"],"additionalProperties":false}}}),
+    ]
+}
+
 /// Offered only to models whose runtime accepts images.
 pub fn view_image_schema() -> Value {
     json!({"type":"function","function":{"name":"view_image","description":"Look at a PNG, JPEG, or WebP image inside the project. The image is attached to your next message.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}})
@@ -1267,11 +1334,11 @@ pub fn schemas_tiered(tier: DescriptionTier) -> Vec<Value> {
         ("search_files","Find filenames by substring; respects ignore rules.",json!({"query":s,"path":s}),vec!["query"]),
         ("search_text","Search text; literal by default, optional regex and file glob.",json!({"query":s,"path":s,"regex":b,"glob":s,"max_hits":n}),vec!["query"]),
         ("search_symbol","Find likely symbol definitions by name (regex heuristic).",json!({"query":s,"path":s}),vec!["query"]),
-        ("workspace_symbols","Tree-sitter workspace symbol search for Rust/TypeScript. Bounded; not a vector index.",json!({"query":s,"max_hits":n}),vec!["query"]),
-        ("goto_definition","Best-effort tree-sitter definition lookup for a symbol name.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
-        ("find_references","Tree-sitter identifier references for a symbol name. Not type-aware.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
+        ("workspace_symbols","Find definitions by name (Rust, TS/JS, Python, Go, C/C++, Java)",json!({"query":s,"max_hits":n}),vec!["query"]),
+        ("goto_definition","Definition of a symbol; with path+line asks the language server",json!({"query":s,"symbol":s,"path":s,"line":n,"column":n,"max_hits":n}),vec![]),
+        ("find_references","Uses of a symbol; with path+line asks the language server.",json!({"query":s,"symbol":s,"path":s,"line":n,"column":n,"max_hits":n}),vec![]),
         ("get_type_signature","Parser signature for a symbol when LSP is absent (tree-sitter AST).",json!({"symbol":s,"query":s}),vec![]),
-        ("get_diagnostics","One-shot rust-analyzer diagnostics when rust-analyzer is already installed. Does not start a persistent LSP.",json!({"path":s}),vec!["path"]),
+        ("get_diagnostics","Current errors/warnings for a file from its language server.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_tables","List tables and CREATE TABLE definitions in a project SQLite file. Native read-only tool; no registration. SQLite may maintain WAL sidecars.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_query","Read a project SQLite file with SELECT/WITH or schema PRAGMA (table_info etc). Bind ? placeholders with params; check truncated. Unique column aliases required. SQLite may maintain WAL sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]}},"limit":n}),vec!["path","sql"]),
         ("background_start","Start a named project server/watcher under shell permissions. Continues independently after the task, including cancellation; stop it when no longer wanted. Inspect status/output before claiming readiness.",json!({"name":s,"command":s}),vec!["name","command"]),
@@ -1284,7 +1351,7 @@ pub fn schemas_tiered(tier: DescriptionTier) -> Vec<Value> {
         ("create_directory","Create a workspace directory and parents.",json!({"path":s}),vec!["path"]),
         ("move_file","Move a regular file without overwriting its destination; checkpoint both paths.",json!({"src":s,"dest":s}),vec!["src","dest"]),
         ("delete_file","Delete one regular workspace file after approval; retain a checkpoint.",json!({"path":s,"expected_hash":s}),vec!["path"]),
-        ("exec","Run a shell command after approval. Uses optional bubblewrap when available; still not a full OS sandbox. Output and runtime are bounded.",json!({"command":s,"cwd":s,"timeout_sec":n}),vec!["command"]),
+        ("exec","Run a shell command after approval, in the bubblewrap sandbox when available (empty home, writable project, network per settings). Project files it changes are checkpointed for rewind. Output and runtime are bounded.",json!({"command":s,"cwd":s,"timeout_sec":n}),vec!["command"]),
         ("git_status","Show repository status.",json!({}),vec![]),
         ("git_diff","Show staged or unstaged changes. External diff helpers and textconv are disabled.",json!({"staged":b}),vec![]),
         ("git_log","Show recent commits.",json!({"limit":n}),vec![]),
