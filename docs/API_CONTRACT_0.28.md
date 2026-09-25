@@ -403,6 +403,37 @@ imports: [{path, mmproj, name, source}], excluded, llama_binary, context_size }`
   name: native names and vendor names such as `codex.command_execution`,
   `codex.file_change`, `cursor.read`, `Bash`, `Edit`.
 
+## Approvals and jobs feed
+
+The window no longer polls approvals and jobs. It reads one feed when the
+engine says something changed, plus a 15 s backstop read.
+
+- `GET /api/feed?session_id=&limit=100` →
+  `{ approvals: Approval[], jobs: JobSummary[], events: string[] }`.
+  `approvals` are the pending approvals of that conversation (all
+  conversations without `session_id`), as `GET /api/approvals`; `jobs` are
+  the same rows as `GET /api/jobs?view=summary&limit=100`; `events` lists
+  the broadcast types after which the feed may have changed
+  (`approval.requested`, `approval.resolved`, `job.changed`, `agent.started`,
+  `agent.completed`, `agent.paused`, `agent.resumed`, `limit.fallback`).
+- Engine broadcast `job.changed {job_id, status}` (with `session_id` and
+  `task_id`): a job was queued or is being cancelled. It is a wake-up only,
+  never stored and never in `/api/sessions/{id}/events`.
+- The desktop shell's `shadowcode:events` wake-up now carries
+  `{session_id, type}`. The window reads the feed for types in `events`, for
+  `view.*` hints and for untyped wake-ups (a lagged or reattached stream), at
+  most once per 30 ms burst. `GET /api/approvals` and `GET /api/jobs` are
+  unchanged.
+- `POST /api/workspace/diffstat {paths: string[]}` (at most 200) →
+  `{ stats: {[path]: {add, del} | null} }`: added and removed lines per file,
+  counted like the per-file diff (unstaged plus staged lines; every line of a
+  new untracked file). `null` marks binary files, unreadable or symlinked new
+  files, and every path outside a Git repository; a path without changes
+  counts `{add: 0, del: 0}`. Keys are the paths as given (relative or
+  absolute inside the project); paths outside the project or the project
+  folder itself are rejected. Task summaries use it for all changed files in
+  one request instead of one `GET /api/workspace/diff` per file.
+
 ## Config
 
 `GET/PUT /api/config`:

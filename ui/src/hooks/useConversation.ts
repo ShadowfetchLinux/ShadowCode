@@ -87,6 +87,7 @@ export function useConversation(onComplete: (done?: Job) => void) {
             kind: "agent",
             text: active.summary,
             who: outcomeLabel(active.status),
+            key: `outcome:${active.id}`,
           });
       }
       cursor.current = detail.event_cursor || state.cursor;
@@ -137,6 +138,7 @@ export function useConversation(onComplete: (done?: Job) => void) {
             kind: "agent",
             text: done.summary,
             who: outcomeLabel(done.status),
+            key: `outcome:${done.id}`,
           });
         return {
           ...s,
