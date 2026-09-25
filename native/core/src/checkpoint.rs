@@ -113,6 +113,12 @@ pub fn restore(store: &Store, workspace: &Workspace, task: &str) -> Result<Vec<S
 /// appended to the last assistant message (or added as one), which keeps
 /// user/assistant alternation intact for strict chat templates.
 pub fn note_restore_in_tape(store: &Store, session_id: &str, paths: &[String]) -> Result<()> {
+    note_in_tape(store, session_id, &restore_note(paths))
+}
+
+/// Append a process note to the session's message tape (see
+/// `note_restore_in_tape`).
+pub fn note_in_tape(store: &Store, session_id: &str, note: &str) -> Result<()> {
     let rows = store.query(
         "SELECT id FROM desktop_jobs WHERE json_extract(payload,'$.session_id')=? AND EXISTS(SELECT 1 FROM job_messages WHERE job_id=desktop_jobs.id) ORDER BY rowid DESC LIMIT 1",
         params![session_id],
@@ -121,7 +127,6 @@ pub fn note_restore_in_tape(store: &Store, session_id: &str, paths: &[String]) -
         return Ok(());
     };
     let mut messages = store.messages(job_id)?;
-    let note = restore_note(paths);
     match messages.last_mut() {
         Some(last)
             if last["role"] == "assistant"

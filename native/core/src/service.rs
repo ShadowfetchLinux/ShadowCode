@@ -51,6 +51,7 @@ mod background;
 mod call;
 mod commands;
 mod compare;
+mod composer;
 mod extensions;
 mod feed;
 mod git;
@@ -60,6 +61,7 @@ mod inspection;
 mod jobs;
 mod memory;
 mod model_catalog;
+mod review;
 mod sessions;
 mod settings;
 mod workspace;
@@ -229,6 +231,7 @@ impl Service {
             }
             "jobs" | "run" | "approvals" | "checkpoints" => self.job_routes(&call).await,
             "goals" => self.goal_routes(&call).await,
+            "review" => self.review_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "background" => self.background_routes(&call).await,
             "workspace" => self.workspace_routes(&call).await,

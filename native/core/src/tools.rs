@@ -361,12 +361,21 @@ impl ToolExecutor {
                     pending: true,
                     created_at: 0.0,
                     expires_at: 0.0,
+                    preview: crate::approvals::preview::native(
+                        &self.workspace,
+                        &call.name,
+                        &call.arguments,
+                    ),
+                    grant: String::new(),
+                    note: true,
                 };
+                let grant = native_grant(&call.name, &call.arguments);
                 let mut pending_error = None;
-                let allowed = self
+                let answer = self
                     .approvals
-                    .request(
+                    .ask(
                         record,
+                        grant.clone(),
                         Duration::from_secs(600),
                         self.cancel.clone(),
                         |record| {
@@ -382,11 +391,22 @@ impl ToolExecutor {
                 if let Some(error) = pending_error {
                     return Err(error);
                 }
-                self.events.emit(
-                    "approval.resolved",
-                    json!({"tool":call.name,"call_id":call.id,"approved":allowed}),
-                )?;
-                ensure!(allowed, "Permission was denied, cancelled, or expired");
+                if answer.automatic {
+                    // Covered by an earlier "Allow for this task": no prompt,
+                    // but the transcript still says what ran and why.
+                    self.events.emit(
+                        "approval.granted",
+                        json!({"tool":call.name,"call_id":call.id,"grant":grant.map(|g|g.label).unwrap_or_default()}),
+                    )?;
+                } else {
+                    let mut resolved = json!({"tool":call.name,"call_id":call.id,"approved":answer.allow,"scope":if answer.for_task {"task"} else {"once"}});
+                    if let Some(note) = &answer.note {
+                        resolved["note"] = json!(note);
+                    }
+                    crate::redaction::redact_value(&mut resolved);
+                    self.events.emit("approval.resolved", resolved)?;
+                }
+                ensure!(answer.allow, "{}", answer.denial());
             }
             Decision::Allow => {}
         }
@@ -1121,7 +1141,7 @@ impl ToolExecutor {
         Ok(payload)
     }
 }
-fn edit_line_hunks(text: &str, hunks: &[Value]) -> Result<String> {
+pub(crate) fn edit_line_hunks(text: &str, hunks: &[Value]) -> Result<String> {
     ensure!(
         !hunks.is_empty() && hunks.len() <= 128,
         "Provide 1 to 128 line hunks"
@@ -1182,6 +1202,38 @@ fn callers_note(root: &std::path::Path, path: &str, content_hint: &str) -> Optio
         return None;
     }
     crate::intelligence::callers_for_patch(root, &name).ok()
+}
+
+/// What "Allow for this task" covers for a native tool that asks: all file
+/// edits, deletions, one Git action, one MCP tool, or commands with the same
+/// program and subcommand. Destructive Git and ungrantable commands
+/// (`Grant::command`) always ask.
+fn native_grant(tool: &str, args: &Value) -> Option<crate::approvals::Grant> {
+    use crate::approvals::Grant;
+    match tool {
+        "write_file" | "edit_file" | "apply_patch" | "create_directory" | "move_file" => {
+            Some(Grant::kind("file_edit", "file edits"))
+        }
+        "delete_file" => Some(Grant::kind("delete_file", "file deletions")),
+        "git_add" => Some(Grant::kind(tool, "staging files in Git")),
+        "git_commit" => Some(Grant::kind(tool, "Git commits")),
+        "git_branch" | "git_checkout" => Some(Grant::kind(tool, "Git branch changes")),
+        "background_stop" => Some(Grant::kind(tool, "stopping background processes")),
+        "exec" => Grant::command(tool, args["command"].as_str()?),
+        "background_start" => Grant::command(tool, args["command"].as_str()?).map(|mut g| {
+            g.label = format!("background {}", g.label);
+            g
+        }),
+        "mcp_call" => {
+            let server = args["server"].as_str()?;
+            let name = args["tool"].as_str()?;
+            Some(Grant::kind(
+                &format!("mcp:{server}/{name}"),
+                &format!("`{server} / {name}` calls"),
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn git_ref(value: &str) -> Result<String> {

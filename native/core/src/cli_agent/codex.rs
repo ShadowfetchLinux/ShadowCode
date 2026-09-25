@@ -10,8 +10,19 @@
 //! approval channel; only used when app-server is unavailable.
 use super::{
     clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, PromptImage, Step,
-    Update, Vendor,
+    Update, Vendor, VendorAnswer,
 };
+
+/// `-c model_reasoning_effort="…"` (Codex's documented config key), placed
+/// before the subcommand so it applies to the whole session.
+fn effort_override(options: &LaunchOptions) -> Vec<String> {
+    match options.effort.as_deref() {
+        Some(effort @ ("low" | "medium" | "high")) => {
+            vec!["-c".into(), format!("model_reasoning_effort=\"{effort}\"")]
+        }
+        _ => Vec::new(),
+    }
+}
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
@@ -455,7 +466,11 @@ impl CodexAppServerAdapter {
                     tool: "codex.file_change".into(),
                     command: "Apply patch".into(),
                     reason: redact(params["reason"].as_str().unwrap_or("Codex requests permission to apply a patch")),
-                    arguments: redact_value(json!({"files":params["fileChanges"].as_object().map(|m| m.keys().cloned().collect::<Vec<_>>())})),
+                    arguments: redact_value(json!({
+                        "files":params["fileChanges"].as_object().map(|m| m.keys().cloned().collect::<Vec<_>>()),
+                        // Shown as a diff on the approval card.
+                        "changes":params["fileChanges"],
+                    })),
                 }))
             }
             "item/permissions/requestApproval" => {
@@ -538,7 +553,9 @@ impl CliAdapter for CodexAppServerAdapter {
         Vendor::Codex
     }
     fn command(&self, options: &LaunchOptions) -> (String, Vec<String>) {
-        (options.binary.clone(), vec!["app-server".into()])
+        let mut args = effort_override(options);
+        args.push("app-server".into());
+        (options.binary.clone(), args)
     }
     fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {
         self.options = Some(options.clone());
@@ -599,18 +616,38 @@ impl CliAdapter for CodexAppServerAdapter {
         }
     }
     fn approve(&mut self, request_id: &str, approve: bool) -> Result<Vec<String>> {
+        self.answer(
+            request_id,
+            &VendorAnswer {
+                allow: approve,
+                ..VendorAnswer::default()
+            },
+        )
+    }
+    /// "Allow for this task" answers with Codex's own session-wide choice
+    /// (`acceptForSession` / `approved_for_session`). Codex's decisions carry
+    /// no reason, so a deny note is not sent.
+    fn answer(&mut self, request_id: &str, answer: &VendorAnswer) -> Result<Vec<String>> {
         let Some(method) = self.pending_approvals.remove(request_id) else {
             bail!("Unknown Codex approval request {request_id}")
         };
+        let (approve, session) = (answer.allow, answer.allow && answer.for_session);
         let id = request_id_value(request_id);
         let line = match method.as_str() {
             "execCommandApproval" | "applyPatchApproval" => rpc_result(
                 &id,
-                json!({"decision": if approve { "approved" } else { "denied" }}),
+                json!({"decision": match (approve, session) {
+                    (true, true) => "approved_for_session",
+                    (true, false) => "approved",
+                    _ => "denied",
+                }}),
             ),
             "item/permissions/requestApproval" => {
                 if approve {
-                    rpc_result(&id, json!({"permissions":{},"scope":"turn"}))
+                    rpc_result(
+                        &id,
+                        json!({"permissions":{},"scope":if session {"session"} else {"turn"}}),
+                    )
                 } else {
                     rpc_error(
                         &id,
@@ -621,7 +658,11 @@ impl CliAdapter for CodexAppServerAdapter {
             }
             _ => rpc_result(
                 &id,
-                json!({"decision": if approve { "accept" } else { "decline" }}),
+                json!({"decision": match (approve, session) {
+                    (true, true) => "acceptForSession",
+                    (true, false) => "accept",
+                    _ => "decline",
+                }}),
             ),
         };
         Ok(vec![line])
@@ -660,13 +701,14 @@ impl CliAdapter for CodexExecAdapter {
         Vendor::Codex
     }
     fn command(&self, options: &LaunchOptions) -> (String, Vec<String>) {
-        let mut args = vec![
+        let mut args = effort_override(options);
+        args.extend([
             "exec".to_owned(),
             "--json".to_owned(),
             "--skip-git-repo-check".to_owned(),
             "--cd".to_owned(),
             options.workspace.display().to_string(),
-        ];
+        ]);
         args.push("--sandbox".into());
         args.push(if options.read_only {
             "read-only".into()

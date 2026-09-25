@@ -15,6 +15,7 @@ fn launch(root: &Path) -> LaunchOptions {
         model: "default".into(),
         read_only: false,
         resume: None,
+        effort: None,
     }
 }
 
@@ -225,6 +226,7 @@ fn grok_acp_permission_round_trip_and_cancel() {
         model: "grok-4".into(),
         read_only: false,
         resume: None,
+        effort: None,
     });
     assert_eq!(bin, "grok");
     assert_eq!(args, vec!["agent", "--model", "grok-4", "stdio"]);
@@ -322,6 +324,7 @@ fn claude_stream_json_approval_and_interrupt() {
         model: "default".into(),
         read_only: true,
         resume: None,
+        effort: None,
     });
     assert!(args.contains(&"--output-format".into()));
     assert!(args.contains(&"stream-json".into()));
@@ -523,6 +526,7 @@ async fn fake_binary_spawn_approval_and_cancel() {
                 model: "default".into(),
                 read_only: false,
                 resume: None,
+                effort: None,
             },
             config: &config,
             prompt: "hello".into(),
@@ -571,6 +575,7 @@ async fn fake_binary_spawn_approval_and_cancel() {
                 model: "default".into(),
                 read_only: false,
                 resume: None,
+                effort: None,
             },
             config: &config,
             prompt: "slow".into(),
@@ -651,6 +656,7 @@ fn cursor_acp_command_and_cancel() {
         model: "auto".into(),
         read_only: false,
         resume: None,
+        effort: None,
     });
     assert_eq!(bin, "cursor-agent");
     assert_eq!(args, vec!["acp"]);
@@ -719,6 +725,7 @@ fn antigravity_runs_through_googles_acp_server() {
         model: "gemini-3.8-pro".into(),
         read_only: false,
         resume: None,
+        effort: None,
     };
     let (bin, args) = adapter.command(&options);
     assert_eq!(bin, "/opt/agy/agy_acp_server.par");

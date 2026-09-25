@@ -27,6 +27,11 @@ pub fn compare_index(workspace: &Path) -> String {
 pub fn compare_scoreboard(workspace: &Path) -> String {
     format!("compare_scoreboard:{}", workspace.display())
 }
+/// `native_meta`: a rewind that can be undone (JSON `review::Rewind`); the
+/// files as they were before it are checkpoint rows of task `rewind:<id>`.
+pub fn rewind_undo(id: &str) -> String {
+    format!("rewind_undo:{id}")
+}
 /// `native_meta`: set once `goals.db` from before 0.28 was imported.
 pub const LEGACY_GOALS_IMPORTED: &str = "legacy_goals_imported";
 /// `native_meta`: set once the pre-0.28 background process list was imported.
@@ -68,5 +73,6 @@ mod tests {
             "compare_scoreboard:/home/u/project"
         );
         assert_eq!(native_session("codex"), "native_session:codex");
+        assert_eq!(rewind_undo("ab12"), "rewind_undo:ab12");
     }
 }
