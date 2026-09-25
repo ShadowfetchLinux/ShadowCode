@@ -27,6 +27,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 mod commands;
 mod compare;
+mod feed;
 #[cfg(unix)]
 mod inspection;
 mod memory;
@@ -212,6 +213,9 @@ impl Service {
             return self
                 .compare(request.method.as_str(), &parts, &query, body)
                 .await;
+        }
+        if let Some(result) = self.feed_route(&request.method, path, &query, body).await? {
+            return Ok(result);
         }
         match (request.method.as_str(), path) {
             ("GET", "/api/worktrees") => {

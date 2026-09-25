@@ -55,10 +55,13 @@ checks and [the 0.2x release gates](archive/NATIVE_MIGRATION.md).
 
 ## Polling and long prompts
 
-The native desktop polls `/api/jobs?view=summary&limit=100`: at most 100 recent
-records plus all active records, including older running/queued work. Polling
-omits full results and summaries and limits prompt previews to 512 Unicode
-characters. A truncated preview is marked explicitly. Expanding a queued prompt
+The native desktop reads the job list through `GET /api/feed` (the same rows
+as `/api/jobs?view=summary&limit=100`) when the engine announces a change
+(`job.changed` when a job is queued or cancelling, `agent.started`,
+`agent.completed`, …), with a 15 s backstop instead of a 1–2 s poll: at most
+100 recent records plus all active records, including older running/queued
+work. The list omits full results and summaries and limits prompt previews to
+512 Unicode characters. A truncated preview is marked explicitly. Expanding a queued prompt
 loads the complete job once, with a visible error and retry if loading fails.
 Opening a conversation fetches its full job separately, preserving its result,
 original prompt and continuation behavior. The existing full job endpoint and
