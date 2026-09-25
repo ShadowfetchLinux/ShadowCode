@@ -217,6 +217,60 @@ project** counts which model you kept. Every lane is a full task: subscription
 lanes use your plan, OpenRouter lanes are billed per token. Details:
 [compare](COMPARE.md).
 
+## Run tasks side by side
+
+A project runs one task at a time in its folder. To start another while one
+is working, type it and press **Worktree** next to **Send** (or
+`Ctrl+Shift+Enter`). While a task is running, the button reads **Run now in
+worktree** instead of queueing.
+
+The new task gets its own conversation and its own copy of the project,
+starting from your latest commit plus any uncommitted work (your files are
+not touched). It is listed under the project with a branch icon, and a bar
+above the composer shows what it changed. When it is done:
+
+- **Apply to project** checks that its changes still fit your project, then
+  writes them to your files (nothing is committed; review them in
+  **Changes**). If files it changed were also changed in the project since,
+  nothing is written and those files are listed.
+- **Keep as branch** saves the result as a commit on branch
+  `shadowcode/<id>` for you to merge later.
+- **Discard** throws the result away.
+
+Either way the copy is removed and the conversation continues in the
+project. A conversation with its own copy can't be deleted until you apply,
+keep or discard it.
+
+## Conversations in the sidebar
+
+- **Badges**: a pulsing dot while a task runs, a clock while it is queued, a
+  hand when it **needs your approval**, a warning sign when it **failed**, and
+  a dot when it **finished** while you were elsewhere (until you open it).
+- **Right-click** a conversation (or press the menu key) to **Rename**,
+  **Pin**, **Fork**, **Export** or **Delete** it.
+- `Alt+↑` / `Alt+↓` open the previous or next conversation in the list;
+  `Ctrl+Tab` goes back to the one you had open before.
+
+## Notifications
+
+When the window is in the background, or the task is in another
+conversation, ShadowCode notifies you when a task needs approval, fails,
+reaches a plan limit (saying whether it continued on a model on this
+computer) or finishes. An unanswered approval is denied after 10 minutes; you
+are warned 2 minutes before. Click a notification to open its conversation.
+Choose which ones you get, and whether they play a sound, in **Settings ›
+Appearance**.
+
+## Context and cost
+
+The chip at the bottom right shows the open conversation's context use and
+cost, for example `42% · 38k / 128k · $0.12`. For subscription CLIs it shows
+the tokens and cost the tool reported (no percentage; the tool manages its
+own context), marked *reported by …*. `est.` means the cost was worked out
+from the model's prices; models on this computer show `$0 · local`. Click it
+for input, output and cached tokens, cost, model requests and the last
+compaction.
+
 ## Offline and web-off
 
 In **Settings › Permissions & network**:
