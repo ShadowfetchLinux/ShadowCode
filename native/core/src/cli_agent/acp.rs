@@ -69,6 +69,8 @@ pub struct AcpAdapter {
     /// Antigravity ends a prompt at once, with no output, when the model
     /// changes underneath it.
     switching: bool,
+    /// The agent accepts HTTP MCP servers (`mcpCapabilities.http`).
+    mcp_http: bool,
 }
 impl AcpAdapter {
     pub fn new(vendor: Vendor) -> Self {
@@ -89,7 +91,20 @@ impl AcpAdapter {
             options: None,
             prompt_active: false,
             switching: false,
+            mcp_http: false,
         }
+    }
+    /// The project's enabled MCP servers in ACP form.
+    fn mcp_servers(&self) -> Value {
+        json!(self
+            .options
+            .as_ref()
+            .map(|o| o
+                .mcp_servers
+                .iter()
+                .filter_map(|s| s.acp(self.mcp_http))
+                .collect::<Vec<_>>())
+            .unwrap_or_default())
     }
     fn id(&mut self) -> u64 {
         self.next_id += 1;
@@ -138,7 +153,7 @@ impl AcpAdapter {
             return request(
                 id,
                 "session/load",
-                json!({"sessionId": resume, "cwd": self.cwd(), "mcpServers": []}),
+                json!({"sessionId": resume, "cwd": self.cwd(), "mcpServers": self.mcp_servers()}),
             );
         }
         self.new_session_request()
@@ -149,7 +164,7 @@ impl AcpAdapter {
         request(
             id,
             "session/new",
-            json!({"cwd": self.cwd(), "mcpServers": []}),
+            json!({"cwd": self.cwd(), "mcpServers": self.mcp_servers()}),
         )
     }
     /// Steps after a session exists: plan mode for read-only tasks, an exact
@@ -275,6 +290,7 @@ impl AcpAdapter {
         let res = &message["result"];
         if Some(id) == self.init_id {
             self.phase = Phase::Initialized;
+            self.mcp_http = res["agentCapabilities"]["mcpCapabilities"]["http"] == true;
             // Documented Cursor flow: `authenticate {methodId:"cursor_login"}`
             // before a session, using the login the CLI already holds.
             let methods: Vec<String> = res["authMethods"]
@@ -413,7 +429,11 @@ impl AcpAdapter {
                     update["inputTokens"].as_u64(),
                     update["outputTokens"].as_u64(),
                 ) {
-                    (Some(input), Some(output)) => Step::update(Update::Usage { input, output }),
+                    (Some(input), Some(output)) => Step::update(Update::Usage {
+                        input,
+                        output,
+                        cached: update["cachedReadTokens"].as_u64().unwrap_or(0),
+                    }),
                     _ => Step::default(),
                 }
             }

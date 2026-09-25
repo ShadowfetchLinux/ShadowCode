@@ -809,3 +809,66 @@ async fn engine_http_streams_close_on_completion_cancellation_and_shutdown() {
         f.service.engine.shutdown().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn approved_tools_become_first_class_schemas_with_the_same_approval() {
+    let f = Fixture::new("http://127.0.0.1:1/v1");
+    f.enable(false).await;
+    let tools = f.tools(None);
+    let schemas = tools.mcp_schemas().await;
+    let echo = schemas
+        .iter()
+        .find(|s| s["function"]["name"] == "mcp__fixture__echo")
+        .expect("echo is offered as a first-class tool");
+    assert!(echo["function"]["description"]
+        .as_str()
+        .unwrap()
+        .contains("MCP server fixture"));
+    assert_eq!(echo["function"]["parameters"]["type"], "object");
+    assert_eq!(schemas.len(), 8);
+    // The meta-tools stay available as a fallback.
+    assert!(tools
+        .schemas()
+        .iter()
+        .any(|s| s["function"]["name"] == "mcp_call"));
+    let worker = tools.clone();
+    let task =
+        tokio::spawn(
+            async move { call(&worker, "mcp__fixture__echo", json!({"exact":"x"})).await },
+        );
+    let record = approval(&f.service).await;
+    assert_eq!(record.tool, "mcp_call");
+    assert!(record.command.starts_with("MCP config:fixture / echo\n"));
+    assert_eq!(record.arguments["arguments"], json!({"exact":"x"}));
+    assert!(f.requests().iter().all(|r| r["method"] != "tools/call"));
+    f.service
+        .engine
+        .approvals()
+        .decide(&record.id, &record.session_id, true)
+        .unwrap();
+    let result = task.await.unwrap();
+    assert!(result.success, "{}", result.error);
+    assert_eq!(result.output["tool"], "echo");
+    let unknown = call(&tools, "mcp__fixture__missing", json!({})).await;
+    assert!(!unknown.success);
+    let started = |f: &Fixture| {
+        f.requests()
+            .iter()
+            .filter(|r| r["method"] == "initialize")
+            .count()
+    };
+    let before = started(&f);
+    tools.close_integrations().await.unwrap();
+    // A later task reuses the recorded catalog without starting the server.
+    let later = f.tools(None);
+    assert_eq!(later.mcp_schemas().await.len(), 8);
+    assert_eq!(started(&f), before);
+    later.close_integrations().await.unwrap();
+    // Above mcp.inline_tools only the meta-tools are offered.
+    let mut config = Config::load(f.service.engine.paths(), Some(&f.project())).unwrap();
+    config.mcp["inline_tools"] = json!(3);
+    let limited = f.tools(Some(config));
+    assert!(limited.mcp_schemas().await.is_empty());
+    limited.close_integrations().await.unwrap();
+    f.service.engine.shutdown().await.unwrap();
+}

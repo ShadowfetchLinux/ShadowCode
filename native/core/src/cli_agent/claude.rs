@@ -224,6 +224,11 @@ impl CliAdapter for ClaudeAdapter {
             args.push("--resume".into());
             args.push(session.to_owned());
         }
+        // Enabled project MCP servers, added to the user's own for this run.
+        if let Some(config) = super::McpServerSpec::claude_config(&options.mcp_servers) {
+            args.push("--mcp-config".into());
+            args.push(config);
+        }
         (options.binary.clone(), args)
     }
     fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {
@@ -325,7 +330,21 @@ impl CliAdapter for ClaudeAdapter {
                     usage["input_tokens"].as_u64(),
                     usage["output_tokens"].as_u64(),
                 ) {
-                    step.updates.push(Update::Usage { input, output });
+                    // Claude counts cache reads and writes apart from
+                    // `input_tokens`; ShadowCode's input includes them.
+                    let cached = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+                    let written = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+                    step.updates.push(Update::Usage {
+                        input: input.saturating_add(cached).saturating_add(written),
+                        output,
+                        cached,
+                    });
+                }
+                if let Some(total_usd) = message["total_cost_usd"]
+                    .as_f64()
+                    .filter(|c| c.is_finite() && *c >= 0.0)
+                {
+                    step.updates.push(Update::VendorCost { total_usd });
                 }
                 if message["is_error"].as_bool() == Some(true)
                     || message["subtype"]
