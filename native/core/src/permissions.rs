@@ -49,6 +49,9 @@ pub fn read_only(tool: &str) -> bool {
             | "update_todos"
             | "web_fetch"
             | "web_search"
+            // Subagents: a child's own permissions decide what it may do.
+            | "spawn_agent"
+            | "load_skill"
     )
 }
 

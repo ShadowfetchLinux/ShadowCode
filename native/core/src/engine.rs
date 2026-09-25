@@ -38,6 +38,8 @@ mod owner;
 pub(crate) use owner::JobOwner;
 mod command;
 pub use command::CommandRequest;
+mod child;
+pub(crate) use child::{ChildLink, ChildSpec};
 #[derive(Default)]
 struct LaunchContext<'a> {
     system_context: Option<String>,
@@ -111,6 +113,8 @@ struct Running {
     steer: steering::SteerControl,
     /// Provider change / model switch decided when the turn was queued.
     turn_plan: crate::cli_agent::handoff::TurnPlan,
+    /// Set for subagent jobs (`engine::child`).
+    child: Option<ChildLink>,
 }
 #[derive(Default)]
 struct QueueState {
@@ -623,6 +627,7 @@ impl Engine {
             done: Notify::new(),
             steer: steering::SteerControl::default(),
             turn_plan,
+            child: None,
         });
         queues.jobs.insert(job.id.clone(), running.clone());
         queues
@@ -867,6 +872,8 @@ impl Engine {
                 .get(&job.workspace.path)
                 .and_then(|q| q.front())
                 .is_some_and(|front| Arc::ptr_eq(front, &job))
+                // A subagent is never queued: its run loop finishes it.
+                || job.child.is_some()
         };
         if !is_front {
             self.finish(
@@ -1299,7 +1306,8 @@ impl Engine {
             running.cancel.clone(),
         )?
         .with_profile(self.0.paths.clone())
-        .with_background(self.0.background.clone());
+        .with_background(self.0.background.clone())
+        .with_extensions(self.tool_extensions(running, &job, &events));
         let result = if let Some(command) = &running.command {
             self.run_command_job(running, &job, &events, &tools, command)
                 .await
@@ -1403,6 +1411,10 @@ impl Engine {
             model: running.config.model.name.clone(),
             read_only: running.config.permissions.level == crate::config::PermissionLevel::ReadOnly,
             resume,
+            #[cfg(unix)]
+            mcp_servers: crate::mcp::vendor::servers(&running.workspace, &running.config),
+            #[cfg(not(unix))]
+            mcp_servers: Vec::new(),
         };
         #[cfg(unix)]
         let outcome = crate::cli_agent::runner::run(crate::cli_agent::runner::Request {
@@ -1591,6 +1603,8 @@ impl Engine {
                     || name == "git_branch"
             })
             .collect();
+        // Approved MCP tools as first-class, namespaced schemas.
+        schemas.extend(tools.mcp_schemas().await);
         // Small local models cannot accept the full native catalog plus a
         // useful response window. Keep the high-frequency coding surface and
         // omit optional integrations; the complete catalog remains available
@@ -1673,6 +1687,7 @@ impl Engine {
             }
         }
         system.push_str(&context::capability_guidance(&running.config, &schemas));
+        system.push_str(&tools.extensions().context_note(&schemas));
         messages.insert(0, json!({"role":"system","content":system}));
         let image_refs = crate::vision::refs_from_paths(&running.workspace, &job.images)?;
         prepared.ensure_images(image_refs.len())?;
@@ -1732,6 +1747,8 @@ impl Engine {
                 json!({"path":path,"success":inspected,"origin":"explicit_file_request"}),
             )?;
         }
+        self.mention_preflight(running, &job, tools, &schemas, &mut messages)
+            .await?;
         for step in 0..running.config.agent.max_steps {
             ensure!(
                 !running.cancel.is_cancelled(),

@@ -45,7 +45,7 @@ fn combined_worker_conflicts_are_detected_and_cleanup_preserves_all_work() {
     init(&repo);
     let lead = git(&repo, &["rev-parse", "HEAD"]);
     fs::write(repo.join("lead-only.txt"), "uncommitted").unwrap();
-    parallel::prepare(&repo, "first\nsecond\nthird", &root).unwrap();
+    parallel::prepare(&repo, "first\nsecond\nthird\nfourth\nfifth", &root).unwrap();
     assert!(parallel::prepare(&repo, "another", &root).is_err());
     assert!(
         parallel::active_plan(&repo, &temp.path().join("other-profile"))
@@ -53,7 +53,9 @@ fn combined_worker_conflicts_are_detected_and_cleanup_preserves_all_work() {
             .is_none()
     );
     let plan = parallel::active_plan(&repo, &root).unwrap().unwrap();
-    assert!(plan.workers[1].item.prompt.contains("third"));
+    // Four workers; lines beyond the fourth stay with the last one.
+    assert_eq!(plan.workers.len(), 4);
+    assert!(plan.workers[3].item.prompt.contains("fourth\nfifth"));
     for (index, w) in plan.workers.iter().enumerate() {
         fs::write(
             w.worktree_path.join("same.txt"),

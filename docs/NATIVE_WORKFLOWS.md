@@ -73,17 +73,27 @@ The native catalog reads these project paths:
 - `.shadow/skills/*.md` and `.shadow/skills/<directory>/SKILL.md`.
 - The same flat-file and `SKILL.md` forms under `.shadowcode/skills` and
   `.agents/skills`.
+- Claude Code's `.claude/commands/*.md` (commands) and
+  `.claude/skills/<directory>/SKILL.md` (skills). A ShadowCode definition with
+  the same name hides the `.claude/` one and the hidden file is reported.
 
 Names and aliases use 1–80 ASCII letters, digits, hyphens, or underscores.
 Optional YAML front matter accepts text `name`, `description`, `alias`, and
 `mode` fields; mode is `code`, `plan`, `review`, or `test`.
 `user-invocable: false` makes a definition unavailable to this explicit-invocation
-catalog. Automatic model invocation is not implemented here, so
-`disable-model-invocation` does not broaden access.
+catalog.
+
+Skills can also be loaded by the agent itself: the system prompt lists each
+skill's name and description, and the agent reads a skill's instructions with
+`load_skill` when it fits the task (at most 32 KB). `disable-model-invocation:
+true` keeps a skill out of that list; it can still be run with `/skill <name>`.
+`argument-hint` is shown next to a command in the `/` menu.
 
 The native parser rejects unsupported operative fields such as `model`, `hooks`,
-`allowed-tools`, and `permission-mode` instead of silently ignoring constraints.
-Configure models and permissions in Settings. Malformed definitions appear as
+`allowed-tools`, and `permission-mode` in ShadowCode's own folders instead of
+silently ignoring constraints. In `.claude/` files, which are written for
+Claude Code, those fields are ignored. Configure models and permissions in
+Settings. Malformed definitions appear as
 discovery issues. Ambiguous names and aliases are rejected. Built-in names stay
 reserved; a skill with the same name can be invoked using `/skill <name>`.
 Discovery remains confined to the project and does not follow directory symlinks

@@ -304,7 +304,7 @@ fn active(status: &str) -> bool {
     matches!(status, "" | "queued" | "running" | "paused" | "cancelling")
 }
 
-async fn git_with(
+pub(crate) async fn git_with(
     dir: &Path,
     args: &[&str],
     env: &[(&str, &str)],
@@ -331,7 +331,7 @@ async fn git_with(
     }
     process::run(spec, cancel.clone(), None).await
 }
-async fn git(dir: &Path, args: &[&str], cancel: &CancellationToken) -> Result<String> {
+pub(crate) async fn git(dir: &Path, args: &[&str], cancel: &CancellationToken) -> Result<String> {
     git_env(dir, args, &[], cancel).await
 }
 async fn git_env(
@@ -356,7 +356,11 @@ async fn git_env(
 /// untracked files that are not ignored) as one commit, using a temporary
 /// copy of the index. Only new Git objects are written; the source index and
 /// working tree are left exactly as they were.
-async fn snapshot(scratch: &Path, source: &Path, cancel: &CancellationToken) -> Result<Base> {
+pub(crate) async fn snapshot(
+    scratch: &Path,
+    source: &Path,
+    cancel: &CancellationToken,
+) -> Result<Base> {
     let head = git(source, &["rev-parse", "--verify", "HEAD^{commit}"], cancel)
         .await
         .context("Make a first commit in this repository before comparing models")?;
@@ -419,7 +423,7 @@ async fn snapshot(scratch: &Path, source: &Path, cancel: &CancellationToken) -> 
 
 /// Diffstat of a lane against its base: committed and uncommitted tracked
 /// changes plus untracked (not ignored) files.
-async fn diffstat(
+pub(crate) async fn diffstat(
     lane: &Path,
     base: &str,
     cancel: &CancellationToken,
