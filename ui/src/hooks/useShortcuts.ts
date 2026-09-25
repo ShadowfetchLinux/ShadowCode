@@ -1,0 +1,86 @@
+import { useEffect, useRef } from "react";
+
+/** What is open, in the order Escape closes it. */
+export type ShortcutContext = {
+  consent: boolean;
+  overlay: boolean;
+  trust: boolean;
+  picker: boolean;
+  panel: boolean;
+  /** First-run onboarding owns the keyboard. */
+  onboarding: boolean;
+};
+
+export type ShortcutAction =
+  | "close-overlay"
+  | "close-trust"
+  | "close-picker"
+  | "close-panel"
+  | "palette"
+  | "sidebar"
+  | "changes"
+  | "settings"
+  | "project"
+  | "new"
+  | "model"
+  | "focus"
+  | "stop"
+  | "export"
+  | "help";
+
+/** The action a key press asks for, or null. Pure, for tests. */
+export function shortcutFor(
+  e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "target">,
+  open: ShortcutContext,
+): ShortcutAction | null {
+  const key = e.key.toLowerCase();
+  const mod = e.ctrlKey || e.metaKey;
+  const inField = /INPUT|TEXTAREA|SELECT/.test(
+    (e.target as HTMLElement | null)?.tagName || "",
+  );
+  if (e.key === "Escape") {
+    if (open.consent) return null;
+    if (open.overlay) return "close-overlay";
+    if (open.trust) return "close-trust";
+    if (open.picker) return "close-picker";
+    if (open.panel) return "close-panel";
+    return null;
+  }
+  // Dialogs own the keyboard while they are open.
+  if (open.overlay || open.trust || open.consent || open.onboarding)
+    return null;
+  if (mod && key === "k") return "palette";
+  if (mod && key === "b" && !e.shiftKey) return "sidebar";
+  if (mod && e.shiftKey && key === "b") return "changes";
+  if (mod && key === ",") return "settings";
+  if (mod && key === "p") return "project";
+  if (mod && key === "n") return "new";
+  if (mod && key === "m") return "model";
+  if (mod && key === "l") return "focus";
+  if (mod && key === ".") return "stop";
+  if (mod && e.shiftKey && key === "e") return "export";
+  if (key === "?" && !inField) return "help";
+  return null;
+}
+
+/** One window keydown listener for the app's lifetime. The latest open state
+ * and handler are read through refs, so re-renders never re-register it. */
+export function useShortcuts(
+  open: ShortcutContext,
+  run: (action: ShortcutAction) => void,
+) {
+  const state = useRef(open);
+  state.current = open;
+  const handler = useRef(run);
+  handler.current = run;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = shortcutFor(e, state.current);
+      if (!action) return;
+      if (!action.startsWith("close-")) e.preventDefault();
+      handler.current(action);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
