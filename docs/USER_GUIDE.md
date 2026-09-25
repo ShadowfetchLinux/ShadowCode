@@ -122,14 +122,70 @@ reply.
   stage a hunk or a whole new file, discard a hunk (after confirming), and
   commit with a message. If a file changed since
   you previewed it, refresh before staging. The drawer's tabs keep your work
-  while you switch between them or close the drawer: terminal output, the
-  file open in Files and an unsent commit message stay until you open
-  another project.
+  while you switch between them or close the drawer: your terminals, the
+  file open in Files and unsent commit and pull request drafts stay until you
+  open another project.
 - **Rewind** undoes every file change the task made with ShadowCode's own
   tools. Stop the task first. Rewind doesn't undo shell commands or Git
   history. It isn't offered for vendor CLI tasks, because the vendor writes
   files with its own tools. Use the Changes drawer or Git to undo those. After
   a rewind, the next turn is told that those edits are no longer on disk.
+
+## Commit, push and open a pull request
+
+The drawer's **Git** tab (click the branch in the status bar, or
+**Commit, push and open a pull request** in `Ctrl+K`) takes the work from
+staged changes to a pull request:
+
+- **Branch.** Type a name and **Create branch**, or switch with
+  **Switch to…**. Names Git would refuse (spaces, `..`, a leading dash) are
+  explained before anything runs.
+- **Commit.** **Stage all** (or stage hunks in Changes), then **Suggest
+  message**. The draft comes from the conversation's model when ShadowCode
+  runs it (a local, API or OpenRouter model), otherwise from the loaded local
+  model, otherwise a plain summary of the staged files. It is always an
+  editable draft, and files that look like secrets (`.env`, keys) are named
+  but never sent to a model.
+- **Push** publishes the branch and tracks it, using your own Git sign-in
+  (SSH agent, credential helper or `gh auth setup-git`). ShadowCode never
+  stores a credential and never force-pushes; if Git would need to ask for a
+  password, the push stops and says how to set up sign-in.
+- **Pull request.** **Suggest title and description** drafts both the same
+  way. Pick the branch to merge into, tick **Draft** if you like, and
+  **Create pull request**. The branch is pushed first when needed. This uses
+  the GitHub CLI (`gh`) when it is installed and signed in (`glab` for
+  GitLab). Without it the tab explains how to install and sign in, and
+  **Open compare page in browser** opens the same page on the website.
+- After the pull request opens, its link and CI checks appear. Checks refresh
+  every minute while the tab is visible, or at once with the refresh button.
+
+Switching branches and committing wait while the agent works; push and pull
+requests do not.
+
+## Terminal
+
+The drawer's **Terminal** tab (`` Ctrl+` ``) is your own login shell in the
+project folder, with colours, full-screen programs and your usual
+environment. **+** opens another; each tab keeps running when you switch tabs
+or close the drawer, and all of them close when ShadowCode quits. Terminals
+work while the agent runs. They are outside the agent's sandbox, need no
+approval, and nothing typed or printed there is shown to a model. The last
+512 KB of output is kept for each terminal. Inside a terminal the keyboard
+belongs to the shell (`Esc`, `Ctrl+L`, `Ctrl+P` …); `` Ctrl+` `` still
+toggles the drawer.
+
+## Tools while you work
+
+The drawer's **Tools** tab holds what you use during work rather than
+configure: **Goals** (milestone checklists), **Processes** (dev servers and
+watchers that keep running between tasks) and **Worktrees**. `Ctrl+K`
+(*Goals and milestones*, *Background processes*, *Worktrees*) and the
+`/goals` and `/background` commands open them there. Skills, MCP, plugins,
+hooks, Guardian, vendor tools and health stay in **Settings › Advanced**.
+
+In **Settings › Permissions & network**, how each runner applies the mode
+(ShadowCode's own tools, and each subscription) is folded under
+*How … applies this*.
 
 ## Switch models mid-conversation
 
