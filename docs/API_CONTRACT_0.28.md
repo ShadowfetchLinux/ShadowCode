@@ -653,6 +653,44 @@ Details (safety branch):
   when `allow_root`; never allowed silently. Destructive Git commands in the
   shell always ask. Network shell commands are denied offline.
 
+### Shell sandbox and checkpoints (0.32)
+
+- `sandbox: { require: bool = false, home_binds: string[], landlock: bool = true }`.
+  `home_binds` are paths relative to the home folder, mounted read-only in
+  the bubblewrap sandbox (default `.cargo .rustup .nvm .npm .cache/pip
+  .local/bin .gitconfig .pyenv .bun .deno`). PUT rejects absolute paths, `..`,
+  and anything equal to, inside or containing `.ssh .aws .gnupg .config
+  .local/share .netrc .docker .kube .password-store .pki .azure .npmrc
+  .pypirc .git-credentials .mozilla .var`. `require: true`: without
+  bubblewrap, `exec` fails with "The command did not run: 'Require sandbox'
+  is on …". `landlock`: without bubblewrap (and `require` off), commands
+  run under Landlock when the kernel has it.
+- `network.shell: "on" | "off" | "allowlist"` (default `on`) and
+  `network.allow: string[]` (at most 128; `host`, `*.domain`, `host:port`,
+  `[v6]:port`; without a port, 80 and 443). The effective shell network is
+  `off` whenever `permissions.network` is false or `network.mode` is
+  `offline`. Settings writes `permissions.network = (shell != "off")`
+  together with `network.shell`. `allowlist` needs bubblewrap; without it,
+  `exec` fails closed. Invalid `network.allow` entries are rejected by PUT.
+- `checkpoints: { shell: bool = true, vendor: bool = true, keep: 1..10000 = 200,
+  max_copy_files: <= 200000 = 5000, max_copy_bytes: <= 1 GiB = 64 MiB }`.
+- `GET /api/sandbox/status` → `{ effective: "bubblewrap" | "landlock" |
+  "none" | "blocked", bubblewrap: {installed, works, detail}, landlock_abi,
+  network_namespace: {available, detail}, require, shell_network, allow,
+  home_read_only: string[], home_skipped: string[], never_mounted: string[] }`.
+- The `exec` tool result carries `sandbox: {mode: "bubblewrap" | "landlock" |
+  "none", network, allow, home_read_only, home_skipped, proxy?: {reached,
+  blocked}, …}` and `checkpoint: {method: "git" | "copy" | "none", paths,
+  skipped: [{path, reason}], unavailable, ref, warning?}`.
+- Events: `agent.warning {text, kind: "sandbox"}` once per conversation when a
+  command runs without bubblewrap; `agent.warning {text, kind: "checkpoint"}`
+  when a vendor turn's changes can't all be rewound;
+  `checkpoint.updated {…summary, source: "shell" | "vendor", changed: string[]}`
+  after a shell command or vendor turn changed project files.
+- `POST /api/jobs/{id}/rewind` and `POST /api/checkpoints/tasks/{task}/restore`
+  now also restore files changed by shell commands and subscription CLI turns.
+  For a running vendor job the rewind is refused; rewind after the turn ends.
+
 ## Web tools (native agent)
 
 - `POST /api/jobs {web: true}` offers `web_fetch {url}` and
@@ -676,8 +714,8 @@ Details (safety branch):
   `tool.started`, `tool.completed`, `approval.requested` and
   `command.completed` payloads are stored redacted.
 - `checkpoint.restored {task_id, paths}` is written for
-  `POST /api/checkpoints/tasks/{task}/restore` and for rewinds of native
-  jobs; after a finished task is restored the session's next turn also sees a
+  `POST /api/checkpoints/tasks/{task}/restore` and for job rewinds (native and subscription
+  jobs); after a finished task is restored the session's next turn also sees a
   process note that the edits are no longer on disk.
 - `POST /api/workspace/attach` and `/attach-image` work in read-only
   projects (trust still required); files go to `.shadow/attachments/`.

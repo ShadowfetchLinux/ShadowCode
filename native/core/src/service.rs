@@ -62,6 +62,7 @@ mod inspection;
 mod jobs;
 mod memory;
 mod model_catalog;
+mod sandbox;
 mod sessions;
 mod settings;
 mod workspace;
@@ -226,7 +227,8 @@ impl Service {
         match call.family() {
             "compare" | "compares" => self.compare(&call).await,
             "agents" | "subagents" => self.blocking(&call, Self::agent_routes).await,
-            "worktrees" | "parallel" | "sandbox" => self.worktree_routes(&call).await,
+            "worktrees" | "parallel" => self.worktree_routes(&call).await,
+            "sandbox" => self.sandbox_routes(&call).await,
             "sessions" | "projects" | "events" | "resolve" => {
                 self.blocking(&call, Self::session_routes).await
             }

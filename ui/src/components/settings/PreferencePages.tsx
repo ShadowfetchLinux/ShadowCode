@@ -1,4 +1,9 @@
 import { useState } from "react";
+import {
+  SandboxSettings,
+  sandboxPatch,
+  sandboxValues,
+} from "./SandboxSettings";
 
 type Save = (values: Record<string, unknown>) => Promise<void>;
 
@@ -10,8 +15,8 @@ const VENDOR_NAMES: Record<string, string> = {
   grok: "Grok",
 };
 
-/** Settings › Permissions & network. Saves only the permissions and network
- * groups. */
+/** Settings › Permissions & network. Saves only the permissions, network
+ * and sandbox groups. */
 export function PermissionsPage({
   cfg,
   onSave,
@@ -28,9 +33,7 @@ export function PermissionsPage({
   );
   const [readOnly, setReadOnly] = useState(originalLevel === "read_only");
   const [netMode, setNetMode] = useState(String(network.mode || "online"));
-  const [shellNetwork, setShellNetwork] = useState(
-    Boolean(permissions.network),
-  );
+  const [shell, setShell] = useState(() => sandboxValues(cfg));
   const [dangerous, setDangerous] = useState(
     permissions.require_approval_for_dangerous !== false,
   );
@@ -119,6 +122,7 @@ export function PermissionsPage({
           </label>
         ))}
       </fieldset>
+      <SandboxSettings values={shell} onChange={setShell} />
       <details className="advanced-options">
         <summary>Advanced</summary>
         <label className="check">
@@ -139,14 +143,6 @@ export function PermissionsPage({
           Ask before destructive commands (rm -rf, git push --force). Privileged
           commands such as sudo are always blocked.
         </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={shellNetwork}
-            onChange={(e) => setShellNetwork(e.target.checked)}
-          />{" "}
-          Let approved shell commands use the network
-        </label>
       </details>
       <div className="row end settings-foot">
         <button
@@ -155,6 +151,7 @@ export function PermissionsPage({
           disabled={saving}
           onClick={() => {
             setSaving(true);
+            const patch = sandboxPatch(shell);
             void onSave({
               permissions: {
                 mode,
@@ -163,10 +160,11 @@ export function PermissionsPage({
                   : originalLevel === "read_only"
                     ? "workspace"
                     : originalLevel,
-                network: shellNetwork,
+                ...patch.permissions,
                 require_approval_for_dangerous: dangerous,
               },
-              network: { mode: netMode },
+              network: { mode: netMode, ...patch.network },
+              sandbox: patch.sandbox,
             }).finally(() => setSaving(false));
           }}
         >

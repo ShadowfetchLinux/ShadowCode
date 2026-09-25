@@ -282,7 +282,11 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     }));
   }
   if (event.type === "checkpoint.updated") {
-    touch((a) => ({ ...a, changed: addChanged(a.changed, p.paths) }));
+    touch((a) => ({
+      ...a,
+      checkpointed: true,
+      changed: addChanged(a.changed, p.paths),
+    }));
   }
   if (event.type === "checkpoint.restored") {
     const paths = Array.isArray(p.paths) ? p.paths : [];

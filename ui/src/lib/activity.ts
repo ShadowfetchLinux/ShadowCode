@@ -51,6 +51,9 @@ export type TaskActivity = {
   calls: ActivityCall[];
   sources: WebSource[];
   changed: string[];
+  /** A file checkpoint was recorded for this task (file tools, shell
+   * commands or a subscription turn), so Rewind can restore it. */
+  checkpointed?: boolean;
   approvalsPending: number;
   approvalsSeen: number;
   verification?: Verification;

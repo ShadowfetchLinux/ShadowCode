@@ -9,14 +9,54 @@ live credentials. There is no bug bounty program.
 
 ## What ShadowCode is not
 
-**ShadowCode is not an operating-system sandbox.** Shell commands run as your
-Linux user, with that user's files and network. If `bwrap` (bubblewrap) is
-available, ShadowCode's own `exec` tool can wrap a command in a limited profile:
-the project is writable, home and system directories are read-only, and the
-network is off unless allowed. If bubblewrap is missing or user namespaces are
-blocked, commands run unwrapped and Doctor reports it. Command classification
-(privileged, network, destructive Git) is a lexical policy check. It is not
-containment.
+**ShadowCode is not a complete operating-system sandbox.** Shell commands run
+as your Linux user. ShadowCode's own `exec` tool limits what they can reach:
+
+- **With `bwrap` (bubblewrap)**: system folders are read-only, and the home
+  folder is an empty temporary one. Only the toolchain folders in
+  `sandbox.home_binds` come back, read-only. The defaults are `.cargo`,
+  `.rustup`, `.nvm`, `.npm`, `.cache/pip`, `.local/bin`, `.gitconfig`,
+  `.pyenv`, `.bun` and `.deno`. Cargo's `credentials.toml` is replaced by an
+  empty file. `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config` (with
+  ShadowCode's `secrets.env`), `~/.local/share`, `~/.netrc`, `~/.docker`,
+  `~/.kube` and similar credential folders are never mounted. Config
+  validation refuses them, and so does a symlink that points at them. If the
+  project itself contains them (for example, a project opened at your home
+  folder), they are hidden inside the project too. Only the project is
+  writable. Other users' home folders are hidden. Processes are in their own
+  PID, IPC and UTS namespaces.
+- **Without bubblewrap**: with `sandbox.require: true` ("Require sandbox" in
+  Settings › Permissions & network), shell commands are refused with a clear
+  message. Otherwise they run under **Landlock** when the kernel supports it
+  (Linux 5.13+). Landlock allows reading only the system folders, the toolchain
+  folders and the project, and writing only the project and temporary folders.
+  It blocks TCP when the shell network is off. Landlock doesn't cover UDP and
+  gives no process isolation. If neither layer is available, commands run
+  unrestricted. Either way, the conversation shows a warning once.
+  Landlock isn't layered under bubblewrap: it forbids the mount calls
+  bubblewrap needs, and ShadowCode runs no helper inside the sandbox.
+- **Network** for shell commands is `off`, `on`, or `allowlist`
+  (`network.shell`). It is always off while `permissions.network` is off or
+  the app is offline. In `allowlist` mode, the command gets a private network
+  namespace whose only interface is loopback. `HTTP(S)_PROXY` there points
+  at a filtering proxy inside ShadowCode. It forwards `CONNECT host:port` and
+  plain `http://` requests only to hosts in `network.allow`. It refuses
+  loopback, link-local (cloud metadata) and unspecified addresses unless the
+  entry names that address or `localhost`. Raw TCP, UDP and DNS have no route
+  out. Programs that ignore proxy variables simply fail to connect. The filter
+  sees host names, not URLs or request bodies: an allowed host can receive
+  anything the command sends. Allowlist mode needs bubblewrap and
+  unprivileged user namespaces. Without them the command is refused and never
+  run unfiltered.
+
+Command classification (privileged, network, destructive Git) is a lexical
+policy check. It is not containment. Background processes started with
+`background_start` and lifecycle hooks are not run in this sandbox.
+
+Vendor CLIs (Codex, Claude Code, Cursor, Antigravity, Grok) run as your user
+with their own tools and sandboxes. ShadowCode doesn't wrap them in bubblewrap,
+and its network and `sudo` rules don't apply to them. Use a container or a
+separate account when you need stronger isolation.
 
 Vendor CLIs (Codex, Claude Code, Cursor, Antigravity, Grok) run as your user
 with their own tools and sandboxes. ShadowCode doesn't wrap them in bubblewrap,
@@ -220,8 +260,20 @@ default).
   changes or file edits. Interrupted jobs are marked `interrupted`.
 - **Review applies only current hunks.** If the diff changed, you get a
   conflict instead of a stale patch.
-- **Rewind covers only ShadowCode's own file tools.** It doesn't undo shell
-  effects or vendor CLI edits.
+- **Rewind covers the project's files.** It covers ShadowCode's file tools
+  and, through a checkpoint taken before each shell command (except simple
+  readers such as `ls` or `git status`) and before each subscription CLI turn,
+  files those commands and CLIs changed. In a Git repository, the checkpoint is
+  a commit built in a temporary index, kept under
+  `refs/shadowcode/checkpoints/<session>/<n>`. Your index, branch and working
+  tree are not touched. The newest `checkpoints.keep` refs (200 by default) are
+  kept. Folders without Git are copied in memory, up to
+  `checkpoints.max_copy_files` files and `checkpoints.max_copy_bytes`. A larger
+  folder is reported as not covered. Not covered: Git-ignored files, files over
+  4 MB, symlinks, submodules, files with a Git filter such as LFS, Git state
+  (HEAD, branches, the index, stashes), and anything outside the project.
+  Rewind refuses, without changing anything, when a covered file changed again
+  since.
 
 ## Releases
 
