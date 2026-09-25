@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import { api, type FileEntry, type Session } from "../api";
 import { Empty } from "./cards";
 import { ChangesTab } from "./ChangesTab";
+import { BranchPanel } from "./BranchPanel";
+import { TerminalPanel } from "./TerminalPanel";
+import { ToolsTab, type ToolsView } from "./ToolsTab";
 import { exportSession } from "../lib/transport";
 import {
   remembered,
@@ -10,16 +13,24 @@ import {
   type DrawerMemoryUpdate,
 } from "../hooks/useDrawerMemory";
 
-/** The optional right-hand drawer: conversations, files, a terminal and the
- * readable diff of current changes. Project tools live in Settings › Advanced.
- * Work in a tab (terminal output, the open file, a commit message) lives in
- * `memory`, owned by the app, so switching tabs keeps it. */
-export type DrawerTab = "terminal" | "sessions" | "files" | "changes";
-export const DRAWER_TABS: { id: DrawerTab; label: string }[] = [
+/** The optional right-hand drawer: the readable diff of current changes,
+ * Git (commit, push, pull requests), the user's own terminals, files,
+ * conversations, and Tools used while working (goals, background processes,
+ * worktrees). Work in a tab (the open file, a commit message, the terminal in
+ * front) lives in `memory`, owned by the app, so switching tabs keeps it; the
+ * terminals themselves run in the engine. */
+export type DrawerTab =
+  "changes" | "git" | "terminal" | "files" | "sessions" | ToolsView;
+const TOOLS: readonly DrawerTab[] = ["goals", "background", "worktrees"];
+export const isToolTab = (tab: DrawerTab): tab is ToolsView =>
+  TOOLS.includes(tab);
+export const DRAWER_TABS: { id: DrawerTab | "tools"; label: string }[] = [
   { id: "changes", label: "Changes" },
+  { id: "git", label: "Git" },
   { id: "terminal", label: "Terminal" },
   { id: "files", label: "Files" },
   { id: "sessions", label: "Sessions" },
+  { id: "tools", label: "Tools" },
 ];
 
 type Toast = (text: string, kind?: "ok" | "err" | "info") => void;
@@ -39,6 +50,7 @@ export function Drawer({
   busy,
   toast,
   onAskAgent,
+  onOpenProject,
   memory,
   onMemory,
 }: {
@@ -56,22 +68,33 @@ export function Drawer({
   busy: boolean;
   toast: Toast;
   onAskAgent?: (prompt: string) => void;
+  onOpenProject?: (path: string) => void;
   memory: DrawerMemory;
   onMemory: DrawerMemoryUpdate;
 }) {
+  const tool = isToolTab(tab) ? tab : null;
+  useEffect(() => {
+    if (tool) onMemory("toolsView", tool);
+  }, [tool, onMemory]);
   return (
     <aside className="drawer" aria-label="Drawer">
       <div className="drawer-tabs">
-        {DRAWER_TABS.map((t) => (
-          <button
-            type="button"
-            key={t.id}
-            className={tab === t.id ? "on" : ""}
-            onClick={() => onTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+        {DRAWER_TABS.map((t) => {
+          const on = t.id === "tools" ? Boolean(tool) : tab === t.id;
+          return (
+            <button
+              type="button"
+              key={t.id}
+              className={on ? "on" : ""}
+              aria-pressed={on}
+              onClick={() =>
+                onTab(t.id === "tools" ? memory.toolsView || "goals" : t.id)
+              }
+            >
+              {t.label}
+            </button>
+          );
+        })}
         <button
           type="button"
           className="icon-btn drawer-close"
@@ -94,12 +117,30 @@ export function Drawer({
           />
         )}
         {tab === "terminal" && (
-          <TerminalTab
+          <TerminalPanel
             workspace={workspace}
+            toast={toast}
+            memory={memory}
+            onMemory={onMemory}
+          />
+        )}
+        {tab === "git" && (
+          <BranchPanel
             busy={busy}
             toast={toast}
             memory={memory}
             onMemory={onMemory}
+            onOpenTerminal={() => onTab("terminal")}
+          />
+        )}
+        {tool && (
+          <ToolsTab
+            view={tool}
+            onView={onTab}
+            sessionId={sessionId}
+            toast={toast}
+            onOpenSession={onOpenSession}
+            onOpenProject={onOpenProject}
           />
         )}
         {tab === "files" && (
@@ -381,92 +422,5 @@ function FilesTab({
         </div>
       )}
     </>
-  );
-}
-
-function TerminalTab({
-  workspace,
-  busy,
-  toast,
-  memory,
-  onMemory,
-}: {
-  workspace: string;
-  busy: boolean;
-  toast: Toast;
-  memory: DrawerMemory;
-  onMemory: DrawerMemoryUpdate;
-}) {
-  const [command, setCommand] = remembered(memory, onMemory, "terminalCommand");
-  const [running, setRunning] = useState(false);
-  const [history, setHistory] = remembered(memory, onMemory, "terminalHistory");
-  return (
-    <section aria-label="Workspace terminal">
-      <h3>Terminal</h3>
-      <p className="hint">
-        Run a command in {workspace.split("/").pop()}. Interactive programs are
-        not supported. Commands time out after 60 seconds.
-      </p>
-      <form
-        className="terminal-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (!command.trim() || running || busy) return;
-          setRunning(true);
-          const text = command;
-          setCommand("");
-          try {
-            const result = await api.exec(text);
-            setHistory((prev) => [result, ...prev].slice(0, 20));
-          } catch (err) {
-            toast(String(err), "err");
-            setCommand(text);
-          } finally {
-            setRunning(false);
-          }
-        }}
-      >
-        <span aria-hidden="true">$</span>
-        <input
-          aria-label="Terminal command"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          placeholder="git status"
-        />
-        <button
-          type="submit"
-          className="mini"
-          disabled={running || busy || !command.trim()}
-        >
-          {running ? "Running…" : "Run"}
-        </button>
-      </form>
-      {busy && (
-        <p className="hint">
-          The agent is working. Terminal commands are available when it
-          finishes.
-        </p>
-      )}
-      {history.length > 0 && (
-        <button type="button" className="mini" onClick={() => setHistory([])}>
-          Clear output
-        </button>
-      )}
-      {history.map((r, i) => (
-        <div className="terminal-result" key={i}>
-          <header>
-            <code>$ {r.command}</code>
-            <span className={r.ok ? "health-ok" : "health-bad"}>
-              exit {r.exit_code}
-            </span>
-          </header>
-          <pre>
-            {r.stdout}
-            {r.stderr}
-            {r.error && `\n${r.error}`}
-          </pre>
-        </div>
-      ))}
-    </section>
   );
 }

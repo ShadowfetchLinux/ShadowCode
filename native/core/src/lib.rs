@@ -56,6 +56,7 @@ pub mod store;
 pub mod subagents;
 pub mod symbol_index;
 pub mod system_info;
+pub mod terminal;
 pub mod tools;
 pub mod usage;
 pub mod vision;

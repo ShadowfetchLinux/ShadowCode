@@ -10,8 +10,8 @@ import {
 import { isNative } from "../../lib/transport";
 import { Empty } from "../cards";
 
-/* Project tools that used to live in the drawer: skills, goals, health and
- * background processes. They sit under Settings › Advanced. */
+/* Project tools: skills and health sit under Settings › Advanced; goals and
+ * background processes are in the drawer's Tools tab (used while working). */
 
 type Toast = (text: string, kind?: "ok" | "err" | "info") => void;
 

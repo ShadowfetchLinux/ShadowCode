@@ -55,6 +55,7 @@ mod commands;
 mod compare;
 mod extensions;
 mod feed;
+mod forge;
 mod git;
 mod goals;
 #[cfg(unix)]
@@ -65,6 +66,7 @@ mod model_catalog;
 mod sandbox;
 mod sessions;
 mod settings;
+mod terminals;
 mod workspace;
 mod worktrees;
 use call::{Call, Flag, Loose, Text};
@@ -95,6 +97,8 @@ pub struct Service {
     guardian: Arc<crate::guardian::Guardian>,
     remember_selection: bool,
     job_owner: Option<JobOwner>,
+    /// This view's interactive terminals (a forked view starts with none).
+    terminals: Arc<crate::terminal::Terminals>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -109,8 +113,10 @@ impl Service {
             .or_else(|| paths.remembered_workspace())
             .unwrap_or(std::env::current_dir()?);
         let workspace = Workspace::open(&workspace)?.path;
+        let engine = Engine::open(paths)?;
+        let terminals = Arc::new(crate::terminal::Terminals::new(engine.notifier()));
         Ok(Self {
-            engine: Engine::open(paths)?,
+            engine,
             selection: Arc::new(RwLock::new(Selection {
                 generation: 0,
                 workspace,
@@ -120,6 +126,7 @@ impl Service {
             guardian: Arc::new(crate::guardian::Guardian::default()),
             remember_selection: true,
             job_owner: None,
+            terminals,
         })
     }
     /// A transport client shares the engine, but has its own navigation state.
@@ -148,6 +155,8 @@ impl Service {
             guardian: self.guardian.clone(),
             remember_selection: false,
             job_owner: None,
+            // An attached window's terminals live as long as its view.
+            terminals: Arc::new(crate::terminal::Terminals::new(self.engine.notifier())),
         })
     }
     pub(crate) fn with_job_owner(mut self, owner: JobOwner) -> Self {
@@ -235,6 +244,8 @@ impl Service {
             "jobs" | "run" | "approvals" | "checkpoints" => self.job_routes(&call).await,
             "goals" => self.goal_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
+            "terminals" => self.terminal_routes(&call).await,
+            "git" => self.forge_routes(&call).await,
             "background" => self.background_routes(&call).await,
             "code-intel" => self.code_intel_routes(&call).await,
             "workspace" => self.workspace_routes(&call).await,

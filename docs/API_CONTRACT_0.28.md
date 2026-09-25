@@ -608,6 +608,92 @@ engine says something changed, plus a 15 s backstop read.
   folder itself are rejected. Task summaries use it for all changed files in
   one request instead of one `GET /api/workspace/diff` per file.
 
+## Terminals
+
+The drawer's interactive terminals: the user's login shell on a
+pseudo-terminal, started in the selected project with the user's environment
+(AppImage library paths removed, `TERM=xterm-256color`). They run outside the
+sandbox, need no approval or trust, work while a task runs (no workspace
+reservation), and are never stored or shown to a model. Terminals belong to
+one desktop view: an attached window has its own, and they end when the view
+or the app closes (`SIGHUP` to the shell's session, then `SIGKILL`). At most
+12 per view.
+
+- `GET /api/terminals` → `{ workspace, terminals: Terminal[], limits: {open,
+  scrollback_bytes} }` for the selected project. `Terminal` is `{id (32 hex),
+  title ("Terminal N"), number, workspace, shell, cols, rows, created, exited,
+  exit_code, cursor}`.
+- `POST /api/terminals {cols?, rows?}` → `Terminal` (a new shell).
+- `POST /api/terminals/{id}/input {data}` → `{ok}`; at most 64 KB per call.
+  Refused once the shell has exited.
+- `POST /api/terminals/{id}/resize {cols, rows}` → `{cols, rows}` (clamped).
+- `GET /api/terminals/{id}/output?after=<byte offset>` → `{id, data (base64
+  bytes), from, cursor, more, truncated, exited, exit_code}`. Offsets count
+  everything the terminal printed; the engine keeps the last 512 KB, so an
+  older `after` starts at the oldest kept byte with `truncated: true`. At most
+  256 KB per read; `more` asks for another.
+- `POST /api/terminals/{id}/close` → `{ok}`.
+- Engine broadcast `terminal.output {terminal_id}` / `terminal.exited
+  {terminal_id}`: transient wake-ups (at most one per 16 ms per terminal,
+  never stored, never carrying output). The desktop shell forwards them as the
+  `shadowcode:terminal` event `{type, terminal_id}`, not as
+  `shadowcode:events`; attached views receive `terminal_id` in their
+  notifications.
+
+## Git panel
+
+Branches, suggested messages, push and pull requests for the selected
+project. Staging and commits stay on `POST /api/workspace/git/add` and
+`/commit`. Git runs with hooks disabled; push, `gh` and `glab` run with the
+user's sign-in environment (SSH agent, askpass, credential helpers,
+`GH_TOKEN`/`GITLAB_TOKEN` when set) and prompts disabled. No credential is
+read or stored; remote URLs are reported without user-info; tool errors are
+redacted.
+
+- `GET /api/git?remote=` → `{repo, branch|null, detached, has_commits,
+  upstream ("origin/x"|null), ahead, behind, staged, changed, branches:
+  [{name, upstream, current}], remotes: [{name, info: RemoteInfo|null}],
+  remote, remote_info, bases: string[], default_base}`; `{repo: false}`
+  outside a repository. `RemoteInfo` is `{host, path ("owner/repo"), web_url,
+  kind: "github"|"gitlab"|"other"}`. The remote is the requested one, else the
+  branch's upstream remote, else `origin`, else the first.
+- `POST /api/git/branch {name, create}` → `{ok, branch, created}`. Names are
+  validated (no spaces, control characters, `~^:?*[\`, `..`, `@{`, `//`,
+  leading `-` or `/`, trailing `/`, `.` or `.lock`, components starting with
+  `.`), then `git check-ref-format --branch`. Needs a trusted, writable
+  project and no running task.
+- `POST /api/git/suggest {kind: "commit"|"pr", base?, remote?}` → `{kind,
+  source: "model"|"local"|"summary", model, note, message}` for commits or
+  `{…, title, body}` for pull requests. Commit drafts read the staged diff
+  (an error when nothing is staged); PR drafts read the commits and diff since
+  `base` (default: the remote's HEAD branch, else main/master/trunk/develop).
+  `model` uses the conversation's picker target when ShadowCode runs it
+  (local GGUF, API, OpenRouter; not subscriptions, and only loopback models
+  when offline), `local` the loaded local model, `summary` a deterministic
+  text. Secret-looking paths are listed but their contents are never sent,
+  and the text is redacted before it leaves. 60 s limit; failures fall back
+  to `summary` with a `note`.
+- `POST /api/git/push {remote?}` → `{ok, remote, branch, output,
+  remote_info}`. Pushes `refs/heads/<branch>` to the same name with
+  `--set-upstream`, never forced; 180 s limit. Sign-in and rejected pushes
+  answer with an explanation.
+- `GET /api/git/pr?remote=&base=` → `{remote, provider, remote_info, cli:
+  {name: "gh"|"glab"|null, installed, version, authenticated, detail,
+  install_url, login_command}, base, compare_url, pr: {number, url, state,
+  draft, title, base}|null}`. `cli.authenticated` comes from `gh|glab auth
+  status --hostname <host>`; `compare_url` is the forge's new pull/merge
+  request page for the current branch.
+- `POST /api/git/pr {title, body, base, draft, remote?}` → `{ok, url, number,
+  provider, pushed, branch, base, draft}`. Pushes first when the branch has
+  no upstream or unpushed commits, then runs `gh pr create` (`glab mr
+  create` for GitLab). Refused on the base branch itself and when the CLI is
+  missing or signed out.
+- `GET /api/git/pr/checks?number=&remote=` → `{supported, checks: [{name,
+  workflow, state, bucket: "pass"|"fail"|"pending"|"skipping", link,
+  description}], summary: {bucket: count}, overall:
+  "pass"|"fail"|"pending"|"none", url, checked_at}` from `gh pr checks
+  --json`. GitLab answers `supported: false` with the pipelines URL.
+
 ## Config
 
 `GET/PUT /api/config`:

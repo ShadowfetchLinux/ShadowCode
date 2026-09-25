@@ -19,6 +19,7 @@ export type ShortcutAction =
   | "palette"
   | "sidebar"
   | "changes"
+  | "terminal"
   | "settings"
   | "project"
   | "new"
@@ -38,6 +39,13 @@ export function shortcutFor(
   const inField = /INPUT|TEXTAREA|SELECT/.test(
     (e.target as HTMLElement | null)?.tagName || "",
   );
+  // A terminal owns the keyboard (Escape, Ctrl+L, Ctrl+P, …) except the
+  // key that toggles it.
+  const inTerminal = Boolean(
+    (e.target as HTMLElement | null)?.closest?.("[data-terminal]"),
+  );
+  const toggleTerminal = mod && (e.key === "`" || e.key === "Dead");
+  if (inTerminal) return toggleTerminal && !open.overlay ? "terminal" : null;
   if (e.key === "Escape") {
     if (open.consent) return null;
     if (open.overlay) return "close-overlay";
@@ -52,6 +60,7 @@ export function shortcutFor(
   if (mod && key === "k") return "palette";
   if (mod && key === "b" && !e.shiftKey) return "sidebar";
   if (mod && e.shiftKey && key === "b") return "changes";
+  if (toggleTerminal) return "terminal";
   if (mod && key === ",") return "settings";
   if (mod && key === "p") return "project";
   if (mod && key === "n") return "new";

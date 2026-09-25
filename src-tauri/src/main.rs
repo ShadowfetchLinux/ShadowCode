@@ -307,6 +307,19 @@ fn run() -> Result<()> {
                 loop {
                     match events.recv().await {
                         Ok(event) => {
+                            // Terminal output wakes only the terminal view (by
+                            // id; the output itself is read by cursor), so a busy
+                            // shell never makes the conversation or feed re-read.
+                            if event["type"]
+                                .as_str()
+                                .is_some_and(|t| t.starts_with("terminal."))
+                            {
+                                let _ = handle.emit(
+                                    "shadowcode:terminal",
+                                    json!({"type":event["type"],"terminal_id":event["terminal_id"]}),
+                                );
+                                continue;
+                            }
                             // Broadcast is only a wakeup. The UI fetches committed
                             // rows in SQLite cursor order, including after lag.
                             // The type lets the approvals/jobs feed skip stream noise.

@@ -1,0 +1,236 @@
+/* Drawer: Terminal, Git and Tools tabs. */
+
+/* ---------- terminal ---------- */
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+.terminal-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 11.5px;
+}
+.terminal-tab > button:first-child {
+  padding: 4px 4px 4px 9px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.terminal-tab.on {
+  border-color: var(--border-strong);
+  background: var(--accent-soft);
+}
+.terminal-tab.on > button:first-child {
+  color: var(--text);
+}
+.terminal-tab-close {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+}
+.terminal-tab-close:hover,
+.terminal-tab > button:first-child:hover {
+  color: var(--text);
+}
+.terminal-new {
+  width: 28px;
+  height: 28px;
+}
+.terminal-hint {
+  margin: 0;
+}
+.terminal-screen {
+  flex: 1;
+  min-height: 260px;
+  height: calc(100vh - 250px);
+  padding: 6px 4px 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.terminal-screen .xterm {
+  height: 100%;
+}
+.terminal-screen .xterm-viewport {
+  background: transparent !important;
+}
+.terminal-exited,
+.terminal-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.terminal-empty {
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 20px 0;
+}
+
+/* ---------- git ---------- */
+.git-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.git-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.git-section + .git-section {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.git-section h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.git-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+.git-branch strong {
+  font: 12.5px var(--mono);
+  word-break: break-all;
+}
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.git-row.end {
+  justify-content: flex-end;
+}
+.git-row .grow {
+  flex: 1;
+  min-width: 0;
+}
+.git-section input:not([type="checkbox"]),
+.git-section textarea,
+.git-section select {
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+}
+.git-section input:not([type="checkbox"]) {
+  flex: 1;
+  min-width: 0;
+}
+.git-section textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.git-section input:focus,
+.git-section textarea:focus,
+.git-section select:focus {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+.git-section input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.git-note {
+  margin: 0;
+}
+.git-base {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pr-created p {
+  margin: 0 0 6px;
+}
+.pr-checks ul {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.pr-checks li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.check-pass svg {
+  color: var(--ok);
+}
+.check-fail svg {
+  color: var(--danger);
+}
+.check-pending svg,
+.check-skipping svg {
+  color: var(--warn);
+}
+.pr-help code {
+  font-size: 11.5px;
+}
+.link-btn {
+  color: var(--accent);
+  text-decoration: underline;
+  padding: 0;
+}
+
+/* ---------- tools ---------- */
+.tools-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tools-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---------- permissions: per-runner disclosures ---------- */
+.vendor-note {
+  border-top: 1px solid var(--border);
+  padding: 6px 0;
+}
+.vendor-note summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.vendor-note p {
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: var(--muted);
+}

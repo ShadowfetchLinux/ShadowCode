@@ -9,35 +9,19 @@ import {
 import { AdvancedTools } from "../AdvancedTools";
 import { McpSettings } from "../McpSettings";
 import { PluginSettings } from "../PluginSettings";
-import { WorktreeSettings } from "../WorktreeSettings";
-import {
-  BackgroundTab,
-  GoalsTab,
-  HealthTab,
-  SkillsTab,
-} from "./AdvancedPanels";
+import { HealthTab, SkillsTab } from "./AdvancedPanels";
 
+/** Goals, background processes and worktrees are used while working, so
+ * they live in the drawer's Tools tab rather than here. */
 export type AdvancedTab =
-  | "skills"
-  | "goals"
-  | "background"
-  | "health"
-  | "mcp"
-  | "plugins"
-  | "hooks"
-  | "worktrees"
-  | "guardian"
-  | "vendors";
+  "skills" | "health" | "mcp" | "plugins" | "hooks" | "guardian" | "vendors";
 
 export const ADVANCED_TABS: { id: AdvancedTab; label: string }[] = [
   { id: "skills", label: "Skills" },
-  { id: "goals", label: "Goals" },
-  { id: "background", label: "Background" },
   { id: "health", label: "Health" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
   { id: "hooks", label: "Hooks" },
-  { id: "worktrees", label: "Worktrees" },
   { id: "guardian", label: "Guardian" },
   { id: "vendors", label: "Vendor tools" },
 ];
@@ -112,23 +96,12 @@ export function AdvancedPage({
             busy={busy}
           />
         )}
-        {tab === "goals" && (
-          <GoalsTab
-            sessionId={sessionId}
-            onOpen={onOpenSession}
-            toast={toast}
-          />
-        )}
-        {tab === "background" && <BackgroundTab toast={toast} />}
         {tab === "health" && <HealthTab health={health} />}
         {tab === "mcp" && <McpPanel onToast={onToast} />}
         {tab === "plugins" && (
           <PluginsPanel onToast={onToast} onNavigate={(next) => onTab(next)} />
         )}
         {tab === "hooks" && <HooksPanel onToast={onToast} />}
-        {tab === "worktrees" && (
-          <WorktreeSettings onOpen={onOpenProject} onToast={onToast} />
-        )}
         {tab === "guardian" && (
           <GuardianPanel
             cfg={cfg}

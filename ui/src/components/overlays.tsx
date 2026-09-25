@@ -19,6 +19,7 @@ const SHORTCUT_GROUPS: { label: string; rows: [string, string][] }[] = [
       ["Ctrl+K", "Command palette"],
       ["Ctrl+B", "Toggle sidebar"],
       ["Ctrl+Shift+B", "Toggle the Changes drawer"],
+      ["Ctrl+`", "Toggle the Terminal (works inside it too)"],
       ["Ctrl+P", "Open project…"],
       ["Ctrl+N", "New task"],
       ["Ctrl+L", "Focus composer"],

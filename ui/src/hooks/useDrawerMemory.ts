@@ -1,15 +1,26 @@
 import { useCallback, useState, type SetStateAction } from "react";
-import type { ExecResult } from "../api";
+import type { ToolsView } from "../components/ToolsTab";
+
+/** A pull request being written in the Git tab. */
+export type PrDraft = {
+  title: string;
+  body: string;
+  /** Empty: the repository's default branch. */
+  base: string;
+  draft: boolean;
+};
 
 /** Drawer work that must survive switching tabs (and closing the drawer):
- * terminal output and the unsent command, the folder and open file in Files,
- * and the commit message draft. A different project starts fresh. */
+ * the terminal tab in front (the shells themselves live in the engine), the
+ * folder and open file in Files, the commit message and pull request drafts,
+ * and the last Tools view. A different project starts fresh. */
 export type DrawerMemory = {
-  terminalCommand: string;
-  terminalHistory: ExecResult[];
+  terminalActive: string;
   filesDir: string;
   filesView: { path: string; content: string } | null;
   commitMessage: string;
+  prDraft: PrDraft;
+  toolsView: ToolsView;
 };
 export type DrawerMemoryUpdate = <K extends keyof DrawerMemory>(
   key: K,
@@ -17,11 +28,12 @@ export type DrawerMemoryUpdate = <K extends keyof DrawerMemory>(
 ) => void;
 
 export const emptyDrawerMemory = (): DrawerMemory => ({
-  terminalCommand: "",
-  terminalHistory: [],
+  terminalActive: "",
   filesDir: ".",
   filesView: null,
   commitMessage: "",
+  prDraft: { title: "", body: "", base: "", draft: false },
+  toolsView: "goals",
 });
 
 export function useDrawerMemory(workspace: string) {
