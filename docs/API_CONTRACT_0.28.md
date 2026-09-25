@@ -479,6 +479,39 @@ Usage = {
   get the complete native tool descriptions; smaller ones get descriptions cut
   to 64 bytes.
 
+||||||| f942214
+
+## Subagents and agent definitions
+
+See [SUBAGENTS.md](SUBAGENTS.md) for behaviour and definition files.
+
+- `GET /api/agents?workspace=` → `{agents, shadowed, issues, dirs, settings, user_dir, workspace}`.
+  `agents[]`: `{name, description, model, tools, deny, mode: "read-only"|"write",
+  max_turns, source: "builtin"|"project"|"user", path, hash, ignored, instructions_preview}`.
+  `settings` is the effective `subagents` config.
+- `GET /api/subagents?session_id=` → `{runs}` (runs started from that
+  conversation, oldest first); `GET /api/subagents/{run_id}` → one run
+  `{id, agent, description, prompt, mode, model, parent_session, parent_task,
+  parent_job, job_id, session_id, status, summary, error, files[{path, status,
+  additions, deletions, binary}], files_truncated, binary_files, patch, applied,
+  usage, steps, depth, notes, created_at, finished_at}`.
+- `GET /api/sessions` hides subagent conversations unless
+  `include_subagents=true`; rows carry `subagent_parent`.
+  `GET /api/sessions/{id}` adds `subagent_parent` and `subagent_run`.
+- Events (parent conversation): `subagent.started {run_id, agent, description,
+  prompt, mode, model, job_id, session_id, depth}`, `subagent.finished {run_id,
+  agent, description, mode, model, status, summary, error, job_id, session_id,
+  files, files_truncated, binary_files, patch, usage, steps, notes, duration_s}`,
+  `subagent.applied {run_id, agent, paths}`. `context.attached` gains
+  `origin: "nested_guidance"`. `mcp.warning {server?, text}`.
+- Native tools: `spawn_agent {agent?, prompt, description?, model?, write?}` or
+  `{tasks: [...]}` (at most 8); `apply_agent_changes {run_id}` (runs as
+  `apply_patch`); `load_skill {name}`; approved MCP tools as
+  `mcp__<server>__<tool>` (run as `mcp_call`). A subagent's approvals carry the
+  parent's `session_id` and a reason starting `Subagent <name>:`.
+- Slash commands (`GET /api/commands`) include `.claude/commands/*.md`;
+  `arg_spec` is the command's `argument-hint` when set.
+
 ## Approvals and jobs feed
 
 The window no longer polls approvals and jobs. It reads one feed when the

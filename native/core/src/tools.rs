@@ -74,6 +74,8 @@ pub struct ToolExecutor {
     background: Option<Arc<crate::background::BackgroundManager>>,
     #[cfg(unix)]
     mcp: crate::mcp::runner::Runner,
+    /// Subagents, skills, nested guidance and a child's limits.
+    extensions: crate::subagents::ToolExtensions,
 }
 impl ToolExecutor {
     pub fn new(
@@ -114,7 +116,63 @@ impl ToolExecutor {
             background: None,
             #[cfg(unix)]
             mcp,
+            extensions: Default::default(),
         })
+    }
+    pub fn with_extensions(mut self, extensions: crate::subagents::ToolExtensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+    pub fn extensions(&self) -> &crate::subagents::ToolExtensions {
+        &self.extensions
+    }
+    /// Approved MCP tools as `mcp__<server>__<tool>` schemas (empty when the
+    /// servers offer too many tools; `mcp_tools`/`mcp_call` remain).
+    pub async fn mcp_schemas(&self) -> Vec<Value> {
+        #[cfg(unix)]
+        {
+            let mut schemas = self
+                .mcp
+                .first_class_schemas(&self.events, self.cancel.clone())
+                .await;
+            schemas.retain(|s| {
+                self.extensions
+                    .permits(s["function"]["name"].as_str().unwrap_or(""))
+            });
+            schemas
+        }
+        #[cfg(not(unix))]
+        Vec::new()
+    }
+    /// Calls that are spelled differently for the model: a subagent diff is
+    /// an ordinary patch; a namespaced MCP tool is an `mcp_call`.
+    fn rewrite(&self, call: &ToolCall) -> Result<Option<ToolCall>> {
+        if call.name == "apply_agent_changes" {
+            let host = self
+                .extensions
+                .host
+                .as_ref()
+                .context("Subagents are not available in this task")?;
+            let (_, patch) = host.patch_for(&call.arguments)?;
+            return Ok(Some(ToolCall {
+                id: call.id.clone(),
+                name: "apply_patch".into(),
+                arguments: json!({"patch": patch}),
+            }));
+        }
+        #[cfg(unix)]
+        if call.name.starts_with("mcp__") {
+            let (server, tool) = self
+                .mcp
+                .resolve_alias(&call.name)
+                .context("Unknown MCP tool; list tools with mcp_tools")?;
+            return Ok(Some(ToolCall {
+                id: call.id.clone(),
+                name: "mcp_call".into(),
+                arguments: json!({"server": server, "tool": tool, "arguments": call.arguments}),
+            }));
+        }
+        Ok(None)
     }
     pub fn with_profile(mut self, paths: crate::paths::AppPaths) -> Self {
         #[cfg(unix)]
@@ -132,6 +190,15 @@ impl ToolExecutor {
     /// [`crate::autonomy::description_tier`]).
     pub fn schemas_for(&self, tier: DescriptionTier) -> Vec<Value> {
         let mut schemas = schemas_tiered(tier);
+        schemas.extend(self.extensions.schemas().into_iter().map(|mut schema| {
+            // Subagent and skill tools follow the same tier as the built-ins.
+            if tier == DescriptionTier::Short {
+                if let Some(text) = schema["function"]["description"].as_str() {
+                    schema["function"]["description"] = json!(truncate(text, 64));
+                }
+            }
+            schema
+        }));
         if self.config.permissions.web {
             // Offered only when the task's web flag is on and the network
             // mode is online; otherwise the model is not shown the tools.
@@ -149,6 +216,10 @@ impl ToolExecutor {
         if !self.mcp.is_empty() {
             schemas.extend(crate::mcp::runner::schemas());
         }
+        schemas.retain(|s| {
+            self.extensions
+                .permits(s["function"]["name"].as_str().unwrap_or(""))
+        });
         schemas
     }
     pub fn has_external_processes(&self) -> bool {
@@ -245,7 +316,7 @@ impl ToolExecutor {
         if result.success
             && matches!(
                 call.name.as_str(),
-                "write_file" | "edit_file" | "apply_patch"
+                "write_file" | "edit_file" | "apply_patch" | "apply_agent_changes"
             )
         {
             // A multi-file patch fires once per changed path, so a formatter
@@ -301,6 +372,39 @@ impl ToolExecutor {
             }
             result.output["hooks"] = json!(outcomes);
         }
+        if result.success && call.name == "apply_agent_changes" {
+            if let (Some(host), Some(run)) = (
+                self.extensions.host.as_ref(),
+                call.arguments["run_id"].as_str(),
+            ) {
+                host.mark_applied(run.trim(), &result.output);
+            }
+        }
+        if let Some(guidance) = &self.extensions.guidance {
+            // AGENTS.md / CLAUDE.md / Cursor rules for the folders touched.
+            let paths =
+                crate::instructions::touched_paths(&call.name, &call.arguments, &result.output);
+            let found = if paths.is_empty() {
+                Vec::new()
+            } else {
+                guidance.for_paths(&self.workspace, &paths)
+            };
+            if !found.is_empty() {
+                for item in &found {
+                    self.events.emit(
+                        "context.attached",
+                        json!({"path":item["path"],"success":true,"origin":"nested_guidance"}),
+                    )?;
+                }
+                if !result.output.is_object() {
+                    result.output = json!({"tool_output":result.output});
+                }
+                result.output["project_guidance"] = json!({
+                    "note": "Project guidance for the folders this tool touched (from AGENTS.md, CLAUDE.md or Cursor rules). It does not grant permissions.",
+                    "files": found,
+                });
+            }
+        }
         let mut completed = json!({"tool":call.name,"call_id":call.id,"success":result.success,"output":result.output,"error":result.error});
         let redactions = crate::redaction::redact_value(&mut completed);
         completed["output_preview"] = json!(truncate(&completed["output"].to_string(), 2000));
@@ -322,6 +426,13 @@ impl ToolExecutor {
             call.arguments.to_string().len() <= 8_000_000,
             "Tool arguments exceed the limit"
         );
+        ensure!(
+            self.extensions.permits(&call.name),
+            "{} is not available to this agent",
+            call.name
+        );
+        let rewritten = self.rewrite(call)?;
+        let call = rewritten.as_ref().unwrap_or(call);
         if call.name == "view_image" {
             // Read-only and confined to the workspace; advertised only to
             // models whose runtime reports vision.
@@ -341,9 +452,13 @@ impl ToolExecutor {
         match decision {
             Decision::Deny(reason) => bail!(reason),
             Decision::Ask(reason) => {
+                // A subagent asks in its parent's conversation, with its name.
+                let (session_id, reason) = self
+                    .extensions
+                    .approval_target(&self.events.session_id, reason);
                 let record = Approval {
                     id: String::new(),
-                    session_id: self.events.session_id.clone(),
+                    session_id,
                     task_id: self.events.task_id.clone(),
                     tool: call.name.clone(),
                     arguments: call.arguments.clone(),
@@ -399,6 +514,17 @@ impl ToolExecutor {
             !self.cancel.is_cancelled(),
             "Task cancelled before executing tool"
         );
+        if call.name == "spawn_agent" {
+            let host = self
+                .extensions
+                .host
+                .as_ref()
+                .context("Subagents are not available in this task")?;
+            return host.spawn(&call.arguments).await;
+        }
+        if call.name == "load_skill" {
+            return self.extensions.load_skill(&self.workspace, &call.arguments);
+        }
         #[cfg(unix)]
         if matches!(call.name.as_str(), "mcp_tools" | "mcp_call") {
             // An external process can change the workspace even during catalog

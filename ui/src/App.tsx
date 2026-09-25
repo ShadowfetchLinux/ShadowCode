@@ -382,6 +382,7 @@ export default function App() {
     chooseModel: () => setPickerOpen(true),
     openLocal: () => openSettings("local"),
     fork: controls.fork,
+    openSession: nav.openSession,
   });
   const onDecide = useStableCallback(
     (id: string, decision: "approve" | "deny") =>

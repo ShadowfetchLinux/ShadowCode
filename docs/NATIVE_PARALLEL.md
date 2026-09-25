@@ -2,7 +2,8 @@
 
 > **Advanced.** This is reached through Settings › Advanced › Worktrees. For the everyday workflow see the [user guide](USER_GUIDE.md), [subscriptions](SUBSCRIPTIONS.md) and [local models](LOCAL_MODELS.md).
 
-Settings › Advanced prepares up to two Git worktrees for separate work items.
+Settings › Advanced prepares up to four Git worktrees for separate work items
+(one per line of the goal; further lines join the fourth).
 Each starts from committed HEAD. Uncommitted lead edits stay in the source
 checkout. Open each workspace to start a task explicitly; preparation does not
 launch model workers or choose models.
@@ -27,7 +28,8 @@ lists it under `missing_checkouts` and still retains its branch, so the plan can
 always be cleared and replaced.
 
 The feature is disabled outside Git and requires opening the repository root.
-Two prepared worktrees do not imply two models will fit in GPU memory.
+Prepared worktrees do not imply that several models fit in GPU memory. To have
+the agent itself run work in parallel, use [subagents](SUBAGENTS.md).
 
 APIs: `GET /api/parallel`, `POST /api/parallel/prepare` (`goal`),
 `POST /api/parallel/worker-status` (`worker_id`, `status`),

@@ -224,6 +224,11 @@ impl CliAdapter for ClaudeAdapter {
             args.push("--resume".into());
             args.push(session.to_owned());
         }
+        // Enabled project MCP servers, added to the user's own for this run.
+        if let Some(config) = super::McpServerSpec::claude_config(&options.mcp_servers) {
+            args.push("--mcp-config".into());
+            args.push(config);
+        }
         (options.binary.clone(), args)
     }
     fn on_start(&mut self, options: &LaunchOptions) -> Vec<String> {
