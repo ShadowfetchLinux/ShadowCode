@@ -37,7 +37,14 @@ runs in-process with the window. There is no HTTP server between them.
   Closing an attached window leaves that engine's work running.
 - **Service** (`service.rs`): routes requests (`/api/picker`,
   `/api/accounts/*`, `/api/openrouter/*`, `/api/local-models/*`, `/api/jobs`,
-  sessions, review, config). The CLI reaches the same service through
+  sessions, review, config). `dispatch` parses a request into a `Call` and
+  hands it, by the segment after `/api/`, to one route module under
+  `service/` (`sessions`, `jobs`, `workspace` + `git`, `worktrees`,
+  `settings`, `accounts`, `model_catalog`, `goals`, `background`,
+  `extensions`, `compare`, `commands`, `memory`). Bodies are typed structs
+  whose `Text`/`Flag`/`Loose` fields read absent or mistyped values the way
+  the untyped API did. Synchronous handlers run on tokio's blocking pool.
+  The CLI reaches the same service through
   `control.rs`, a Unix socket in `/run/user/<uid>/shadowcode/` with
   peer-credential checks. It opens no TCP listener. At startup it removes
   sockets left behind by dead engines.
@@ -101,10 +108,18 @@ vendor with official interfaces only:
 - **Database.** SQLite `user_version` is 25 (`store.rs`). Opening an older
   database first copies it to `shadow-agent.pre-native-<id>.sqlite` (mode 600)
   with the SQLite backup API. Migrations then run forward in order inside one
-  transaction. A database from a newer version is refused.
+  transaction. A database from a newer version is refused. The database runs
+  in WAL mode behind one connection lock; async code does writes and large
+  reads through `Store::run` (tokio's blocking pool), so a slow `fsync` never
+  stalls a worker that is streaming a model reply.
 - **Per-conversation state.** Execution targets and vendor session IDs are
   `session_meta` rows (`execution_target`, `native_session:<vendor>`). The
   per-project default is a `native_meta` row (`execution_target:<workspace>`).
+  Every `native_meta` key is built in `store/keys.rs`. JSON documents there
+  (compare records, per-project compare indexes and scoreboards) are changed
+  only inside one `BEGIN IMMEDIATE` transaction (`Store::meta_transaction`);
+  a compare record carries a revision, so a stale save from a second process
+  is refused instead of overwriting it or counting a run twice.
 
 ## Local runtime lifecycle
 
