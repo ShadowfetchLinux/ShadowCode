@@ -54,8 +54,8 @@ export function NotificationFields({
           checked={value.notify}
           onChange={(e) => set("notify", e.target.checked)}
         />{" "}
-        Notify me when the window is in the background or the task is in
-        another conversation
+        Notify me when the window is in the background or the task is in another
+        conversation
       </label>
       <div className="notify-kinds" aria-disabled={!value.notify}>
         {KINDS.map(([key, label]) => (
@@ -79,9 +79,7 @@ export function NotificationFields({
           Play a sound
         </label>
       </div>
-      <p className="hint">
-        Clicking a notification opens its conversation.
-      </p>
+      <p className="hint">Clicking a notification opens its conversation.</p>
     </fieldset>
   );
 }

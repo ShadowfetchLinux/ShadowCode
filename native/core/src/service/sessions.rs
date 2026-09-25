@@ -233,7 +233,7 @@ impl Service {
         session["compare_lane"] = json!(compare_lane);
         // The worktree task this conversation runs in (as last saved; GET
         // /api/worktree-tasks/{id} refreshes it).
-        session["worktree_task"] = match crate::worktree_tasks::session_task(&store, id)? {
+        session["worktree"] = match crate::worktree_tasks::session_task(&store, id)? {
             Some(task) => crate::worktree_tasks::load(&store, &task)
                 .map(|record| record.to_json())
                 .unwrap_or(Value::Null),

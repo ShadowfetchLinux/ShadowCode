@@ -75,7 +75,6 @@ export function useConversationMenu(ctx: {
     act,
     previous: () => go(stepConversation(ordered(), ctx.sessionId, -1)),
     next: () => go(stepConversation(ordered(), ctx.sessionId, 1)),
-    recent: () =>
-      go(ctx.mostRecent((id) => sessions.some((s) => s.id === id))),
+    recent: () => go(ctx.mostRecent((id) => sessions.some((s) => s.id === id))),
   };
 }

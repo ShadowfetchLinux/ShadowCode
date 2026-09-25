@@ -84,8 +84,9 @@ export function pruneUnread(
 
 /** The project a conversation is listed under: a worktree task's
  * conversation belongs to its project, not to its worktree folder. */
-export const projectOf = (session: Pick<Session, "workspace" | "worktree_source">) =>
-  session.worktree_source || session.workspace;
+export const projectOf = (
+  session: Pick<Session, "workspace" | "worktree_source">,
+) => session.worktree_source || session.workspace;
 
 /** Conversations in the order the sidebar lists them: pinned first, then
  * by project (the open project first, then the project list), each

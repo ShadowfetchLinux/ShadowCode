@@ -84,8 +84,7 @@ export function useConversationBadges({
   /** The conversation opened before the current one (Ctrl+Tab). */
   const mostRecent = useCallback(
     (exists: (id: string) => boolean) =>
-      recent.current.find((id) => id !== visible.current && exists(id)) ||
-      null,
+      recent.current.find((id) => id !== visible.current && exists(id)) || null,
     [],
   );
 

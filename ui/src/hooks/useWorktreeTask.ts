@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { api, type Job, type SessionDetail, type WorktreeTask } from "../api";
 import type { ToastKind } from "./useToasts";
 

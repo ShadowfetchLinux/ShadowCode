@@ -468,7 +468,8 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       omitted: Number(p.omitted_messages || 0),
       method: String(p.method || ""),
     };
-    if (budget && compaction.after) budget = { ...budget, used: compaction.after };
+    if (budget && compaction.after)
+      budget = { ...budget, used: compaction.after };
   }
   if (event.type === "workflow.selected") {
     items = [

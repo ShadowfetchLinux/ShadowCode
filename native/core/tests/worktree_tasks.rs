@@ -339,7 +339,7 @@ async fn a_worktree_task_runs_beside_the_main_checkout_and_applies() {
     )
     .await
     .unwrap();
-    assert_eq!(session["worktree_task"]["id"], id.as_str());
+    assert_eq!(session["worktree"]["id"], id.as_str());
     // Its worktree would be orphaned: the conversation is not deleted.
     let error = call(
         &f.service,
@@ -383,7 +383,7 @@ async fn a_worktree_task_runs_beside_the_main_checkout_and_applies() {
     .await
     .unwrap();
     assert_eq!(session["workspace"], json!(project));
-    assert!(session["worktree_task"].is_null());
+    assert!(session["worktree"].is_null());
     // A second apply is refused.
     let again = call(
         &f.service,

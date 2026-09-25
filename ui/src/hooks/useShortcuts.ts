@@ -69,8 +69,7 @@ export function shortcutFor(
   // opened before this one.
   if (e.altKey && !mod && key === "arrowup") return "previous-conversation";
   if (e.altKey && !mod && key === "arrowdown") return "next-conversation";
-  if (e.ctrlKey && !e.shiftKey && e.key === "Tab")
-    return "recent-conversation";
+  if (e.ctrlKey && !e.shiftKey && e.key === "Tab") return "recent-conversation";
   if (key === "?" && !inField) return "help";
   return null;
 }

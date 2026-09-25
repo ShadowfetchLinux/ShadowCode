@@ -763,7 +763,10 @@ export const api = {
       `/api/worktree-tasks${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`,
     ),
   /** apply | keep-branch | discard */
-  closeWorktreeTask: (id: string, action: "apply" | "keep-branch" | "discard") =>
+  closeWorktreeTask: (
+    id: string,
+    action: "apply" | "keep-branch" | "discard",
+  ) =>
     send<WorktreeTask>(
       `/api/worktree-tasks/${encodeURIComponent(id)}/${action}`,
       "POST",

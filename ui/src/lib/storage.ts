@@ -29,7 +29,7 @@ export const readPins = (): string[] => {
 export const writePins = (pins: string[]) =>
   writeStore("shadow:pins", JSON.stringify(pins));
 
-export const draftKey =(id: string, workspace: string) =>
+export const draftKey = (id: string, workspace: string) =>
   `shadow:draft:${id || workspace}`;
 export const targetKey = (workspace: string) => `shadow:model:${workspace}`;
 export const isSessionCommand = (text: string) =>

@@ -18,10 +18,7 @@ import {
 import { api, type Job, type Project, type Session } from "../api";
 import { BADGE_LABELS, projectOf, type Badge } from "../lib/badges";
 import { readPins, writePins } from "../lib/storage";
-import {
-  ConversationMenu,
-  type ConversationAction,
-} from "./ConversationMenu";
+import { ConversationMenu, type ConversationAction } from "./ConversationMenu";
 
 /** Projects and their recent conversations, with per-conversation badges
  * (running, needs approval, failed, finished-unread) and a right-click menu
@@ -115,8 +112,7 @@ export function Sidebar({
       badges?.[s.id] ??
       (jobs.some(
         (j) =>
-          j.session_id === s.id &&
-          ["running", "cancelling"].includes(j.status),
+          j.session_id === s.id && ["running", "cancelling"].includes(j.status),
       )
         ? "running"
         : jobs.some((j) => j.session_id === s.id && j.status === "queued")

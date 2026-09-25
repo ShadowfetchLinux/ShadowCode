@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Gauge } from "lucide-react";
-import {
-  breakdownRows,
-  contextChip,
-  type ChipInput,
-} from "../lib/usageChip";
+import { breakdownRows, contextChip, type ChipInput } from "../lib/usageChip";
 import type { Transcript } from "../lib/transcript";
 
 /** "42% · 38k / 128k · $0.12": context use and cost for the open

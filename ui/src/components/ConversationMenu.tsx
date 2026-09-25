@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, GitFork, Pencil, Pin, Trash2 } from "lucide-react";
 
-export type ConversationAction = "rename" | "pin" | "fork" | "export" | "delete";
+export type ConversationAction =
+  "rename" | "pin" | "fork" | "export" | "delete";
 
 /** The right-click menu of a sidebar conversation. Delete asks once more
  * inside the menu. Arrow keys move between items; Escape closes. */
