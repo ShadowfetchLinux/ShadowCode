@@ -4208,6 +4208,7 @@ name = "shadowcode-desktop"
 version = "0.31.1"
 dependencies = [
  "anyhow",
+ "notify-rust",
  "serde_json",
  "shadowcode-core",
  "tauri",
