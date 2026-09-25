@@ -93,9 +93,15 @@ it("runs a task and shows the event-derived timeline and summary", async () => {
   fireEvent.click(
     within(summary).getByRole("button", { name: "Review changes" }),
   );
+  // A task's changes open the full-width review of that task.
+  const review = await screen.findByRole("region", { name: "Review changes" });
   expect(
-    await screen.findByRole("complementary", { name: "Drawer" }),
+    await within(review).findByRole("button", { name: /src\/app\.ts/ }),
   ).toBeTruthy();
+  fireEvent.click(
+    within(review).getByRole("button", { name: "Back to conversation" }),
+  );
+  expect(screen.queryByRole("region", { name: "Review changes" })).toBeNull();
   const post = fake.log.find(
     (r) => r.path === "/api/jobs" && r.method === "POST",
   );

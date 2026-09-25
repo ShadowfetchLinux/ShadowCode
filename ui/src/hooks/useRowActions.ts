@@ -9,8 +9,15 @@ import type { Transcript } from "../lib/transcript";
 type LimitItem = Extract<ChatItem, { kind: "limit" }>;
 export type RowHandlers = {
   setTranscript: (update: SetStateAction<Transcript>) => void;
-  reviewChanges: (path?: string) => void;
+  reviewChanges: (path?: string, taskId?: string) => void;
   rewind: (taskId: string) => Promise<void>;
+  editResend: (
+    item: Extract<ChatItem, { kind: "user" }>,
+    text: string,
+    undoFiles: boolean,
+  ) => Promise<void>;
+  retry: (text: string) => Promise<void>;
+  copy: (text: string) => Promise<void>;
   continueOnFallback: (item: LimitItem, choice: Fallback) => Promise<void>;
   chooseModel: () => void;
   openLocal: () => void;
@@ -38,7 +45,8 @@ export function useRowActions(handlers: RowHandlers): RowActions {
       diffStats: batchDiffStats((paths) =>
         api.diffStats(paths).then((r) => r.stats),
       ),
-      onReview: (path?: string) => latest.current.reviewChanges(path),
+      onReview: (path?: string, taskId?: string) =>
+        latest.current.reviewChanges(path, taskId),
       onRewind: (taskId: string) => void latest.current.rewind(taskId),
       onContinue: (item: LimitItem, choice: Fallback) =>
         void latest.current.continueOnFallback(item, choice),
@@ -47,6 +55,13 @@ export function useRowActions(handlers: RowHandlers): RowActions {
       onFork: (eventId: number) => void latest.current.fork(eventId),
       onOpenSession: (sessionId: string) =>
         void latest.current.openSession(sessionId),
+      onEditResend: (
+        item: Extract<ChatItem, { kind: "user" }>,
+        text: string,
+        undoFiles: boolean,
+      ) => void latest.current.editResend(item, text, undoFiles),
+      onRetry: (text: string) => void latest.current.retry(text),
+      onCopy: (text: string) => void latest.current.copy(text),
     }),
     [],
   );

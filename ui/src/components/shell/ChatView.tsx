@@ -2,7 +2,8 @@ import type { ReactNode, RefObject, UIEvent } from "react";
 import { LoaderCircle, X } from "lucide-react";
 import type { Approval, CommandResult, Job } from "../../api";
 import { ActivityTimeline } from "../ActivityTimeline";
-import { ApprovalCard, CommandCardView } from "../cards";
+import { CommandCardView } from "../cards";
+import { ApprovalCard, type ApprovalDecision } from "../ApprovalCard";
 import { Elapsed } from "../Elapsed";
 import { TaskSteerBar } from "../TaskSteerBar";
 import { WelcomeBanner } from "../WelcomeBanner";
@@ -124,7 +125,7 @@ export function ChatView({
   rows: ReactNode;
   commandCards: CommandResult[];
   approvals: Approval[];
-  onDecide: (id: string, decision: "approve" | "deny") => void;
+  onDecide: (id: string, answer: ApprovalDecision) => void;
   /** A task is running or being submitted. */
   working: boolean;
   /** The running task's activity. */

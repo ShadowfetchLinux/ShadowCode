@@ -11,6 +11,7 @@ import { ActivityTimeline } from "../ActivityTimeline";
 import { CommandCardView, OpCard, type ChatItem } from "../cards";
 import { LimitFallbackItem } from "../LimitFallback";
 import { Markdown } from "../Markdown";
+import { CopyButton, UserMessage } from "../MessageActions";
 import { SubagentCard } from "../SubagentCard";
 import { TaskSummary, type DiffStat } from "../TaskSummary";
 import type { TaskActivity } from "../../lib/activity";
@@ -26,12 +27,21 @@ type LimitItem = Extract<ChatItem, { kind: "limit" }>;
 export type RowActions = {
   onToggleTool: (key: string) => void;
   diffStats: (paths: string[]) => Promise<Record<string, DiffStat>>;
-  onReview: (path?: string) => void;
+  /** Review a task's changes (the Review view), or with no task the
+   * working tree (the Changes drawer). */
+  onReview: (path?: string, taskId?: string) => void;
   onRewind: (taskId: string) => void;
   onContinue: (item: LimitItem, choice: Fallback) => void;
   onChooseModel: () => void;
   onOpenLocal: () => void;
   onFork: (eventId: number) => void;
+  onEditResend: (
+    item: Extract<ChatItem, { kind: "user" }>,
+    text: string,
+    undoFiles: boolean,
+  ) => void;
+  onRetry: (text: string) => void;
+  onCopy: (text: string) => void;
   /** Open a subagent's own conversation (hidden from the sidebar). */
   onOpenSession?: (sessionId: string) => void;
 };
@@ -155,7 +165,11 @@ const TranscriptRow = memo(function TranscriptRow({
     node = <SubagentCard run={item.run} onOpen={actions.onOpenSession} />;
   else if (item.kind === "divider")
     node = (
-      <div className="msg-divider" role="separator">
+      <div
+        className={`msg-divider${item.rewound ? " is-rewound" : ""}`}
+        role="separator"
+        aria-label={item.text}
+      >
         <span>{item.text}</span>
       </div>
     );
@@ -166,7 +180,7 @@ const TranscriptRow = memo(function TranscriptRow({
         <TaskSummary
           activity={activity}
           diffStats={actions.diffStats}
-          onReview={actions.onReview}
+          onReview={(path) => actions.onReview(path, item.taskId)}
           onRewind={
             activity.verification?.status === "vendor_owned"
               ? undefined
@@ -188,33 +202,37 @@ const TranscriptRow = memo(function TranscriptRow({
     );
   else if (item.kind === "user")
     node = (
-      <div className={`msg-user${item.continued ? " is-continuation" : ""}`}>
-        <div className="user-pill">
-          {item.continued && (
-            <div className="continued-label">
-              {item.continued === "auto"
-                ? "Continued automatically"
-                : "Continued after the plan limit"}
-            </div>
-          )}
-          <div className="bubble">{item.text}</div>
-        </div>
-      </div>
+      <UserMessage
+        item={item}
+        disabled={forkDisabled}
+        onEditResend={actions.onEditResend}
+        onRetry={actions.onRetry}
+        onCopy={actions.onCopy}
+      />
     );
   else
     node = (
       <div className="msg-agent">
         {item.who && <div className="who">{item.who}</div>}
         <Markdown>{item.text}</Markdown>
-        {item.eventId && !item.live && (
-          <button
-            type="button"
-            className="ghost fork-action"
-            disabled={forkDisabled}
-            onClick={() => actions.onFork(item.eventId!)}
-          >
-            Fork from here
-          </button>
+        {!item.live && (
+          <div className="agent-actions" role="group" aria-label="Answer actions">
+            <CopyButton
+              text={item.text}
+              onCopy={actions.onCopy}
+              label="Copy answer"
+            />
+            {item.eventId && (
+              <button
+                type="button"
+                className="ghost fork-action"
+                disabled={forkDisabled}
+                onClick={() => actions.onFork(item.eventId!)}
+              >
+                Fork from here
+              </button>
+            )}
+          </div>
         )}
       </div>
     );
@@ -316,7 +334,11 @@ export function TranscriptRows({
           }
           fallback={row.item.kind === "limit" ? fallback : null}
           locked={row.item.kind === "limit" ? locked : false}
-          forkDisabled={row.item.kind === "agent" ? forkDisabled : false}
+          forkDisabled={
+            row.item.kind === "agent" || row.item.kind === "user"
+              ? forkDisabled
+              : false
+          }
           actions={actions}
         />
       ))}

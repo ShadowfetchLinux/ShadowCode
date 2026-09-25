@@ -64,6 +64,8 @@ export type PickerTarget = {
   featured?: boolean;
   vision?: boolean;
   tools?: boolean;
+  /** The composer's reasoning-effort control applies to this row. */
+  reasoning?: boolean;
   is_default?: boolean;
   usage?: UsageSnapshot | null;
   local?: LocalDetail;

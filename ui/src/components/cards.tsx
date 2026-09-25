@@ -1,5 +1,5 @@
 import { memo } from "react";
-import type { Approval, CommandResult } from "../api";
+import type { CommandResult } from "../api";
 import type { SubagentRun } from "../lib/subagents";
 import { Markdown } from "./Markdown";
 
@@ -10,6 +10,9 @@ export type ChatItem = (
       kind: "user";
       text: string;
       taskId?: string;
+      /** The event that recorded this prompt (Edit & resend forks just
+       * before it). */
+      eventId?: number;
       /** A follow-up ShadowCode wrote after a plan limit: "auto" when the
        * engine started it, "manual" when the user chose Continue on …. */
       continued?: "auto" | "manual";
@@ -44,7 +47,13 @@ export type ChatItem = (
   /** A subagent run started by this task (subagent.* events). */
   | { kind: "subagent"; taskId?: string; text: string; run: SubagentRun }
   /** Provider change inside one conversation (agent.handoff). */
-  | { kind: "divider"; text: string; taskId?: string }
+  | {
+      kind: "divider";
+      text: string;
+      taskId?: string;
+      /** A rewind: files went back to how they were before this task. */
+      rewound?: boolean;
+    }
   /** Final card for a finished task; content comes from transcript.activity. */
   | { kind: "summary"; taskId: string; text: string }
   | {
@@ -84,14 +93,6 @@ export function isMutatingTool(tool: string): boolean {
   return MUTATING.has(tool);
 }
 
-const FILE_TOOLS = new Set([
-  "write_file",
-  "edit_file",
-  "apply_patch",
-  "delete_file",
-  "create_directory",
-  "move_file",
-]);
 
 const BACKGROUND_LABELS = new Map([
   ["background_start", "Start background process"],
@@ -186,65 +187,6 @@ export const OpCard = memo(function OpCard({
           )}
         </div>
       )}
-    </div>
-  );
-});
-
-export const ApprovalCard = memo(function ApprovalCard({
-  approval,
-  onDecide,
-}: {
-  approval: Approval;
-  onDecide: (id: string, decision: "approve" | "deny") => void;
-}) {
-  const tool = approval.tool || "";
-  // File tools report their tool name as the "command"; what they do is in
-  // the reason ("Write hello.txt").
-  const fileChange = FILE_TOOLS.has(tool);
-  const command =
-    approval.command && approval.command !== tool ? approval.command : "";
-  const main = fileChange ? approval.reason || command : command;
-  const detail = main === approval.reason ? "" : approval.reason;
-  return (
-    <div className="approval" data-approval-id={approval.id}>
-      <div className="approval-head">
-        <span className="approval-kind">
-          {BACKGROUND_LABELS.has(tool)
-            ? "Background process"
-            : fileChange
-              ? "File change"
-              : tool === "exec"
-                ? "Command"
-                : tool || "Permission"}
-        </span>
-        <span className="approval-title">
-          {tool === "background_stop"
-            ? "Allow ShadowCode to stop this process?"
-            : tool === "background_start"
-              ? "Allow ShadowCode to start this process?"
-              : fileChange
-                ? "Allow this change?"
-                : "Allow ShadowCode to run this?"}
-        </span>
-      </div>
-      {main && <pre className="code">{main}</pre>}
-      {detail && <p className="hint">{detail}</p>}
-      <div className="row approval-actions">
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => onDecide(approval.id, "deny")}
-        >
-          Deny
-        </button>
-        <button
-          type="button"
-          className="primary"
-          onClick={() => onDecide(approval.id, "approve")}
-        >
-          Allow
-        </button>
-      </div>
     </div>
   );
 });
