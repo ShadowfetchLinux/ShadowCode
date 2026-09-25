@@ -401,11 +401,17 @@ impl Store {
             params![sid,workspace.to_string_lossy(),now,now,model,title])?;
         self.session(&sid)?.context("Created session disappeared")
     }
+    /// The session row, with `usage` (tokens and cost of its finished
+    /// tasks) parsed from `usage_json`.
     pub fn session(&self, sid: &str) -> Result<Option<Value>> {
         Ok(self
             .query("SELECT * FROM sessions WHERE id=?", [sid])?
             .into_iter()
-            .next())
+            .next()
+            .map(|mut row| {
+                row["usage"] = json!(crate::usage::parse(&row["usage_json"]));
+                row
+            }))
     }
     /// Resolve identifiers against the complete indexed history, never a recent
     /// list of potentially large job payloads. Two rows suffice for ambiguity.
@@ -1086,25 +1092,15 @@ fn finish_task_on(
         tx.query_row("SELECT usage_json FROM tasks WHERE id=?", [tid], |r| {
             r.get(0)
         })?;
-    let previous: Value = previous
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(json!({}));
     let current: Option<String> =
         tx.query_row("SELECT usage_json FROM sessions WHERE id=?", [&sid], |r| {
             r.get(0)
         })?;
-    let mut total: Value = current
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(json!({}));
-    if let Some(usage) = usage.as_object() {
-        for (key, value) in usage {
-            total[key] = json!(total[key]
-                .as_u64()
-                .unwrap_or(0)
-                .saturating_sub(previous[key].as_u64().unwrap_or(0))
-                .saturating_add(value.as_u64().unwrap_or(0)));
-        }
-    }
+    // Re-finishing a task replaces its earlier contribution.
+    let mut total = crate::usage::parse(&json!(current));
+    total.subtract(&crate::usage::parse(&json!(previous)));
+    total.add(&crate::usage::parse(usage));
+    let total = json!(total);
     tx.execute(
         "UPDATE tasks SET status=?,summary=?,completed_at=?,usage_json=? WHERE id=?",
         params![status, summary, now(), usage.to_string(), tid],

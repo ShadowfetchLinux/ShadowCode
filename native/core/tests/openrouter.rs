@@ -75,7 +75,7 @@ class Handler(BaseHTTPRequestHandler):
         log({"method": "POST", "path": self.path, "auth": self.auth(), "model": body.get("model"),
              "tools": [t["function"]["name"] for t in body.get("tools", [])],
              "title": self.headers.get("X-Title"), "referer": self.headers.get("HTTP-Referer"),
-             "image": "image_url" in json.dumps(messages)})
+             "image": "image_url" in json.dumps(messages), "usage": body.get("usage")})
         if not self.auth():
             return self.reply(401, {"error": {"message": "No auth credentials found"}})
         if self.path != "/api/v1/chat/completions":
@@ -89,7 +89,8 @@ class Handler(BaseHTTPRequestHandler):
                         "arguments": json.dumps({"path": "hello.txt", "content": "hi from openrouter\n"})}}]},
                     "finish_reason": None}]},
                 {"choices": [{"delta": {}, "finish_reason": "tool_calls"}],
-                 "usage": {"prompt_tokens": 40, "completion_tokens": 9}}])
+                 "usage": {"prompt_tokens": 40, "completion_tokens": 9, "cost": 0.0001,
+                           "prompt_tokens_details": {"cached_tokens": 32}}}])
         return sse(self, [
             {"choices": [{"delta": {"role": "assistant", "content": "Wrote hello.txt."}, "finish_reason": None}]},
             {"choices": [{"delta": {}, "finish_reason": "stop"}],
@@ -324,6 +325,36 @@ async fn key_models_picker_and_a_task_run_on_the_native_loop() {
         .iter()
         .any(|t| t == "write_file"));
     assert_eq!(chats[0]["title"], "ShadowCode");
+    assert_eq!(
+        chats[0]["usage"],
+        json!({"include": true}),
+        "cost is requested"
+    );
+
+    // Per-task usage: the first turn's cost is OpenRouter's; the second turn
+    // reported none, so it is priced from the model list and marked estimated.
+    let usage = &done["usage"];
+    assert_eq!(usage["prompt_tokens"], 95);
+    assert_eq!(usage["completion_tokens"], 14);
+    assert_eq!(usage["cached_tokens"], 32);
+    assert_eq!(usage["turns"], 2);
+    assert_eq!(usage["source"], "provider");
+    let expected = 0.0001 + 55.0 * 0.000001 + 5.0 * 0.000002;
+    assert!(
+        (usage["cost_usd"].as_f64().unwrap() - expected).abs() < 1e-12,
+        "{usage}"
+    );
+    assert_eq!(usage["cost_estimated"], true);
+    let session = call(
+        &service,
+        "GET",
+        &format!("/api/sessions/{}", done["session_id"].as_str().unwrap()),
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(session["usage"]["cached_tokens"], 32);
+    assert!((session["usage"]["cost_usd"].as_f64().unwrap() - expected).abs() < 1e-12);
 
     // A chat-only model gets no tool schemas.
     let chat = call(

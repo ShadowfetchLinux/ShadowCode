@@ -208,7 +208,8 @@ fn codex_exec_fallback_maps_jsonl() {
         u,
         Update::Usage {
             input: 3,
-            output: 2
+            output: 2,
+            ..
         }
     )));
     assert!(adapter.one_shot());
@@ -369,12 +370,24 @@ fn claude_stream_json_approval_and_interrupt() {
         &mut *adapter,
         &[
             r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"wrote"}]}}"#,
-            r#"{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":2},"result":"ignored"}"#,
+            r#"{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":300,"cache_creation_input_tokens":20},"total_cost_usd":0.0125,"result":"ignored"}"#,
         ],
     );
     assert!(done.iter().any(
         |u| matches!(u, Update::FilesChanged { paths, .. } if paths == &["a.rs".to_string()])
     ));
+    // Cache reads and writes count as input; the run's cost is reported.
+    assert!(done.iter().any(|u| matches!(
+        u,
+        Update::Usage {
+            input: 321,
+            output: 2,
+            cached: 300
+        }
+    )));
+    assert!(done
+        .iter()
+        .any(|u| matches!(u, Update::VendorCost { total_usd } if *total_usd == 0.0125)));
     assert!(done.iter().any(|u| matches!(
         u,
         Update::TurnCompleted {

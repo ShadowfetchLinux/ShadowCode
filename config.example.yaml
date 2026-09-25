@@ -76,8 +76,10 @@ agent:
   max_steps: 32
   tool_timeout_sec: 60
   parallel_reads: true
-  model_retries: 3          # retry transient provider errors (429/5xx/connection)
-  retry_backoff_sec: 1.0    # exponential backoff base
+  model_retries: 3          # retry 429/5xx/overloaded and dropped streams (0-10)
+  retry_backoff_sec: 1.0    # exponential backoff base, with jitter; Retry-After wins
+  summary_compaction: true  # let the model summarize history dropped to fit the context
+  summary_timeout_sec: 60   # longest wait for that summary before the built-in digest
 
 onboarding:
   completed: false

@@ -652,11 +652,19 @@ async fn apply_update(
         Update::Usage {
             input,
             output: completion,
+            cached,
         } => {
             *usage_reported = true;
             usage.prompt_tokens = usage.prompt_tokens.saturating_add(input);
             usage.completion_tokens = usage.completion_tokens.saturating_add(completion);
             usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+            usage.cached_tokens = usage.cached_tokens.saturating_add(cached);
+            usage.turns = usage.turns.saturating_add(1);
+            usage.source = "vendor".into();
+        }
+        Update::VendorCost { total_usd } => {
+            usage.cost_usd = Some(total_usd);
+            usage.source = "vendor".into();
         }
         Update::TurnCompleted { text, interrupted } => {
             flush_text(request, message_id, pending_text)?;
