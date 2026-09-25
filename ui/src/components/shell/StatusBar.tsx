@@ -1,9 +1,7 @@
+import type { ReactNode } from "react";
 import { GitBranch } from "lucide-react";
 import type { AllowanceResponse } from "../../api";
 import { AllowanceButton } from "../Allowance";
-
-const formatTokens = (n: number) =>
-  n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
 /** The bottom line: state, branch, allowance, context use and version. */
 export function StatusBar({
@@ -15,8 +13,7 @@ export function StatusBar({
   allowance,
   allowanceOpen,
   onAllowance,
-  contextPercent,
-  totalTokens,
+  context,
   version,
 }: {
   busy: boolean;
@@ -27,11 +24,10 @@ export function StatusBar({
   allowance: AllowanceResponse | null;
   allowanceOpen: boolean;
   onAllowance: () => void;
-  contextPercent: number;
-  totalTokens: number;
+  /** The context & cost chip. */
+  context?: ReactNode;
   version: string;
 }) {
-  const ctx = contextPercent;
   return (
     <footer className="statusline" aria-live="polite">
       <span className={`status-dot ${busy ? "active" : ""}`} />
@@ -64,19 +60,7 @@ export function StatusBar({
         onOpen={onAllowance}
       />
       <span className="grow" />
-      {ctx > 0 && (
-        <span
-          className={`ctx-bar${ctx >= 80 ? " ctx-warn" : ""}`}
-          role="img"
-          aria-label={`${ctx}% of context used`}
-          title={`${ctx}% of context used · ${formatTokens(totalTokens)} tokens`}
-        >
-          <span
-            className="ctx-fill"
-            style={{ width: `${Math.min(ctx, 100)}%` }}
-          />
-        </span>
-      )}
+      {context}
       <span className="version">{version ? `v${version}` : "Connecting"}</span>
     </footer>
   );

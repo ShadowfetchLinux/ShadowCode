@@ -72,6 +72,8 @@ export function useConversation(onComplete: (done?: Job) => void) {
       session.current = detail.id;
       setHistoryBase(detail.history_page || null);
       const state = replay(detail.events);
+      // Older turns outside the loaded window: the engine's session total.
+      if (!state.sessionUsage && detail.usage) state.sessionUsage = detail.usage;
       if (active && !isActive(active)) {
         state.stage = active.status.toUpperCase();
         // A stopped job already shows "Stopped" in its summary card; its

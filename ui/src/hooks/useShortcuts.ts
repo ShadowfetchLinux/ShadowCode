@@ -26,11 +26,17 @@ export type ShortcutAction =
   | "focus"
   | "stop"
   | "export"
-  | "help";
+  | "help"
+  | "previous-conversation"
+  | "next-conversation"
+  | "recent-conversation";
 
 /** The action a key press asks for, or null. Pure, for tests. */
 export function shortcutFor(
-  e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "target">,
+  e: Pick<
+    KeyboardEvent,
+    "key" | "ctrlKey" | "metaKey" | "shiftKey" | "target"
+  > & { altKey?: boolean },
   open: ShortcutContext,
 ): ShortcutAction | null {
   const key = e.key.toLowerCase();
@@ -59,6 +65,12 @@ export function shortcutFor(
   if (mod && key === "l") return "focus";
   if (mod && key === ".") return "stop";
   if (mod && e.shiftKey && key === "e") return "export";
+  // Conversations: Alt+↑/↓ previous/next in the sidebar, Ctrl+Tab the one
+  // opened before this one.
+  if (e.altKey && !mod && key === "arrowup") return "previous-conversation";
+  if (e.altKey && !mod && key === "arrowdown") return "next-conversation";
+  if (e.ctrlKey && !e.shiftKey && e.key === "Tab")
+    return "recent-conversation";
   if (key === "?" && !inField) return "help";
   return null;
 }

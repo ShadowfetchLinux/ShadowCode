@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { NotificationFields, notifyPrefs } from "./NotificationFields";
 
 type Save = (values: Record<string, unknown>) => Promise<void>;
 
@@ -187,7 +188,7 @@ export function AppearancePage({
 }) {
   const ui = (cfg.ui || {}) as Record<string, unknown>;
   const [theme, setTheme] = useState(String(ui.theme || "system"));
-  const [notify, setNotify] = useState(ui.notify !== false);
+  const [notify, setNotify] = useState(() => notifyPrefs(ui));
   const [saving, setSaving] = useState(false);
   return (
     <section className="settings-page">
@@ -213,15 +214,7 @@ export function AppearancePage({
           ))}
         </div>
       </fieldset>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={notify}
-          onChange={(e) => setNotify(e.target.checked)}
-        />{" "}
-        Desktop notification when a task finishes while the window is in the
-        background
-      </label>
+      <NotificationFields value={notify} onChange={setNotify} />
       <div className="row end settings-foot">
         <button
           type="button"
@@ -229,7 +222,7 @@ export function AppearancePage({
           disabled={saving}
           onClick={() => {
             setSaving(true);
-            void onSave({ ui: { theme, notify } }).finally(() =>
+            void onSave({ ui: { theme, ...notify } }).finally(() =>
               setSaving(false),
             );
           }}

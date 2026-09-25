@@ -10,6 +10,7 @@ import {
 } from "../ComposerControls";
 import { QueuedTasks } from "../QueuedTasks";
 import { UnifiedPicker } from "../UnifiedPicker";
+import { RunInWorktreeButton } from "../RunInWorktreeButton";
 import { TaskPlan } from "./Chrome";
 import {
   isApiKey,
@@ -67,6 +68,7 @@ export function ComposerDock({
   permission,
   network,
   compare,
+  worktree,
 }: {
   hidden: boolean;
   queue: {
@@ -96,6 +98,8 @@ export function ComposerDock({
     onWeb: (enabled: boolean) => void;
   };
   compare: { reason: string | null; locked: boolean; onOpen: () => void };
+  /** "Run in new worktree" (hidden when `reason` says it cannot apply). */
+  worktree?: ComponentProps<typeof RunInWorktreeButton>;
 }) {
   return (
     <div className="composer-wrap" hidden={hidden}>
@@ -123,6 +127,7 @@ export function ComposerDock({
         }
         compare={
           <>
+            {worktree && <RunInWorktreeButton {...worktree} />}
             <button
               type="button"
               className="compare-btn"
