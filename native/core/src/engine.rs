@@ -215,6 +215,11 @@ impl Engine {
     pub fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.0.sender.subscribe()
     }
+    /// The windows' wake-up channel, for transient notifications that are
+    /// never stored (a terminal printed output, for example).
+    pub fn notifier(&self) -> broadcast::Sender<Value> {
+        self.0.sender.clone()
+    }
     pub fn paths(&self) -> &AppPaths {
         &self.0.paths
     }

@@ -93,6 +93,12 @@ impl Backend {
             Self::Owned { service, server } => {
                 server.close();
                 server.wait_closed().await;
+                // The user's own terminals end with the window.
+                let terminals = service.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    terminals.close_terminals(Duration::from_millis(800))
+                })
+                .await;
                 service.engine.shutdown().await
             }
             Self::Attached(view) => {

@@ -269,6 +269,14 @@ fn notification(event: &Value) -> Value {
     if event["type"] == "agent.completed" {
         result["payload"] = json!({"summary": event["payload"]["summary"].as_str().unwrap_or("Task finished").chars().take(180).collect::<String>()});
     }
+    // Terminal wake-ups name the terminal (never its output). Every view hears
+    // them; a view reads only terminals its own hub owns.
+    if let Some(id) = event["terminal_id"]
+        .as_str()
+        .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        result["terminal_id"] = json!(id);
+    }
     result
 }
 

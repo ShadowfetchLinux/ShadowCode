@@ -48,6 +48,7 @@ pub mod steering;
 pub mod store;
 pub mod symbol_index;
 pub mod system_info;
+pub mod terminal;
 pub mod tools;
 pub mod vision;
 pub mod web;
