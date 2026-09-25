@@ -89,6 +89,12 @@ sliding-window layers.
   context is smaller.
 - **One number.** The result is used both as the server's `--ctx-size` and as
   the agent's context limit.
+- **What the context changes.** With 32K or more, the model gets ShadowCode's
+  complete tool descriptions; below that, short ones, so the answer keeps room.
+  At 4K only the core coding tools are offered. When a long conversation must
+  shrink, a model with 8K or more writes a short summary of the removed steps;
+  smaller ones keep a built-in digest. Local models cost nothing, and their
+  token counts are recorded like any other model's.
 - **Fit.** The row reports whether the model fits the GPU, fits only in RAM
   (CPU), or doesn't fit at all (*Not enough memory on this computer*).
 

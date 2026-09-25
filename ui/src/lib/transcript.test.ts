@@ -278,6 +278,22 @@ describe("durable transcript", () => {
       "Finished",
     ]);
   });
+  it("refreshes the picker for vendor usage pushes but not per-task usage", () => {
+    const state = replay([
+      event(1, "usage.updated", {
+        purpose: "turn",
+        turn: { prompt_tokens: 20 },
+        job: { prompt_tokens: 20 },
+        session: { prompt_tokens: 20 },
+      }),
+    ]);
+    expect(state.usageVersion).toBe(0);
+    const pushed = applyEvent(
+      state,
+      event(2, "usage.updated", { vendor: "codex", usage: {} }),
+    );
+    expect(pushed.usageVersion).toBe(1);
+  });
   it("does not duplicate a final model response", () => {
     const items = replay([
       event(1, "model.delta", { text: "Done" }),

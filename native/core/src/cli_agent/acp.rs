@@ -413,7 +413,11 @@ impl AcpAdapter {
                     update["inputTokens"].as_u64(),
                     update["outputTokens"].as_u64(),
                 ) {
-                    (Some(input), Some(output)) => Step::update(Update::Usage { input, output }),
+                    (Some(input), Some(output)) => Step::update(Update::Usage {
+                        input,
+                        output,
+                        cached: update["cachedReadTokens"].as_u64().unwrap_or(0),
+                    }),
                     _ => Step::default(),
                 }
             }

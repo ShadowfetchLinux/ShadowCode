@@ -1450,25 +1450,26 @@ impl Engine {
                 .run(move |store| store.set_session_meta(&session_id, &native_key, &native))
                 .await?;
         }
-        let (text, usage) = (outcome.text, outcome.usage);
+        let (text, mut usage) = (outcome.text, outcome.usage);
+        usage.source = "vendor".into();
+        usage.estimated = !outcome.usage_reported;
         {
             let mut record = running
                 .record
                 .lock()
                 .map_err(|_| anyhow!("Job lock poisoned"))?;
-            record.usage.add(&usage);
             // No token counts from the protocol: say so instead of a zero.
             record.usage_is_estimated = !outcome.usage_reported;
             record.steps = record.steps.saturating_add(1);
-            self.0.store.save_job(&json!(*record))?;
         }
+        self.record_usage(running, &events, &job, usage, "vendor")?;
         // Keep the conversation's message tape complete, so a later turn on
         // the native loop sees this vendor turn as plain prior conversation.
         let mut tape = self
             .0
             .store
             .latest_session_messages(&job.session_id, &job.id)?;
-        tape.retain(|m| m["role"] != "system");
+        tape.retain(|m| m["role"] != "system" || m["_shadow_compaction"] == true);
         tape.push(json!({"role":"user","content":job.task}));
         tape.push(json!({
             "role":"assistant",
@@ -1535,6 +1536,34 @@ impl Engine {
         Ok(())
     }
 
+    /// Add a priced model request to the job's usage and report it.
+    fn record_usage(
+        &self,
+        running: &Running,
+        events: &TaskEvents,
+        job: &Job,
+        mut turn: Usage,
+        purpose: &str,
+    ) -> Result<()> {
+        crate::usage::price_turn(&mut turn, &running.config.model, &self.0.paths.state);
+        let total = {
+            let mut record = running
+                .record
+                .lock()
+                .map_err(|_| anyhow!("Job lock poisoned"))?;
+            record.usage.add(&turn);
+            self.0.store.save_job(&json!(*record))?;
+            record.usage.clone()
+        };
+        let session =
+            crate::usage::session_total(&self.0.store, &job.session_id, &job.task_id, &total)?;
+        events.emit(
+            "usage.updated",
+            crate::usage::event(&turn, &total, &session, purpose),
+        )?;
+        Ok(())
+    }
+
     async fn run_with_tools(
         &self,
         running: &Running,
@@ -1547,8 +1576,13 @@ impl Engine {
             .prepare_model_client(&running.config, &running.config.model, &running.cancel)
             .await?;
         let model: ModelClient = prepared.client(&self.0.paths)?;
+        let tier = autonomy::description_tier(&autonomy::capability_profile_for(
+            &running.config.model.provider,
+            &running.config.model.name,
+            running.config.model.context_limit,
+        ));
         let mut schemas: Vec<_> = tools
-            .schemas()
+            .schemas_for(tier)
             .into_iter()
             .filter(|schema| {
                 let name = schema["function"]["name"].as_str().unwrap_or("");
@@ -1586,7 +1620,8 @@ impl Engine {
             .0
             .store
             .latest_session_messages(&job.session_id, &job.id)?;
-        messages.retain(|m| m["role"] != "system");
+        // Earlier turns' compaction notes (summaries) carry into this turn.
+        messages.retain(|m| m["role"] != "system" || m["_shadow_compaction"] == true);
         context::repair_incomplete(&mut messages);
         // Legacy histories have no native message tape; preserve a bounded,
         // explicitly labelled transcript as data rather than inventing calls.
@@ -1698,12 +1733,19 @@ impl Engine {
                 !running.cancel.is_cancelled(),
                 "Task cancelled. Completed changes remain checkpointed."
             );
-            if let Some(compaction) = context::compact(
+            if let Some(compacted) = crate::compaction::compact(
+                &model,
                 &mut messages,
                 &schemas,
-                running.config.model.context_limit,
-                running.config.agent.compact_ratio,
-            )? {
+                &running.config,
+                &running.cancel,
+            )
+            .await?
+            {
+                if let Some(usage) = compacted.usage {
+                    self.record_usage(running, &events, &job, usage, "compaction")?;
+                }
+                let compaction = compacted.event;
                 events.emit("context.compacted", compaction.clone())?;
                 let outcomes = tools
                     .fire_hooks(hooks::context(
@@ -1832,23 +1874,22 @@ impl Engine {
                             "model.stream_end",
                             json!({"message_id":message_id,"complete":false}),
                         )?;
-                        let safe_retry = partial.is_empty()
-                            && error.chain().any(|e| {
-                                e.downcast_ref::<reqwest::Error>()
-                                    .is_some_and(reqwest::Error::is_connect)
-                            });
-                        if safe_retry
-                            && attempts < running.config.agent.model_retries
-                            && !running.cancel.is_cancelled()
-                        {
-                            attempts += 1;
-                            events.emit("model.retry",json!({"attempt":attempts,"reason":"connection failed before a response"}))?;
-                            let delay = Duration::from_secs_f64(
-                                (running.config.agent.retry_backoff_sec
-                                    * 2_f64.powi((attempts - 1) as i32))
-                                .min(30.0),
-                            );
-                            tokio::select! {_=running.cancel.cancelled()=>bail!("Task cancelled during connection retry"),_=tokio::time::sleep(delay)=>{}}
+                        // Tools run only after a complete response, so no tool of
+                        // this step has run: re-sending the request cannot
+                        // repeat one. The failed attempt's partial text and
+                        // partial tool arguments are discarded.
+                        let plan = crate::retry::plan(
+                            &error,
+                            attempts,
+                            running.config.agent.model_retries as u32,
+                            running.config.agent.retry_backoff_sec,
+                        )
+                        .filter(|_| !running.cancel.is_cancelled());
+                        if let Some(plan) = plan {
+                            attempts = plan.attempt;
+                            let discard = (!partial.is_empty()).then_some(message_id.as_str());
+                            events.emit("model.retry", plan.event(discard))?;
+                            tokio::select! {_=running.cancel.cancelled()=>bail!("Task cancelled during model retry"),_=tokio::time::sleep(plan.delay)=>{}}
                             continue;
                         }
                         if !partial.is_empty() {
@@ -1883,12 +1924,28 @@ impl Engine {
                     ) as u64;
                     response.usage.total_tokens =
                         response.usage.prompt_tokens + response.usage.completion_tokens;
+                    response.usage.estimated = true;
                     record.usage_is_estimated = true;
                 }
+                crate::usage::price_turn(
+                    &mut response.usage,
+                    &running.config.model,
+                    &self.0.paths.state,
+                );
                 record.usage.add(&response.usage);
                 record.steps = step + 1;
                 record.event_cursor = self.0.store.event_cursor(&job.session_id)?;
                 self.0.store.save_job(&json!(*record))?;
+                let session = crate::usage::session_total(
+                    &self.0.store,
+                    &job.session_id,
+                    &job.task_id,
+                    &record.usage,
+                )?;
+                events.emit(
+                    "usage.updated",
+                    crate::usage::event(&response.usage, &record.usage, &session, "turn"),
+                )?;
                 let caps = autonomy::effective_caps(
                     &running.config.agent.autonomy_profile,
                     running.config.agent.max_steps,

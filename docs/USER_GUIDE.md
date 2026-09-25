@@ -243,6 +243,32 @@ In **Settings › Permissions & network**:
 - **Command palette** (`Ctrl+K`): rename, branch, export (`Ctrl+Shift+E`) and
   delete conversations.
 
+## Long conversations, retries and cost
+
+- **Long conversations.** When a conversation no longer fits the model's
+  context, ShadowCode removes the oldest steps (a tool call always goes with
+  its result) and asks the same model for a short summary of what was
+  removed: goals, decisions, files, commands and open problems. The summary
+  stays in the conversation, so later messages start from it. For models with
+  less than 8K of context, or when the summary fails or takes longer than a
+  minute, a built-in digest is used instead. The full history always stays in
+  the app. Turn summaries off with `agent.summary_compaction: false`.
+- **Busy or dropped providers.** A request that fails with a rate limit, an
+  overloaded or failing provider, or a connection that drops mid-answer is
+  sent again, up to three times (`agent.model_retries`), waiting longer each
+  time or as long as the provider asks. A reply that was cut off is thrown
+  away and replaced; tools only run after a complete reply, so nothing runs
+  twice. Errors such as a wrong key or an unknown model are shown at once.
+- **Tokens and cost.** Every job and conversation records input, output and
+  cached tokens and a cost in US dollars: what OpenRouter charged, zero for a
+  model on this computer, and what a subscription CLI reports (Claude Code
+  reports a cost, Codex reports tokens). When OpenRouter doesn't report a
+  cost, ShadowCode works it out from the model's listed prices and marks it
+  as an estimate. Type `/cost` to see the conversation's totals.
+- **Prompt caching.** Claude and Gemini models on OpenRouter are asked to
+  cache the unchanging start of each request, which makes later steps
+  cheaper and faster. Other providers cache on their own.
+
 ## Troubleshooting
 
 - **A subscription row says Sign in.** Use **Settings › Accounts › Connect**,

@@ -242,7 +242,15 @@ pub enum Update {
     /// Non-fatal diagnostic (shown as a warning, never fails the task).
     Warning(String),
     /// Token usage reported by the vendor, when the protocol carries it.
-    Usage { input: u64, output: u64 },
+    /// `input` includes `cached` (input served from the vendor's cache).
+    Usage {
+        input: u64,
+        output: u64,
+        cached: u64,
+    },
+    /// The vendor's running cost for this run in US dollars (Claude's
+    /// `total_cost_usd`); it replaces, never adds to, an earlier value.
+    VendorCost { total_usd: f64 },
     /// The current turn finished. `text` is the final assistant message when
     /// the protocol delivers one that was not already streamed.
     TurnCompleted {

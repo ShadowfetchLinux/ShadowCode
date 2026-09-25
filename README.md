@@ -192,7 +192,9 @@ when it has no tool support. Search the picker by name or slug to find one.
 These models run on ShadowCode's own agent loop, the same one local models
 use, so your permission mode, approvals, checkpoints, the **Web** toggle,
 image attachments (*Vision* rows) and review all apply. Every token is billed to your OpenRouter account; the Accounts card
-shows credits used and your key's limit. Details: [OpenRouter](docs/OPENROUTER.md).
+shows credits used and your key's limit. Each job and conversation records its
+tokens and cost (`/cost`), Claude and Gemini requests use prompt caching, and
+rate limits are retried automatically. Details: [OpenRouter](docs/OPENROUTER.md).
 
 ## Local models
 
