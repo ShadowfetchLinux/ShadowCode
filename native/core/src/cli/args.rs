@@ -336,9 +336,14 @@ pub struct TaskOptions {
 }
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub enum ApprovalMode {
+    /// Stop the task and exit with code 2.
     #[default]
     Cancel,
+    /// Leave the request for the desktop or `shadowcode approvals`.
     Wait,
+    /// Approve each request this task raises. For disposable machines such
+    /// as CI runners only; denied actions and project permissions still apply.
+    Approve,
 }
 #[derive(Debug, Subcommand)]
 pub enum Background {

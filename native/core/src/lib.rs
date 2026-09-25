@@ -2,6 +2,7 @@
 pub mod agents;
 pub mod allowance;
 pub mod approvals;
+pub mod automations;
 pub mod autonomy;
 pub mod background;
 pub mod checkpoint;
@@ -22,6 +23,7 @@ pub mod guardian;
 pub mod hooks;
 pub mod instructions;
 pub mod intelligence;
+pub mod issues;
 #[cfg(unix)]
 pub mod lifecycle;
 pub mod local_engine;

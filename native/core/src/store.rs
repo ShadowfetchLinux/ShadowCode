@@ -9,11 +9,13 @@ use std::{
     time::Duration,
 };
 
+mod automations;
 mod background;
 mod goals;
 pub mod keys;
 mod memory;
 mod meta;
+pub use automations::AutomationRun;
 pub use goals::MilestoneSpec;
 pub use meta::MetaTransaction;
 
@@ -91,7 +93,7 @@ CREATE TABLE IF NOT EXISTS task_notes (
 
 /// Current schema version. Older databases are backed up, then migrated
 /// forward one step at a time inside one transaction.
-pub const SCHEMA_VERSION: i64 = 25;
+pub const SCHEMA_VERSION: i64 = 26;
 
 /// Version 25: persisted subscription usage snapshots, so the Accounts page
 /// and picker can show "Last checked …" before the first refresh. Execution
@@ -103,6 +105,24 @@ CREATE TABLE IF NOT EXISTS usage_snapshots (
  PRIMARY KEY(vendor,account,pool)
 );
 CREATE INDEX IF NOT EXISTS sessions_updated ON sessions(updated_at);
+"#;
+
+/// Version 26: scheduled automations and their run history
+/// (`store::automations`). Idempotent like every step.
+const MIGRATION_26: &str = r#"
+CREATE TABLE IF NOT EXISTS automations (
+ id TEXT PRIMARY KEY, workspace TEXT NOT NULL, name TEXT NOT NULL,
+ payload TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0, next_run_at REAL,
+ created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS automations_workspace ON automations(workspace,created_at);
+CREATE INDEX IF NOT EXISTS automations_due ON automations(paused,next_run_at);
+CREATE TABLE IF NOT EXISTS automation_runs (
+ id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, status TEXT NOT NULL,
+ origin TEXT NOT NULL, scheduled_for REAL, started_at REAL NOT NULL,
+ finished_at REAL, session_id TEXT, job_id TEXT, payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS automation_runs_automation ON automation_runs(automation_id,started_at);
 "#;
 
 pub struct Store {
@@ -288,6 +308,9 @@ impl Store {
             // Ordered forward steps; each is idempotent.
             if version < 25 {
                 tx.execute_batch(MIGRATION_25)?;
+            }
+            if version < 26 {
+                tx.execute_batch(MIGRATION_26)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

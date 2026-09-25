@@ -48,6 +48,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 mod accounts;
 mod agents;
+mod automations;
 mod background;
 mod call;
 mod code_intel;
@@ -60,6 +61,7 @@ mod git;
 mod goals;
 #[cfg(unix)]
 mod inspection;
+mod issues;
 mod jobs;
 mod memory;
 mod model_catalog;
@@ -198,10 +200,15 @@ impl Service {
         // A Compare lane's worktree is temporary: it is selected while its
         // conversation is open but never becomes a project or the relaunch
         // folder, which would go stale once the comparison is kept.
+        // An automation's temporary worktree is treated the same way.
         let lane = match &session {
-            Some(id) => crate::compare::session_tags(&self.engine.store(), id)?
-                .0
-                .is_some(),
+            Some(id) => {
+                let store = self.engine.store();
+                crate::compare::session_tags(&store, id)?.0.is_some()
+                    || store
+                        .session_meta(id, crate::store::keys::AUTOMATION_WORKTREE)?
+                        .is_some()
+            }
             None => false,
         };
         if !lane {
@@ -243,6 +250,8 @@ impl Service {
             }
             "jobs" | "run" | "approvals" | "checkpoints" => self.job_routes(&call).await,
             "goals" => self.goal_routes(&call).await,
+            "automations" => self.automation_routes(&call).await,
+            "issues" => self.issue_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "terminals" => self.terminal_routes(&call).await,
             "git" => self.forge_routes(&call).await,
