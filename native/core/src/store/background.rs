@@ -51,8 +51,8 @@ impl Store {
         let mut db = self.lock()?;
         if db
             .query_row(
-                "SELECT value FROM native_meta WHERE key='legacy_background_imported'",
-                [],
+                "SELECT value FROM native_meta WHERE key=?",
+                [super::keys::LEGACY_BACKGROUND_IMPORTED],
                 |row| row.get::<_, String>(0),
             )
             .optional()?
@@ -99,8 +99,8 @@ impl Store {
             tx.execute("INSERT OR IGNORE INTO background_processes(id,workspace,started_at,status,payload) VALUES(?,?,?,?,?)",params![task.id,task.cwd,task.started_at,task.status,serde_json::to_string(&task)?])?;
         }
         tx.execute(
-            "INSERT INTO native_meta(key,value) VALUES('legacy_background_imported','true')",
-            [],
+            "INSERT INTO native_meta(key,value) VALUES(?,'true')",
+            [super::keys::LEGACY_BACKGROUND_IMPORTED],
         )?;
         tx.commit()?;
         Ok(())

@@ -496,21 +496,20 @@ async fn git_before(
 async fn create_ref(dir: &Path, session: &str, commit: &str) -> Result<String> {
     let base = format!("{REF_ROOT}/{session}/");
     let existing = git(dir, &["for-each-ref", "--format=%(refname)", &base], None).await?;
-    let mut next = String::from_utf8_lossy(&existing)
+    let first = String::from_utf8_lossy(&existing)
         .lines()
         .filter_map(|r| r.strip_prefix(&base)?.parse::<u64>().ok())
         .max()
         .unwrap_or(0)
         + 1;
     let mut last = None;
-    for _ in 0..5 {
+    for next in first..first + 5 {
         let name = format!("{base}{next}");
         // An empty old value: create only, never overwrite a parallel capture.
         match git(dir, &["update-ref", &name, commit, ""], None).await {
             Ok(_) => return Ok(name),
             Err(error) => last = Some(error),
         }
-        next += 1;
     }
     Err(last.unwrap_or_else(|| anyhow::anyhow!("Could not create a checkpoint ref")))
 }
