@@ -27,8 +27,14 @@ export function installFakeBackend(options: FakeOptions = {}) {
   const workspace = "/work/demo";
   const log: { method: string; path: string; body: any }[] = [];
   const listeners: Record<string, ((payload: unknown) => void)[]> = {};
-  const wake = () =>
-    (listeners["shadowcode:events"] || []).forEach((fn) => fn({}));
+  /** Like the desktop shell: every engine broadcast wakes the window with
+   * its type and conversation. */
+  const wake = (payload: Json = {}) =>
+    (listeners["shadowcode:events"] || []).forEach((fn) => fn(payload));
+  /** Transient feed notifications (not stored), as the engine sends when a
+   * job is queued or cancelled or an approval changes. */
+  const notify = (type: string, sessionId?: string) =>
+    wake({ type, session_id: sessionId || null });
 
   const unknownUsage = {
     state: "unavailable",
@@ -511,6 +517,8 @@ export function installFakeBackend(options: FakeOptions = {}) {
     /** The engine's selected project (a lane's copy once its conversation
      * is activated). */
     selected: workspace,
+    /** The conversation the window opened last. */
+    activeSession: "",
     projects: [workspace] as string[],
     /** Compare records, newest last, and the project's scoreboard. */
     compares: [] as Json[],
@@ -799,7 +807,29 @@ export function installFakeBackend(options: FakeOptions = {}) {
       session_id: sessionId,
       task_id: taskId,
     });
-    wake();
+    wake({ type, session_id: sessionId });
+  }
+
+  /** A tool asks for permission: the record is listed at once and the
+   * window is woken, as the engine does. Tests call it directly too. */
+  function requestApproval(record: Json = {}) {
+    const sid = record.session_id || state.activeSession || "s1";
+    const approval = {
+      id: `a${state.approvals.length + 1}-${Date.now()}`,
+      session_id: sid,
+      task_id: "",
+      tool: "exec",
+      arguments: { command: "npm test" },
+      command: "npm test",
+      reason: "Run the tests",
+      pending: true,
+      created_at: now(),
+      expires_at: now() + 600,
+      ...record,
+    };
+    state.approvals.push(approval);
+    notify("approval.requested", sid);
+    return approval;
   }
 
   function script(job: Json, local: boolean) {
@@ -1079,6 +1109,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
       handoff: body.handoff ? { ...body.handoff, job_id: id } : undefined,
     };
     state.jobs.push(job);
+    notify("job.changed", sid);
     emit(sid, job.task_id, "user.message", { text: body.task });
     job.event_cursor = state.cursor - 1;
     const session = state.sessions.find((s: Json) => s.id === sid);
@@ -1205,7 +1236,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
     });
     if (plan.approval)
       steps.push(() => {
-        state.approvals.push({
+        requestApproval({
           id: `a-${job.id}`,
           session_id: sid,
           task_id: tid,
@@ -1258,6 +1289,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
         state.approvals = state.approvals.filter(
           (a: Json) => a.task_id !== tid,
         );
+        notify("approval.resolved", sid);
         job.status = "cancelled";
         job.finished_at = now();
         job.summary = "Task cancelled";
@@ -1384,6 +1416,8 @@ export function installFakeBackend(options: FakeOptions = {}) {
         state.approvals = state.approvals.filter(
           (a: Json) => a.task_id !== job.task_id,
         );
+        notify("approval.resolved", job.session_id);
+        notify("job.changed", job.session_id);
       }
     }
   }
@@ -1963,6 +1997,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
       // As in the engine, activating selects (and records) its project,
       // a lane's copy included.
       state.selected = detail.workspace;
+      state.activeSession = m[1];
       if (!state.projects.includes(detail.workspace))
         state.projects.push(detail.workspace);
       return detail;
@@ -2025,11 +2060,53 @@ export function installFakeBackend(options: FakeOptions = {}) {
     }
     if ((m = path.match(/^\/api\/jobs\/([^/]+)\/cancel$/))) {
       const job = state.jobs.find((j: Json) => j.id === m![1]);
-      if (["queued", "running"].includes(job.status)) job.status = "cancelling";
+      if (["queued", "running"].includes(job.status)) {
+        job.status = "cancelling";
+        notify("job.changed", job.session_id);
+      }
       return { ...job };
     }
     if ((m = path.match(/^\/api\/jobs\/([^/]+)$/)))
       return { ...state.jobs.find((j: Json) => j.id === m![1]) };
+    if (path === "/api/feed" && method === "GET") {
+      const sid = q.get("session_id");
+      return {
+        approvals: state.approvals.filter(
+          (a: Json) => !sid || a.session_id === sid,
+        ),
+        jobs: state.jobs,
+        events: [
+          "approval.requested",
+          "approval.resolved",
+          "job.changed",
+          "agent.started",
+          "agent.completed",
+          "agent.paused",
+          "agent.resumed",
+          "limit.fallback",
+        ],
+      };
+    }
+    if (path === "/api/workspace/diffstat" && method === "POST") {
+      // Counted from the same hunks the per-file diff shows.
+      const stats: Json = {};
+      for (const file of body.paths as string[]) {
+        const diff = route(
+          "GET",
+          `/api/workspace/diff?path=${encodeURIComponent(file)}`,
+          null,
+        ) as Json;
+        let add = 0;
+        let del = 0;
+        for (const hunk of [...diff.hunks, ...diff.staged_hunks])
+          for (const line of hunk.lines) {
+            if (line.kind === "add") add++;
+            else if (line.kind === "del") del++;
+          }
+        stats[file] = { add, del };
+      }
+      return { stats };
+    }
     if (path === "/api/approvals" && method === "GET") {
       const sid = q.get("session_id");
       return {
@@ -2045,6 +2122,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
       if (body?.session_id && body.session_id !== approval.session_id)
         throw compareError("Approval belongs to a different session");
       state.approvals = state.approvals.filter((a: Json) => a !== approval);
+      notify("approval.resolved", approval.session_id);
       return { ...approval, pending: false };
     }
     if (path === "/api/commands") return { commands: [] };
@@ -2102,6 +2180,29 @@ export function installFakeBackend(options: FakeOptions = {}) {
         truncated: false,
       };
     }
+    if (path === "/api/workspace/files")
+      return {
+        workspace,
+        path: q.get("path") || ".",
+        parent: ".",
+        entries: [
+          { name: "README.md", path: "README.md", type: "file" },
+          { name: "src", path: "src", type: "dir" },
+        ],
+      };
+    if (path === "/api/workspace/file")
+      return {
+        path: q.get("path"),
+        content: `# Demo\nContents of ${q.get("path")}\n`,
+      };
+    if (path === "/api/workspace/exec" && method === "POST")
+      return {
+        ok: true,
+        command: body.command,
+        stdout: `ran ${body.command}\n`,
+        stderr: "",
+        exit_code: 0,
+      };
     if (path === "/api/workspace/attach-image")
       return {
         path: `.shadow/attachments/${body.filename}`,
@@ -2139,6 +2240,6 @@ export function installFakeBackend(options: FakeOptions = {}) {
     },
   };
   (window as any).__SHADOW_TEST_TRANSPORT__ = bridge;
-  (window as any).__SHADOW_FAKE__ = { log, state };
-  return { bridge, log, state };
+  (window as any).__SHADOW_FAKE__ = { log, state, requestApproval };
+  return { bridge, log, state, requestApproval };
 }

@@ -1,3 +1,4 @@
+import { memo, type ReactNode } from "react";
 import { Check, CircleAlert, LoaderCircle } from "lucide-react";
 import {
   deriveSteps,
@@ -6,8 +7,9 @@ import {
 } from "../lib/activity";
 
 /** One compact timeline for a task. Every step is backed by recorded events
- * and expands to the real tool calls and their output. */
-export function ActivityTimeline({
+ * and expands to the real tool calls and their output. Memoized: a task's
+ * activity object only changes when its own events arrive. */
+export const ActivityTimeline = memo(function ActivityTimeline({
   activity,
   pendingApprovals = 0,
   elapsed,
@@ -15,7 +17,8 @@ export function ActivityTimeline({
 }: {
   activity: TaskActivity | undefined;
   pendingApprovals?: number;
-  elapsed?: string;
+  /** Elapsed time of the running task (text or a ticking `<Elapsed>`). */
+  elapsed?: ReactNode;
   /** A summary card follows and states the outcome; skip the last step. */
   withSummary?: boolean;
 }) {
@@ -43,7 +46,7 @@ export function ActivityTimeline({
       )}
     </div>
   );
-}
+});
 
 function StepIcon({ state }: { state: TimelineStep["state"] }) {
   if (state === "active")

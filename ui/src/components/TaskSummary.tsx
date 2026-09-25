@@ -1,43 +1,52 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { FileDiff, FlaskConical, Timer } from "lucide-react";
 import { formatDuration, type TaskActivity } from "../lib/activity";
+import type { LineCounts } from "../lib/diffStats";
 
-export type DiffStat = { add: number; del: number } | null;
+export type DiffStat = LineCounts;
 
 /** Final card for a finished task: changed files (with +/- from the diff API
  * when it has them), recorded checks with exit codes, duration, and a way to
- * review the changes. */
-export function TaskSummary({
+ * review the changes. `diffStats` counts every file in one request;
+ * `diffStat` (one file per call) remains for callers without it. */
+export const TaskSummary = memo(function TaskSummary({
   activity,
   onReview,
   onRewind,
   diffStat,
+  diffStats,
 }: {
   activity: TaskActivity;
   onReview: (path?: string) => void;
   onRewind?: () => void;
   diffStat?: (path: string) => Promise<DiffStat>;
+  diffStats?: (paths: string[]) => Promise<Record<string, DiffStat>>;
 }) {
   const [stats, setStats] = useState<Record<string, DiffStat>>({});
   const changed = activity.changed;
+  const changedKey = changed.join("\n");
   useEffect(() => {
-    if (!diffStat || !changed.length) return;
+    if ((!diffStat && !diffStats) || !changedKey) return;
     let live = true;
-    void Promise.all(
-      changed.slice(0, 20).map(async (path) => {
-        try {
-          return [path, await diffStat(path)] as const;
-        } catch {
-          return [path, null] as const;
-        }
-      }),
-    ).then((rows) => {
-      if (live) setStats(Object.fromEntries(rows));
+    const paths = changedKey.split("\n").slice(0, 20);
+    const read = diffStats
+      ? diffStats(paths).catch(() => ({}) as Record<string, DiffStat>)
+      : Promise.all(
+          paths.map(async (path) => {
+            try {
+              return [path, await diffStat!(path)] as const;
+            } catch {
+              return [path, null] as const;
+            }
+          }),
+        ).then((rows) => Object.fromEntries(rows));
+    void read.then((next) => {
+      if (live) setStats(next);
     });
     return () => {
       live = false;
     };
-  }, [diffStat, changed.join("\n")]);
+  }, [diffStat, diffStats, changedKey]);
   const verification = activity.verification;
   const duration =
     activity.startedAt && activity.finishedAt
@@ -182,4 +191,4 @@ export function TaskSummary({
       </div>
     </section>
   );
-}
+});

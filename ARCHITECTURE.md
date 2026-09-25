@@ -176,6 +176,25 @@ Job statuses end in `completed`, `failed`, `cancelled`, `interrupted` or
 
 ## Frontend
 
+- **Shell.** `ui/src/App.tsx` only wires hooks to components. Behaviour is in
+  `ui/src/hooks/`: `useNavigation` (startup, opening conversations and
+  projects, trust), `useConversation` (the job event stream and history
+  pages), `useFeed` (approvals and jobs), `useTaskActions` (sending, slash
+  commands, consent, plan-limit continuation), `useJobControls`,
+  `useCompare`, `useShortcuts` (one keydown listener), `useTheme`,
+  `useStickyScroll` and `useDrawerMemory`. Layout is in
+  `ui/src/components/shell/` (`TopBar`, `Stage`, `ChatView`,
+  `TranscriptRows`, `ComposerDock`, `StatusBar`, `AppDialogs`).
+- **Push, not polling.** The desktop shell forwards every engine broadcast as
+  `shadowcode:events {session_id, type}`. `useFeed` reads `GET /api/feed`
+  (pending approvals and the job list) only for the types it lists
+  (`approval.*`, `job.changed`, `agent.*`), with a 15 s backstop, and keeps
+  unchanged arrays so nothing re-renders for them.
+- **Rendering.** Transcript rows carry stable keys (message, call or event
+  ids, `lib/rowKeys.ts`) and are memoized per row; long pages render their
+  latest 150 rows first. The elapsed timer ticks in its own component. Task
+  summaries count changed lines for every file in one
+  `POST /api/workspace/diffstat`.
 - **Picker and settings.** `ui/src/components/UnifiedPicker.tsx` is filled only
   by `GET /api/picker`. The settings pages are in `components/settings/`:
   Accounts (vendors, the Antigravity install and the OpenRouter key), Local
