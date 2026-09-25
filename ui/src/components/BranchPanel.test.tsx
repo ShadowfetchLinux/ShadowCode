@@ -4,11 +4,10 @@ import {
   cleanup,
   fireEvent,
   render,
-  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
-import { GitPanel } from "./GitPanel";
+import { BranchPanel } from "./BranchPanel";
 import { api } from "../api";
 import { forgeApi, type GitOverview, type PrStatus } from "../lib/forge";
 import { useDrawerMemory } from "../hooks/useDrawerMemory";
@@ -66,29 +65,21 @@ const ready: PrStatus = {
 };
 
 function mount(busy = false) {
-  const memory = renderHook(() => useDrawerMemory("/work/demo"));
   const toast = vi.fn();
-  const view = render(
-    <GitPanel
-      busy={busy}
-      toast={toast}
-      memory={memory.result.current.memory}
-      onMemory={memory.result.current.update}
-      onOpenTerminal={vi.fn()}
-    />,
-  );
-  // Re-render with the latest memory after each change.
-  const sync = () =>
-    view.rerender(
-      <GitPanel
+  function Harness() {
+    const memory = useDrawerMemory("/work/demo");
+    return (
+      <BranchPanel
         busy={busy}
         toast={toast}
-        memory={memory.result.current.memory}
-        onMemory={memory.result.current.update}
+        memory={memory.memory}
+        onMemory={memory.update}
         onOpenTerminal={vi.fn()}
-      />,
+      />
     );
-  return { toast, sync, memory };
+  }
+  render(<Harness />);
+  return { toast };
 }
 
 beforeEach(() => {
@@ -109,19 +100,17 @@ it("suggests an editable message, then commits it", async () => {
     message: "Add the login page\n\nUsers can sign in.",
   });
   vi.mocked(api.gitCommit).mockResolvedValue({ ok: true });
-  const { sync, toast } = mount();
+  const { toast } = mount();
   await screen.findByText("feature/login");
   expect(screen.getByText("1 to push · origin/feature/login")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Suggest message" }));
   await waitFor(() => expect(forgeApi.suggest).toHaveBeenCalledWith("commit"));
-  sync();
   const box = screen.getByRole("textbox", {
     name: "Commit message",
   }) as HTMLTextAreaElement;
   await waitFor(() => expect(box.value).toContain("Add the login page"));
   expect(screen.getByText(/Drafted by qwen3-coder/)).toBeTruthy();
   fireEvent.change(box, { target: { value: "Add login" } });
-  sync();
   fireEvent.click(screen.getByRole("button", { name: "Commit" }));
   await waitFor(() => expect(api.gitCommit).toHaveBeenCalledWith("Add login"));
   expect(toast).toHaveBeenCalledWith("Committed", "ok");
@@ -171,18 +160,18 @@ it("opens a draft pull request and shows its checks", async () => {
     overall: "pending",
     url: "https://github.com/octo/demo/pull/7/checks",
   });
-  const { sync, toast } = mount();
+  const { toast } = mount();
   await screen.findByRole("button", { name: "Create pull request" });
-  fireEvent.change(screen.getByRole("textbox", { name: "Pull request title" }), {
-    target: { value: "Add login" },
-  });
-  sync();
+  fireEvent.change(
+    screen.getByRole("textbox", { name: "Pull request title" }),
+    {
+      target: { value: "Add login" },
+    },
+  );
   fireEvent.change(screen.getByRole("combobox", { name: "Base branch" }), {
     target: { value: "develop" },
   });
-  sync();
   fireEvent.click(screen.getByRole("checkbox", { name: "Draft" }));
-  sync();
   fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
   await waitFor(() =>
     expect(forgeApi.createPr).toHaveBeenCalledWith({
@@ -192,7 +181,6 @@ it("opens a draft pull request and shows its checks", async () => {
       draft: true,
     }),
   );
-  sync();
   const link = await screen.findByRole("link", { name: /#7 Add login/ });
   expect(link.getAttribute("href")).toBe("https://github.com/octo/demo/pull/7");
   expect(toast).toHaveBeenCalledWith(
@@ -240,8 +228,11 @@ it("waits for the agent before switching branches or committing", async () => {
       .disabled,
   ).toBe(true);
   expect(
-    (screen.getByRole("combobox", { name: "Switch to branch" }) as HTMLSelectElement)
-      .disabled,
+    (
+      screen.getByRole("combobox", {
+        name: "Switch to branch",
+      }) as HTMLSelectElement
+    ).disabled,
   ).toBe(true);
   // Push still works while the agent runs.
   expect(

@@ -46,7 +46,7 @@ function sourceText(s: Suggestion, action = "commit") {
     : `Drafted by ${who}. Edit it before you ${action}.`;
 }
 
-export function GitPanel({
+export function BranchPanel({
   busy,
   toast,
   memory,
@@ -131,7 +131,8 @@ export function GitPanel({
   const others = (overview.branches || []).filter((b) => !b.current);
   const onBase = overview.branch === base;
   const cli = status?.cli;
-  const cliName = cli?.name === "glab" ? "GitLab CLI (glab)" : "GitHub CLI (gh)";
+  const cliName =
+    cli?.name === "glab" ? "GitLab CLI (glab)" : "GitHub CLI (gh)";
   const canCreate =
     Boolean(cli?.installed && cli?.authenticated) &&
     Boolean(overview.branch) &&
@@ -159,7 +160,12 @@ export function GitPanel({
           <button
             type="button"
             className="mini"
-            disabled={busy || !branchName.trim() || Boolean(nameProblem) || Boolean(working)}
+            disabled={
+              busy ||
+              !branchName.trim() ||
+              Boolean(nameProblem) ||
+              Boolean(working)
+            }
             onClick={() =>
               void run("branch", async () => {
                 const made = await forgeApi.branch(branchName.trim(), true);
@@ -262,7 +268,9 @@ export function GitPanel({
           <button
             type="button"
             className="mini primary-mini"
-            disabled={busy || !overview.staged || !message.trim() || Boolean(working)}
+            disabled={
+              busy || !overview.staged || !message.trim() || Boolean(working)
+            }
             onClick={() =>
               void run("commit", async () => {
                 await api.gitCommit(message);
@@ -364,7 +372,10 @@ export function GitPanel({
                   {checks.error && <p className="hint error">{checks.error}</p>}
                   <ul>
                     {checks.checks?.checks.map((c) => (
-                      <li key={`${c.workflow}/${c.name}`} className={`check-${c.bucket}`}>
+                      <li
+                        key={`${c.workflow}/${c.name}`}
+                        className={`check-${c.bucket}`}
+                      >
                         {c.bucket === "pass" ? (
                           <CircleCheck size={13} aria-label="Passed" />
                         ) : c.bucket === "fail" ? (
@@ -372,11 +383,15 @@ export function GitPanel({
                         ) : (
                           <CircleDashed
                             size={13}
-                            aria-label={c.bucket === "skipping" ? "Skipped" : "Running"}
+                            aria-label={
+                              c.bucket === "skipping" ? "Skipped" : "Running"
+                            }
                           />
                         )}
                         {c.link ? <a href={c.link}>{c.name}</a> : c.name}
-                        {c.workflow ? <span className="dim"> · {c.workflow}</span> : null}
+                        {c.workflow ? (
+                          <span className="dim"> · {c.workflow}</span>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -453,7 +468,11 @@ export function GitPanel({
                   onClick={() =>
                     void run("suggest-pr", async () => {
                       const s = await forgeApi.suggest("pr", base);
-                      setPr({ ...pr, title: s.title || "", body: s.body || "" });
+                      setPr({
+                        ...pr,
+                        title: s.title || "",
+                        body: s.body || "",
+                      });
                       setPrNote(
                         s.source === "summary"
                           ? s.note || "Written from the commit list."
@@ -462,7 +481,9 @@ export function GitPanel({
                     })
                   }
                 >
-                  {working === "suggest-pr" ? "Drafting…" : "Suggest title and description"}
+                  {working === "suggest-pr"
+                    ? "Drafting…"
+                    : "Suggest title and description"}
                 </button>
                 {canCreate && (
                   <button
@@ -484,7 +505,12 @@ export function GitPanel({
                           title: pr.title.trim(),
                           state: "OPEN",
                         });
-                        setPr({ title: "", body: "", base: pr.base, draft: pr.draft });
+                        setPr({
+                          title: "",
+                          body: "",
+                          base: pr.base,
+                          draft: pr.draft,
+                        });
                         setPrNote("");
                         toast(
                           made.pushed
@@ -496,7 +522,9 @@ export function GitPanel({
                       })
                     }
                   >
-                    {working === "create-pr" ? "Creating…" : "Create pull request"}
+                    {working === "create-pr"
+                      ? "Creating…"
+                      : "Create pull request"}
                   </button>
                 )}
               </div>
@@ -513,7 +541,11 @@ export function GitPanel({
                       The {cliName} is installed but not signed in. Run{" "}
                       <code>{cli.login_command}</code> in the Terminal, then
                       come back here.{" "}
-                      <button type="button" className="link-btn" onClick={onOpenTerminal}>
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={onOpenTerminal}
+                      >
                         Open the Terminal
                       </button>
                     </p>
@@ -536,15 +568,18 @@ export function GitPanel({
                     )
                   }
                 >
-                  <ExternalLink size={12} aria-hidden="true" /> Open compare page
-                  in browser
+                  <ExternalLink size={12} aria-hidden="true" /> Open compare
+                  page in browser
                 </button>
               )}
-              {status?.provider && FORGE[status.provider] && cli?.detail && cli.authenticated && (
-                <p className="hint dim">
-                  {FORGE[status.provider]}: {cli.detail}
-                </p>
-              )}
+              {status?.provider &&
+                FORGE[status.provider] &&
+                cli?.detail &&
+                cli.authenticated && (
+                  <p className="hint dim">
+                    {FORGE[status.provider]}: {cli.detail}
+                  </p>
+                )}
             </>
           )}
         </section>

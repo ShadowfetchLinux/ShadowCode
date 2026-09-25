@@ -14,13 +14,7 @@ import { HealthTab, SkillsTab } from "./AdvancedPanels";
 /** Goals, background processes and worktrees are used while working, so
  * they live in the drawer's Tools tab rather than here. */
 export type AdvancedTab =
-  | "skills"
-  | "health"
-  | "mcp"
-  | "plugins"
-  | "hooks"
-  | "guardian"
-  | "vendors";
+  "skills" | "health" | "mcp" | "plugins" | "hooks" | "guardian" | "vendors";
 
 export const ADVANCED_TABS: { id: AdvancedTab; label: string }[] = [
   { id: "skills", label: "Skills" },

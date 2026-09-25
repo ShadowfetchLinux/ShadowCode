@@ -34,9 +34,7 @@ const enc = encodeURIComponent;
 
 export const terminalApi = {
   list: () =>
-    request<{ workspace: string; terminals: TerminalInfo[] }>(
-      "/api/terminals",
-    ),
+    request<{ workspace: string; terminals: TerminalInfo[] }>("/api/terminals"),
   open: (cols: number, rows: number) =>
     request<TerminalInfo>("/api/terminals", "POST", { cols, rows }),
   input: (id: string, data: string) =>

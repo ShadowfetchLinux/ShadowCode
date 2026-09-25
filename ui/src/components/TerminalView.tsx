@@ -126,7 +126,9 @@ export function TerminalView({
       role="group"
       aria-label={title}
       onClick={(e) =>
-        (e.currentTarget.querySelector("textarea") as HTMLElement | null)?.focus()
+        (
+          e.currentTarget.querySelector("textarea") as HTMLElement | null
+        )?.focus()
       }
     />
   );

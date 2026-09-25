@@ -7,7 +7,16 @@ it("explains bad branch names the way the engine refuses them", () => {
   expect(branchNameProblem("")).toMatch(/Enter/);
   expect(branchNameProblem("-rf")).toMatch(/dash/);
   expect(branchNameProblem("a b")).toMatch(/spaces/);
-  for (const bad of ["a..b", "x.lock", "/x", "x/", ".x", "a/.b", "HEAD", "a@{1}"])
+  for (const bad of [
+    "a..b",
+    "x.lock",
+    "/x",
+    "x/",
+    ".x",
+    "a/.b",
+    "HEAD",
+    "a@{1}",
+  ])
     expect(branchNameProblem(bad)).toBe("That is not a valid branch name");
 });
 

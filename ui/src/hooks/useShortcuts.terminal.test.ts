@@ -40,7 +40,13 @@ it("toggles the terminal with Ctrl+` elsewhere", () => {
   ).toBe("terminal");
   expect(
     shortcutFor(
-      { key: "Escape", ctrlKey: false, metaKey: false, shiftKey: false, target },
+      {
+        key: "Escape",
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        target,
+      },
       closed,
     ),
   ).toBe("close-panel");

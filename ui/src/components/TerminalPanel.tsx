@@ -1,10 +1,16 @@
 /** The drawer's Terminal tab: the user's own shells in this project, one
  * per tab. They keep running when the drawer closes or another tab opens,
  * work while the agent runs, and are never shown to the model. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Plus, X } from "lucide-react";
 import { terminalApi, type TerminalInfo } from "../lib/terminal";
-import { TerminalView } from "./TerminalView";
 import {
   remembered,
   type DrawerMemory,
@@ -13,6 +19,11 @@ import {
 import "../tools.css";
 
 type Toast = (text: string, kind?: "ok" | "err" | "info") => void;
+
+/** xterm.js loads with the first terminal, not with the window. */
+const TerminalView = lazy(() =>
+  import("./TerminalView").then((m) => ({ default: m.TerminalView })),
+);
 
 /** Rough initial size; the view fits itself once laid out. */
 const START = { cols: 80, rows: 24 };
@@ -144,7 +155,7 @@ export function TerminalPanel({
         </div>
       )}
       {shown && (
-        <>
+        <Suspense fallback={<p role="status">Starting a terminal…</p>}>
           <TerminalView
             key={shown.id}
             id={shown.id}
@@ -155,7 +166,11 @@ export function TerminalPanel({
                 setTerminals((rows) =>
                   (rows || []).map((t) =>
                     t.id === chunk.id
-                      ? { ...t, exited: chunk.exited, exit_code: chunk.exit_code }
+                      ? {
+                          ...t,
+                          exited: chunk.exited,
+                          exit_code: chunk.exit_code,
+                        }
                       : t,
                   ),
                 );
@@ -165,7 +180,9 @@ export function TerminalPanel({
             <div className="terminal-exited" role="status">
               <span>
                 The shell exited
-                {shown.exit_code !== null ? ` with code ${shown.exit_code}` : ""}
+                {shown.exit_code !== null
+                  ? ` with code ${shown.exit_code}`
+                  : ""}
                 .
               </span>
               <button
@@ -179,7 +196,7 @@ export function TerminalPanel({
               </button>
             </div>
           )}
-        </>
+        </Suspense>
       )}
     </section>
   );

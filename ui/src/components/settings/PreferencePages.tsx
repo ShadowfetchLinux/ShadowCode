@@ -17,15 +17,17 @@ const VENDOR_NAMES: Record<string, string> = {
 export function noteSummary(id: string) {
   if (id === "native")
     return "How ShadowCode applies this (local, API and OpenRouter models)";
-  if (id === "network") return "How the network setting applies to subscriptions";
+  if (id === "network")
+    return "How the network setting applies to subscriptions";
   const name = VENDOR_NAMES[id.replace(/^cli[-:]/, "")];
-  return name ? `How ${name} applies this` : "How this subscription applies this";
+  return name
+    ? `How ${name} applies this`
+    : "How this subscription applies this";
 }
 
 /** ShadowCode first, the subscriptions, then the network note. */
 function noteOrder(notes: Record<string, string>) {
-  const rank = (id: string) =>
-    id === "native" ? 0 : id === "network" ? 2 : 1;
+  const rank = (id: string) => (id === "native" ? 0 : id === "network" ? 2 : 1);
   return Object.entries(notes).sort(([a], [b]) => rank(a) - rank(b));
 }
 

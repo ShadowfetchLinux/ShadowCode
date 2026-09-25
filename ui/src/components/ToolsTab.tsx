@@ -46,7 +46,11 @@ export function ToolsTab({
       </div>
       <div className="tools-body">
         {view === "goals" && (
-          <GoalsTab sessionId={sessionId} onOpen={onOpenSession} toast={toast} />
+          <GoalsTab
+            sessionId={sessionId}
+            onOpen={onOpenSession}
+            toast={toast}
+          />
         )}
         {view === "background" && <BackgroundTab toast={toast} />}
         {view === "worktrees" && (

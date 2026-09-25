@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type FileEntry, type Session } from "../api";
 import { Empty } from "./cards";
 import { ChangesTab } from "./ChangesTab";
-import { GitPanel } from "./GitPanel";
+import { BranchPanel } from "./BranchPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { ToolsTab, type ToolsView } from "./ToolsTab";
 import { exportSession } from "../lib/transport";
@@ -20,12 +20,7 @@ import {
  * front) lives in `memory`, owned by the app, so switching tabs keeps it; the
  * terminals themselves run in the engine. */
 export type DrawerTab =
-  | "changes"
-  | "git"
-  | "terminal"
-  | "files"
-  | "sessions"
-  | ToolsView;
+  "changes" | "git" | "terminal" | "files" | "sessions" | ToolsView;
 const TOOLS: readonly DrawerTab[] = ["goals", "background", "worktrees"];
 export const isToolTab = (tab: DrawerTab): tab is ToolsView =>
   TOOLS.includes(tab);
@@ -130,7 +125,7 @@ export function Drawer({
           />
         )}
         {tab === "git" && (
-          <GitPanel
+          <BranchPanel
             busy={busy}
             toast={toast}
             memory={memory}
