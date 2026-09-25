@@ -51,6 +51,9 @@ tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 tree-sitter-java = "0.23"
 streaming-iterator = "0.1.9"
+# Pairing QR codes for remote access (Settings › Remote access and
+# `shadowcode serve --remote`). MIT OR Apache-2.0, no dependencies.
+qrcode = { version = "=0.14.1", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Landlock file/TCP restrictions for shell commands that run without
