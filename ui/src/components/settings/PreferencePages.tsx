@@ -1,4 +1,5 @@
 import { useState } from "react";
+import "../../tools.css";
 
 type Save = (values: Record<string, unknown>) => Promise<void>;
 
@@ -9,6 +10,24 @@ const VENDOR_NAMES: Record<string, string> = {
   antigravity: "Antigravity",
   grok: "Grok",
 };
+
+/** The disclosure label for one `permissions.vendor_notes` entry. The
+ * engine keys ShadowCode's own enforcement as `native`; that key is never
+ * shown. */
+export function noteSummary(id: string) {
+  if (id === "native")
+    return "How ShadowCode applies this (local, API and OpenRouter models)";
+  if (id === "network") return "How the network setting applies to subscriptions";
+  const name = VENDOR_NAMES[id.replace(/^cli[-:]/, "")];
+  return name ? `How ${name} applies this` : "How this subscription applies this";
+}
+
+/** ShadowCode first, the subscriptions, then the network note. */
+function noteOrder(notes: Record<string, string>) {
+  const rank = (id: string) =>
+    id === "native" ? 0 : id === "network" ? 2 : 1;
+  return Object.entries(notes).sort(([a], [b]) => rank(a) - rank(b));
+}
 
 /** Settings › Permissions & network. Saves only the permissions and network
  * groups. */
@@ -71,19 +90,16 @@ export function PermissionsPage({
       </fieldset>
       {Object.keys(notes).length > 0 && (
         <div className="vendor-notes">
-          <h4>Subscriptions</h4>
           <p className="hint">
-            Vendor tools enforce their own sandbox. This is how each one applies
-            the mode above:
+            ShadowCode enforces this for models it runs itself. Subscriptions
+            run in their vendor's own sandbox and apply it their way.
           </p>
-          <dl>
-            {Object.entries(notes).map(([id, note]) => (
-              <div key={id}>
-                <dt>{VENDOR_NAMES[id.replace(/^cli[-:]/, "")] || id}</dt>
-                <dd>{note}</dd>
-              </div>
-            ))}
-          </dl>
+          {noteOrder(notes).map(([id, note]) => (
+            <details key={id} className="vendor-note">
+              <summary>{noteSummary(id)}</summary>
+              <p>{note}</p>
+            </details>
+          ))}
         </div>
       )}
       <fieldset className="mode-options">

@@ -353,6 +353,7 @@ export default function App() {
     palette: () => setOverlay("palette"),
     sidebar: () => setSidebar((v) => !v),
     changes: () => setPanel((p) => (p ? null : "changes")),
+    terminal: () => setPanel((p) => (p === "terminal" ? null : "terminal")),
     settings: () => openSettings(),
     project: () => setOverlay("project"),
     new: () => void nav.newSession(),
@@ -559,6 +560,7 @@ export default function App() {
             setPanel(null);
             promptRef.current?.focus();
           }}
+          onOpenProject={(path) => void nav.pickProject(path)}
           memory={memory.memory}
           onMemory={memory.update}
         />
