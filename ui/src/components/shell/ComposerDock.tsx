@@ -1,0 +1,150 @@
+import type { ComponentProps } from "react";
+import { GitCompareArrows } from "lucide-react";
+import type { Job, PlanStep, Session } from "../../api";
+import { Composer } from "../Composer";
+import {
+  NetworkPill,
+  PermissionControl,
+  WebToggle,
+  type PermissionMode,
+} from "../ComposerControls";
+import { QueuedTasks } from "../QueuedTasks";
+import { UnifiedPicker } from "../UnifiedPicker";
+import { TaskPlan } from "./Chrome";
+import {
+  isApiKey,
+  isLocal,
+  vendorKey,
+  type PickerTarget,
+} from "../../lib/picker";
+
+type ComposerProps = ComponentProps<typeof Composer>;
+
+/** How the chosen row runs: the permission mode, whether ShadowCode's own
+ * agent loop (and so its web access) applies, and what a vendor CLI does
+ * with these choices. */
+export function composerAccess(
+  cfg: Record<string, unknown>,
+  level: string | undefined,
+  target: PickerTarget | undefined,
+) {
+  const permissions = (cfg.permissions || {}) as Record<string, unknown>;
+  const mode: PermissionMode =
+    permissions.mode === "allow_edits" ? "allow_edits" : "ask";
+  const readOnly = (level || permissions.level) === "read_only";
+  const network = String(
+    ((cfg.network || {}) as { mode?: string }).mode || "online",
+  );
+  const notes = (permissions.vendor_notes || {}) as Record<string, string>;
+  // Local and OpenRouter rows run on ShadowCode's own agent loop, with its
+  // tools, approvals and web access; only subscription CLIs bring their own.
+  const ownLoop = Boolean(target && (isLocal(target) || isApiKey(target)));
+  const vendorNote =
+    target && !ownLoop
+      ? notes[vendorKey(target)] ||
+        notes[`cli-${vendorKey(target)}`] ||
+        `${target.name.split(" · ")[0]} runs its own tools, sandbox and web access; ShadowCode passes this choice to it where the tool supports it.`
+      : undefined;
+  return {
+    mode,
+    readOnly,
+    network,
+    ownLoop,
+    vendorNote,
+    webAllowed: ownLoop && network === "online",
+  };
+}
+
+/** Everything below the conversation: queued follow-ups, the task plan and
+ * the composer with its model picker, permission and web controls and the
+ * Compare button. */
+export function ComposerDock({
+  hidden,
+  queue,
+  plan,
+  composer,
+  picker,
+  permission,
+  network,
+  compare,
+}: {
+  hidden: boolean;
+  queue: {
+    jobs: Job[];
+    sessions: Session[];
+    selected: string;
+    cancelling: string[];
+    disabled: boolean;
+    onCancel: (job: Job) => void;
+    onOpen: (id: string) => void;
+  };
+  plan: PlanStep[];
+  composer: Omit<ComposerProps, "picker" | "controls" | "compare">;
+  picker: ComponentProps<typeof UnifiedPicker>;
+  permission: {
+    mode: PermissionMode;
+    readOnly: boolean;
+    vendorNote?: string;
+    onChange: (mode: PermissionMode) => void;
+    onOpenSettings: () => void;
+  };
+  network: {
+    mode: string;
+    /** ShadowCode's own agent loop runs the chosen row (web applies). */
+    ownLoop: boolean;
+    webEnabled: boolean;
+    onWeb: (enabled: boolean) => void;
+  };
+  compare: { reason: string | null; locked: boolean; onOpen: () => void };
+}) {
+  return (
+    <div className="composer-wrap" hidden={hidden}>
+      <QueuedTasks {...queue} />
+      <TaskPlan plan={plan} />
+      <Composer
+        {...composer}
+        picker={<UnifiedPicker {...picker} />}
+        controls={
+          <>
+            <PermissionControl {...permission} />
+            {network.mode === "offline" ? (
+              <NetworkPill mode="offline" />
+            ) : network.ownLoop ? (
+              network.mode === "web_off" ? (
+                <NetworkPill mode="web_off" />
+              ) : (
+                <WebToggle
+                  enabled={network.webEnabled}
+                  onChange={network.onWeb}
+                />
+              )
+            ) : null}
+          </>
+        }
+        compare={
+          <>
+            <button
+              type="button"
+              className="compare-btn"
+              aria-disabled={Boolean(compare.reason) || compare.locked}
+              aria-describedby={compare.reason ? "compare-blocked" : undefined}
+              title={
+                compare.reason ||
+                "Run this task on 2–3 models at once and keep the best result"
+              }
+              onClick={compare.onOpen}
+            >
+              <GitCompareArrows size={15} aria-hidden="true" />
+              <span className="compare-btn-text">Compare</span>
+            </button>
+            {compare.reason && (
+              <span id="compare-blocked" className="sr-only">
+                {compare.reason}
+              </span>
+            )}
+          </>
+        }
+      />
+    </div>
+  );
+}

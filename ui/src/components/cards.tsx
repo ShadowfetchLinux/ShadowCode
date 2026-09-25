@@ -1,7 +1,9 @@
+import { memo } from "react";
 import type { Approval, CommandResult } from "../api";
 import { Markdown } from "./Markdown";
 
-export type ChatItem =
+/** Every row carries a React `key` that survives updates (lib/rowKeys). */
+export type ChatItem = (
   | { kind: "command"; card: CommandResult; text: string; taskId?: string }
   | {
       kind: "user";
@@ -64,7 +66,8 @@ export type ChatItem =
       taskId?: string;
       callId?: string;
       path?: string;
-    };
+    }
+) & { key?: string };
 
 const MUTATING = new Set([
   "write_file",
@@ -96,7 +99,7 @@ const BACKGROUND_LABELS = new Map([
 
 /** Codex-style collapsed one-liner. Click to expand; expanded cards expose
  *  Rewind (per-task file undo) and Review diff (jump to the Changes tab). */
-export function OpCard({
+export const OpCard = memo(function OpCard({
   item,
   onToggle,
   onRewind,
@@ -182,9 +185,9 @@ export function OpCard({
       )}
     </div>
   );
-}
+});
 
-export function ApprovalCard({
+export const ApprovalCard = memo(function ApprovalCard({
   approval,
   onDecide,
 }: {
@@ -241,9 +244,13 @@ export function ApprovalCard({
       </div>
     </div>
   );
-}
+});
 
-export function CommandCardView({ card }: { card: CommandResult }) {
+export const CommandCardView = memo(function CommandCardView({
+  card,
+}: {
+  card: CommandResult;
+}) {
   if (card.kind === "text" && card.text) {
     return (
       <div className="msg-agent">
@@ -318,7 +325,7 @@ export function CommandCardView({ card }: { card: CommandResult }) {
         ))}
     </div>
   );
-}
+});
 
 export function Empty({ title, body }: { title: string; body?: string }) {
   return (

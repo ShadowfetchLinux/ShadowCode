@@ -45,6 +45,7 @@ impl Service {
             ("POST", "/api/workspace/exec") => self.exec(call).await,
             ("GET", "/api/workspace/git") => self.git_status().await,
             ("GET", "/api/workspace/diff") => self.git_diff(call.q("path")).await,
+            ("POST", "/api/workspace/diffstat") => self.diff_stats(&call.body).await,
             ("POST", "/api/workspace/diff/hunk") => self.hunk_action(&call.body).await,
             ("POST", "/api/workspace/git/add") => self.git_add(&call.body).await,
             ("POST", "/api/workspace/git/commit") => self.git_commit(call.text("message")).await,

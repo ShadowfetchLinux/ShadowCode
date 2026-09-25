@@ -1151,6 +1151,20 @@ export const api = {
       restored: string[];
       note?: string;
     }>(`/api/jobs/${id}/rewind`, "POST", {}),
+  /** Pending approvals (for one conversation, or all) and project jobs in
+   * one read, plus the broadcast types after which to read it again. */
+  feed: (sessionId?: string) =>
+    get<{ approvals: Approval[]; jobs: Job[]; events?: string[] }>(
+      `/api/feed?limit=100${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ""}`,
+    ),
+  /** Added/removed line counts for many files at once; `null` for binary
+   * or unknown files. */
+  diffStats: (paths: string[]) =>
+    send<{ stats: Record<string, { add: number; del: number } | null> }>(
+      "/api/workspace/diffstat",
+      "POST",
+      { paths },
+    ),
   approvals: (sessionId?: string) =>
     get<{ approvals: Approval[] }>(
       `/api/approvals${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,

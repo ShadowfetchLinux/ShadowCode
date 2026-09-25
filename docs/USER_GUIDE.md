@@ -81,7 +81,7 @@ way as ShadowCode's own tools.
 When the agent wants to do something that needs permission, an approval card
 shows what it is, for example `Edit src/main.rs`, `Apply a patch to …`, or a
 shell command. Choose **Allow** or **Deny**. Keyboard shortcuts never approve
-anything.
+anything. The card appears in the conversation as soon as the agent asks.
 
 - **Local and OpenRouter models.** ShadowCode enforces the permission mode
   for every tool call.
@@ -121,7 +121,10 @@ reply.
   drawer (`Ctrl+Shift+B`). Pick a file, compare unstaged and staged hunks,
   stage a hunk or a whole new file, discard a hunk (after confirming), and
   commit with a message. If a file changed since
-  you previewed it, refresh before staging.
+  you previewed it, refresh before staging. The drawer's tabs keep your work
+  while you switch between them or close the drawer: terminal output, the
+  file open in Files and an unsent commit message stay until you open
+  another project.
 - **Rewind** undoes every change the task made to project files. That
   includes ShadowCode's own file tools, files changed by the task's shell
   commands, and files a subscription CLI (Codex, Claude Code, Cursor, Grok,
@@ -272,7 +275,9 @@ Subscription CLIs use their own sandboxes, not this one.
 - **Reloading** the window keeps the selected conversation, the transcript and
   your unsent draft. A running task reconnects without repeating output.
 - **Older messages** pages back through long conversations. **Fork from here**
-  starts a new conversation at a response.
+  starts a new conversation at a response. A very long page shows its latest
+  150 items first; **Show … earlier items** adds more without moving what
+  you are reading.
 - **Interrupted tasks.** If ShadowCode exits during a task, the task is marked
   *interrupted*. **Continue task** writes a recovery request for you. Shell
   commands and file edits are never replayed automatically.

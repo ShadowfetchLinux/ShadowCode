@@ -32,7 +32,10 @@ rejected before attachment.
 
 Attached windows receive event hints through their private lease connection;
 there is no window timer repeatedly waking an idle engine. The event reader
-still fetches committed rows and polls as a fallback. Completion summaries use
+still fetches committed rows and polls as a fallback. Each hint reaches the
+window as `shadowcode:events {session_id, type}`; pending approvals and the
+job list are read (`GET /api/feed`) only for hints that can change them, with
+a 15 s backstop read. Completion summaries use
 the same native notification path as an engine-owning desktop, respecting the
 profile's notification setting and suppressing notifications while focused.
 Hints never contain model-stream bodies or complete tool output. Their frame
