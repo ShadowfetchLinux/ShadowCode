@@ -233,6 +233,11 @@ pub struct AgentConfig {
     pub max_output_bytes: usize,
     pub max_task_tokens: u64,
     pub autonomy_profile: String,
+    /// When history must shrink, ask the current model to summarize the
+    /// dropped messages (falls back to the built-in keep-list digest).
+    pub summary_compaction: bool,
+    /// Longest wait for that summary before falling back.
+    pub summary_timeout_sec: u64,
 }
 impl Default for AgentConfig {
     fn default() -> Self {
@@ -247,6 +252,8 @@ impl Default for AgentConfig {
             max_output_bytes: 256_000,
             max_task_tokens: 1_000_000,
             autonomy_profile: "normal".into(),
+            summary_compaction: true,
+            summary_timeout_sec: 60,
         }
     }
 }
@@ -412,6 +419,10 @@ impl Config {
             self.agent.retry_backoff_sec.is_finite()
                 && (0.0..=30.0).contains(&self.agent.retry_backoff_sec),
             "Invalid retry delay"
+        );
+        ensure!(
+            (5..=600).contains(&self.agent.summary_timeout_sec),
+            "Compaction summary timeout must be between 5 and 600 seconds"
         );
         ensure!(
             (4096..=4_000_000).contains(&self.agent.max_output_bytes),

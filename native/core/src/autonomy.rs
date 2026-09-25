@@ -414,6 +414,21 @@ pub fn capability_profile_for(
     }
 }
 
+/// Complete tool descriptions for models with room for them: 32K+ context,
+/// or 16K+ for hosted models (which follow longer instructions well). Small
+/// local models keep the short catalog so their response window survives.
+pub fn description_tier(profile: &CapabilityProfile) -> crate::tools::DescriptionTier {
+    let local = matches!(
+        profile.provider.as_str(),
+        "ollama" | "local" | "llamacpp" | "lmstudio" | "vllm" | "mock"
+    );
+    if profile.context_window >= 32_768 || (!local && profile.context_window >= 16_384) {
+        crate::tools::DescriptionTier::Full
+    } else {
+        crate::tools::DescriptionTier::Short
+    }
+}
+
 pub fn account(
     messages: &[Value],
     schemas: &[Value],

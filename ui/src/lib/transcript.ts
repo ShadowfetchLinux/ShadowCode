@@ -43,7 +43,7 @@ export type Transcript = {
   /** Per-task activity derived from recorded events. */
   activity: Record<string, TaskActivity>;
   limit?: LimitReached;
-  /** Increments on usage.updated so the picker can refresh its rows. */
+  /** Increments on a vendor's usage.updated so the picker can refresh its rows. */
   usageVersion: number;
   /** The latest automatic continuation on a local model (limit.fallback). */
   fallback?: { jobId: string; target: string; to: string };
@@ -433,7 +433,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       ];
     }
   }
-  if (event.type === "usage.updated") usageVersion += 1;
+  // Vendor account pushes carry `vendor`; per-task token/cost updates
+  // (`turn`/`job`/`session`) do not change the picker's rows.
+  if (event.type === "usage.updated" && p.vendor) usageVersion += 1;
   if (event.type === "workflow.selected") {
     items = [
       ...items,

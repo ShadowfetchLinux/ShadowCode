@@ -468,6 +468,82 @@ imports: [{path, mmproj, name, source}], excluded, llama_binary, context_size }`
   name: native names and vendor names such as `codex.command_execution`,
   `codex.file_change`, `cursor.read`, `Bash`, `Edit`.
 
+## Usage, cost, retries and compaction (native loop)
+
+Token and cost accounting, per model request ("turn"), per job and per
+session. One shape, `Usage`, is used everywhere:
+
+```ts
+Usage = {
+  prompt_tokens: number,       // input, including cached_tokens
+  completion_tokens: number,   // output
+  total_tokens: number,
+  cached_tokens: number,       // input served from the provider's prompt cache
+  cache_write_tokens: number,  // input written to the cache, when reported
+  cost_usd: number|null,       // null = no cost known
+  cost_estimated: boolean,     // cost from the price list, or some turns had none
+  estimated: boolean,          // some token counts were estimated by ShadowCode
+  source: "provider"|"local"|"vendor"|"mixed"|"",  // who reported the numbers
+  turns: number,               // model requests / vendor turns counted
+}
+```
+
+- Where cost comes from: OpenRouter's `usage.cost` (requested with
+  `usage: {include: true}`); `0` for a model on this computer (llama.cpp,
+  Ollama, loopback servers); OpenRouter's cached per-token prices when a turn
+  reported no cost (`cost_estimated: true`; cached input is priced as full
+  input, so it is an upper bound); otherwise `null`. Subscription CLI jobs
+  carry what the vendor reports with `source: "vendor"`: token counts (Claude,
+  Codex, ACP), cached input (Claude cache reads, Codex cached input) and
+  Claude's `total_cost_usd` (the run's running total). A vendor that reports
+  no counts gives `estimated: true` and zeros.
+- `GET /api/jobs/{id}`: `usage: Usage` for the job so far (also in
+  `result.usage` at the end). `usage_is_estimated` is kept for older readers.
+- `GET /api/sessions/{id}` (with or without `?summary=true`): `usage: Usage`,
+  the sum of the session's finished jobs (`usage_json` still holds the raw
+  text). `GET /api/sessions/{id}/cost`: `{session_id, tasks[{task_id, prompt,
+  status, usage}], usage, cost, cost_estimated, note}`.
+- Event `usage.updated {purpose, turn, job, session}` after every counted
+  request: `purpose` is `"turn"` (an agent step), `"compaction"` (a summary
+  request) or `"vendor"` (a finished subscription CLI turn); `turn`, `job` and
+  `session` are `Usage` (`session` includes the running job). The older
+  `usage.updated {vendor, usage}` from a vendor's rate-limit push (Codex) still
+  exists and has no `turn`; tell them apart by `vendor`.
+- Event `model.retry {attempt, max_attempts, reason, status, delay_ms,
+  retry_after, discard_message_id}`: a model request failed for a passing
+  reason and will be re-sent after `delay_ms`. `reason` is `rate_limited`
+  (429), `overloaded` (503/529), `server_error` (408, 425, 500, 502, 504,
+  520–528), `stream_error` (the provider's error inside the stream),
+  `disconnected` (the stream stopped before its finish marker, or the body
+  failed), `stalled` (no bytes for 120 s) or `connect_failed`. `status` is the
+  HTTP status or null; `retry_after: true` means the wait is the provider's
+  `Retry-After`/`Retry-After-Ms`. `discard_message_id` names the streamed
+  message of the failed attempt (partial text already shown) so the UI can
+  drop or grey it; null when nothing was streamed. Local runtimes are retried
+  only on 429/503. At most `agent.model_retries` retries (default 3, max 10);
+  waits double from `agent.retry_backoff_sec` with jitter (capped at 30 s); a
+  `Retry-After` over 120 s is not waited for. Tool calls run only after a
+  complete response, so a retry never repeats a tool.
+- Event `context.compacted {before_estimated_tokens, after_estimated_tokens,
+  omitted_messages, response_token_limit, method, preserved, summary?,
+  summary_model?, summary_ms?, fallback_reason?}`: `method` is
+  `"model_summary"` when the current model summarized the removed messages
+  (`summary` is the text, at most 6,000 bytes) or `"bounded_history"` for the
+  built-in digest note. `fallback_reason` says why no summary was used:
+  `disabled`, `context_too_small` (under 8,192 tokens), `offline_demo`,
+  `timeout`, `empty_summary`, `summary_too_large`, or the request's error.
+  The summary is kept in the conversation's message tape, so later turns of
+  the session start from it.
+- Prompt caching: OpenRouter requests to Claude models (`anthropic/…`) mark
+  the system prompt and a rolling point at the newest and previous request end
+  with `cache_control`; Gemini (`google/gemini…`) gets one mark on the system
+  prompt. Other providers cache on their own; `cached_tokens` is recorded
+  when reported (`prompt_tokens_details.cached_tokens`, DeepSeek's
+  `prompt_cache_hit_tokens`).
+- Tool descriptions: models with 32K+ context, or hosted models with 16K+,
+  get the complete native tool descriptions; smaller ones get descriptions cut
+  to 64 bytes.
+
 ## Approvals and jobs feed
 
 The window no longer polls approvals and jobs. It reads one feed when the
@@ -507,6 +583,10 @@ engine says something changed, plus a 15 s backstop read.
   `ask` = shell and file edits ask; `allow_edits` = file edits inside the project
   are allowed, shell still asks. Vendor mapping is described in
   `permissions.vendor_notes: {[vendorId]: string}` returned with the config.
+- `agent.model_retries` (0–10, default 3) and `agent.retry_backoff_sec`
+  (0–30, default 1.0): model request retries (see above).
+  `agent.summary_compaction` (default true) and `agent.summary_timeout_sec`
+  (5–600, default 60): model-written compaction summaries.
 - `network.mode: "online" | "web_off" | "offline"` — `web_off` disables web
   tools only; `offline` also suppresses account/usage refresh and any helper
   network activity. Cloud rows are marked unavailable in `offline`.
