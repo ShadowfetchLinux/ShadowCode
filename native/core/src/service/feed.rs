@@ -6,15 +6,12 @@
 //! changes), with a slow timer only as a backstop; it no longer polls
 //! approvals and jobs every second or two.
 //!
-//! `POST /api/workspace/diffstat` counts added and removed lines for many
-//! changed files with two `git diff --numstat` runs instead of one full diff
-//! per file.
-use super::{query_limit, Service};
-use crate::workspace::Workspace;
-use anyhow::{ensure, Context, Result};
-use serde_json::{json, Map, Value};
-use std::{collections::HashMap, io::Read, path::Path};
-use tokio_util::sync::CancellationToken;
+//! `POST /api/workspace/diffstat` (routed from `workspace.rs`, whose family
+//! it belongs to) counts added and removed lines for many changed files with
+//! two `git diff --numstat` runs instead of one full diff per file.
+use super::*;
+use serde_json::Map;
+use std::io::Read;
 
 /// Broadcast types after which the feed may have changed. The window also
 /// refreshes on untyped wake-ups (a lagged or reattached event stream).
@@ -37,26 +34,20 @@ const MAX_NEW_FILE_BYTES: u64 = 4 * 1024 * 1024;
 type Counts = Option<(u64, u64)>;
 
 impl Service {
-    /// Feed routes, or `None` for every other request.
-    pub(super) async fn feed_route(
-        &self,
-        method: &str,
-        path: &str,
-        query: &HashMap<String, String>,
-        body: &Value,
-    ) -> Result<Option<Value>> {
-        Ok(Some(match (method, path) {
-            ("GET", "/api/feed") => {
-                let session = query.get("session_id").map(String::as_str);
-                let session = session.filter(|id| !id.is_empty());
-                json!({
-                    "approvals": self.engine.approvals().list(session),
-                    "jobs": self.engine.store().job_summaries(query_limit(query, 100, 100))?,
-                    "events": FEED_EVENTS,
-                })
-            }
-            ("POST", "/api/workspace/diffstat") => self.diff_stats(body).await?,
-            _ => return Ok(None),
+    /// The `feed` family.
+    pub(super) async fn feed_routes(&self, call: &Arc<Call>) -> Result<Value> {
+        match (call.method.as_str(), call.path.as_str()) {
+            ("GET", "/api/feed") => self.blocking(call, Self::feed).await,
+            _ => Err(call.unavailable()),
+        }
+    }
+
+    fn feed(&self, call: &Call) -> Result<Value> {
+        let session = Some(call.q("session_id")).filter(|id| !id.is_empty());
+        Ok(json!({
+            "approvals": self.engine.approvals().list(session),
+            "jobs": self.engine.store().job_summaries(call.limit(100, 100))?,
+            "events": FEED_EVENTS,
         }))
     }
 
@@ -64,7 +55,7 @@ impl Service {
     /// window's per-file diff counts them: unstaged plus staged lines, and
     /// every line of a new untracked file. `null` marks binary or unreadable
     /// files; a path without changes counts zero.
-    async fn diff_stats(&self, body: &Value) -> Result<Value> {
+    pub(super) async fn diff_stats(&self, body: &Value) -> Result<Value> {
         let requested = body["paths"]
             .as_array()
             .context("List the paths to count")?;
@@ -135,14 +126,26 @@ async fn count_changes(root: &Path, paths: &[String]) -> Result<HashMap<String, 
     args.extend(paths.iter().cloned());
     let others = git(args).await?;
     if others["ok"] == true && others["truncated"] != true {
-        for path in others["stdout"].as_str().unwrap_or("").split('\0') {
-            if paths.iter().any(|p| p == path) {
-                add(
-                    &mut counts,
-                    path.to_owned(),
-                    new_file_lines(&root.join(path)),
-                );
-            }
+        let new: Vec<String> = others["stdout"]
+            .as_str()
+            .unwrap_or("")
+            .split('\0')
+            .filter(|path| paths.iter().any(|p| p == path))
+            .map(str::to_owned)
+            .collect();
+        // Reading new files is file I/O: keep it off the async workers.
+        let root = root.to_owned();
+        let lines = tokio::task::spawn_blocking(move || {
+            new.into_iter()
+                .map(|path| {
+                    let lines = new_file_lines(&root.join(&path));
+                    (path, lines)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await?;
+        for (path, stat) in lines {
+            add(&mut counts, path, stat);
         }
     }
     Ok(counts)
