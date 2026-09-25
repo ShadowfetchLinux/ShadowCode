@@ -25,6 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
+mod code_intel;
 mod commands;
 mod compare;
 #[cfg(unix)]
@@ -211,6 +212,11 @@ impl Service {
         if matches!(parts.get(1), Some(&"compare" | &"compares")) {
             return self
                 .compare(request.method.as_str(), &parts, &query, body)
+                .await;
+        }
+        if parts.get(1) == Some(&"code-intel") {
+            return self
+                .code_intel(request.method.as_str(), path, &query, body)
                 .await;
         }
         match (request.method.as_str(), path) {

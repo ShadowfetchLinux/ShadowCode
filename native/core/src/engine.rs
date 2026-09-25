@@ -1594,6 +1594,16 @@ impl Engine {
             system.push_str("\n\n");
             system.push_str(extra);
         }
+        if schemas.iter().any(|s| s["function"]["name"] == "repo_map") {
+            let root = running.workspace.path.clone();
+            if let Some(map) =
+                crate::code_intel::repo_map::system_note(root, job.task.clone(), &running.config)
+                    .await
+            {
+                system.push_str("\n\n");
+                system.push_str(&map);
+            }
+        }
         system.push_str(&context::capability_guidance(&running.config, &schemas));
         messages.insert(0, json!({"role":"system","content":system}));
         let image_refs = crate::vision::refs_from_paths(&running.workspace, &job.images)?;
@@ -2067,6 +2077,8 @@ impl Engine {
                                 | "find_references"
                                 | "get_diagnostics"
                                 | "get_type_signature"
+                                | "repo_map"
+                                | "search_code"
                                 | "git_diff"
                                 | "git_status"
                                 | "git_log"

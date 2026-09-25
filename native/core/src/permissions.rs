@@ -36,6 +36,8 @@ pub fn read_only(tool: &str) -> bool {
             | "find_references"
             | "get_diagnostics"
             | "get_type_signature"
+            | "repo_map"
+            | "search_code"
             | "mcp_sqlite_tables"
             | "mcp_sqlite_query"
             | "background_list"

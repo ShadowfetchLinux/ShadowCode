@@ -22,6 +22,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 mod background;
+mod intel;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -72,6 +73,8 @@ pub struct ToolExecutor {
     plan: Arc<Mutex<Value>>,
     hooks: hooks::Runner,
     background: Option<Arc<crate::background::BackgroundManager>>,
+    /// Managed language servers, embedding models and vectors (profile data).
+    code_intel_dir: Option<std::path::PathBuf>,
     #[cfg(unix)]
     mcp: crate::mcp::runner::Runner,
 }
@@ -112,11 +115,13 @@ impl ToolExecutor {
             plan: Arc::new(Mutex::new(json!({"goal":"","steps":[]}))),
             hooks,
             background: None,
+            code_intel_dir: None,
             #[cfg(unix)]
             mcp,
         })
     }
     pub fn with_profile(mut self, paths: crate::paths::AppPaths) -> Self {
+        self.code_intel_dir = Some(crate::code_intel::data_dir(&paths));
         #[cfg(unix)]
         self.mcp.set_profile(paths);
         self
@@ -203,6 +208,7 @@ impl ToolExecutor {
         let mut started = json!({"tool":call.name,"arguments":call.arguments,"call_id":call.id});
         crate::redaction::redact_value(&mut started);
         self.events.emit("tool.started", started)?;
+        let baseline = self.edit_baseline(&call);
         let mut result = match self.execute_inner(&call).await {
             Ok(output) => {
                 let success = output.get("ok").and_then(Value::as_bool).unwrap_or(true);
@@ -295,6 +301,15 @@ impl ToolExecutor {
                 result.output = json!({"tool_output":result.output});
             }
             result.output["hooks"] = json!(outcomes);
+        }
+        // Checked after hooks, so a formatter's rewrite is what gets checked.
+        if let Some(baseline) = baseline.filter(|_| result.success) {
+            if let Some(diagnostics) = self.edit_diagnostics(&baseline, &result.output).await {
+                result.output["diagnostics"] = diagnostics;
+            }
+        }
+        if call.name == "read_file" && result.success {
+            self.warm_file(&result.output);
         }
         let mut completed = json!({"tool":call.name,"call_id":call.id,"success":result.success,"output":result.output,"error":result.error});
         let redactions = crate::redaction::redact_value(&mut completed);
@@ -466,7 +481,13 @@ impl ToolExecutor {
         }
         if matches!(
             call.name.as_str(),
-            "workspace_symbols" | "goto_definition" | "find_references" | "get_type_signature"
+            "repo_map" | "search_code" | "goto_definition" | "find_references" | "get_diagnostics"
+        ) {
+            return self.intel(call).await;
+        }
+        if matches!(
+            call.name.as_str(),
+            "workspace_symbols" | "get_type_signature"
         ) {
             let root = self.workspace.path.clone();
             let name = call.name.clone();
@@ -481,22 +502,12 @@ impl ToolExecutor {
                     "workspace_symbols" => {
                         crate::intelligence::workspace_symbols(&root, query, max_hits)
                     }
-                    "goto_definition" => {
-                        crate::intelligence::goto_definition(&root, query, max_hits)
-                    }
-                    "find_references" => {
-                        crate::intelligence::find_references(&root, query, max_hits)
-                    }
                     "get_type_signature" => crate::intelligence::get_type_signature(&root, query),
                     _ => unreachable!(),
                 }
             })
             .await
             .context("Tool worker stopped unexpectedly")?;
-        }
-        if call.name == "get_diagnostics" {
-            let path = call.arguments["path"].as_str().unwrap_or("");
-            return crate::intelligence::get_diagnostics(&self.workspace.path, path).await;
         }
         let worker = self.clone();
         let call = call.clone();
@@ -1246,11 +1257,13 @@ pub fn schemas() -> Vec<Value> {
         ("search_files","Find filenames by substring; respects ignore rules.",json!({"query":s,"path":s}),vec!["query"]),
         ("search_text","Search text; literal by default, optional regex and file glob.",json!({"query":s,"path":s,"regex":b,"glob":s,"max_hits":n}),vec!["query"]),
         ("search_symbol","Find likely symbol definitions by name (regex heuristic).",json!({"query":s,"path":s}),vec!["query"]),
-        ("workspace_symbols","Tree-sitter workspace symbol search for Rust/TypeScript. Bounded; not a vector index.",json!({"query":s,"max_hits":n}),vec!["query"]),
-        ("goto_definition","Best-effort tree-sitter definition lookup for a symbol name.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
-        ("find_references","Tree-sitter identifier references for a symbol name. Not type-aware.",json!({"query":s,"symbol":s,"max_hits":n}),vec![]),
+        ("workspace_symbols","Find definitions by name (Rust, TS/JS, Python, Go, C/C++, Java)",json!({"query":s,"max_hits":n}),vec!["query"]),
+        ("goto_definition","Definition of a symbol; with path+line asks the language server",json!({"query":s,"symbol":s,"path":s,"line":n,"column":n,"max_hits":n}),vec![]),
+        ("find_references","Uses of a symbol; with path+line asks the language server.",json!({"query":s,"symbol":s,"path":s,"line":n,"column":n,"max_hits":n}),vec![]),
         ("get_type_signature","Parser signature for a symbol when LSP is absent (tree-sitter AST).",json!({"symbol":s,"query":s}),vec![]),
-        ("get_diagnostics","One-shot rust-analyzer diagnostics when rust-analyzer is already installed. Does not start a persistent LSP.",json!({"path":s}),vec!["path"]),
+        ("get_diagnostics","Current errors/warnings for a file from its language server.",json!({"path":s}),vec!["path"]),
+        ("repo_map","Ranked outline of key definitions; focus with paths or a query.",json!({"query":s,"paths":{"type":"array","items":s},"max_tokens":n}),vec![]),
+        ("search_code","Search code by keywords or meaning; returns ranked line ranges",json!({"query":s,"path":s,"max_hits":n}),vec!["query"]),
         ("mcp_sqlite_tables","List tables and CREATE TABLE definitions in a project SQLite file. Native read-only tool; no registration. SQLite may maintain WAL sidecars.",json!({"path":s}),vec!["path"]),
         ("mcp_sqlite_query","Read a project SQLite file with SELECT/WITH or schema PRAGMA (table_info etc). Bind ? placeholders with params; check truncated. Unique column aliases required. SQLite may maintain WAL sidecars.",json!({"path":s,"sql":s,"params":{"type":"array","items":{"type":["string","number","boolean","null"]}},"limit":n}),vec!["path","sql"]),
         ("background_start","Start a named project server/watcher under shell permissions. Continues independently after the task, including cancellation; stop it when no longer wanted. Inspect status/output before claiming readiness.",json!({"name":s,"command":s}),vec!["name","command"]),
