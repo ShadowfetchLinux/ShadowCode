@@ -294,12 +294,7 @@ pub struct RunRecord {
     pub finished_at: Option<f64>,
 }
 
-fn record_key(id: &str) -> String {
-    format!("subagent:{id}")
-}
-fn index_key(session: &str) -> String {
-    format!("subagent_index:{session}")
-}
+use crate::store::keys::{subagent_index as index_key, subagent_run as record_key};
 fn valid_id(id: &str) -> Result<()> {
     ensure!(
         id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),

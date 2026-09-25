@@ -399,7 +399,7 @@ impl Runner {
         Ok(())
     }
     fn catalog_key(&self, server: &str) -> String {
-        format!("mcp_catalog:{}:{server}", self.workspace.path.display())
+        crate::store::keys::mcp_catalog(&self.workspace.path, server)
     }
     /// A server's tools: the catalog recorded at its last connection with
     /// this exact definition, or a new connection when there is none.

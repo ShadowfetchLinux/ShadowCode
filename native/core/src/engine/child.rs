@@ -75,9 +75,10 @@ impl Engine {
             .as_str()
             .context("Session missing ID")?
             .to_owned();
-        store.set_session_meta(&sid, "subagent_parent", &spec.link.parent_session)?;
-        store.set_session_meta(&sid, "subagent_run", &spec.link.run_id)?;
-        store.set_session_meta(&sid, "subagent_agent", &spec.link.name)?;
+        use crate::store::keys;
+        store.set_session_meta(&sid, keys::SUBAGENT_PARENT, &spec.link.parent_session)?;
+        store.set_session_meta(&sid, keys::SUBAGENT_RUN, &spec.link.run_id)?;
+        store.set_session_meta(&sid, keys::SUBAGENT_AGENT, &spec.link.name)?;
         let job = Job {
             id: crate::id(),
             workspace: workspace.path.clone(),

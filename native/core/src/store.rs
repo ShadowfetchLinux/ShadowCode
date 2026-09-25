@@ -5,14 +5,17 @@ use serde_json::{json, Map, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
 mod background;
 mod goals;
+pub mod keys;
 mod memory;
+mod meta;
 pub use goals::MilestoneSpec;
+pub use meta::MetaTransaction;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
@@ -149,21 +152,6 @@ impl Store {
         Ok(self
             .lock()?
             .execute("DELETE FROM usage_snapshots WHERE vendor=?", [vendor])?)
-    }
-    pub fn native_meta(&self, key: &str) -> Result<Option<String>> {
-        Ok(self
-            .lock()?
-            .query_row("SELECT value FROM native_meta WHERE key=?", [key], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()?)
-    }
-    pub fn set_native_meta(&self, key: &str, value: &str) -> Result<()> {
-        self.lock()?.execute(
-            "INSERT INTO native_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![key, value],
-        )?;
-        Ok(())
     }
     /// `session_meta` rows whose key starts with `prefix`, as (key, value).
     pub fn session_meta_prefixed(
@@ -354,8 +342,8 @@ impl Store {
         let mut db = self.lock()?;
         if db
             .query_row(
-                "SELECT value FROM native_meta WHERE key='legacy_goals_imported'",
-                [],
+                "SELECT value FROM native_meta WHERE key=?",
+                [keys::LEGACY_GOALS_IMPORTED],
                 |r| r.get::<_, String>(0),
             )
             .optional()?
@@ -372,8 +360,11 @@ impl Store {
             tx.execute_batch(
                 "INSERT OR IGNORE INTO goals SELECT * FROM legacy_goals.goals;
                 INSERT OR IGNORE INTO milestones(id,goal_id,title,status,order_index,detail,task_id,created_at,updated_at)
-                    SELECT id,goal_id,title,status,order_index,detail,task_id,created_at,updated_at FROM legacy_goals.milestones;
-                INSERT INTO native_meta(key,value) VALUES('legacy_goals_imported','true');",
+                    SELECT id,goal_id,title,status,order_index,detail,task_id,created_at,updated_at FROM legacy_goals.milestones;",
+            )?;
+            tx.execute(
+                "INSERT INTO native_meta(key,value) VALUES(?,'true')",
+                [keys::LEGACY_GOALS_IMPORTED],
             )?;
             tx.commit()?;
             Ok(())
@@ -386,6 +377,22 @@ impl Store {
         self.connection
             .lock()
             .map_err(|_| anyhow::anyhow!("Database lock was poisoned"))
+    }
+    /// Run database work on tokio's blocking pool. Async code uses this for
+    /// writes and large reads: they wait on the connection lock and on
+    /// `fsync` (synchronous=FULL), which must not stall an async worker that
+    /// is also streaming a model reply. A panic resumes in the caller.
+    pub async fn run<T, F>(self: &Arc<Self>, work: F) -> Result<T>
+    where
+        F: FnOnce(&Store) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let store = self.clone();
+        match tokio::task::spawn_blocking(move || work(&store)).await {
+            Ok(result) => result,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => Err(anyhow::anyhow!("Database work stopped: {error}")),
+        }
     }
     pub(crate) fn query(&self, sql: &str, args: impl Params) -> Result<Vec<Value>> {
         query_rows(&*self.lock()?, sql, args)
@@ -988,13 +995,18 @@ impl Store {
         Ok(jobs.len())
     }
     pub fn save_messages(&self, job_id: &str, messages: &[Value]) -> Result<()> {
+        let payloads: Vec<String> = messages.iter().map(Value::to_string).collect();
+        self.save_message_payloads(job_id, &payloads)
+    }
+    /// Replace a job's message tape with already serialised messages.
+    pub fn save_message_payloads(&self, job_id: &str, payloads: &[String]) -> Result<()> {
         let mut db = self.lock()?;
         let tx = db.transaction()?;
         tx.execute("DELETE FROM job_messages WHERE job_id=?", [job_id])?;
-        for (ordinal, message) in messages.iter().enumerate() {
+        for (ordinal, payload) in payloads.iter().enumerate() {
             tx.execute(
                 "INSERT INTO job_messages(job_id,ordinal,payload) VALUES(?,?,?)",
-                params![job_id, ordinal, message.to_string()],
+                params![job_id, ordinal, payload],
             )?;
         }
         tx.commit()?;
