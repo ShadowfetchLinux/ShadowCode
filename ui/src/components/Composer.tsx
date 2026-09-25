@@ -56,6 +56,7 @@ export function Composer({
   sendBlocked,
   stopDisabled,
   onSubmit,
+  onSubmitWorktree,
   onStop,
   compare,
 }: {
@@ -81,6 +82,8 @@ export function Composer({
   sendBlocked: string | null;
   stopDisabled: boolean;
   onSubmit: () => void;
+  /** Ctrl+Shift+Enter: run in a new worktree (when possible now). */
+  onSubmitWorktree?: () => void;
   onStop: () => void;
   /** The Compare button, next to Send. */
   compare?: ReactNode;
@@ -256,6 +259,17 @@ export function Composer({
             if (e.key === "Escape" && slashOpen) {
               e.stopPropagation();
               setSlashOpen(false);
+              return;
+            }
+            if (
+              e.key === "Enter" &&
+              e.shiftKey &&
+              (e.ctrlKey || e.metaKey) &&
+              onSubmitWorktree &&
+              !e.nativeEvent.isComposing
+            ) {
+              e.preventDefault();
+              onSubmitWorktree();
               return;
             }
             if (

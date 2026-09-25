@@ -544,7 +544,6 @@ Usage = {
   get the complete native tool descriptions; smaller ones get descriptions cut
   to 64 bytes.
 
-||||||| f942214
 
 ## Subagents and agent definitions
 
@@ -583,7 +582,9 @@ The window no longer polls approvals and jobs. It reads one feed when the
 engine says something changed, plus a 15 s backstop read.
 
 - `GET /api/feed?session_id=&limit=100` →
-  `{ approvals: Approval[], jobs: JobSummary[], events: string[] }`.
+  `{ approvals: Approval[], jobs: JobSummary[], events: string[], waiting: string[] }`.
+  `waiting` lists every conversation with a pending approval, whatever
+  `session_id` is (sidebar "needs approval" badges).
   `approvals` are the pending approvals of that conversation (all
   conversations without `session_id`), as `GET /api/approvals`; `jobs` are
   the same rows as `GET /api/jobs?view=summary&limit=100`; `events` lists
@@ -693,6 +694,88 @@ redacted.
   description}], summary: {bucket: count}, overall:
   "pass"|"fail"|"pending"|"none", url, checked_at}` from `gh pr checks
   --json`. GitLab answers `supported: false` with the pipelines URL.
+
+## Worktree tasks (run in a new worktree)
+
+A task can start as a new conversation in a fresh managed worktree of the
+project, so it runs while another task runs in the main checkout. The engine
+allows one active task per checkout (folder); a worktree is its own folder.
+
+- Start: `POST /api/run` (or `/api/jobs`) with `worktree: true` and the usual
+  `workspace`, `task`, `model`, `images`, `web`, `handoff_consent`
+  (`session_id` and `queue` are ignored). The engine captures HEAD plus the
+  project's uncommitted, non-ignored files as a base commit (as Compare does;
+  the project's index and files are not touched), creates a managed worktree
+  on branch `shadowcode/<id>`, trusts it, copies the composer's
+  `.shadow/attachments/…` files named in the task, creates the conversation
+  there and starts the job with the project's permission level as the
+  ceiling. The answer is the job plus `worktree_task: WorktreeTask`. If the
+  job cannot start (including a `needs_consent` answer) everything created is
+  removed. Refused when the project is not a Git repository root, has
+  unresolved merge conflicts or no first commit, or when the model is a local
+  GGUF model while another task runs on a different local model.
+- `WorktreeTask = {id, workspace (project), session_id, worktree, branch,
+  base {commit, head, included_uncommitted}, task, created_at, finished_at,
+  state, job_id, status, changed_files: FileStat[], changed_files_truncated,
+  applied_files: string[], conflicts: string[], conflict_detail,
+  kept_branch, notes: string[], removed}`. `state` is `running`, `done`,
+  `applied`, `branch` or `discarded`; `status` is the conversation's latest
+  job status (a follow-up turn moves `done` back to `running`).
+- `GET /api/worktree-tasks?workspace=` → `{workspace, tasks: WorktreeTask[]}`
+  (newest first, at most 30). `GET /api/worktree-tasks/{id}` refreshes one.
+- `POST /api/worktree-tasks/{id}/apply`: needs no turn running in it and no
+  task in the project's main checkout. Commits the result on the worktree's
+  own branch, then `git apply --check` of `base..result` against the
+  project; on refusal nothing is written and the record comes back with
+  `state: "done"` and `conflicts` (the files Git named; `conflict_detail` has
+  Git's words). Otherwise the result is applied to the working tree (never
+  the index, never a commit), `applied_files` lists it and `state` is
+  `applied`.
+- `POST /api/worktree-tasks/{id}/keep-branch`: commits the result on
+  `shadowcode/<id>` and keeps that branch (`kept_branch`); `state: "branch"`.
+- `POST /api/worktree-tasks/{id}/discard`: stops a running turn (waits up to
+  60 s), then `state: "discarded"`. Repeating it retries a failed cleanup.
+- Closing (apply, keep, discard) removes the worktree (and, except for keep,
+  its branch), stops trusting its folder, and moves the conversation back to
+  the project (`sessions.workspace`; vendor CLI session ids are forgotten), so
+  later turns run in the main checkout. When it was the open conversation the
+  selection follows. A `worktree_task.closed {id, state, applied_files,
+  branch}` event is recorded in the conversation.
+- Sessions: `GET /api/sessions` rows carry `worktree_task` (id) and
+  `worktree_source` (the project) while the worktree exists;
+  `?workspace=<project>` also lists them. `GET /api/sessions/{id}` has
+  `worktree: WorktreeTask | null`. `DELETE /api/sessions/{id}` is refused
+  while the conversation still has its worktree. A worktree folder is never
+  added to `/api/projects` or remembered as the relaunch folder.
+- Storage: `native_meta` `worktree_task:<id>` (record) and
+  `worktree_task_index:<project>` (ids); `session_meta` `worktree_task` and
+  `worktree_source`.
+
+## Desktop notifications
+
+The desktop shell shows a notification (only while the window is unfocused,
+or for a conversation other than the one on screen) for:
+`approval.requested` ("Waiting for you: <command or tool>"),
+`approval.expiring` (below), `agent.completed` with `success: false` and no
+plan limit ("task failed"), `limit.fallback` (plan limit reached, and whether
+the task continued on a local model) and a successful `agent.completed`.
+Cancelled tasks never notify. Settings (`ui` group, all default on except
+sound): `notify` (all), `notify_approval`, `notify_failed`, `notify_limit`,
+`notify_finished`, `notify_sound`. The selection lives in
+`shadowcode_core::notify` (`select`, `should_show`, `hint`).
+
+- Engine broadcast `approval.expiring {approval_id, session_id, tool,
+  command, expires_at, seconds_left}` (with `session_id`, `task_id`): sent
+  once when 80% of a pending approval's time has passed (8 of 10 minutes for
+  vendor approvals; timeouts under a minute get none). Transient: never
+  stored. The command is redacted.
+- Tauri command `set_visible_session {sessionId}`: the conversation the window
+  shows. Clicking a notification (Linux: the notification's default action)
+  focuses the window and emits `shadowcode:open-session {session_id}`, which
+  opens that conversation.
+- Attached windows receive a bounded copy of these events' payloads
+  (`notify::hint`: summary, success, cancelled, whether a limit was reached,
+  command, tool, limit continuation), never transcript content.
 
 ## Config
 

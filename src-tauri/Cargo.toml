@@ -27,6 +27,11 @@ tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
 
+# Clickable notifications on Linux (the notification plugin cannot report
+# a click on desktop); the same crate the plugin already uses.
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

@@ -3,6 +3,7 @@ import type {
   EventRow,
   PlanStep,
   RoutingDecision,
+  Usage,
 } from "../api";
 import type { ChatItem } from "../components/cards";
 import {
@@ -48,6 +49,18 @@ export type Transcript = {
   usageVersion: number;
   /** The latest automatic continuation on a local model (limit.fallback). */
   fallback?: { jobId: string; target: string; to: string };
+  /** The latest context estimate (context.budget, native loop only). */
+  budget?: { used: number; limit: number };
+  /** The conversation's usage so far (usage.updated `session`). */
+  sessionUsage?: Usage;
+  /** The latest context compaction (context.compacted). */
+  compaction?: {
+    ts: number;
+    before: number;
+    after: number;
+    omitted: number;
+    method: string;
+  };
 };
 export const emptyTranscript = (): Transcript => ({
   items: [],
@@ -150,6 +163,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let limit = state.limit;
   let usageVersion = state.usageVersion;
   let fallback = state.fallback;
+  let budget = state.budget;
+  let sessionUsage = state.sessionUsage;
+  let compaction = state.compaction;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
   const touch = (update: (current: TaskActivity) => TaskActivity) => {
@@ -444,6 +460,25 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   // Vendor account pushes carry `vendor`; per-task token/cost updates
   // (`turn`/`job`/`session`) do not change the picker's rows.
   if (event.type === "usage.updated" && p.vendor) usageVersion += 1;
+  // Per-task accounting (no `vendor`): the conversation's running total.
+  if (event.type === "usage.updated" && !p.vendor && p.session)
+    sessionUsage = p.session as Usage;
+  if (event.type === "context.budget" && Number(p.limit) > 0)
+    budget = {
+      used: Number(p.used_estimated_tokens || 0),
+      limit: Number(p.limit),
+    };
+  if (event.type === "context.compacted") {
+    compaction = {
+      ts: event.ts,
+      before: Number(p.before_estimated_tokens || 0),
+      after: Number(p.after_estimated_tokens || 0),
+      omitted: Number(p.omitted_messages || 0),
+      method: String(p.method || ""),
+    };
+    if (budget && compaction.after)
+      budget = { ...budget, used: compaction.after };
+  }
   if (event.type === "workflow.selected") {
     items = [
       ...items,
@@ -791,6 +826,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     limit,
     usageVersion,
     fallback,
+    budget,
+    sessionUsage,
+    compaction,
     cursor: event.id || state.cursor,
   };
 }

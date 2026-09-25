@@ -32,6 +32,7 @@ pub mod mcp;
 pub mod memory;
 pub mod model_registry;
 pub mod models;
+pub mod notify;
 pub mod ollama_store;
 pub mod openrouter;
 pub mod parallel;
@@ -63,6 +64,7 @@ pub mod vision;
 pub mod web;
 pub mod workflows;
 pub mod workspace;
+pub mod worktree_tasks;
 pub mod worktrees;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
