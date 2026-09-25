@@ -15,6 +15,7 @@ import {
 } from "./activity";
 import type { UsageSnapshot } from "./picker";
 import { CONTINUATION } from "./allowance";
+import { keyRows } from "./rowKeys";
 
 const ROUTE_PRODUCTS: Record<string, string> = {
   "cli:codex": "Codex",
@@ -201,7 +202,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     };
     items = [...items];
     if (index < 0) items.push(card);
-    else items[index] = card;
+    else items[index] = { ...card, key: items[index].key };
   }
   if (
     event.type === "command.completed" &&
@@ -554,7 +555,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       };
       items = [...items];
       if (index < 0) items.push(next);
-      else items[index] = next;
+      else items[index] = { ...next, key: items[index].key };
     }
   }
   if (event.type === "tool.started") {
@@ -633,7 +634,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     };
     items = [...items];
     if (index < 0) items.push(card);
-    else items[index] = card;
+    else items[index] = { ...card, key: items[index].key };
     const completedArgs = (args || {}) as Record<string, unknown>;
     touch((a) => {
       const at = a.calls.findIndex(
@@ -770,7 +771,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     }
   }
   return {
-    items,
+    items: keyRows(state.items, items, event.id),
     stage,
     usage,
     plan,

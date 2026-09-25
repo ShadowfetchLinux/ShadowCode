@@ -162,6 +162,77 @@ test("runs a task with streamed events and reviews the changes", async ({
   });
 });
 
+test("approvals appear as soon as the engine asks, without polling", async ({
+  page,
+}) => {
+  const reads = async () =>
+    (await fakeLog(page)).filter((r) =>
+      /^\/api\/(feed|approvals|jobs)\b/.test(r.path),
+    ).length;
+  await page.waitForTimeout(500);
+  const idle = await reads();
+  // Nothing polls approvals or jobs while the window is idle.
+  await page.waitForTimeout(3000);
+  expect(await reads()).toBe(idle);
+  const asked = Date.now();
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        __SHADOW_FAKE__: { requestApproval: (r: object) => void };
+      }
+    ).__SHADOW_FAKE__.requestApproval({
+      command: "npm run lint",
+      reason: "Check the style",
+    }),
+  );
+  const card = page.locator(".approval");
+  await expect(card).toContainText("npm run lint", { timeout: 1000 });
+  expect(Date.now() - asked).toBeLessThan(1000);
+  await card.getByRole("button", { name: "Allow" }).click();
+  await expect(card).toHaveCount(0, { timeout: 1000 });
+  const decided = (await fakeLog(page)).find(
+    (r) => r.method === "POST" && r.path.startsWith("/api/approvals/"),
+  );
+  expect(decided?.body).toMatchObject({ decision: "approve" });
+});
+
+test("drawer tabs keep terminal output, the open file and the commit message", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Review changes" }).click();
+  const drawer = page.getByRole("complementary", { name: "Drawer" });
+  const tab = (name: string) =>
+    drawer.locator(".drawer-tabs").getByRole("button", { name });
+  await drawer.getByPlaceholder("Commit message").fill("Fix the add function");
+  await tab("Terminal").click();
+  await drawer.getByRole("textbox", { name: "Terminal command" }).fill("ls");
+  await drawer.getByRole("button", { name: "Run" }).click();
+  await expect(drawer).toContainText("ran ls");
+  await drawer
+    .getByRole("textbox", { name: "Terminal command" })
+    .fill("git log");
+  await tab("Files").click();
+  await drawer.getByRole("button", { name: /README\.md/ }).click();
+  await expect(drawer).toContainText("Contents of README.md");
+  await tab("Changes").click();
+  await expect(drawer.getByPlaceholder("Commit message")).toHaveValue(
+    "Fix the add function",
+  );
+  await tab("Terminal").click();
+  await expect(drawer).toContainText("ran ls");
+  await expect(
+    drawer.getByRole("textbox", { name: "Terminal command" }),
+  ).toHaveValue("git log");
+  await tab("Files").click();
+  await expect(drawer).toContainText("Contents of README.md");
+  // Closing and reopening the drawer keeps them too.
+  await drawer.getByRole("button", { name: "Close drawer" }).click();
+  await page.getByRole("button", { name: "Review changes" }).click();
+  await expect(drawer.getByPlaceholder("Commit message")).toHaveValue(
+    "Fix the add function",
+  );
+});
+
 test("asks for consent before sending local context to a cloud row", async ({
   page,
 }) => {

@@ -53,6 +53,7 @@ mod code_intel;
 mod commands;
 mod compare;
 mod extensions;
+mod feed;
 mod git;
 mod goals;
 #[cfg(unix)]
@@ -229,6 +230,7 @@ impl Service {
             }
             "jobs" | "run" | "approvals" | "checkpoints" => self.job_routes(&call).await,
             "goals" => self.goal_routes(&call).await,
+            "feed" => self.feed_routes(&call).await,
             "background" => self.background_routes(&call).await,
             "code-intel" => self.code_intel_routes(&call).await,
             "workspace" => self.workspace_routes(&call).await,
