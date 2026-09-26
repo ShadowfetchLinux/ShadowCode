@@ -19,8 +19,32 @@ pub fn set_visible_session(state: tauri::State<'_, Visible>, session_id: String)
     }
 }
 
+/// Conversations of automation runs still going (newest last, bounded):
+/// their task's `agent.completed` is announced by `automation.finished`.
+static AUTOMATION_SESSIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 /// Called for every engine broadcast.
 pub fn on_event(handle: &AppHandle, paths: &AppPaths, event: &Value) {
+    if let Some(session) = notify::automation_session(event) {
+        if let Ok(mut sessions) = AUTOMATION_SESSIONS.lock() {
+            sessions.retain(|s| s != session);
+            if event["type"] == "automation.started" {
+                sessions.push(session.to_owned());
+                let excess = sessions.len().saturating_sub(64);
+                sessions.drain(..excess);
+                return;
+            }
+        }
+    }
+    if event["type"] == "agent.completed" {
+        let session = event["session_id"].as_str().unwrap_or("");
+        if AUTOMATION_SESSIONS
+            .lock()
+            .is_ok_and(|sessions| sessions.iter().any(|s| s == session))
+        {
+            return;
+        }
+    }
     // Cheap check first: most events never notify.
     if notify::select(event, &notify::Prefs::default()).is_none() {
         return;

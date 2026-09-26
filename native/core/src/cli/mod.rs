@@ -627,6 +627,8 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 "This profile already has an engine"
             );
             errln!("ShadowCode {} · serving {}\nPress Ctrl-C to stop managed work and close the engine.",crate::VERSION,workspace.display());
+            // A headless server runs scheduled automations like the desktop.
+            backend.service().context("Native service unavailable")?.engine.start_automations();
             let guardian_service=backend.service().context("Native service unavailable")?.clone();
             let guardian=tokio::spawn(async move {
                 loop {

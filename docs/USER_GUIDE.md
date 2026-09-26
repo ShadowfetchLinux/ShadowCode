@@ -262,11 +262,30 @@ toggles the drawer.
 ## Tools while you work
 
 The drawer's **Tools** tab holds what you use during work rather than
-configure: **Goals** (milestone checklists), **Processes** (dev servers and
-watchers that keep running between tasks) and **Worktrees**. `Ctrl+K`
-(*Goals and milestones*, *Background processes*, *Worktrees*) and the
-`/goals` and `/background` commands open them there. Skills, MCP, plugins,
-hooks, Guardian, vendor tools and health stay in **Settings › Advanced**.
+configure: **Goals** (milestone checklists), **Automations** (prompts that
+run on a schedule), **Issues** (start a task from a GitHub or GitLab issue),
+**Processes** (dev servers and watchers that keep running between tasks) and
+**Worktrees**. `Ctrl+K` (*Goals and milestones*, *Automations*, *Start from
+an issue*, *Background processes*, *Worktrees*) and the `/goals` and
+`/background` commands open them there.
+
+- **Automations** run a saved prompt hourly, daily, on weekdays, weekly or
+  on a cron schedule while ShadowCode (or `shadowcode serve`) is open. Each
+  run is its own conversation, by default in a fresh worktree, stops when it
+  asks for approval unless you let it wait, and has a time limit. Missed
+  times are caught up once at startup within a window you choose, otherwise
+  recorded as missed. The history shows each run's result, duration and
+  cost.
+- **Issues** lists open issues through `gh` or `glab`, fills the message box
+  with the picked issue (title, description, newest comments) for you to
+  review, creates an `issue-<n>-…` branch, and when the task finishes offers
+  **Open PR that closes #n** in the Git tab.
+
+See [Automations, issues and the GitHub Action](AUTOMATIONS.md) for the
+details, including running ShadowCode from GitHub Actions.
+
+Skills, MCP, plugins, hooks, Guardian, vendor tools and health stay in
+**Settings › Advanced**.
 
 In **Settings › Permissions & network**, how each runner applies the mode
 (ShadowCode's own tools, and each subscription) is folded under

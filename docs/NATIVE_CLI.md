@@ -77,6 +77,13 @@ shadowcode approvals
 shadowcode approvals --session SESSION_ID --id APPROVAL_ID --decision approve
 ```
 
+`--approval approve` grants every approval request of the task this command
+started, printing each one on stderr. It is for machines that are discarded
+after the job, such as GitHub-hosted runners (the
+[GitHub Action](../integrations/github-action/README.md) uses it when asked);
+actions the project's permissions deny stay denied, and it never approves
+another client's tasks.
+
 Decisions are scoped to the saved session and operation. This command does not
 grant blanket permission for later commands. `exec "command"` is an exact
 user-requested terminal operation; project trust and configured restrictions
@@ -235,7 +242,9 @@ shadowcode background stop PROCESS_PREFIX
 ```
 
 `--detach` and background start require that persistent owner. Closing it cancels
-managed work and waits for process-group cleanup. `serve` does not install a
+managed work and waits for process-group cleanup. `serve` and the desktop also
+run [scheduled automations](AUTOMATIONS.md); one-shot commands such as `run`
+never do. `serve` does not install a
 daemon or automatically restart jobs. Opening the GUI while `serve` or a TUI
 owns the same profile attaches to that engine. The window keeps its own project
 and conversation selection and shows a notice that closing it leaves shared

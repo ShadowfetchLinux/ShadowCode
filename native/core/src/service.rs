@@ -48,6 +48,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 mod accounts;
 mod agents;
+mod automations;
 mod background;
 mod call;
 mod code_intel;
@@ -61,6 +62,7 @@ mod git;
 mod goals;
 #[cfg(unix)]
 mod inspection;
+mod issues;
 mod jobs;
 mod memory;
 mod model_catalog;
@@ -198,15 +200,19 @@ impl Service {
         if expected.is_some_and(|generation| generation != selection.generation) {
             return Ok(());
         }
-        // A Compare lane's or worktree task's worktree is temporary: it is
-        // selected while its conversation is open but never becomes a
-        // project or the relaunch folder, which would go stale once the
-        // comparison is kept or the task applied.
+        // A Compare lane's, worktree task's or automation run's worktree is
+        // temporary: it is selected while its conversation is open but never
+        // becomes a project or the relaunch folder, which would go stale once
+        // the comparison is kept, the task applied or the run's checkout
+        // removed.
         let lane = match &session {
             Some(id) => {
                 let store = self.engine.store();
                 crate::compare::session_tags(&store, id)?.0.is_some()
                     || crate::worktree_tasks::session_task(&store, id)?.is_some()
+                    || store
+                        .session_meta(id, crate::store::keys::AUTOMATION_WORKTREE)?
+                        .is_some()
             }
             None => false,
         };
@@ -250,6 +256,8 @@ impl Service {
             }
             "jobs" | "run" | "approvals" | "checkpoints" => self.job_routes(&call).await,
             "goals" => self.goal_routes(&call).await,
+            "automations" => self.automation_routes(&call).await,
+            "issues" => self.issue_routes(&call).await,
             "review" => self.review_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "terminals" => self.terminal_routes(&call).await,

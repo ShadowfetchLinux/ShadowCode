@@ -51,6 +51,9 @@ tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 tree-sitter-java = "0.23"
 streaming-iterator = "0.1.9"
+# Automation schedules: local wall-clock times (daylight saving included).
+# Already in the dependency tree through rmcp/schemars; MIT OR Apache-2.0.
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Landlock file/TCP restrictions for shell commands that run without

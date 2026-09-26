@@ -181,6 +181,47 @@ pub fn select(event: &Value, prefs: &Prefs) -> Option<Notice> {
                 )
             }
         }
+        "automation.finished" => {
+            // Only automations set to notify. Its task's own
+            // `agent.completed` is not shown (see `automation_session`).
+            if payload["notify"] != true {
+                return None;
+            }
+            let name = clip(payload["name"].as_str().unwrap_or("Automation"), 80);
+            let title = format!("ShadowCode · {name}");
+            let summary = payload["summary"].as_str().unwrap_or("");
+            match payload["status"].as_str().unwrap_or("") {
+                "completed" => (
+                    Kind::Finished,
+                    title,
+                    if summary.trim().is_empty() {
+                        "Finished".to_owned()
+                    } else {
+                        clip(summary, 180)
+                    },
+                ),
+                // Stopped by the user, or ShadowCode was closing.
+                "cancelled" => return None,
+                "needs_approval" => (
+                    Kind::Failed,
+                    title,
+                    "Stopped because it asked for approval".to_owned(),
+                ),
+                "timed_out" => (Kind::Failed, title, "Stopped at its time limit".to_owned()),
+                _ => {
+                    let detail = payload["detail"].as_str().unwrap_or("");
+                    (
+                        Kind::Failed,
+                        title,
+                        if detail.trim().is_empty() {
+                            "The automation failed".to_owned()
+                        } else {
+                            format!("Failed: {}", clip(detail, 160))
+                        },
+                    )
+                }
+            }
+        }
         _ => return None,
     };
     prefs.allows(kind).then_some(Notice {
@@ -189,6 +230,17 @@ pub fn select(event: &Value, prefs: &Prefs) -> Option<Notice> {
         body,
         session_id,
     })
+}
+
+/// Automation runs are announced by `automation.finished` (when the
+/// automation asks for it), not by their task's own `agent.completed`.
+/// `automation.started` names the run's conversation; the desktop keeps a
+/// short list of them and skips their `agent.completed`.
+pub fn automation_session(event: &Value) -> Option<&str> {
+    match event["type"].as_str()? {
+        "automation.started" | "automation.finished" => event["session_id"].as_str(),
+        _ => None,
+    }
 }
 
 /// Show it only when the window is in the background or another
@@ -225,6 +277,14 @@ pub fn hint(event: &Value) -> Value {
             "to": text("to", 120),
             "reason": text("reason", 300),
         }),
+        "automation.finished" => json!({
+            "notify": payload["notify"],
+            "name": text("name", 80),
+            "status": text("status", 40),
+            "summary": text("summary", 180),
+            "detail": text("detail", 300),
+        }),
+        "automation.started" => json!({}),
         _ => Value::Null,
     }
 }
@@ -350,6 +410,53 @@ mod tests {
             &off
         )
         .is_none());
+    }
+
+    #[test]
+    fn automations_notify_when_asked() {
+        let prefs = Prefs::default();
+        let finished = |status: &str, notify: bool| {
+            select(
+                &event(
+                    "automation.finished",
+                    json!({"name":"Nightly tests","status":status,"notify":notify,
+                           "summary":"All 42 tests passed","detail":"Model stream failed"}),
+                ),
+                &prefs,
+            )
+        };
+        let done = finished("completed", true).unwrap();
+        assert_eq!(done.kind, Kind::Finished);
+        assert_eq!(done.title, "ShadowCode · Nightly tests");
+        assert_eq!(done.body, "All 42 tests passed");
+        assert!(finished("completed", false).is_none());
+        assert!(finished("cancelled", true).is_none());
+        assert_eq!(
+            finished("needs_approval", true).unwrap().body,
+            "Stopped because it asked for approval"
+        );
+        let failed = finished("failed", true).unwrap();
+        assert_eq!(failed.kind, Kind::Failed);
+        assert_eq!(failed.body, "Failed: Model stream failed");
+        let off = Prefs::from_ui(&json!({"notify_failed": false}));
+        assert!(select(
+            &event(
+                "automation.finished",
+                json!({"name":"x","status":"timed_out","notify":true})
+            ),
+            &off
+        )
+        .is_none());
+        let started = event("automation.started", json!({}));
+        assert_eq!(automation_session(&started), Some("s1"));
+        assert_eq!(
+            automation_session(&event("agent.completed", json!({}))),
+            None
+        );
+        // Attached windows get enough to decide.
+        let hinted = json!({"type":"automation.finished","session_id":"s1",
+            "payload":hint(&event("automation.finished", json!({"name":"n","status":"completed","notify":true,"summary":"ok"})))});
+        assert_eq!(select(&hinted, &prefs).unwrap().body, "ok");
     }
 
     #[test]

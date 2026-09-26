@@ -32,6 +32,7 @@ use std::{
 use tokio::sync::{broadcast, Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 
+mod automations;
 mod goals;
 use goals::GoalRun;
 mod owner;
@@ -170,6 +171,7 @@ struct Inner {
     queues: Mutex<QueueState>,
     workers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     goals: Mutex<HashMap<String, Arc<GoalRun>>>,
+    automations: automations::Registry,
     slots: Semaphore,
     closing: AtomicBool,
     background: Arc<BackgroundManager>,
@@ -196,6 +198,7 @@ impl Engine {
         let store = Arc::new(Store::open(&paths.database())?);
         store.recover_jobs()?;
         store.recover_goals()?;
+        store.recover_automation_runs()?;
         store.recover_background()?;
         let background = Arc::new(BackgroundManager::new(store.clone(), profile_lock.clone()));
         let (sender, _) = broadcast::channel(1024);
@@ -212,6 +215,7 @@ impl Engine {
             queues: Mutex::new(QueueState::default()),
             workers: Mutex::new(Vec::new()),
             goals: Mutex::new(HashMap::new()),
+            automations: automations::Registry::default(),
             slots: Semaphore::new(4),
             closing: AtomicBool::new(false),
             background,
@@ -958,6 +962,7 @@ impl Engine {
         for goal in &goals {
             goal.cancel.cancel();
         }
+        let automation_runs = self.0.automations.cancel_all();
         let manual: Vec<_> = self
             .0
             .queues
@@ -988,6 +993,7 @@ impl Engine {
             for goal in goals {
                 goal.wait().await;
             }
+            automations::Registry::wait_all(automation_runs).await;
             for operation in manual {
                 loop {
                     let notified = operation.done.notified();

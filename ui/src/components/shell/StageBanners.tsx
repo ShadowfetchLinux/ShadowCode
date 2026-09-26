@@ -1,4 +1,4 @@
-import { GitCompareArrows, LoaderCircle } from "lucide-react";
+import { GitCompareArrows, GitPullRequest, LoaderCircle } from "lucide-react";
 
 /** Banners above the conversation: a shared engine, a plan limit, an
  * interrupted task, a lost connection and a comparison lane. */
@@ -12,6 +12,7 @@ export function StageBanners({
   laneName,
   switching,
   onBackToCompare,
+  issueOffer,
 }: {
   attached: boolean;
   /** The vendor whose plan limit stopped the conversation. */
@@ -24,6 +25,12 @@ export function StageBanners({
   laneName?: string;
   switching: boolean;
   onBackToCompare: () => void;
+  /** A task started from an issue finished: offer its pull request. */
+  issueOffer?: {
+    number: number;
+    onOpen: () => void;
+    onDismiss: () => void;
+  } | null;
 }) {
   return (
     <>
@@ -54,6 +61,18 @@ export function StageBanners({
             onClick={onContinueInterrupted}
           >
             Continue task
+          </button>
+        </div>
+      )}
+      {issueOffer && (
+        <div className="connection-banner issue-banner" role="status">
+          <GitPullRequest size={14} aria-hidden="true" />
+          <span>Task for issue #{issueOffer.number} finished.</span>
+          <button type="button" className="mini" onClick={issueOffer.onOpen}>
+            Open PR that closes #{issueOffer.number}
+          </button>
+          <button type="button" className="mini" onClick={issueOffer.onDismiss}>
+            Dismiss
           </button>
         </div>
       )}
