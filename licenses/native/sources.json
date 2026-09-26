@@ -317,6 +317,22 @@
       "file": "whisper-rs-sys-0.15.0/LICENSE",
       "url": "https://codeberg.org/tazz4843/whisper-rs/raw/commit/7558e1b72f54f2f22a53589afb77e65681834c36/LICENSE",
       "sha256": "f0510d3b9d1223c45e8fdd2b49270ec8734fff491c7f7d1b948ee70162e1ceff"
+    },
+    {
+      "packages": [
+        "tree-sitter-cpp@0.23.4"
+      ],
+      "file": "tree-sitter-cpp-0.23.4/LICENSE",
+      "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-cpp/f41e1a044c8a84ea9fa8577fdd2eab92ec96de02/LICENSE",
+      "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1"
+    },
+    {
+      "packages": [
+        "tree-sitter-java@0.23.5"
+      ],
+      "file": "tree-sitter-java-0.23.5/LICENSE",
+      "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-java/94703d5a6bed02b98e438d7cad1136c01a60ba2c/LICENSE",
+      "sha256": "52ed137b039cd9c46409bc22e89938af911c95b157feae2d040b51e6084369a7"
     }
   ]
 }
