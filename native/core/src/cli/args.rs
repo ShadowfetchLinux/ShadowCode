@@ -212,6 +212,24 @@ pub enum Command {
     },
     /// Run the shared engine without a window until Ctrl-C or SIGTERM.
     Serve,
+    /// Serve the Agent Client Protocol on stdio for Zed, JetBrains and other ACP editors.
+    Acp {
+        /// Trust a project the first time an editor opens a session in it.
+        #[arg(long)]
+        trust: bool,
+        /// Print editor configuration for this executable instead of serving.
+        #[arg(long, value_enum)]
+        print_config: Option<AcpClient>,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AcpClient {
+    /// Zed `settings.json` → `agent_servers`.
+    Zed,
+    /// JetBrains AI Assistant `~/.jetbrains/acp.json`.
+    Jetbrains,
+    /// Command and arguments for any other ACP client.
+    Generic,
 }
 
 #[derive(Debug, Subcommand)]
