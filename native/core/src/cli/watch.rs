@@ -256,6 +256,29 @@ pub async fn job(
                         value: json!({"status":"needs_approval","message":"Task stopped because this non-interactive invocation cannot grant tool approval. Use --interactive in a terminal, or --approval wait and approve through the desktop/approvals command.","approval":approval,"job":stopped}),
                         raw: None,
                     });
+                } else if owns_job && matches!(options.approval, ApprovalMode::Approve) {
+                    // Explicitly requested for disposable machines (CI):
+                    // grant this task's own request and say so on stderr.
+                    if announced.insert(approval["id"].as_str().unwrap_or("").to_owned()) {
+                        errln!(
+                            "Approved automatically (--approval approve): {} {}",
+                            plain(approval["tool"].as_str().unwrap_or("tool")),
+                            plain(approval["command"].as_str().unwrap_or(""))
+                        );
+                        let result = backend
+                            .call(
+                                "POST",
+                                format!(
+                                    "/api/approvals/{}",
+                                    approval["id"].as_str().context("Approval ID missing")?
+                                ),
+                                json!({"session_id":approval["session_id"],"decision":"approve"}),
+                            )
+                            .await;
+                        if let Err(error) = result {
+                            errln!("Approval was not applied: {}", plain(&format!("{error:#}")));
+                        }
+                    }
                 } else if announced.insert(approval["id"].as_str().unwrap_or("").to_owned())
                     && !json_output
                     && !options.events

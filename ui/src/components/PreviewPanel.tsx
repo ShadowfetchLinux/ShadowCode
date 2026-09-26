@@ -37,7 +37,7 @@ import {
   type PreviewOpened,
   type PreviewServer,
 } from "../lib/preview";
-import { openExternal } from "../lib/transport";
+import { isRemote, openExternal } from "../lib/transport";
 import "../preview.css";
 
 type Toast = (text: string, kind?: "ok" | "err" | "info") => void;
@@ -59,17 +59,29 @@ const MAX_CONSOLE = 100;
  * through the engine's loopback proxy so the picker script can point at
  * elements. Picked elements and console errors become chips on the next
  * message (lib/pendingAttachments). */
-export function PreviewPanel({
-  workspace,
-  toast,
-  memory,
-  onMemory,
-}: {
+type PanelProps = {
   workspace: string;
   toast: Toast;
   memory: DrawerMemory;
   onMemory: DrawerMemoryUpdate;
-}) {
+};
+
+export function PreviewPanel(props: PanelProps) {
+  // The proxies listen on the engine computer's loopback, which a remote
+  // device cannot reach (the engine refuses /api/preview over remote access).
+  if (isRemote())
+    return (
+      <section className="preview-panel" aria-label="Preview">
+        <p className="hint">
+          The app preview works in the ShadowCode window on the computer running
+          your dev server. Open it there to pick elements.
+        </p>
+      </section>
+    );
+  return <LocalPreview {...props} />;
+}
+
+function LocalPreview({ workspace, toast, memory, onMemory }: PanelProps) {
   const savedUrl = memory.previewUrl;
   const saveUrl = useCallback(
     (url: string) => onMemory("previewUrl", url),

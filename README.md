@@ -193,6 +193,19 @@ chip in the status bar shows context use and cost, e.g.
 `42% · 38k / 128k · $0.12`. Details:
 [user guide](docs/USER_GUIDE.md#run-tasks-side-by-side).
 
+## Remote access (phone)
+
+Follow and steer tasks from your phone or another computer in a browser:
+**Settings › Remote access** (or `shadowcode serve --remote` without a
+window) serves the same interface, off by default and on `127.0.0.1` unless
+you choose another address. Pair a device by scanning a QR code; each device
+gets its own access key that you can unpair. Terminals stay off remotely
+unless you allow them, and secrets are never shown. Use Tailscale
+(`tailscale serve` for HTTPS): plain HTTP on a local network is not
+encrypted. Optional phone notifications through [ntfy](https://ntfy.sh)
+say when a task needs approval, finishes, fails or reaches a plan limit.
+Details: [docs/REMOTE.md](docs/REMOTE.md).
+
 ## API keys (OpenRouter)
 
 No subscription? Create a key at [openrouter.ai/keys](https://openrouter.ai/keys)
@@ -303,12 +316,33 @@ ShadowCode.
 Shell commands run as your Linux user. **ShadowCode is not an operating-system
 sandbox.** See [SECURITY.md](SECURITY.md).
 
+## Use it from Zed or JetBrains
+
+`shadowcode acp` runs ShadowCode as an [Agent Client
+Protocol](https://agentclientprotocol.com) agent, so it appears in Zed's and
+JetBrains' agent panels with the same models, approvals, plans and history as
+the window. `shadowcode acp --print-config zed` prints the entry to paste into
+Zed's `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "ShadowCode": { "type": "custom", "command": "/usr/bin/shadowcode", "args": ["acp"], "env": {} }
+  }
+}
+```
+
+The editor's project must be trusted in ShadowCode (or start the agent with
+`--trust`). It works with the desktop open or closed. See
+[ACP_SERVER.md](docs/ACP_SERVER.md) for JetBrains and other clients.
+
 ## Data locations
 
 | What | Where |
 | --- | --- |
 | Settings | `~/.config/shadow-agent/config.yaml` ([example](config.example.yaml)) |
 | Secrets for HTTP providers, including the OpenRouter key (`OPENROUTER_API_KEY`) | `~/.config/shadow-agent/secrets.env` (mode 600) |
+| Remote access: switches, paired devices (token digests only), phone notifications | `~/.config/shadow-agent/remote.json` (mode 600) |
 | Conversations, jobs, events, goals, usage snapshots | `~/.local/state/shadow-agent/shadow-agent.db` (SQLite, schema version 25; backed up as `shadow-agent.pre-native-<id>.sqlite` before a migration) |
 | OpenRouter model list (cache) | `~/.local/state/shadow-agent/openrouter-models.json` |
 | Webview storage | `~/.local/share/shadow-agent/webview` |
@@ -405,11 +439,16 @@ throwaway profile has no `secrets.env`.
   suggested message, push, pull requests with CI status), a **Preview** of
   your dev server where you can pick an element (or a console error) to put
   in your next message ([app preview](docs/PREVIEW.md)), and **Tools** (goals,
-  background processes, worktrees). Integrations (skills, MCP, plugins, hooks,
+  scheduled automations, start a task from a GitHub/GitLab issue, background
+  processes, worktrees): [automations and issues](docs/AUTOMATIONS.md).
+- Run ShadowCode in GitHub Actions (`/shadowcode <task>` in an issue comment,
+  or a label for a pull request review) with the
+  [GitHub Action](integrations/github-action/README.md). Integrations (skills, MCP, plugins, hooks,
   Guardian, vendor tools, health) are under **Settings › Advanced**. The same executable
-  also has a CLI (`shadowcode run`, `shadowcode tui`, `shadowcode mcp serve`):
-  [native CLI](docs/NATIVE_CLI.md), [terminal UI](docs/NATIVE_TUI.md),
-  [MCP](docs/NATIVE_MCP.md).
+  also has a CLI (`shadowcode run`, `shadowcode tui`, `shadowcode mcp serve`,
+  `shadowcode acp`): [native CLI](docs/NATIVE_CLI.md), [terminal
+  UI](docs/NATIVE_TUI.md), [MCP](docs/NATIVE_MCP.md), [editors over
+  ACP](docs/ACP_SERVER.md).
 - Package notices: [licenses/native](licenses/native/README.md).
 
 ## License

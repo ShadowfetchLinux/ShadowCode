@@ -1,6 +1,7 @@
 import { useCallback, useState, type SetStateAction } from "react";
 import type { PreviewDevice } from "../components/PreviewPanel";
 import type { ToolsView } from "../components/ToolsTab";
+import type { IssueLink } from "../lib/issues";
 
 /** A pull request being written in the Git tab. */
 export type PrDraft = {
@@ -25,6 +26,8 @@ export type DrawerMemory = {
   toolsView: ToolsView;
   previewUrl: string;
   previewDevice: PreviewDevice;
+  /** The issue the latest task was started from (Tools › Issues). */
+  issueTask: IssueLink | null;
 };
 export type DrawerMemoryUpdate = <K extends keyof DrawerMemory>(
   key: K,
@@ -40,6 +43,7 @@ export const emptyDrawerMemory = (): DrawerMemory => ({
   toolsView: "goals",
   previewUrl: "",
   previewDevice: "desktop",
+  issueTask: null,
 });
 
 export function useDrawerMemory(workspace: string) {

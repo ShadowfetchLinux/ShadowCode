@@ -211,7 +211,58 @@ pub enum Command {
         undo: bool,
     },
     /// Run the shared engine without a window until Ctrl-C or SIGTERM.
-    Serve,
+    Serve {
+        /// Also serve the web interface and API for phones and other
+        /// computers (paired devices only; see docs/REMOTE.md).
+        #[arg(long)]
+        remote: bool,
+        /// Listen on this IP:port for this run instead of the saved remote
+        /// access address (127.0.0.1:7390 unless changed in Settings).
+        #[arg(long, requires = "remote")]
+        remote_address: Option<std::net::SocketAddr>,
+    },
+    /// Serve the Agent Client Protocol on stdio for Zed, JetBrains and other ACP editors.
+    Acp {
+        /// Trust a project the first time an editor opens a session in it.
+        #[arg(long)]
+        trust: bool,
+        /// Print editor configuration for this executable instead of serving.
+        #[arg(long, value_enum)]
+        print_config: Option<AcpClient>,
+    },
+    /// Remote access: show status, create a pairing link, or unpair devices.
+    Remote {
+        #[command(subcommand)]
+        action: Option<Remote>,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AcpClient {
+    /// Zed `settings.json` → `agent_servers`.
+    Zed,
+    /// JetBrains AI Assistant `~/.jetbrains/acp.json`.
+    Jetbrains,
+    /// Command and arguments for any other ACP client.
+    Generic,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Remote {
+    /// Show whether remote access runs, where, and the paired devices.
+    Status,
+    /// Print a one-time pairing link and QR code (valid 10 minutes).
+    Pair {
+        /// Which of this computer's addresses the link uses.
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// Unpair one device (by ID prefix), or every device with --all.
+    Revoke {
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -336,9 +387,14 @@ pub struct TaskOptions {
 }
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub enum ApprovalMode {
+    /// Stop the task and exit with code 2.
     #[default]
     Cancel,
+    /// Leave the request for the desktop or `shadowcode approvals`.
     Wait,
+    /// Approve each request this task raises. For disposable machines such
+    /// as CI runners only; denied actions and project permissions still apply.
+    Approve,
 }
 #[derive(Debug, Subcommand)]
 pub enum Background {

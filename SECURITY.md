@@ -234,13 +234,37 @@ default).
 
 ## Local trust boundary
 
-- **No network listener.** The desktop talks to the engine over Tauri IPC in
-  the same process. The CLI uses a Unix socket in a private per-user directory
-  (`/run/user/<uid>/shadowcode/`). Both peers check the user ID, protocol and
-  profile, frames are bounded, and the engine's API has no TCP listener (the
-  Preview tab's proxies, below, forward to your dev server only). Sockets left by
-  dead engines are removed at startup. Processes running as the same user are
+- **No network listener by default.** The desktop talks to the engine over
+  Tauri IPC in the same process. The CLI uses a Unix socket in a private
+  per-user directory (`/run/user/<uid>/shadowcode/`). Both peers check the
+  user ID, protocol and profile, frames are bounded, and the engine's API has
+  no TCP listener unless you turn on remote access (below); the Preview tab's
+  proxies (below) forward to your dev server only. Sockets left by dead
+  engines are removed at startup. Processes running as the same user are
   trusted.
+- **Remote access (opt-in).** Settings › Remote access or `shadowcode serve
+  --remote` starts an HTTP server for the web interface. It is off by
+  default and binds `127.0.0.1` unless you choose another address. Every API
+  and event-stream request needs a per-device 256-bit access token in the
+  `Authorization` header (never a URL or cookie); only SHA-256 digests are
+  stored (`remote.json`, mode 600) and compared in constant time. Devices
+  pair with single-use links that expire after 10 minutes and can be
+  unpaired one by one or all at once. Eight failed attempts from one address
+  within 5 minutes block it for 5 minutes. There are no CORS headers;
+  cross-origin requests are refused; static files are served by exact name
+  from the built interface only; bodies are limited to 8 MB. A paired device
+  has the same control as the desktop window, except: it cannot manage remote
+  access, terminals and direct commands are refused unless you allow them,
+  secret files are not shown, the profile folders cannot be opened, and
+  recognizable credentials in answers are redacted. **Plain HTTP on a local
+  network is not encrypted**: anyone on that network can read the traffic,
+  including the access key. Use Tailscale (`tailscale serve` gives HTTPS).
+  See [docs/REMOTE.md](docs/REMOTE.md).
+- **Phone notifications (opt-in).** Nothing is sent until you enter an ntfy
+  server and topic. Messages carry the event, the project name and a link;
+  task details only if you turn them on (redacted). On a public ntfy server,
+  anyone who knows the topic can read it: use a long random topic. The
+  optional ntfy token is kept in `secrets.env`.
 - **Private directories.** Profile config, data and state directories are
   created with mode 700 and must be owned by the current user. The profile lock
   is a private regular file. Symlinks, extra hard links and foreign owners are
@@ -257,8 +281,9 @@ default).
   only with the ShadowCode window's origin, and the window only with the
   preview frame; the frame is sandboxed without top navigation and is the
   only extra origin the webview may navigate to. Picked elements and console
-  text are page data; they reach a model only when you send them. See
-  [docs/PREVIEW.md](docs/PREVIEW.md).
+  text are page data; they reach a model only when you send them. Remote
+  devices cannot use the preview (`/api/preview…` is refused over remote
+  access). See [docs/PREVIEW.md](docs/PREVIEW.md).
 - **Optional MCP HTTP server.** `shadowcode mcp serve --http` binds loopback
   only, needs a bearer credential and rejects browser origins. See
   [docs/NATIVE_MCP.md](docs/NATIVE_MCP.md).

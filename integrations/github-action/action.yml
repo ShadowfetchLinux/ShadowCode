@@ -1,0 +1,297 @@
+name: ShadowCode
+description: >-
+  Run a ShadowCode task headless on a pinned, checksum-verified release, then
+  open a pull request with the changes or post the result as a comment.
+author: Shadowfetch
+branding:
+  icon: terminal
+  color: green
+
+inputs:
+  task:
+    description: >-
+      What ShadowCode should do. A leading command prefix (see `prefix`) is
+      removed, so a whole issue comment such as "/shadowcode fix the typo" can
+      be passed as is.
+    required: true
+  prefix:
+    description: Command prefix removed from the start of `task`.
+    required: false
+    default: /shadowcode
+  api-key:
+    description: >-
+      API key for the model, from repository secrets (an OpenRouter key by
+      default, or the key for `endpoint`). It is given only to the ShadowCode
+      step, never to shell commands the agent runs.
+    required: true
+  model:
+    description: >-
+      Model to run. Without `endpoint`: an OpenRouter model as
+      `api:openrouter:<slug>`. With `endpoint`: the model name that endpoint
+      serves.
+    required: false
+    default: api:openrouter:qwen/qwen3-coder
+  endpoint:
+    description: >-
+      Optional OpenAI-compatible base URL (for example
+      https://api.example.com/v1). Leave empty for OpenRouter.
+    required: false
+    default: ""
+  mode:
+    description: "`code` (may edit files), `plan` or `ask` (both read-only)."
+    required: false
+    default: code
+  approval:
+    description: >-
+      What happens when the task asks for approval (a shell command, say):
+      `cancel` stops it (exit code 2); `approve` grants its requests. Use
+      `approve` only on GitHub-hosted runners, which are thrown away after
+      the job. Actions the project's permissions deny stay denied.
+    required: false
+    default: cancel
+  output:
+    description: >-
+      `pull-request` pushes a new branch and opens a pull request when files
+      changed (otherwise comments); `comment` posts the result on the issue or
+      pull request; `none` only sets the outputs.
+    required: false
+    default: comment
+  github-token:
+    description: >-
+      Token for the comment or pull request, normally `github.token`. Used
+      only after ShadowCode has finished, in separate steps.
+    required: false
+    default: ${{ github.token }}
+  issue-number:
+    description: Issue or pull request to comment on. Defaults to the event's.
+    required: false
+    default: ${{ github.event.issue.number || github.event.pull_request.number }}
+  base:
+    description: Branch the pull request targets. Defaults to the checked-out branch.
+    required: false
+    default: ""
+  version:
+    description: ShadowCode release to download (without the leading v).
+    required: false
+    default: 0.31.1
+  appimage-sha256:
+    description: >-
+      Optional SHA-256 of the AppImage. When set it must match as well as the
+      release's SHA256SUMS, pinning the exact bytes you reviewed.
+    required: false
+    default: ""
+  working-directory:
+    description: Project folder (the repository root by default).
+    required: false
+    default: ${{ github.workspace }}
+
+outputs:
+  exit-code:
+    description: "ShadowCode's exit code: 0 done, 1 failed, 2 stopped for approval."
+    value: ${{ steps.run.outputs.exit-code }}
+  status:
+    description: The task's final status (completed, failed, needs_approval, …).
+    value: ${{ steps.run.outputs.status }}
+  changed:
+    description: "`true` when the task changed files."
+    value: ${{ steps.run.outputs.changed }}
+  result-file:
+    description: Path of the JSON result written by `shadowcode run --json`.
+    value: ${{ steps.run.outputs.result-file }}
+  pull-request-url:
+    description: The pull request opened, if any.
+    value: ${{ steps.deliver.outputs.pull-request-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        APPROVAL: ${{ inputs.approval }}
+        OUTPUT: ${{ inputs.output }}
+        VERSION: ${{ inputs.version }}
+        PIN: ${{ inputs.appimage-sha256 }}
+      run: |
+        set -euo pipefail
+        fail() { echo "::error title=ShadowCode::$*"; exit 1; }
+        [[ "$RUNNER_OS" == "Linux" && "$RUNNER_ARCH" == "X64" ]] || fail "ShadowCode runs on Linux x64 runners."
+        [[ "$MODE" =~ ^(code|plan|ask)$ ]] || fail "mode must be code, plan or ask."
+        [[ "$APPROVAL" =~ ^(cancel|approve)$ ]] || fail "approval must be cancel or approve."
+        [[ "$OUTPUT" =~ ^(pull-request|comment|none)$ ]] || fail "output must be pull-request, comment or none."
+        [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must look like 0.31.1."
+        [[ -z "$PIN" || "$PIN" =~ ^[0-9a-fA-F]{64}$ ]] || fail "appimage-sha256 must be 64 hex characters."
+
+    - name: Download and verify ShadowCode
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        PIN: ${{ inputs.appimage-sha256 }}
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP/shadowcode-$VERSION"
+        name="ShadowCode_${VERSION}_amd64.AppImage"
+        base="https://github.com/Shadowfetchapps/ShadowCode/releases/download/v$VERSION"
+        mkdir -p "$dir"
+        cd "$dir"
+        curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o SHA256SUMS "$base/SHA256SUMS"
+        curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$name" "$base/$name"
+        expected="$(awk -v name="$name" '{ file=$2; sub(/^\*/, "", file); n=split(file, p, "/"); if (p[n] == name) { print $1; exit } }' SHA256SUMS)"
+        [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo "::error title=ShadowCode::No SHA-256 for $name in SHA256SUMS"; exit 1; }
+        actual="$(sha256sum "$name" | awk '{print $1}')"
+        [[ "$actual" == "$expected" ]] || { echo "::error title=ShadowCode::Checksum mismatch for $name; refusing to run it"; exit 1; }
+        if [[ -n "$PIN" ]]; then
+          [[ "$actual" == "${PIN,,}" ]] || { echo "::error title=ShadowCode::$name does not match appimage-sha256"; exit 1; }
+        fi
+        echo "Verified $name ($actual)"
+        chmod +x "$name"
+        # Extract once instead of --appimage-extract-and-run for every call;
+        # it runs the same AppRun. No FUSE or display is needed.
+        "./$name" --appimage-extract >/dev/null
+        "$dir/squashfs-root/AppRun" --version
+        echo "bin=$dir/squashfs-root/AppRun" >> "$GITHUB_OUTPUT"
+
+    - name: Run the task
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SHADOWCODE: ${{ steps.install.outputs.bin }}
+        TASK: ${{ inputs.task }}
+        PREFIX: ${{ inputs.prefix }}
+        MODEL: ${{ inputs.model }}
+        ENDPOINT: ${{ inputs.endpoint }}
+        MODE: ${{ inputs.mode }}
+        APPROVAL: ${{ inputs.approval }}
+        SHADOWCODE_API_KEY: ${{ inputs.api-key }}
+      run: |
+        set -uo pipefail
+        profile="$RUNNER_TEMP/shadowcode-profile"
+        result="$RUNNER_TEMP/shadowcode-result.json"
+        mkdir -p "$profile"
+        sc() { "$SHADOWCODE" --profile "$profile" --workspace "$PWD" "$@"; }
+        task="$TASK"
+        if [[ -n "$PREFIX" && "$task" == "$PREFIX"* ]]; then
+          task="${task#"$PREFIX"}"
+        fi
+        task="$(printf '%s' "$task" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        if [[ -z "$task" ]]; then
+          echo "::error title=ShadowCode::The task is empty."
+          exit 1
+        fi
+        [[ -n "$SHADOWCODE_API_KEY" ]] || { echo "::error title=ShadowCode::api-key is empty (is the secret available to this workflow?)"; exit 1; }
+        set -e
+        if [[ "$APPROVAL" == "approve" ]] && ! sc run --help | grep -q "approve"; then
+          echo "::error title=ShadowCode::approval: approve needs a newer ShadowCode; raise the version input."
+          exit 1
+        fi
+        sc trust >/dev/null
+        sc config permissions.mode allow_edits >/dev/null
+        args=()
+        if [[ -n "$ENDPOINT" ]]; then
+          sc models --use "$MODEL" --provider openai_compatible --endpoint "$ENDPOINT" --api-key-env SHADOWCODE_API_KEY >/dev/null
+        else
+          export OPENROUTER_API_KEY="$SHADOWCODE_API_KEY"
+          unset SHADOWCODE_API_KEY
+          args+=(--model "$MODEL")
+        fi
+        case "$MODE" in
+          plan) args+=(--purpose planner) ;;
+          ask) args+=(--purpose reviewer) ;;
+          *) args+=(--purpose coder) ;;
+        esac
+        set +e
+        sc run --json --approval "$APPROVAL" "${args[@]}" -- "$task" > "$result"
+        code=$?
+        set -e
+        status="$(jq -r '.status // (if .ok == false then "failed" else "unknown" end)' "$result" 2>/dev/null || echo failed)"
+        changed=false
+        if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [[ -n "$(git status --porcelain --untracked-files=all -- . ':(exclude).shadow')" ]]; then
+          changed=true
+        fi
+        {
+          echo "exit-code=$code"
+          echo "status=$status"
+          echo "changed=$changed"
+          echo "result-file=$result"
+        } >> "$GITHUB_OUTPUT"
+        echo "ShadowCode finished with exit code $code ($status); files changed: $changed"
+
+    - name: Deliver the result
+      id: deliver
+      if: always() && inputs.output != 'none' && steps.run.outputs.result-file != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        OUTPUT: ${{ inputs.output }}
+        NUMBER: ${{ inputs.issue-number }}
+        BASE: ${{ inputs.base }}
+        RESULT: ${{ steps.run.outputs.result-file }}
+        CODE: ${{ steps.run.outputs.exit-code }}
+        STATUS: ${{ steps.run.outputs.status }}
+        CHANGED: ${{ steps.run.outputs.changed }}
+        TASK: ${{ inputs.task }}
+        PREFIX: ${{ inputs.prefix }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        REPO: ${{ github.repository }}
+        SERVER: ${{ github.server_url }}
+      run: |
+        set -euo pipefail
+        summary="$(jq -r '.summary // .message // .error // ""' "$RESULT" 2>/dev/null | head -c 60000 || true)"
+        [[ -n "$summary" ]] || summary="(ShadowCode returned no summary.)"
+        body="$RUNNER_TEMP/shadowcode-comment.md"
+        comment() {
+          [[ -n "$NUMBER" ]] || { echo "No issue or pull request to comment on."; return 0; }
+          gh issue comment "$NUMBER" --repo "$REPO" --body-file "$body"
+        }
+        pr_url=""
+        if [[ "$OUTPUT" == "pull-request" && "$CHANGED" == "true" && "$CODE" == "0" ]]; then
+          branch="shadowcode/run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          base="${BASE:-$(git rev-parse --abbrev-ref HEAD)}"
+          title="$(printf '%s' "${TASK#"$PREFIX"}" | tr '\n' ' ' | sed -e 's/^[[:space:]]*//' | cut -c1-72)"
+          git switch -c "$branch"
+          git add -A -- . ':(exclude).shadow'
+          git -c user.name="shadowcode[bot]" -c user.email="shadowcode-bot@users.noreply.github.com" \
+            -c commit.gpgsign=false commit -q -m "ShadowCode: $title" -m "Task run: $RUN_URL"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.$SERVER/.extraheader=AUTHORIZATION: basic $auth" push -q origin "HEAD:refs/heads/$branch"
+          {
+            printf '%s\n\n' "$summary"
+            [[ -n "$NUMBER" ]] && printf 'Requested in #%s.\n\n' "$NUMBER"
+            printf -- '---\nMade by ShadowCode in [this run](%s). Review the changes before merging.\n' "$RUN_URL"
+          } > "$body"
+          pr_url="$(gh pr create --repo "$REPO" --base "$base" --head "$branch" --title "$title" --body-file "$body")"
+          echo "pull-request-url=$pr_url" >> "$GITHUB_OUTPUT"
+          { printf 'ShadowCode opened %s\n\n' "$pr_url"; printf '<details><summary>Summary</summary>\n\n%s\n\n</details>\n' "$summary"; } > "$body"
+          comment
+          exit 0
+        fi
+        {
+          case "$STATUS" in
+            completed) printf '**ShadowCode finished.**\n\n' ;;
+            needs_approval) printf '**ShadowCode stopped: the task asked for approval** (for example to run a command). Set `approval: approve` on a GitHub-hosted runner to allow it.\n\n' ;;
+            *) printf '**ShadowCode did not finish** (%s, exit code %s).\n\n' "$STATUS" "$CODE" ;;
+          esac
+          printf '%s\n\n' "$summary"
+          if [[ "$OUTPUT" == "pull-request" && "$CHANGED" != "true" && "$CODE" == "0" ]]; then
+            printf 'No files changed, so no pull request was opened.\n\n'
+          fi
+          printf -- '---\n[Run details](%s)\n' "$RUN_URL"
+        } > "$body"
+        comment
+
+    - name: Report the outcome
+      if: always() && steps.run.outputs.exit-code != ''
+      shell: bash
+      env:
+        CODE: ${{ steps.run.outputs.exit-code }}
+        STATUS: ${{ steps.run.outputs.status }}
+      run: |
+        if [[ "$CODE" != "0" ]]; then
+          echo "::error title=ShadowCode::The task did not finish ($STATUS, exit code $CODE)."
+          exit 1
+        fi

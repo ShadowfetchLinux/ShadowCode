@@ -234,3 +234,210 @@
   font-size: 12px;
   color: var(--muted);
 }
+
+/* ---------- automations ---------- */
+.automations,
+.issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.automations .row,
+.issues .row,
+.automation-editor .row,
+.issue-pick .row,
+.run-history .row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.automations .row .grow,
+.issues .row .grow,
+.automation-editor .row .grow {
+  flex: 1;
+  min-width: 0;
+}
+.automation-editor .row.end,
+.issue-pick .row.end {
+  justify-content: flex-end;
+}
+.automation {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.automation.paused {
+  opacity: 0.75;
+}
+.automation header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.automation header .hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.automation-next {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  font-size: 12px;
+}
+.run-status {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.run-status.completed {
+  color: var(--ok);
+}
+.run-status.failed,
+.run-status.timed_out,
+.run-status.needs_approval,
+.run-status.interrupted {
+  color: var(--danger);
+}
+.run-status.missed,
+.run-status.skipped,
+.run-status.running {
+  color: var(--warn);
+}
+.run-history {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+}
+.run-detail {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+.automation-editor,
+.issue-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.automation-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-2);
+}
+.automation-editor label.check,
+.issue-pick label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+.automation-editor label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.automation-editor fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 0;
+}
+.automation-editor legend {
+  font-size: 12px;
+  padding: 0 4px;
+}
+.automation-editor input:not([type="checkbox"]):not([type="radio"]),
+.automation-editor textarea,
+.automation-editor select,
+.issue-pick input:not([type="checkbox"]) {
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.automation-editor input[type="number"] {
+  width: 72px;
+}
+.automation-editor textarea {
+  resize: vertical;
+}
+.automation-editor .mono {
+  font-family: var(--mono);
+}
+.automation-editor input:focus,
+.automation-editor textarea:focus,
+.automation-editor select:focus,
+.issue-pick input:focus {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+/* ---------- issues ---------- */
+.issue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.issue-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.issue-row:hover {
+  border-color: var(--border-strong);
+}
+.issue-row .grow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.issue-row svg {
+  color: var(--ok);
+  margin-top: 2px;
+}
+.issue-pick h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.issue-body {
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  margin: 0;
+}
+.issue-banner {
+  gap: 8px;
+}

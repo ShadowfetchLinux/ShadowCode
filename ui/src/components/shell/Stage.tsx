@@ -78,6 +78,7 @@ export function Stage({
   refresh,
   setPermissionMode,
   toast,
+  issueOffer,
   extras,
   reviewPanel,
   worktreeBar,
@@ -130,6 +131,11 @@ export function Stage({
   refresh: () => Promise<void>;
   setPermissionMode: (mode: "ask" | "allow_edits") => void;
   toast: (text: string, kind?: ToastKind) => void;
+  issueOffer?: {
+    number: number;
+    onOpen: () => void;
+    onDismiss: () => void;
+  } | null;
   extras: ComposerExtras;
   /** The full-width Review view, shown instead of the conversation. */
   reviewPanel?: ReactNode;
@@ -178,6 +184,7 @@ export function Stage({
         }
         switching={switching}
         onBackToCompare={() => void compare.back()}
+        issueOffer={issueOffer}
       />
       {view === "compare" && (
         <CompareView

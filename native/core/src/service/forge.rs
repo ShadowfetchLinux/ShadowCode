@@ -12,7 +12,7 @@ use super::*;
 use std::collections::BTreeMap;
 
 const PUSH_TIMEOUT: Duration = Duration::from_secs(180);
-const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 const MODEL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Diff text offered to a model when drafting a message.
 const DIFF_BUDGET: usize = 16_000;
@@ -171,7 +171,7 @@ pub fn validate_branch(name: &str) -> Result<()> {
 /// The user's environment for Git transport and forge CLIs. `process::run`
 /// starts from a minimal environment; these add what push and `gh`/`glab`
 /// need to use the user's own sign-in. Values pass through; none are read.
-fn user_tool_env() -> BTreeMap<String, String> {
+pub(super) fn user_tool_env() -> BTreeMap<String, String> {
     const PASS: &[&str] = &[
         "SSH_AUTH_SOCK",
         "SSH_AGENT_PID",
@@ -221,7 +221,7 @@ fn user_tool_env() -> BTreeMap<String, String> {
     env
 }
 
-async fn run_tool(
+pub(super) async fn run_tool(
     workspace: &Path,
     program: &str,
     args: Vec<String>,
@@ -266,7 +266,7 @@ fn ok(value: &Value) -> bool {
     value["ok"] == true
 }
 /// Tool output for an error message, with anything secret-shaped removed.
-fn clean(text: &str) -> String {
+pub(super) fn clean(text: &str) -> String {
     let text = crate::redaction::redact_text(text.trim()).text;
     truncate(&text, 2000).to_owned()
 }
@@ -960,7 +960,7 @@ impl Service {
     // --- Pull requests -------------------------------------------------------
 
     /// Which forge CLI applies to a remote and whether it is ready.
-    async fn forge_cli(&self, workspace: &Path, info: &RemoteInfo) -> Value {
+    pub(super) async fn forge_cli(&self, workspace: &Path, info: &RemoteInfo) -> Value {
         let (program, install, login) = match info.kind {
             "github" => (
                 "gh",
@@ -1025,7 +1025,7 @@ impl Service {
     }
 
     /// `owner/repo` for github.com, `HOST/owner/repo` elsewhere.
-    fn repo_arg(info: &RemoteInfo) -> String {
+    pub(super) fn repo_arg(info: &RemoteInfo) -> String {
         if info.host.eq_ignore_ascii_case("github.com")
             || info.host.eq_ignore_ascii_case("gitlab.com")
         {
@@ -1035,7 +1035,11 @@ impl Service {
         }
     }
 
-    async fn forge_remote(&self, workspace: &Path, remote: &str) -> Result<(String, RemoteInfo)> {
+    pub(super) async fn forge_remote(
+        &self,
+        workspace: &Path,
+        remote: &str,
+    ) -> Result<(String, RemoteInfo)> {
         match self.chosen_remote(workspace, remote).await? {
             Some((name, Some(info))) => Ok((name, info)),
             Some((name, None)) => bail!("Remote {name} is not a web address ShadowCode recognises"),

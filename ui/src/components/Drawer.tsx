@@ -17,13 +17,19 @@ import {
 /** The optional right-hand drawer: the readable diff of current changes,
  * Git (commit, push, pull requests), the user's own terminals, files,
  * conversations, the Preview of the project's dev server (with element
- * picking), and Tools used while working (goals, background processes,
- * worktrees). Work in a tab (the open file, a commit message, the terminal in
+ * picking), and Tools used while working (goals, automations, issues,
+ * background processes, worktrees). Work in a tab (the open file, a commit message, the terminal in
  * front) lives in `memory`, owned by the app, so switching tabs keeps it; the
  * terminals themselves run in the engine. */
 export type DrawerTab =
   "changes" | "git" | "terminal" | "preview" | "files" | "sessions" | ToolsView;
-const TOOLS: readonly DrawerTab[] = ["goals", "background", "worktrees"];
+const TOOLS: readonly DrawerTab[] = [
+  "goals",
+  "automations",
+  "issues",
+  "background",
+  "worktrees",
+];
 export const isToolTab = (tab: DrawerTab): tab is ToolsView =>
   TOOLS.includes(tab);
 export const DRAWER_TABS: { id: DrawerTab | "tools"; label: string }[] = [
@@ -149,9 +155,13 @@ export function Drawer({
             view={tool}
             onView={onTab}
             sessionId={sessionId}
+            busy={busy}
             toast={toast}
             onOpenSession={onOpenSession}
             onOpenProject={onOpenProject}
+            onAskAgent={onAskAgent}
+            onIssueLinked={(link) => onMemory("issueTask", link)}
+            onOpenTerminal={() => onTab("terminal")}
           />
         )}
         {tab === "files" && (

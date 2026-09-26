@@ -11,6 +11,8 @@ import {
 } from "react";
 import { Plus, X } from "lucide-react";
 import { terminalApi, type TerminalInfo } from "../lib/terminal";
+import { getRemoteSession } from "../lib/remote";
+import { isRemote } from "../lib/transport";
 import {
   remembered,
   type DrawerMemory,
@@ -28,17 +30,29 @@ const TerminalView = lazy(() =>
 /** Rough initial size; the view fits itself once laid out. */
 const START = { cols: 80, rows: 24 };
 
-export function TerminalPanel({
-  workspace,
-  toast,
-  memory,
-  onMemory,
-}: {
+type PanelProps = {
   workspace: string;
   toast: Toast;
   memory: DrawerMemory;
   onMemory: DrawerMemoryUpdate;
-}) {
+};
+
+export function TerminalPanel(props: PanelProps) {
+  // Over remote access terminals stay off unless the desktop allows them.
+  if (isRemote() && !getRemoteSession()?.allow_terminals)
+    return (
+      <section className="terminal-panel" aria-label="Terminals">
+        <p className="hint terminal-hint">
+          Terminals are turned off for remote access. To use them from this
+          device, turn on “Allow terminals over remote access” in Settings ›
+          Remote access on the computer running ShadowCode.
+        </p>
+      </section>
+    );
+  return <LocalTerminals {...props} />;
+}
+
+function LocalTerminals({ workspace, toast, memory, onMemory }: PanelProps) {
   const [active, setActive] = remembered(memory, onMemory, "terminalActive");
   const [terminals, setTerminals] = useState<TerminalInfo[] | null>(null);
   const [error, setError] = useState("");

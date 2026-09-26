@@ -837,6 +837,60 @@ export type SandboxStatus = {
   never_mounted: string[];
 };
 
+/** Settings › Remote access (`/api/remote`, desktop only). */
+export type RemoteStatus = {
+  enabled: boolean;
+  running: boolean;
+  address: string;
+  port: number;
+  /** `ip:port` the server listens on while it runs. */
+  bound: string | null;
+  url: string | null;
+  public_url: string;
+  /** Bound to something other than loopback (reachable from the network). */
+  exposed: boolean;
+  allow_terminals: boolean;
+  error: string | null;
+  addresses: {
+    address: string;
+    interface: string;
+    kind: "loopback" | "tailscale" | "lan";
+  }[];
+  devices: {
+    id: string;
+    name: string;
+    created_at: number;
+    last_seen: number | null;
+  }[];
+  ntfy: {
+    server: string;
+    topic: string;
+    details: boolean;
+    events: {
+      approval: boolean;
+      finished: boolean;
+      failed: boolean;
+      limit: boolean;
+    };
+    token_saved: boolean;
+    configured: boolean;
+    error: string | null;
+  };
+};
+export type RemotePairing = {
+  link: string;
+  base: string;
+  expires_in: number;
+  qr: { size: number; rows: string[] };
+};
+export type NtfyChange = Partial<
+  Pick<RemoteStatus["ntfy"], "server" | "topic" | "details">
+> & {
+  events?: Partial<RemoteStatus["ntfy"]["events"]>;
+  /** A new access token; "" removes the saved one. */
+  token?: string;
+};
+
 const get = <T>(path: string) => request<T>(path);
 
 async function send<T>(
@@ -1057,6 +1111,26 @@ export const api = {
     ),
   unloadLocalModel: () =>
     send<{ ok: boolean }>("/api/local-models/unload", "POST", {}),
+  remoteStatus: () => get<RemoteStatus>("/api/remote"),
+  saveRemote: (
+    values: Partial<
+      Pick<
+        RemoteStatus,
+        "enabled" | "address" | "port" | "public_url" | "allow_terminals"
+      >
+    >,
+  ) => send<RemoteStatus>("/api/remote", "PUT", values),
+  pairRemote: (host?: string) =>
+    send<RemotePairing>("/api/remote/pair", "POST", { host: host || "" }),
+  revokeRemote: (id?: string) =>
+    send<RemoteStatus>(
+      "/api/remote/devices/revoke",
+      "POST",
+      id ? { id } : { all: true },
+    ),
+  saveNtfy: (values: NtfyChange) =>
+    send<RemoteStatus>("/api/remote/ntfy", "PUT", values),
+  testNtfy: () => send<{ ok: boolean }>("/api/remote/ntfy/test", "POST", {}),
   codeIntelStatus: () => get<CodeIntelStatus>("/api/code-intel/status"),
   saveCodeIntel: (values: Partial<CodeIntelSettings>) =>
     send<{ ok: boolean; config: CodeIntelSettings }>(

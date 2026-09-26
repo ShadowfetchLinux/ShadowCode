@@ -21,6 +21,7 @@ use tauri_plugin_opener::OpenerExt;
 
 mod backend;
 mod notices;
+mod web_ui;
 use backend::Backend;
 
 #[derive(Default)]
@@ -227,6 +228,10 @@ fn main() {
 
 fn run() -> Result<()> {
     let extraction_parent = shadowcode_core::lifecycle::extraction_parent();
+    // Built once: the window and remote access (`shadowcode serve --remote`
+    // and Settings › Remote access) serve the same embedded interface.
+    let mut context = tauri::generate_context!();
+    web_ui::share(&mut context);
     let options = cli::Options::parse_args();
     if !options.desktop() {
         let json_output = options.json && !options.mcp_stdio();
@@ -408,7 +413,7 @@ fn run() -> Result<()> {
                 request_shutdown(window.app_handle());
             }
         })
-        .build(tauri::generate_context!())?;
+        .build(context)?;
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             if !app.state::<Lifecycle>().complete.load(Ordering::Acquire) {

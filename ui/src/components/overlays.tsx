@@ -1,7 +1,7 @@
 import { Dialog } from "./Dialog";
 import { useEffect, useState } from "react";
 import type { Project } from "../api";
-import { isNative, pickDirectory } from "../lib/transport";
+import { canPickFiles, pickDirectory } from "../lib/transport";
 
 const SHORTCUT_GROUPS: { label: string; rows: [string, string][] }[] = [
   {
@@ -193,7 +193,7 @@ export function ProjectPicker({
               if (ev.key === "Enter") onPick(path);
             }}
           />
-          {isNative() && (
+          {canPickFiles() && (
             <button
               type="button"
               className="ghost"

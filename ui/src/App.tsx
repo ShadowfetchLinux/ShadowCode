@@ -51,6 +51,7 @@ import {
   writeStore,
 } from "./lib/storage";
 import { sameWorkspacePath } from "./lib/trust";
+import { closingPr, issueFollowUp } from "./lib/issues";
 import { exportSession as saveExport } from "./lib/transport";
 
 /** The window. Behaviour lives in `hooks/` (navigation, the approvals and
@@ -472,6 +473,20 @@ export default function App() {
   const onDecide = useStableCallback(
     (id: string, answer: ApprovalDecision) => void controls.decide(id, answer),
   );
+  const issueLink = issueFollowUp(memory.memory.issueTask, job, busy);
+  const issueOffer = issueLink
+    ? {
+        number: issueLink.number,
+        onOpen: () => {
+          memory.update("prDraft", (current) =>
+            closingPr(issueLink, current.base),
+          );
+          memory.update("issueTask", null);
+          setPanel("git");
+        },
+        onDismiss: () => memory.update("issueTask", null),
+      }
+    : null;
   const fallback = useMemo(
     () => resolveFallback(limitsFrom(cfg), allowance.data, pickerTargets),
     [cfg, allowance.data, pickerTargets],
@@ -617,6 +632,7 @@ export default function App() {
         refresh={refresh}
         setPermissionMode={(mode) => void setPermissionMode(mode)}
         toast={toast}
+        issueOffer={issueOffer}
         extras={extras}
         reviewPanel={
           review.target ? (

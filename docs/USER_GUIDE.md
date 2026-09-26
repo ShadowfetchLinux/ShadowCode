@@ -282,11 +282,30 @@ chip with ×. Only servers on this computer (`localhost`, `*.localhost`,
 ## Tools while you work
 
 The drawer's **Tools** tab holds what you use during work rather than
-configure: **Goals** (milestone checklists), **Processes** (dev servers and
-watchers that keep running between tasks) and **Worktrees**. `Ctrl+K`
-(*Goals and milestones*, *Background processes*, *Worktrees*) and the
-`/goals` and `/background` commands open them there. Skills, MCP, plugins,
-hooks, Guardian, vendor tools and health stay in **Settings › Advanced**.
+configure: **Goals** (milestone checklists), **Automations** (prompts that
+run on a schedule), **Issues** (start a task from a GitHub or GitLab issue),
+**Processes** (dev servers and watchers that keep running between tasks) and
+**Worktrees**. `Ctrl+K` (*Goals and milestones*, *Automations*, *Start from
+an issue*, *Background processes*, *Worktrees*) and the `/goals` and
+`/background` commands open them there.
+
+- **Automations** run a saved prompt hourly, daily, on weekdays, weekly or
+  on a cron schedule while ShadowCode (or `shadowcode serve`) is open. Each
+  run is its own conversation, by default in a fresh worktree, stops when it
+  asks for approval unless you let it wait, and has a time limit. Missed
+  times are caught up once at startup within a window you choose, otherwise
+  recorded as missed. The history shows each run's result, duration and
+  cost.
+- **Issues** lists open issues through `gh` or `glab`, fills the message box
+  with the picked issue (title, description, newest comments) for you to
+  review, creates an `issue-<n>-…` branch, and when the task finishes offers
+  **Open PR that closes #n** in the Git tab.
+
+See [Automations, issues and the GitHub Action](AUTOMATIONS.md) for the
+details, including running ShadowCode from GitHub Actions.
+
+Skills, MCP, plugins, hooks, Guardian, vendor tools and health stay in
+**Settings › Advanced**.
 
 In **Settings › Permissions & network**, how each runner applies the mode
 (ShadowCode's own tools, and each subscription) is folded under
@@ -421,6 +440,34 @@ computer) or finishes. An unanswered approval is denied after 10 minutes; you
 are warned 2 minutes before. Click a notification to open its conversation.
 Choose which ones you get, and whether they play a sound, in **Settings ›
 Appearance**.
+
+To get them on your phone too, set up ntfy in **Settings › Remote access ›
+Phone notifications** (see below).
+
+## Use it from your phone
+
+**Settings › Remote access** lets a phone or another computer follow and
+steer ShadowCode in a web browser: watch tasks stream, answer approvals, send
+messages and review changes. It is off until you turn it on, and only
+devices you pair can connect.
+
+1. Turn on **Turn on remote access**. It starts on *This computer only*.
+2. To reach it from a phone, use Tailscale: run `tailscale serve --bg 7390`
+   and enter the HTTPS address it prints as **Public address**, or choose
+   your Tailscale address under **Where it listens**. A local network address
+   also works, but plain HTTP on a local network is not encrypted.
+3. Choose **Pair a device** and scan the QR code with the phone (the link
+   works once, for 10 minutes). Add it to the home screen to open it like an
+   app.
+
+Terminals are off for paired devices unless you turn on **Allow terminals
+over remote access**. Secret files and keys are never shown remotely.
+**Unpair** a device (or all of them) at any time. **Phone notifications**
+send "needs approval", "finished", "failed" and "plan limit" messages
+through [ntfy](https://ntfy.sh) to your phone, with a link back to the
+conversation; nothing is sent until you enter a server and topic. Without a
+window, `shadowcode serve --remote` does the same. Details:
+[REMOTE.md](REMOTE.md).
 
 ## Context and cost
 

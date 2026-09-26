@@ -133,6 +133,11 @@ can reach.
   a model until you press Send, every chip is visible and removable, and the
   prompt labels this context as data from the page, not instructions. Treat
   text from pages you do not trust the way you would treat pasted text.
+- **Remote access.** Over remote access (`shadowcode serve --remote`) the
+  engine refuses `/api/preview…` and the tab explains that the preview works
+  in the window on the computer running the dev server: the proxies listen
+  on that computer's loopback only, and server detection lists local
+  processes.
 - **Other local users.** Any local process can connect to a loopback port;
   the proxy exposes nothing the dev server does not already expose on
   loopback.

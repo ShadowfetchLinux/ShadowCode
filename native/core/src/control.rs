@@ -119,6 +119,16 @@ pub struct Client {
     view: Option<String>,
 }
 impl Client {
+    /// The same engine connection with requests scoped to another project
+    /// (the engine forks its project selection per request).
+    pub fn for_workspace(&self, workspace: PathBuf) -> Client {
+        Client {
+            endpoint: self.endpoint.clone(),
+            workspace,
+            session_id: None,
+            view: None,
+        }
+    }
     /// Each request owns its connection. Dropping a pending request closes it;
     /// subsequent requests cannot consume an earlier abandoned response.
     pub async fn dispatch(&self, request: Request) -> Result<Value> {
@@ -353,7 +363,7 @@ impl Server {
     }
     pub fn start_with_mode(service: Service, mode: &str) -> Result<Self> {
         ensure!(
-            matches!(mode, "desktop" | "server" | "command" | "tui"),
+            matches!(mode, "desktop" | "server" | "command" | "tui" | "acp"),
             "Invalid engine mode"
         );
         let mode = mode.to_owned();
@@ -386,6 +396,13 @@ impl Server {
             finished: AtomicBool::new(false),
             done: Notify::new(),
         });
+        // Persistent owners (the desktop and `shadowcode serve`) run remote
+        // access and phone notifications; both stop when this endpoint does.
+        if matches!(mode.as_str(), "desktop" | "server") {
+            service
+                .remote()
+                .activate(&service, state.cancel.child_token());
+        }
         let running = state.clone();
         let profile = endpoint.profile.clone();
         tokio::spawn(async move {

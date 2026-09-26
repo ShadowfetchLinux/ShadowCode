@@ -62,6 +62,13 @@ pub const SUBAGENT_PARENT: &str = "subagent_parent";
 pub const SUBAGENT_RUN: &str = "subagent_run";
 /// `session_meta`: the agent definition a subagent conversation ran.
 pub const SUBAGENT_AGENT: &str = "subagent_agent";
+/// `session_meta`: the automation a conversation was started by.
+pub const AUTOMATION_ID: &str = "automation_id";
+/// `session_meta`: the automation run (history row) of a conversation.
+pub const AUTOMATION_RUN: &str = "automation_run";
+/// `session_meta`: set when the automation ran in a temporary managed
+/// worktree, so opening its conversation never makes that folder a project.
+pub const AUTOMATION_WORKTREE: &str = "automation_worktree";
 /// `native_meta`: one subagent run (JSON `subagents::RunRecord`).
 pub fn subagent_run(id: &str) -> String {
     format!("subagent:{id}")
