@@ -327,6 +327,8 @@ export function Stage({
           mentions: extras.mentions,
           onMention: extras.addMention,
           onRemoveMention: extras.removeMention,
+          context: extras.context,
+          onRemoveContext: extras.removeContext,
           history: extras.history,
         }}
         modes={{

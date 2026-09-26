@@ -35,6 +35,8 @@ import {
   pastedImages,
   type Attachment,
 } from "../lib/attachments";
+import type { ContextAttachment } from "../lib/pendingAttachments";
+import { ContextChips } from "./ContextChips";
 
 export type SlashCommand = {
   name: string;
@@ -73,6 +75,8 @@ export function Composer({
   mentions = [],
   onMention,
   onRemoveMention,
+  context = [],
+  onRemoveContext,
   history,
 }: {
   task: string;
@@ -109,6 +113,9 @@ export function Composer({
   mentions?: Mention[];
   onMention?: (mention: Mention) => void;
   onRemoveMention?: (path: string) => void;
+  /** Elements and console messages from the Preview tab (chips). */
+  context?: readonly ContextAttachment[];
+  onRemoveContext?: (id: string) => void;
   /** ↑/↓ recall of earlier prompts while the field is empty. */
   history?: PromptHistory;
 }) {
@@ -242,7 +249,7 @@ export function Composer({
           onSubmit();
         }}
       >
-        {attachments.length > 0 && (
+        {(attachments.length > 0 || context.length > 0) && (
           <ul className="chips" aria-label="Attachments">
             {attachments.map((a) => (
               <li key={a.path} className="path-chip">
@@ -262,6 +269,7 @@ export function Composer({
                 </button>
               </li>
             ))}
+            <ContextChips items={context} onRemove={onRemoveContext} />
           </ul>
         )}
         {mentions.length > 0 && (

@@ -8,8 +8,12 @@ use shadowcode_core::{
     service::Request,
 };
 use std::{
+    collections::HashSet,
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -26,15 +30,45 @@ struct Lifecycle {
     complete: AtomicBool,
 }
 
+/// Loopback ports of the preview proxies this window opened
+/// (`POST /api/preview/open`): besides the app itself, the only addresses its
+/// frames may navigate to, so the preview frame can load its page.
+#[derive(Clone, Default)]
+struct PreviewPorts(Arc<Mutex<HashSet<u16>>>);
+impl PreviewPorts {
+    fn allows(&self, url: &tauri::Url) -> bool {
+        url.scheme() == "http"
+            && url.host_str() == Some("127.0.0.1")
+            && url.port().is_some_and(|port| {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(&port)
+            })
+    }
+}
+
 #[tauri::command]
 async fn api(
     request: Request,
     service: tauri::State<'_, Backend>,
+    previews: tauri::State<'_, PreviewPorts>,
 ) -> std::result::Result<Value, String> {
-    service
+    let preview = request.method == "POST" && request.path == "/api/preview/open";
+    let value = service
         .dispatch(request)
         .await
-        .map_err(|e| format!("{e:#}"))
+        .map_err(|e| format!("{e:#}"))?;
+    if let Some(port) = value["proxy_port"].as_u64().filter(|_| preview) {
+        if let Ok(port) = u16::try_from(port) {
+            previews
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(port);
+        }
+    }
+    Ok(value)
 }
 
 #[tauri::command]
@@ -269,8 +303,10 @@ fn run() -> Result<()> {
     if !isolated {
         builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
     }
+    let preview_ports = PreviewPorts::default();
     let app = builder
         .manage(Lifecycle::default())
+        .manage(preview_ports.clone())
         .manage(notices::Visible::default())
         .invoke_handler(tauri::generate_handler![
             api,
@@ -298,8 +334,11 @@ fn run() -> Result<()> {
                 .context("Window configuration missing")?;
             tauri::WebviewWindowBuilder::from_config(app, config)?
                 .data_directory(webview_data)
-                .on_navigation(|url| {
-                    (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+                .on_navigation(move |url| {
+                    // WebKitGTK asks for every frame, so this also admits the
+                    // preview frame's proxy (and nothing else on loopback).
+                    preview_ports.allows(url)
+                        || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
                         || (matches!(url.scheme(), "http" | "https")
                             && url.host_str() == Some("tauri.localhost"))
                         || (cfg!(debug_assertions)

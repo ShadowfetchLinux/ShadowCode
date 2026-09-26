@@ -39,6 +39,7 @@ const DRAWERS: Record<string, DrawerTab> = {
   changes: "changes",
   files: "files",
   terminal: "terminal",
+  preview: "preview",
   git: "git",
   goals: "goals",
   background: "background",
@@ -120,6 +121,7 @@ export type TaskActionContext = {
 export function useTaskActions(c: TaskActionContext) {
   const { task, attachments, selectedTarget, modelChoice, pickerLoaded } = c;
   const { canAttachImages } = c;
+  const pending = c.extras?.context.length ?? 0;
   const sendBlocked = useMemo(() => {
     if (task.trim().startsWith("/")) return null;
     if (!pickerLoaded) return null;
@@ -142,7 +144,7 @@ export function useTaskActions(c: TaskActionContext) {
     attachments,
     canAttachImages,
   ]);
-  const hasContent = Boolean(task.trim() || attachments.length);
+  const hasContent = Boolean(task.trim() || attachments.length || pending);
   const canSend =
     !c.composerLocked &&
     !c.commandWaiting &&
@@ -298,6 +300,7 @@ export function useTaskActions(c: TaskActionContext) {
         c.setTask(original.task);
         c.setAttachments(original.attachments);
         for (const m of body.mentions || []) c.extras?.addMention(m);
+        if (body.context?.length) c.extras?.restoreContext(body.context);
       }
       c.setError(String(e));
       c.toast(String(e), "err");
@@ -451,6 +454,9 @@ export function useTaskActions(c: TaskActionContext) {
     ).trim();
     const extras = c.extras;
     const mentions = extras ? mentionsInText(task, extras.mentions) : [];
+    // Picked elements and console messages from the Preview tab; the engine
+    // appends them after the message.
+    const context = extras?.takeContext() ?? [];
     c.setTask("");
     c.setAttachments([]);
     extras?.setMentions([]);
@@ -458,7 +464,8 @@ export function useTaskActions(c: TaskActionContext) {
     c.pin();
     await startTask(
       {
-        task: text || "Describe the attached image(s).",
+        // Preview context alone is a message: the engine appends it.
+        task: text || (context.length ? "" : "Describe the attached image(s)."),
         workspace: c.workspace || undefined,
         model: selectedTarget.id,
         purpose: extras ? purposeFor(extras.mode) : "coder",
@@ -471,6 +478,7 @@ export function useTaskActions(c: TaskActionContext) {
           ? { effort: extras.effort }
           : {}),
         ...(mentions.length ? { mentions } : {}),
+        ...(context.length ? { context } : {}),
       },
       original,
     );

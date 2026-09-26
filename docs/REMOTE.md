@@ -74,6 +74,9 @@ The same as the desktop window, with these exceptions:
 - **Terminals are off.** Interactive terminals and **Run** (a command typed
   in the drawer) are refused unless you turn on **Allow terminals over remote
   access**. Tasks still run commands through the usual approvals.
+- **No app preview.** The drawer's Preview tab loads your dev server through
+  proxies on this computer's loopback, which a remote device cannot reach;
+  `/api/preview…` is refused and the tab says so.
 - **Remote access settings stay on this computer.** A remote device cannot
   see or change pairing, devices, the address or phone notifications.
 - **No secrets.** Secret files (`.env`, `secrets.env`, private keys,

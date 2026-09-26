@@ -7,6 +7,10 @@ import {
   type TaskMode,
 } from "../lib/effort";
 import type { Mention } from "../lib/mentions";
+import {
+  pendingAttachments,
+  usePendingAttachments,
+} from "../lib/pendingAttachments";
 import type { PickerTarget } from "../lib/picker";
 import { pushHistory, readHistory, stepHistory } from "../lib/promptHistory";
 
@@ -75,9 +79,13 @@ export function useComposerExtras({
   if (effortState.target !== targetId)
     setEffortState({ target: targetId, effort: readEffort(targetId) });
   const history = usePromptHistory(workspace);
-  // Mentions belong to the draft of one conversation.
+  // Preview context (picked elements, console messages) is added from the
+  // drawer's Preview tab through `pendingAttachments`.
+  const context = usePendingAttachments();
+  // Mentions and preview context belong to the draft of one conversation.
   useEffect(() => {
     setMentions([]);
+    pendingAttachments.clear();
   }, [sessionId, workspace]);
   const addMention = useCallback(
     (m: Mention) =>
@@ -101,6 +109,12 @@ export function useComposerExtras({
   );
   const effortShown = supportsEffort(target);
   return {
+    context,
+    removeContext: pendingAttachments.remove,
+    /** Everything waiting, removed from the composer (sending). */
+    takeContext: pendingAttachments.take,
+    /** Put context back (sending failed or consent was cancelled). */
+    restoreContext: pendingAttachments.restore,
     mentions,
     setMentions,
     addMention,

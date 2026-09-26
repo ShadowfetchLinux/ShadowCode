@@ -1,5 +1,7 @@
 import { request, ApiError } from "./lib/transport";
 import type { PickerTarget, UsageSnapshot } from "./lib/picker";
+import type { ContextAttachment } from "./lib/pendingAttachments";
+import type { PreviewOpened, PreviewServer } from "./lib/preview";
 
 // --- 0.28 contract: picker, accounts, local models (docs/API_CONTRACT_0.28.md)
 
@@ -345,6 +347,9 @@ export type StartJobRequest = {
   effort?: string;
   /** Files and folders the message @-mentions. */
   mentions?: { path: string; kind: "file" | "dir" }[];
+  /** Elements and console messages from the Preview tab; the engine appends
+   * their `text` after the task (docs/PREVIEW.md). */
+  context?: ContextAttachment[];
   /** Start a new conversation in a fresh worktree of the project; it runs
    * beside a task in the main checkout. */
   worktree?: boolean;
@@ -1228,6 +1233,15 @@ export const api = {
     send<BackgroundTask>("/api/background", "POST", { name, command }),
   stopBackground: (id: string) =>
     send<BackgroundTask>(`/api/background/${id}/stop`, "POST", {}),
+  /** Dev servers of this project (docs/PREVIEW.md). */
+  previewServers: () =>
+    get<{ workspace: string; servers: PreviewServer[] }>(
+      "/api/preview/servers",
+    ),
+  /** A loopback proxy for `url` that the preview frame loads; `app_origin`
+   * is this window's origin (the only one the picker talks to). */
+  openPreview: (url: string, app_origin: string) =>
+    send<PreviewOpened>("/api/preview/open", "POST", { url, app_origin }),
   hooks: () => get<HookCatalog>("/api/hooks"),
   activateHook: (
     workspace: string,

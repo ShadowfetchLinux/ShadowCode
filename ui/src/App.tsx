@@ -544,7 +544,7 @@ export default function App() {
 
   return (
     <div
-      className={`app ${sidebar ? "with-sidebar" : ""} ${panel ? "drawer-open" : ""}`}
+      className={`app ${sidebar ? "with-sidebar" : ""} ${panel ? "drawer-open" : ""} ${panel === "preview" ? "drawer-preview" : ""}`}
     >
       {sidebar && (
         <Sidebar
@@ -720,6 +720,8 @@ export default function App() {
           setTask(consent.original.task);
           setAttachments(consent.original.attachments);
           for (const m of consent.body.mentions || []) extras.addMention(m);
+          if (consent.body.context?.length)
+            extras.restoreContext(consent.body.context);
           setConsent(null);
           promptRef.current?.focus();
         }}

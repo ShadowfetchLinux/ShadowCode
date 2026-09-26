@@ -237,8 +237,9 @@ default).
 - **No network listener by default.** The desktop talks to the engine over
   Tauri IPC in the same process. The CLI uses a Unix socket in a private
   per-user directory (`/run/user/<uid>/shadowcode/`). Both peers check the
-  user ID, protocol and profile, frames are bounded, and there is no TCP
-  listener unless you turn on remote access (below). Sockets left by dead
+  user ID, protocol and profile, frames are bounded, and the engine's API has
+  no TCP listener unless you turn on remote access (below); the Preview tab's
+  proxies (below) forward to your dev server only. Sockets left by dead
   engines are removed at startup. Processes running as the same user are
   trusted.
 - **Remote access (opt-in).** Settings › Remote access or `shadowcode serve
@@ -269,8 +270,20 @@ default).
   is a private regular file. Symlinks, extra hard links and foreign owners are
   rejected.
 - **Webview restrictions.** The webview only navigates to the app's own
-  origin. Markdown from models renders without raw HTML or remote images. Only
+  origin (and, for the Preview frame, to preview proxy ports the app opened). Markdown from models renders without raw HTML or remote images. Only
   `http`/`https` links without embedded credentials stay clickable.
+- **App preview proxies.** The drawer's Preview tab loads the project's dev
+  server through reverse proxies the engine opens on `127.0.0.1` (random
+  ports) and only when asked. They forward only to loopback targets without
+  DNS, refuse ports the engine itself listens on, answer only their own
+  `Host` (DNS rebinding), add the element-picker script to HTML responses
+  only, and pass WebSocket upgrades through. The picker exchanges messages
+  only with the ShadowCode window's origin, and the window only with the
+  preview frame; the frame is sandboxed without top navigation and is the
+  only extra origin the webview may navigate to. Picked elements and console
+  text are page data; they reach a model only when you send them. Remote
+  devices cannot use the preview (`/api/preview…` is refused over remote
+  access). See [docs/PREVIEW.md](docs/PREVIEW.md).
 - **Optional MCP HTTP server.** `shadowcode mcp serve --http` binds loopback
   only, needs a bearer credential and rejects browser origins. See
   [docs/NATIVE_MCP.md](docs/NATIVE_MCP.md).

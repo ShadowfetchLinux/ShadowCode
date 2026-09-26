@@ -473,6 +473,12 @@ imports: [{path, mmproj, name, source}], excluded, llama_binary, context_size }`
   `user.message` keep only the text (vendor CLIs resolve the `@path` in it).
   `purpose` is `coder` (Code), `planner` (Plan) or `reviewer` (Ask); Plan and
   Ask run read-only.
+- `POST /api/jobs` body also takes `context: [{kind: "element"|"console",
+  label, text}]` from the Preview tab (at most 12 items, 16 000 characters
+  each; other fields such as `id` and `detail` are ignored). The engine
+  appends them after `task`, under a line saying they were captured from the
+  page and are data, not instructions, for every runner; the stored prompt
+  and `user.message` include them. See [PREVIEW.md](PREVIEW.md).
 - `GET /api/workspace/mentions?q=&limit=30` (limit ≤ 100) →
   `{ items: [{path, kind: "file"|"dir"}], truncated }`: fuzzy matches (letters
   in order; file names, word starts and runs rank higher), skipping
@@ -770,6 +776,46 @@ or the app closes (`SIGHUP` to the shell's session, then `SIGKILL`). At most
   `shadowcode:terminal` event `{type, terminal_id}`, not as
   `shadowcode:events`; attached views receive `terminal_id` in their
   notifications.
+
+## Preview
+
+The drawer's Preview tab (Linux). See [PREVIEW.md](PREVIEW.md) for the proxy,
+the picker script and the threat model. Refused (403) over remote access.
+
+- `GET /api/preview/servers` → `{ workspace, servers: PreviewServer[] }` for
+  the selected project, sorted by port. `PreviewServer` is `{port, url,
+  source ("background" | "process"), listening, pid, process, command,
+  background_id, background_name}`. `"background"`: a running background
+  process of this project printed the URL (`listening` says whether the port
+  is open now; `pid`/`process`/`command` are filled when a project process
+  also owns the port). `"process"`: a process whose working folder is inside
+  the project listens on the port over loopback (`url` is
+  `http://localhost:<port>/`, or the specific `127.x` address it is bound
+  to). ShadowCode's own ports are never listed.
+- `POST /api/preview/open {url, app_origin}` → `{proxy_origin, proxy_port,
+  target_origin, url, target_url}`. `url` must be `http://` to `localhost`,
+  `*.localhost`, `127.0.0.0/8` or `[::1]` (no credentials); `app_origin` is
+  the calling window's origin (`tauri://localhost`, `http(s)://tauri.localhost`
+  or an `http://` loopback origin with a port). Opens (or reuses, for the same
+  target and window) a reverse proxy on `127.0.0.1:<proxy_port>`; the answer's
+  `url` is the page through the proxy (load it in the frame) and `target_url`
+  the same page at the dev server's own address. Refused: other hosts and
+  schemes, a port this process listens on, a proxy's own port, `*`/`null`
+  origins. At most 8 proxies stay open (the oldest closes). The desktop shell
+  records `proxy_port` so the preview frame may navigate there.
+- The proxy serves `GET /__shadowcode_preview__/picker.js` itself (never
+  forwarded) and adds `<script src="/__shadowcode_preview__/picker.js">` to
+  uncompressed `text/html` responses; it answers `421` to any other `Host`
+  than `127.0.0.1:<proxy_port>` and `502` with a short page when the dev
+  server does not answer.
+- Picker → window messages (`postMessage` to `app_origin`): `{source:
+  "shadowcode-preview", version: 1, type}` with `type` `"ready"` /
+  `"navigated"` `{url, title}`, `"picked"` `{element: {selector, tag, role,
+  name, text, attributes, outer_html, styles, box: {x, y, width, height},
+  ancestors, url, title, viewport: {width, height, dpr}}}`, `"console"`
+  `{entries: [{level: "error" | "warn", message, source, url, time}]}`, or
+  `"pick-cancelled"`. Window → picker: `{source: "shadowcode-app", type}` with
+  `"hello"`, `"pick" {on}`, `"back"`, `"forward"`, `"reload"`.
 
 ## Git panel
 

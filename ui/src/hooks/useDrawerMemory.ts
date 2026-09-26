@@ -1,4 +1,5 @@
 import { useCallback, useState, type SetStateAction } from "react";
+import type { PreviewDevice } from "../components/PreviewPanel";
 import type { ToolsView } from "../components/ToolsTab";
 import type { IssueLink } from "../lib/issues";
 
@@ -14,7 +15,8 @@ export type PrDraft = {
 /** Drawer work that must survive switching tabs (and closing the drawer):
  * the terminal tab in front (the shells themselves live in the engine), the
  * folder and open file in Files, the commit message and pull request drafts,
- * and the last Tools view. A different project starts fresh. */
+ * the last Tools view, and the page and device width in Preview. A different
+ * project starts fresh. */
 export type DrawerMemory = {
   terminalActive: string;
   filesDir: string;
@@ -22,6 +24,8 @@ export type DrawerMemory = {
   commitMessage: string;
   prDraft: PrDraft;
   toolsView: ToolsView;
+  previewUrl: string;
+  previewDevice: PreviewDevice;
   /** The issue the latest task was started from (Tools › Issues). */
   issueTask: IssueLink | null;
 };
@@ -37,6 +41,8 @@ export const emptyDrawerMemory = (): DrawerMemory => ({
   commitMessage: "",
   prDraft: { title: "", body: "", base: "", draft: false },
   toolsView: "goals",
+  previewUrl: "",
+  previewDevice: "desktop",
   issueTask: null,
 });
 

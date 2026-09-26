@@ -41,12 +41,15 @@ pub mod models;
 pub mod notify;
 pub mod ollama_store;
 pub mod openrouter;
+pub mod page_context;
 pub mod parallel;
 pub mod patch;
 pub mod paths;
 pub mod permissions;
 #[cfg(unix)]
 pub mod plugins;
+#[cfg(target_os = "linux")]
+pub mod preview;
 pub mod process;
 pub mod project;
 pub mod prompt_cache;

@@ -453,7 +453,9 @@ throwaway profile has no `secrets.env`.
   [Security](SECURITY.md) · [Subscriptions](docs/SUBSCRIPTIONS.md) ·
   [Local models](docs/LOCAL_MODELS.md) · [Voice input](docs/VOICE.md)
 - The drawer has your own terminals, a Git tab (branch, commit with a
-  suggested message, push, pull requests with CI status) and **Tools** (goals,
+  suggested message, push, pull requests with CI status), a **Preview** of
+  your dev server where you can pick an element (or a console error) to put
+  in your next message ([app preview](docs/PREVIEW.md)), and **Tools** (goals,
   scheduled automations, start a task from a GitHub/GitLab issue, background
   processes, worktrees): [automations and issues](docs/AUTOMATIONS.md).
 - Run ShadowCode in GitHub Actions (`/shadowcode <task>` in an issue comment,

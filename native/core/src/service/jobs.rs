@@ -24,6 +24,9 @@ struct StartBody {
     effort: Text,
     /// `[{path, kind}]` files and folders the prompt @-mentions.
     mentions: Option<Value>,
+    /// `[{kind, label, text}]` elements and console messages from the app
+    /// preview, appended after the task (`crate::page_context`).
+    context: Option<Value>,
     /// Start a new conversation in a fresh managed worktree of the project
     /// (`crate::worktree_tasks`); `session_id` and `queue` are ignored.
     worktree: Flag,
@@ -303,6 +306,10 @@ impl Service {
             .flatten()
             .filter_map(|v| v.as_str().map(str::to_owned))
             .collect();
+        let task = crate::page_context::append(
+            body.task.as_str(),
+            &crate::page_context::parse(body.context.as_ref())?,
+        );
         let mentions: Vec<crate::mentions::Mention> = match body.mentions.as_ref() {
             Some(Value::Null) | None => Vec::new(),
             Some(value) => serde_json::from_value(value.clone())
@@ -325,7 +332,7 @@ impl Service {
             let record = crate::worktree_tasks::prepare(
                 &self.engine,
                 &workspace,
-                body.task.as_str(),
+                &task,
                 &images,
                 model
                     .as_ref()
@@ -354,7 +361,7 @@ impl Service {
             .start_turn_owned(
                 StartRequest {
                     workspace: run_in,
-                    task: body.task.as_str().into(),
+                    task: task.clone(),
                     session_id,
                     model,
                     mode: mode.into(),

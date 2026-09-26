@@ -5,6 +5,8 @@
 //! - `/api/remote…` (tokens, binding, phone notifications) is managed only on
 //!   this computer, so a stolen token cannot mint more tokens, widen the
 //!   bind address or turn terminals on.
+//! - The app preview (`/api/preview…`) is refused: its proxies listen on this
+//!   computer's loopback only, and server detection lists local processes.
 //! - Interactive terminals (`/api/terminals…`) and the direct command runner
 //!   (`/api/workspace/exec`) are refused unless the user turned on "Allow
 //!   terminals over remote access". Agent shell commands still go through
@@ -40,6 +42,8 @@ pub const REDACTED_INPUT: &str =
 pub const MICROPHONE: &str =
     "The microphone of the computer running ShadowCode can't be switched on over remote access.";
 pub const INVALID_PATH: &str = "Invalid application command path";
+pub const PREVIEW_LOCAL: &str =
+    "The app preview works only in the ShadowCode window on the computer running your dev server.";
 
 /// The path's segments after `/api/`, or `None` for a path the router could
 /// read differently (encoded characters, empty or dot segments).
@@ -122,6 +126,7 @@ pub fn check(path: &str, body: &Value, access: &Access, paths: &AppPaths) -> Res
     match family {
         "remote" | "views" | "runtime" | "owned-jobs" => return Err(Refusal(MANAGED_LOCALLY)),
         "terminals" if !access.allow_terminals => return Err(Refusal(TERMINALS_OFF)),
+        "preview" => return Err(Refusal(PREVIEW_LOCAL)),
         _ => {}
     }
     if parts == ["workspace", "exec"] && !access.allow_terminals {
@@ -278,6 +283,21 @@ mod tests {
             "/api/approvals/a1",
         ] {
             assert!(check(path, &Value::Null, &off, &paths).is_ok(), "{path}");
+        }
+    }
+
+    #[test]
+    fn the_app_preview_stays_on_this_computer() {
+        let (_dir, paths) = paths();
+        let on = Access {
+            allow_terminals: true,
+        };
+        for path in ["/api/preview/servers", "/api/preview/open"] {
+            assert_eq!(
+                check(path, &Value::Null, &on, &paths),
+                Err(Refusal(PREVIEW_LOCAL)),
+                "{path}"
+            );
         }
     }
 

@@ -259,6 +259,26 @@ approval, and nothing typed or printed there is shown to a model. The last
 belongs to the shell (`Esc`, `Ctrl+L`, `Ctrl+P` …); `` Ctrl+` `` still
 toggles the drawer.
 
+## Preview your app and point at elements
+
+The drawer's **Preview** tab shows your project's dev server inside
+ShadowCode. Servers started in this project (from **Tools › Processes**, a
+terminal or the agent) are listed under **Servers**; click one or type an
+address such as `localhost:5173` and press **Go**. **Back**, **Forward**,
+**Reload** and **Open in browser** work as in a browser, and **Phone**,
+**Tablet** and **Desktop** lay the page out at those widths. The drawer
+widens while Preview is in front.
+
+To show the agent what you mean, press **Pick element** and click something
+in the page (the click does not reach the page; `Esc` cancels). It becomes a
+chip on the composer, and when you send, the element's address, selector,
+text, role, size, key styles and HTML go into the message after your text.
+The **Console** strip below the page lists its errors and warnings; **Attach**
+adds one to your next message, **Attach all** adds them together. Remove a
+chip with ×. Only servers on this computer (`localhost`, `*.localhost`,
+`127.0.0.1`) open. Details and the security model are in
+[PREVIEW.md](PREVIEW.md).
+
 ## Tools while you work
 
 The drawer's **Tools** tab holds what you use during work rather than
