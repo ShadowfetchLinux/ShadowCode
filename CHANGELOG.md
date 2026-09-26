@@ -1,5 +1,100 @@
 # Changelog
 
+## 0.32.0: The big upgrade
+
+Everyday use:
+- **Composer.** `@` searches project files and folders (local and OpenRouter
+  models read their contents; subscription CLIs get `@path`) and lists
+  subagents. ↑ recalls earlier prompts, a Code / Plan / Ask switch sets the
+  mode, and an effort control appears for models that support one (OpenRouter
+  `reasoning.effort`, Codex `model_reasoning_effort`, Claude Code thinking
+  budget, local thinking switch).
+- **Message actions.** Edit & resend (a fork, optionally rewinding later file
+  changes), Retry and Copy on your messages; Copy and Fork on answers.
+- **Approvals show the change.** File changes show a diff (or the new file),
+  commands show the full command and folder. "Allow for this task" grants the
+  same kind of action until the task ends (never for chained, `sudo`,
+  deleting or history-rewriting commands); "Deny with note" sends a reason.
+- **Per-task Review.** A full-width view of just the files a task changed,
+  unified or split, with Keep / Undo per hunk and per file and Undo all.
+- **Safer rewind.** Rewind asks first, marks the conversation and can be
+  undone. It now also covers files changed by shell commands and by
+  subscription CLIs (Codex, Claude Code, Cursor, Grok, Antigravity), through
+  hidden checkpoint commits that never touch your index.
+- **Parallel tasks.** **Worktree** next to Send (Ctrl+Shift+Enter) runs a
+  task in its own copy of the project; Apply (checked first, conflicts
+  listed), Keep as branch or Discard when it's done.
+- **Notifications** for approvals (with a warning before one expires),
+  failures, plan limits and finished tasks; clicking one opens the
+  conversation. Sidebar badges for running, needs approval, failed and
+  unread; a right-click menu; Alt+↑/↓ and Ctrl+Tab.
+- **Context and cost chip** for every model, e.g. `42% · 38k / 128k · $0.12`,
+  with a breakdown on click.
+- **Real terminal.** Your own login shell on a pseudo-terminal (xterm.js),
+  with tabs, kept while you switch tabs or the agent works; never shown to a
+  model.
+- **Git tab.** Create or switch branches, an editable suggested commit
+  message, push with your own sign-in, and pull requests through `gh` or
+  `glab` with live CI checks (or the web compare page).
+- **Tools tab** in the drawer for Goals, Background processes, Worktrees,
+  Automations and Issues; Settings › Advanced keeps configuration only.
+- **Voice input.** Hold the mic button (or Ctrl+Shift+Space) to dictate into
+  the composer with whisper.cpp on this computer; models (74–141 MB) download
+  only on request. OpenRouter transcription is optional and off by default.
+
+A smarter agent (ShadowCode's own loop for local, OpenRouter and API models):
+- **Subagents.** `spawn_agent` runs read-only `explore`, `plan` and `review`
+  helpers, or `general`, which edits an isolated worktree and returns a diff
+  the agent applies with your approval; up to four at once. `@name` runs
+  one. Agent definitions from `.shadow/agents`, `.claude/agents`,
+  `.opencode/agent`.
+- **Reads other tools' files:** `CLAUDE.md`, nested `AGENTS.md`/`CLAUDE.md`,
+  Cursor rules, Claude Code commands and skills; the agent loads skills on
+  its own. MCP tools are offered directly as `mcp__server__tool`, and enabled
+  servers are passed to Codex, Claude Code, Cursor, Grok and Antigravity.
+- **Code intelligence.** Persistent language servers (rust-analyzer,
+  TypeScript, Pyright, gopls, clangd) report the errors an edit introduced;
+  go-to-definition and references; tree-sitter index for Python, Go, C, C++,
+  Java and JavaScript; a ranked repo map; `search_code` with keyword (BM25)
+  and optional embedding search through the bundled llama.cpp.
+- **Long conversations** are summarized by the model instead of cut; prompt
+  caching for Claude and Gemini on OpenRouter; per-task tokens and cost;
+  retries on rate limits, overloads and dropped streams (never repeating a
+  tool); full tool descriptions for large-context models.
+
+Safety:
+- **Real shell sandbox.** Commands see an empty home folder with read-only
+  toolchains; SSH keys, cloud credentials, `~/.config` and ShadowCode's keys
+  are never visible; only the project is writable. "Require sandbox" refuses
+  commands without bubblewrap; otherwise Landlock applies with a warning.
+  Shell network can be off, on, or limited to an allow-list enforced by a
+  private network namespace and filtering proxy.
+
+Beyond the window:
+- **Remote access.** Settings › Remote access (or `shadowcode serve
+  --remote`) serves the interface to a phone or another computer: off by
+  default, loopback unless you choose an address, QR pairing with a key per
+  device, secrets hidden. Terminals work remotely only if you allow them;
+  the host computer's microphone never does. Optional ntfy phone
+  notifications.
+- **Editors.** `shadowcode acp` runs ShadowCode as an Agent Client Protocol
+  agent for Zed, JetBrains and other ACP editors, with its models, modes and
+  approvals.
+- **Automations.** Scheduled prompts (hourly, daily, weekdays, weekly or
+  cron) in fresh worktrees, with catch-up, history and cost. "Start from an
+  issue" turns a GitHub or GitLab issue into a task and a closing pull
+  request. A GitHub Action runs a checksum-verified release headless from an
+  issue comment or label (`shadowcode run --approval approve` for disposable
+  runners).
+
+Under the hood:
+- The application router is split into per-domain modules with typed
+  requests; database work no longer blocks async workers; Compare state is
+  updated transactionally.
+- The window is split into hooks and components, reads one push feed instead
+  of polling, keeps drawer state per project, and the light theme is really
+  tested.
+
 ## 0.31.1: Apache License 2.0
 
 - **License changed from MIT to Apache-2.0.** A new `NOTICE` file credits

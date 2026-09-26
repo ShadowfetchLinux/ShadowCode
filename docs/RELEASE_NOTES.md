@@ -1,5 +1,54 @@
-ShadowCode 0.31.1 moves to the Apache License 2.0. Nothing else changes from
-0.31.0, whose notes follow below.
+ShadowCode 0.32.0 is the biggest update yet: it's easier to use every day,
+the agent is smarter, commands are properly sandboxed, and you can use
+ShadowCode from your phone, your editor, or on a schedule. The 0.31.1 notes
+follow below.
+
+## Easier every day
+
+- **Type `@` to attach files** and folders, **↑** for earlier prompts, and
+  switch between **Code, Plan and Ask** right in the composer. Models that
+  support it get an **effort** control.
+- **Edit and resend** any of your messages, or retry or copy it.
+- **Approvals show the actual change:** the diff for a file, the full
+  command for a shell step. **Allow for this task** stops repeat prompts,
+  and **Deny with note** tells the agent why.
+- **Review just what a task changed**, full width, and keep or undo each
+  change. **Rewind** now asks first, can be undone, and also covers shell
+  commands and Codex, Claude Code, Cursor, Grok and Antigravity edits.
+- **Run tasks side by side:** **Worktree** next to Send starts a task in its
+  own copy of the project; apply it, keep it as a branch or discard it.
+- **Notifications** when a task needs you, fails, hits a plan limit or
+  finishes; click to jump to it. The sidebar marks what needs attention.
+- **See context and cost** for every model in the status bar.
+- **A real terminal**, a **Git tab** that goes from commit to pull request
+  with live CI checks, and **voice dictation** that runs on your computer.
+
+## A smarter agent
+
+- **Subagents** explore, plan, review or work in parallel copies of your
+  project.
+- **Language servers** tell the agent about errors right after each edit,
+  and a **repo map** and **code search** help it find its way.
+- Long conversations are **summarized** instead of cut, OpenRouter
+  requests use **prompt caching**, and dropped connections are **retried**.
+- It reads **CLAUDE.md, Cursor rules and Claude Code skills and commands**,
+  and your MCP servers reach every model.
+
+## Safer by default
+
+- Shell commands run in a **sandbox that hides your home folder**: SSH
+  keys, cloud credentials and API keys stay invisible, and only the project
+  is writable. You can require the sandbox and limit the network to a list
+  of hosts.
+
+## Beyond the window
+
+- **Remote access:** scan a QR code to follow and steer ShadowCode from your
+  phone. Off by default; Tailscale recommended.
+- **Zed and JetBrains:** `shadowcode acp` makes ShadowCode an agent inside
+  your editor.
+- **Automations:** run a prompt on a schedule, turn a GitHub issue into a
+  task and pull request, or run ShadowCode in GitHub Actions.
 
 ## Changed in 0.31.1
 
@@ -181,9 +230,9 @@ runtime that ships with the app.
 
 ## Downloads
 
-- `ShadowCode_0.31.1_amd64.AppImage`
-- `ShadowCode_0.31.1_amd64.deb`
-- `ShadowCode_0.31.1_appimage-runtime-sources.tar.gz`
+- `ShadowCode_0.32.0_amd64.AppImage`
+- `ShadowCode_0.32.0_amd64.deb`
+- `ShadowCode_0.32.0_appimage-runtime-sources.tar.gz`
 - `SHA256SUMS`
 
 Builds are for x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).
