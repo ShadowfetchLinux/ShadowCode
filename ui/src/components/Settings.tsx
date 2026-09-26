@@ -3,18 +3,26 @@ import { Dialog } from "./Dialog";
 import type { Health } from "../api";
 import { AccountsPage } from "./settings/AccountsPage";
 import { CodeIntelPage } from "./settings/CodeIntelPage";
+import { VoicePage } from "./settings/VoicePage";
 import { LocalModelsPage } from "./settings/LocalModelsPage";
 import { AppearancePage, PermissionsPage } from "./settings/PreferencePages";
 import { AdvancedPage, type AdvancedTab } from "./settings/AdvancedPage";
 
 export type SettingsSection =
-  "accounts" | "local" | "code" | "permissions" | "appearance" | "advanced";
+  | "accounts"
+  | "local"
+  | "code"
+  | "voice"
+  | "permissions"
+  | "appearance"
+  | "advanced";
 export type { AdvancedTab };
 
 const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "accounts", label: "Accounts" },
   { id: "local", label: "Local models" },
   { id: "code", label: "Code intelligence" },
+  { id: "voice", label: "Voice" },
   { id: "permissions", label: "Permissions & network" },
   { id: "appearance", label: "Appearance" },
   { id: "advanced", label: "Advanced" },
@@ -93,6 +101,7 @@ export function Settings({
           <LocalModelsPage onChanged={onCatalogChanged} onToast={onToast} />
         )}
         {section === "code" && <CodeIntelPage onToast={onToast} />}
+        {section === "voice" && <VoicePage onToast={onToast} />}
         {section === "permissions" && (
           <PermissionsPage cfg={cfg} onSave={onSave} />
         )}

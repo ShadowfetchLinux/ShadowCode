@@ -157,6 +157,18 @@ pub fn data_dir(paths: &AppPaths) -> PathBuf {
     paths.data.join("voice")
 }
 
+/// The local model dictation uses: the chosen one when installed, otherwise
+/// the first installed one (so installing any model is enough to start).
+pub fn active_model(data_dir: &Path, voice: &VoiceConfig) -> Option<&'static models::VoiceModel> {
+    models::entry(&voice.model)
+        .filter(|m| models::installed(data_dir, m))
+        .or_else(|| {
+            models::CATALOG
+                .iter()
+                .find(|m| models::installed(data_dir, m))
+        })
+}
+
 /// Where a transcription will run, checked before recording starts so the
 /// user hears about a missing model or key without speaking first.
 pub enum Engine {
@@ -198,14 +210,18 @@ pub fn engine(paths: &AppPaths, config: &Config, voice: &VoiceConfig) -> Result<
         }
         _ => {
             ensure!(whisper::cpu_supported(), whisper::CPU_MESSAGE);
-            let model = models::entry(&voice.model).context("Unknown voice model")?;
             let dir = data_dir(paths);
-            ensure!(
-                models::installed(&dir, model),
-                "No voice model is installed. Open Settings › Voice and install {} ({} MB).",
-                model.name,
-                model.bytes / 1_000_000
-            );
+            let model = match active_model(&dir, voice) {
+                Some(model) => model,
+                None => {
+                    let wanted = models::entry(&voice.model).context("Unknown voice model")?;
+                    bail!(
+                        "No voice model is installed. Open Settings › Voice and install {} ({} MB).",
+                        wanted.name,
+                        wanted.bytes / 1_000_000
+                    )
+                }
+            };
             Ok(Engine::Local {
                 model: models::model_path(&dir, model),
                 language: if model.english_only {
@@ -535,6 +551,10 @@ mod tests {
                     _ => panic!("expected local"),
                 }
             }
+            // base.en is chosen by default but not installed: the first
+            // installed model is used instead.
+            let fallback = active_model(&dir, &VoiceConfig::default()).unwrap();
+            assert_eq!(fallback.id, "tiny.en");
         }
         let cloud = VoiceConfig {
             engine: "openrouter".into(),

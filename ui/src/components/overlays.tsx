@@ -11,6 +11,7 @@ const SHORTCUT_GROUPS: { label: string; rows: [string, string][] }[] = [
       ["Shift+Enter", "New line in composer"],
       ["Ctrl+.", "Stop the agent"],
       ["/", "Slash commands (in composer)"],
+      ["Ctrl+Shift+Space", "Dictate: hold to talk, or tap to start and stop"],
     ],
   },
   {

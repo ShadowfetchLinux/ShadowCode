@@ -2,6 +2,7 @@ import type { ComponentProps } from "react";
 import { GitCompareArrows } from "lucide-react";
 import type { Job, PlanStep, Session } from "../../api";
 import { Composer } from "../Composer";
+import { MicButton } from "../MicButton";
 import {
   NetworkPill,
   PermissionControl,
@@ -67,6 +68,7 @@ export function ComposerDock({
   permission,
   network,
   compare,
+  voice,
 }: {
   hidden: boolean;
   queue: {
@@ -96,6 +98,8 @@ export function ComposerDock({
     onWeb: (enabled: boolean) => void;
   };
   compare: { reason: string | null; locked: boolean; onOpen: () => void };
+  /** Dictation: errors to show, and Settings › Voice when not set up. */
+  voice: { onError: (message: string) => void; onOpenSettings: () => void };
 }) {
   return (
     <div className="composer-wrap" hidden={hidden}>
@@ -104,6 +108,16 @@ export function ComposerDock({
       <Composer
         {...composer}
         picker={<UnifiedPicker {...picker} />}
+        voice={
+          <MicButton
+            task={composer.task}
+            onTask={composer.onTask}
+            promptRef={composer.promptRef}
+            disabled={hidden}
+            onError={voice.onError}
+            onOpenSettings={voice.onOpenSettings}
+          />
+        }
         controls={
           <>
             <PermissionControl {...permission} />

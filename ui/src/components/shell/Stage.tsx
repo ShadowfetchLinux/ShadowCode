@@ -344,6 +344,10 @@ export function Stage({
           locked: composerLocked,
           onOpen: compare.open,
         }}
+        voice={{
+          onError: (message) => toast(message, "err"),
+          onOpenSettings: () => openSettings("voice"),
+        }}
       />
       <StatusBar
         busy={busy}

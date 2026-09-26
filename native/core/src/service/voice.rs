@@ -143,6 +143,7 @@ impl Service {
         let settings = VoiceConfig::lenient(&config);
         let paths = self.engine.paths();
         let dir = voice::data_dir(paths);
+        let active = voice::active_model(&dir, &settings).map(|m| m.id);
         let models: Vec<Value> = models::CATALOG
             .iter()
             .map(|model| {
@@ -154,7 +155,9 @@ impl Service {
                     "english_only": model.english_only,
                     "summary": model.summary,
                     "installed": models::installed(&dir, model),
-                    "active": settings.model == model.id,
+                    // In use: the effective model, or the chosen one when
+                    // none is installed yet.
+                    "active": active.map_or(settings.model == model.id, |id| id == model.id),
                     "progress": models::progress(model.id),
                 })
             })

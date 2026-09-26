@@ -58,6 +58,7 @@ export function Composer({
   onSubmit,
   onStop,
   compare,
+  voice,
 }: {
   task: string;
   onTask: (value: string) => void;
@@ -84,6 +85,8 @@ export function Composer({
   onStop: () => void;
   /** The Compare button, next to Send. */
   compare?: ReactNode;
+  /** The dictation mic button, next to Attach. */
+  voice?: ReactNode;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -298,6 +301,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
+          {voice}
           {picker}
           {controls}
           <span className="grow" />
