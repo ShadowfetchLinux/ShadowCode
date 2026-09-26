@@ -652,6 +652,71 @@ impl Store {
             "original_intact": true
         }))
     }
+    /// Fork keeping only what came before the task `event_id` belongs to
+    /// (its prompt included), for Edit & resend. The event must belong to
+    /// the session. With nothing earlier the fork starts empty in the same
+    /// project.
+    pub fn fork_session_before_event(
+        &self,
+        sid: &str,
+        event_id: i64,
+        title: &str,
+    ) -> Result<Value> {
+        let owned = self.query(
+            "SELECT id,task_id FROM events WHERE session_id=? AND id=?",
+            params![sid, event_id],
+        )?;
+        let event = owned
+            .first()
+            .context("event_id does not belong to this session")?;
+        // The task's first event (a queued follow-up records its prompt
+        // before it starts).
+        let cut = match event["task_id"].as_str().filter(|t| !t.is_empty()) {
+            Some(task) => self
+                .query(
+                    "SELECT MIN(id) AS id FROM events WHERE session_id=? AND task_id=?",
+                    params![sid, task],
+                )?
+                .first()
+                .and_then(|row| row["id"].as_i64())
+                .unwrap_or(event_id),
+            None => event_id,
+        };
+        let earlier = self.query(
+            "SELECT id FROM events WHERE session_id=? AND id<? ORDER BY id DESC LIMIT 1",
+            params![sid, cut],
+        )?;
+        if let Some(previous) = earlier.first().and_then(|row| row["id"].as_i64()) {
+            return self.fork_session_from_event(sid, previous, title);
+        }
+        let parent = self.session(sid)?.context("Session not found")?;
+        let branch = id();
+        let time = now();
+        let title = if title.is_empty() {
+            format!("{} (edited)", parent["title"].as_str().unwrap_or("Task"))
+        } else {
+            title.into()
+        };
+        self.execute(
+            "INSERT INTO sessions(id,workspace,created_at,updated_at,model_id,status,title,parent_id,branched_at) VALUES(?,?,?,?,?,'active',?,?,?)",
+            params![
+                branch,
+                parent["workspace"].as_str(),
+                time,
+                time,
+                parent["model_id"].as_str(),
+                title,
+                sid,
+                time
+            ],
+        )?;
+        Ok(json!({
+            "fork": self.session(&branch)?.context("Fork not found")?,
+            "original": parent,
+            "forked_from_event": null,
+            "original_intact": true
+        }))
+    }
     pub fn branch_session_with_memory(
         &self,
         sid: &str,

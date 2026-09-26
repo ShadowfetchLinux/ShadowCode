@@ -32,6 +32,9 @@ values are `null`, never invented.
   featured: boolean,
   vision: boolean,        // images accepted by model AND runtime (protocol/mmproj)
   tools: boolean,         // false ⇒ "Chat only"
+  reasoning: boolean,     // the composer's reasoning-effort control applies
+                          // (Codex, Claude Code, OpenRouter models listing
+                          // `reasoning`, GGUF templates with a thinking switch)
   is_default: boolean,
   usage: UsageSnapshot,
   local?: LocalDetail      // present for local rows
@@ -409,6 +412,27 @@ imports: [{path, mmproj, name, source}], excluded, llama_binary, context_size }`
   configured default. Job records keep the exact id in `routing.model_id`;
   `routing` also carries `inference: "local"|"cloud"` and
   `route: "vendor_cli"|"local_llamacpp"|"native_http"`.
+- `POST /api/jobs` body also takes `effort: "low"|"medium"|"high"` (omitted
+  or `"default"`: the model's own setting; anything else is refused) and
+  `mentions: [{path, kind: "file"|"dir"}]` (at most 20, inside the project).
+  Effort maps to OpenRouter `reasoning.effort`, llama.cpp
+  `chat_template_kwargs.enable_thinking` (false for `low`) on templates with
+  the switch, Codex `-c model_reasoning_effort="…"` and Claude Code
+  `MAX_THINKING_TOKENS` (4 000 / 16 000 / 31 999); other runtimes ignore it.
+  Native models read each mentioned file's current text (64 KB each, 256 KB
+  in all) or folder listing with the prompt; the stored prompt and
+  `user.message` keep only the text (vendor CLIs resolve the `@path` in it).
+  `purpose` is `coder` (Code), `planner` (Plan) or `reviewer` (Ask); Plan and
+  Ask run read-only.
+- `GET /api/workspace/mentions?q=&limit=30` (limit ≤ 100) →
+  `{ items: [{path, kind: "file"|"dir"}], truncated }`: fuzzy matches (letters
+  in order; file names, word starts and runs rank higher), skipping
+  `.gitignore`d and hidden entries; an empty `q` lists the shallowest
+  entries. The listing is cached for 5 s per project.
+- `POST /api/sessions/{id}/fork {event_id, title?, before: true}` keeps only
+  the events before the task `event_id` belongs to (its prompt included):
+  Edit & resend forks there and sends the edited text. Before the first
+  event the fork is an empty conversation with `parent_id` set.
 - `POST /api/jobs` body gains `web: boolean` (web tools for this task) and
   `handoff_consent: boolean`. Consent is required when the target is a cloud
   route and (a) the previous turn ran on this computer, (b) the previous turn
@@ -433,7 +457,12 @@ imports: [{path, mmproj, name, source}], excluded, llama_binary, context_size }`
   `model.switched {provider, from, to, resumed}`,
   `usage.updated {vendor, usage}` (Codex pushes during a turn),
   `limit.reached {vendor, usage, detail, job_id}` (job stops; user picks another model),
-  `checkpoint.restored {task_id, paths}`,
+  `checkpoint.restored {task_id, paths, undo_id?}` (the transcript shows a
+  *Rewound to here · N files restored* divider above the task's prompt),
+  `checkpoint.rewind_undone {task_id, paths, undo_id}`,
+  `review.undone {task_id, path, hunk, whole}`,
+  `approval.granted {tool, call_id|job_id, grant}` (allowed without a prompt
+  by an earlier "Allow for this task"),
 - `GET /api/sessions/{id}.execution_target` may already carry the workspace
   default for a conversation that has none of its own; the UI otherwise falls
   back to the last target chosen in that project (local cache) and never to
@@ -609,6 +638,58 @@ engine says something changed, plus a 15 s backstop read.
   folder itself are rejected. Task summaries use it for all changed files in
   one request instead of one `GET /api/workspace/diff` per file.
 
+### Approval answers, previews and task grants
+
+- `Approval` records (feed, `GET /api/approvals`, `approval.requested`) add
+  `preview`, `grant` and `note`:
+  - `preview`: `{kind: "files", files: [{path, status: "added"|"modified"|"deleted",
+    diff, added, removed, truncated, binary}]}` — `diff` is a unified diff body
+    against the file as it is now (at most 2 000 lines per file, 256 KB per
+    prompt; later files keep their counts with `truncated`); or
+    `{kind: "command", command, cwd}`, `{kind: "move", from, to}`,
+    `{kind: "folder", path}`; `null` when nothing can be shown. Vendor
+    prompts carry previews where the protocol describes the change (Claude
+    `Write`/`Edit`/`MultiEdit`, ACP `diff` content, Codex `applyPatchApproval`
+    file changes; commands with their `cwd`).
+  - `grant`: what "Allow for this task" covers ("file edits", "`cargo test`
+    commands", "`server / tool` calls"), empty when the action is allowed
+    once only (chained, redirected, privileged, deleting or history-rewriting
+    commands; extra sandbox permissions).
+  - `note`: a deny note reaches the agent (native tools and Claude Code).
+- `POST /api/approvals/{id} {decision, session_id?, scope?: "once"|"task", note?}`.
+  `scope: "task"` with `approve` keeps a grant until the task ends: later
+  requests of the same task with the same scope (tool kind, or the same
+  program and subcommand for commands) are allowed without a prompt and
+  recorded as `approval.granted`. A scope the prompt does not offer is
+  refused. For Codex the first grant answers `acceptForSession` /
+  `approved_for_session`; other vendors receive single allows. `note`
+  (with `deny`, at most 2 000 bytes) becomes the tool error the model reads
+  ("The user denied this action and said: …") or Claude's denial message;
+  `approval.resolved` carries `scope` and `note`.
+
+### Per-task review and rewinds
+
+- `GET /api/review/tasks/{task_id}` → `{task_id, session_id, workspace, busy,
+  files: [{path, status: "added"|"modified"|"deleted"|"unchanged"|"unavailable",
+  source: "checkpoint"|"git"|"none", added, removed, binary, error?}]}`: only
+  the files this task changed, each compared with the checkpoint taken before
+  the task's first write (`checkpoint`), or for paths a vendor CLI reported,
+  with the last commit (`git`). `busy`: a task is queued or running in the
+  project.
+- `GET /api/review/tasks/{task_id}/file?path=` → the row plus `hash` and
+  `hunks: [{id, header, old_start, old_len, new_start, new_len,
+  lines: [{kind: "add"|"del"|"ctx", text, eol?: false}]}]`.
+- `POST /api/review/tasks/{task_id}/undo {path, hunk?}` puts one hunk (by
+  `id`), or without `hunk` the whole file, back as it was before the task,
+  and answers the file's review. Refused while a task runs in the project,
+  outside the open project, and when the file changed since the hunk was
+  computed. The conversation's message tape gets a process note.
+- `POST /api/checkpoints/tasks/{task_id}/restore` → `{ok, restored, undo_id}`:
+  before writing, the files are recorded as they are (checkpoint rows of
+  task `rewind:<undo_id>`, `native_meta` `rewind_undo:<undo_id>`).
+  `POST /api/checkpoints/rewinds/{undo_id}/undo` → `{ok, restored, task_id}`
+  puts them back once (refused if they changed since the rewind); the task
+  can then be rewound again.
 ## Terminals
 
 The drawer's interactive terminals: the user's login shell on a

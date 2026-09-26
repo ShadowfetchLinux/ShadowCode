@@ -14,6 +14,9 @@ struct SessionBody {
     label: Text,
     body: Text,
     event_id: Option<Value>,
+    /// Fork: keep only the events before `event_id` (Edit & resend forks
+    /// just before the edited message).
+    before: Flag,
 }
 
 impl Service {
@@ -133,7 +136,11 @@ impl Service {
                     .as_ref()
                     .and_then(|id| id.as_i64().or_else(|| id.as_u64().map(|v| v as i64)))
                     .context("event_id required")?;
-                store.fork_session_from_event(sid, event_id, body.title.as_str())
+                if body.before.is_true() {
+                    store.fork_session_before_event(sid, event_id, body.title.as_str())
+                } else {
+                    store.fork_session_from_event(sid, event_id, body.title.as_str())
+                }
             }
             ("GET", Some("events")) => self.session_events(call, sid),
             ("GET", Some("export")) => self.export(sid, call.q("format")),

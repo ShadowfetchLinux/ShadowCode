@@ -1,12 +1,13 @@
 import { useEffect, useState, type RefObject } from "react";
 import { api, type Job } from "../api";
+import type { ApprovalDecision } from "../components/ApprovalCard";
 import { conversationJob } from "../lib/jobs";
 import type { useConversation } from "./useConversation";
 import type { useFeed } from "./useFeed";
 import type { ToastKind } from "./useToasts";
 
-/** Stop, queued follow-ups, approvals, rewind and fork for the open
- * conversation. */
+/** Stop, queued follow-ups, approvals and fork for the open conversation
+ * (rewind: useRewind). */
 export function useJobControls({
   conversation,
   feed,
@@ -72,25 +73,14 @@ export function useJobControls({
 
   /** Answer an approval, then read the feed at once (the engine also wakes
    * it when the tool resumes). */
-  async function decide(id: string, decision: "approve" | "deny") {
+  async function decide(id: string, answer: ApprovalDecision) {
     const approval = feed.approvals.find((a) => a.id === id);
     try {
-      await api.decide(id, decision, approval?.session_id);
+      await api.decide(id, answer.decision, approval?.session_id, {
+        scope: answer.scope,
+        note: answer.note,
+      });
       await feed.refresh();
-    } catch (e) {
-      toast(String(e), "err");
-    }
-  }
-
-  async function rewind(taskId: string) {
-    if (busy) {
-      toast("Stop the task before rewinding its files.", "info");
-      return;
-    }
-    try {
-      const result = await api.rewindTask(taskId);
-      toast(`Restored ${result.restored.length} files`, "ok");
-      await refresh();
     } catch (e) {
       toast(String(e), "err");
     }
@@ -146,7 +136,6 @@ export function useJobControls({
     stop,
     cancelQueued,
     decide,
-    rewind,
     fork,
   };
 }

@@ -4,6 +4,7 @@ import { Drawer, type DrawerTab } from "./components/Drawer";
 import { Sidebar } from "./components/Sidebar";
 import { Onboarding } from "./components/Onboarding";
 import type { PermissionMode } from "./components/ComposerControls";
+import type { ApprovalDecision } from "./components/ApprovalCard";
 import type { AdvancedTab, SettingsSection } from "./components/Settings";
 import { Stage } from "./components/shell/Stage";
 import { TopBar } from "./components/shell/TopBar";
@@ -28,6 +29,10 @@ import { useDrawerMemory } from "./hooks/useDrawerMemory";
 import { useStableCallback } from "./hooks/useStableCallback";
 import { useTaskActions, type Consent } from "./hooks/useTaskActions";
 import { useAttachments } from "./hooks/useAttachments";
+import { useComposerExtras } from "./hooks/useComposerExtras";
+import { useConversationEdits } from "./hooks/useConversationEdits";
+import { ReviewView } from "./components/ReviewView";
+import { RewindDialog } from "./components/RewindDialog";
 import { useNavigation } from "./hooks/useNavigation";
 import { useJobControls } from "./hooks/useJobControls";
 import { useDesktopEvents, useSidebar } from "./hooks/useWindow";
@@ -209,6 +214,11 @@ export default function App() {
     toast,
   });
   const { attachments, setAttachments } = files;
+  const extras = useComposerExtras({
+    workspace,
+    sessionId,
+    target: selectedTarget,
+  });
   const scroll = useStickyScroll({
     active: nav.ready && !switching,
     content: [
@@ -276,7 +286,14 @@ export default function App() {
     setCommands(result.commands);
   });
 
-  function reviewChanges(path?: string) {
+  /** A task's changes open the full-width Review; without a task, the
+   * working tree opens in the Changes drawer. */
+  function reviewChanges(path?: string, taskId?: string) {
+    if (taskId) {
+      setPanel((p) => (p === "changes" ? null : p));
+      review.open(taskId, path);
+      return;
+    }
     setDiffPath(path || "");
     setPanel("changes");
   }
@@ -385,6 +402,7 @@ export default function App() {
     setCommandCards,
     setRunningChoice: nav.setRunningChoice,
     pin: scroll.pin,
+    extras,
     gitRepo: git.repo,
     inWorktree: Boolean(worktree.task),
   });
@@ -422,10 +440,29 @@ export default function App() {
     (action) => shortcuts[action](),
   );
 
+  const { review, rewinding, messages, refreshAfterFiles } =
+    useConversationEdits({
+      conversation,
+      jobRef,
+      selectedRef: nav.selectedRef,
+      submittingRef,
+      sessionId,
+      workspace,
+      target: selectedTarget,
+      busy: busy || submitting,
+      queueing,
+      openSession: nav.openSession,
+      startTask: actions.startTask,
+      refresh,
+      toast,
+    });
   const rowActions = useRowActions({
     setTranscript: conversation.setTranscript,
     reviewChanges,
-    rewind: controls.rewind,
+    rewind: rewinding.ask,
+    editResend: messages.editResend,
+    retry: messages.retry,
+    copy: messages.copy,
     continueOnFallback: actions.continueOnFallback,
     chooseModel: () => setPickerOpen(true),
     openLocal: () => openSettings("local"),
@@ -433,8 +470,7 @@ export default function App() {
     openSession: nav.openSession,
   });
   const onDecide = useStableCallback(
-    (id: string, decision: "approve" | "deny") =>
-      void controls.decide(id, decision),
+    (id: string, answer: ApprovalDecision) => void controls.decide(id, answer),
   );
   const fallback = useMemo(
     () => resolveFallback(limitsFrom(cfg), allowance.data, pickerTargets),
@@ -581,6 +617,27 @@ export default function App() {
         refresh={refresh}
         setPermissionMode={(mode) => void setPermissionMode(mode)}
         toast={toast}
+        extras={extras}
+        reviewPanel={
+          review.target ? (
+            <ReviewView
+              key={review.target.taskId}
+              taskId={review.target.taskId}
+              initialPath={review.target.path}
+              busy={busy}
+              onClose={review.close}
+              toast={toast}
+              refresh={refreshAfterFiles}
+              onAskAgent={(prompt) => {
+                setTask(prompt);
+                review.close();
+                promptRef.current?.focus();
+              }}
+              memory={memory.memory}
+              onMemory={memory.update}
+            />
+          ) : undefined
+        }
         worktreeBar={
           worktree.task && (
             <WorktreeBar
@@ -627,6 +684,13 @@ export default function App() {
         />
       )}
       <Toasts toasts={toasts} onDismiss={dismiss} />
+      {rewinding.asking && (
+        <RewindDialog
+          paths={rewinding.asking.paths}
+          onConfirm={rewinding.confirm}
+          onCancel={rewinding.cancel}
+        />
+      )}
       <AppDialogs
         overlay={overlay}
         setOverlay={setOverlay}
@@ -639,6 +703,7 @@ export default function App() {
           if (!consent) return;
           setTask(consent.original.task);
           setAttachments(consent.original.attachments);
+          for (const m of consent.body.mentions || []) extras.addMention(m);
           setConsent(null);
           promptRef.current?.focus();
         }}

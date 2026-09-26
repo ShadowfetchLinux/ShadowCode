@@ -1,6 +1,7 @@
 import type { ReactNode, RefObject } from "react";
 import { ArrowDown } from "lucide-react";
 import type { Approval, CommandResult, Health, Job, Session } from "../../api";
+import type { ApprovalDecision } from "../ApprovalCard";
 import { CompareView } from "../CompareView";
 import type { DrawerTab } from "../Drawer";
 import type { AdvancedTab, SettingsSection } from "../Settings";
@@ -10,6 +11,7 @@ import { StageBanners } from "./StageBanners";
 import { StatusBar } from "./StatusBar";
 import { TranscriptRows, type RowActions } from "./TranscriptRows";
 import type { useAttachments } from "../../hooks/useAttachments";
+import type { ComposerExtras } from "../../hooks/useComposerExtras";
 import type { useAllowance } from "../../hooks/useCatalog";
 import type { useCompare } from "../../hooks/useCompare";
 import type { useConversation } from "../../hooks/useConversation";
@@ -76,6 +78,8 @@ export function Stage({
   refresh,
   setPermissionMode,
   toast,
+  extras,
+  reviewPanel,
   worktreeBar,
 }: {
   conversation: ReturnType<typeof useConversation>;
@@ -104,7 +108,7 @@ export function Stage({
   queuedTaskIds: ReadonlySet<string>;
   fallback: Fallback | null;
   rowActions: RowActions;
-  onDecide: (id: string, decision: "approve" | "deny") => void;
+  onDecide: (id: string, answer: ApprovalDecision) => void;
   commandCards: CommandResult[];
   approvals: Approval[];
   task: string;
@@ -126,6 +130,9 @@ export function Stage({
   refresh: () => Promise<void>;
   setPermissionMode: (mode: "ask" | "allow_edits") => void;
   toast: (text: string, kind?: ToastKind) => void;
+  extras: ComposerExtras;
+  /** The full-width Review view, shown instead of the conversation. */
+  reviewPanel?: ReactNode;
   /** The open conversation's worktree (Apply / Keep as branch / Discard). */
   worktreeBar?: ReactNode;
 }) {
@@ -191,8 +198,9 @@ export function Stage({
           onRecords={compare.noteLanes}
         />
       )}
+      {view !== "compare" && reviewPanel}
       <ChatView
-        hidden={view === "compare"}
+        hidden={view === "compare" || Boolean(reviewPanel)}
         streamRef={scroll.streamRef}
         onScroll={scroll.onScroll}
         empty={empty}
@@ -244,22 +252,24 @@ export function Stage({
         busy={busy}
         onToast={toast}
       />
-      {view === "chat" && (!scroll.atBottom || history.viewing) && (
-        <button
-          type="button"
-          className="jump-latest"
-          onClick={() => {
-            if (history.viewing) history.latest();
-            scroll.jumpToLatest();
-          }}
-        >
-          <ArrowDown size={14} aria-hidden="true" />
-          Latest activity
-        </button>
-      )}
-      {view === "chat" && worktreeBar}
+      {view === "chat" &&
+        !reviewPanel &&
+        (!scroll.atBottom || history.viewing) && (
+          <button
+            type="button"
+            className="jump-latest"
+            onClick={() => {
+              if (history.viewing) history.latest();
+              scroll.jumpToLatest();
+            }}
+          >
+            <ArrowDown size={14} aria-hidden="true" />
+            Latest activity
+          </button>
+        )}
+      {view === "chat" && !reviewPanel && worktreeBar}
       <ComposerDock
-        hidden={view === "compare"}
+        hidden={view === "compare" || Boolean(reviewPanel)}
         queue={{
           jobs: queuedJobs,
           sessions,
@@ -293,7 +303,7 @@ export function Stage({
                   ? "↵ Queue"
                   : "↵ Queue · Ctrl+Shift+↵ Run now in a worktree"
                 : "↵ Send"
-              : "/ for commands",
+              : "/ commands · @ files · ↑ earlier",
           busy,
           queueing,
           submitting,
@@ -307,6 +317,17 @@ export function Stage({
             ? () => void actions.submit({ worktree: true })
             : undefined,
           onStop: () => void controls.stop(),
+          mentions: extras.mentions,
+          onMention: extras.addMention,
+          onRemoveMention: extras.removeMention,
+          history: extras.history,
+        }}
+        modes={{
+          mode: extras.mode,
+          onMode: extras.setMode,
+          effort: extras.effort,
+          effortShown: extras.effortShown,
+          onEffort: extras.setEffort,
         }}
         picker={{
           targets,

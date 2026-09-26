@@ -6,6 +6,7 @@ import "./tokens.css";
 import "./index.css";
 import "./workspace.css";
 import "./components.css";
+import "./review.css";
 import "./tasks.css";
 
 // The last saved appearance (else the system theme) until the config loads.

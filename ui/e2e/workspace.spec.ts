@@ -154,10 +154,13 @@ test("runs a task with streamed events and reviews the changes", async ({
   await timeline.getByText("Running checks", { exact: true }).click();
   await expect(timeline.getByText("Tests  4 passed (4)")).toBeVisible();
   await summary.getByRole("button", { name: "Review changes" }).click();
-  const drawer = page.getByRole("complementary", { name: "Drawer" });
-  await expect(drawer).toBeVisible();
-  await drawer.getByText("src/app.ts").first().click();
-  await expect(drawer).toContainText("export const add = (a, b) => a + b;");
+  // The task's own changes open full width, file by file.
+  const review = page.getByRole("region", { name: "Review changes" });
+  await expect(review).toBeVisible();
+  await review.getByRole("button", { name: /src\/app\.ts/ }).click();
+  await expect(review.locator(".review-diff")).toContainText(
+    "export const add = (a, b) => a + b;",
+  );
   await page.screenshot({
     path: "test-results/task-complete.png",
     fullPage: true,

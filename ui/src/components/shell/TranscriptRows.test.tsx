@@ -51,6 +51,9 @@ const actions: RowActions = {
   onChooseModel: vi.fn(),
   onOpenLocal: vi.fn(),
   onFork: vi.fn(),
+  onEditResend: vi.fn(),
+  onRetry: vi.fn(),
+  onCopy: vi.fn(),
 };
 const notes = (count: number): ChatItem[] =>
   Array.from({ length: count }, (_, i) => ({

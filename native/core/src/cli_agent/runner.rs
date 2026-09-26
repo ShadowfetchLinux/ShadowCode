@@ -5,10 +5,10 @@
 //! its tools or bubblewrap, and kills the process group on cancel.
 use super::{
     adapter_for, clip, redact, resolve_binary, ApprovalPrompt, CliAdapter, CliAgentsConfig,
-    LaunchOptions, Update, Vendor, MAX_LINE_BYTES, MAX_MALFORMED_LINES,
+    LaunchOptions, Update, Vendor, VendorAnswer, MAX_LINE_BYTES, MAX_MALFORMED_LINES,
 };
 use crate::{
-    approvals::{Approval, ApprovalHub},
+    approvals::{Answer, Approval, ApprovalHub, Grant},
     events::TaskEvents,
     models::Usage,
     steering::SteerControl,
@@ -220,7 +220,9 @@ async fn run_once(
     ensure_ready(vendor, request)?;
     let mut adapter = adapter_for(vendor, codex_exec_fallback);
     let (program, args) = adapter.command(&request.options);
-    let (mut child, _run_dir) = spawn_vendor(vendor, &program, &args, &request.options.workspace)?;
+    let env = adapter.env(&request.options);
+    let (mut child, _run_dir) =
+        spawn_vendor(vendor, &program, &args, &env, &request.options.workspace)?;
     let pid = child.id().context("Vendor CLI has no process ID")?;
     let mut group = ProcessGroup(pid);
     let mut stdin = Some(child.stdin.take().context("Vendor CLI stdin missing")?);
@@ -438,12 +440,14 @@ fn spawn_vendor(
     vendor: Vendor,
     program: &str,
     args: &[String],
+    env: &[(String, String)],
     workspace: &Path,
 ) -> Result<(Child, Option<super::antigravity_server::RunDir>)> {
     ensure_workspace(workspace)?;
     let mut command = Command::new(program);
     command
         .args(args)
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .current_dir(workspace)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -643,8 +647,16 @@ async fn apply_update(
                 send_lines(stdin, &adapter.approve(&prompt.request_id, false)?).await?;
                 return Ok(());
             }
-            let approved = request_approval(request, prompt.clone()).await?;
-            send_lines(stdin, &adapter.approve(&prompt.request_id, approved)?).await?;
+            let answer = request_approval(request, prompt.clone(), adapter.deny_note()).await?;
+            let reply = VendorAnswer {
+                allow: answer.allow,
+                // The first "Allow for this task" maps to the vendor's own
+                // session-wide allow where the protocol has one; requests
+                // ShadowCode already allowed are answered once.
+                for_session: answer.for_task && !answer.automatic,
+                note: answer.note.clone(),
+            };
+            send_lines(stdin, &adapter.answer(&prompt.request_id, &reply)?).await?;
         }
         Update::Warning(text) => {
             request.events.emit("agent.warning", json!({"text":text}))?;
@@ -766,7 +778,37 @@ async fn limit_reached(
     })
 }
 
-async fn request_approval(request: &Request<'_>, prompt: ApprovalPrompt) -> Result<bool> {
+/// What "Allow for this task" covers for a vendor prompt: commands with the
+/// same program and subcommand, the vendor's file changes, or one named
+/// tool. Extra sandbox permissions are always asked.
+fn vendor_grant(prompt: &ApprovalPrompt) -> Option<Grant> {
+    match prompt.kind.as_str() {
+        "command" => Grant::command(&prompt.tool, &prompt.command),
+        "file_change" => Some(Grant::kind(&prompt.tool, "file changes")),
+        "permissions" => None,
+        _ => {
+            let name = clip(prompt.command.trim(), 80);
+            (!name.is_empty()).then(|| {
+                Grant::kind(
+                    &format!("{}:{name}", prompt.tool),
+                    &format!("`{name}` requests"),
+                )
+            })
+        }
+    }
+}
+
+async fn request_approval(
+    request: &Request<'_>,
+    prompt: ApprovalPrompt,
+    deny_note: bool,
+) -> Result<Answer> {
+    let grant = vendor_grant(&prompt);
+    let preview = crate::approvals::preview::vendor(
+        &request.options.workspace,
+        &prompt.kind,
+        &prompt.arguments,
+    );
     let record = Approval {
         id: String::new(),
         session_id: request.session_id.clone(),
@@ -778,16 +820,23 @@ async fn request_approval(request: &Request<'_>, prompt: ApprovalPrompt) -> Resu
         pending: true,
         created_at: 0.0,
         expires_at: 0.0,
+        preview,
+        grant: String::new(),
+        note: deny_note,
     };
+    let tool = record.tool.clone();
     let mut pending_error = None;
-    let allowed = request
+    let answer = request
         .approvals
-        .request(
+        .ask(
             record,
+            grant.clone(),
             Duration::from_secs(request.config.approval_timeout_sec),
             request.cancel.clone(),
             |record| {
-                if let Err(error) = request.events.emit("approval.requested", json!(record)) {
+                let mut shown = json!(record);
+                crate::redaction::redact_value(&mut shown);
+                if let Err(error) = request.events.emit("approval.requested", shown) {
                     pending_error = Some(error);
                     request.cancel.cancel();
                 }
@@ -797,11 +846,20 @@ async fn request_approval(request: &Request<'_>, prompt: ApprovalPrompt) -> Resu
     if let Some(error) = pending_error {
         return Err(error);
     }
-    request.events.emit(
-        "approval.resolved",
-        json!({"tool":"vendor","approved":allowed,"job_id":request.job_id}),
-    )?;
-    Ok(allowed)
+    if answer.automatic {
+        request.events.emit(
+            "approval.granted",
+            json!({"tool":tool,"job_id":request.job_id,"grant":grant.map(|g|g.label).unwrap_or_default()}),
+        )?;
+    } else {
+        let mut resolved = json!({"tool":"vendor","approved":answer.allow,"job_id":request.job_id,"scope":if answer.for_task {"task"} else {"once"}});
+        if let Some(note) = &answer.note {
+            resolved["note"] = json!(note);
+        }
+        crate::redaction::redact_value(&mut resolved);
+        request.events.emit("approval.resolved", resolved)?;
+    }
+    Ok(answer)
 }
 
 async fn wait_for_steer(request: &Request<'_>) -> Result<Option<String>> {

@@ -22,6 +22,9 @@ import {
   trustRequestFor,
 } from "../lib/trust";
 import type { useConversation } from "./useConversation";
+import type { ComposerExtras } from "./useComposerExtras";
+import { purposeFor } from "../lib/effort";
+import { mentionsInText } from "../lib/mentions";
 import type { ToastKind } from "./useToasts";
 import type { WorkspaceStatus } from "./useWorkspace";
 
@@ -104,6 +107,8 @@ export type TaskActionContext = {
   setRunningChoice: (id: string) => void;
   /** Follow the conversation to its newest row. */
   pin: () => void;
+  /** @-mentions, prompt history, effort and task mode. */
+  extras?: ComposerExtras;
   /** The project is a Git repository (worktree runs need one). */
   gitRepo: boolean;
   /** The open conversation already runs in its own worktree. */
@@ -292,6 +297,7 @@ export function useTaskActions(c: TaskActionContext) {
       if (original) {
         c.setTask(original.task);
         c.setAttachments(original.attachments);
+        for (const m of body.mentions || []) c.extras?.addMention(m);
       }
       c.setError(String(e));
       c.toast(String(e), "err");
@@ -410,6 +416,7 @@ export function useTaskActions(c: TaskActionContext) {
       return;
     }
     const original = { task, attachments };
+    c.extras?.history.push(task);
     if (task.trim().startsWith("/")) {
       c.setTask("");
       c.pin();
@@ -442,31 +449,29 @@ export function useTaskActions(c: TaskActionContext) {
       (texts.length ? `\n\nAttached paths: ${texts.join(", ")}` : "") +
       (images.length ? `\n\nAttached images: ${images.join(", ")}` : "")
     ).trim();
+    const extras = c.extras;
+    const mentions = extras ? mentionsInText(task, extras.mentions) : [];
     c.setTask("");
     c.setAttachments([]);
+    extras?.setMentions([]);
     writeStore(draftKey(c.sessionId, c.workspace), null);
     c.pin();
     await startTask(
-      opts.worktree
-        ? {
-            task: text || "Describe the attached image(s).",
-            workspace: c.workspace || undefined,
-            model: selectedTarget.id,
-            purpose: "coder",
-            images,
-            web: c.webAllowed && c.webEnabled,
-            worktree: true,
-          }
-        : {
-            task: text || "Describe the attached image(s).",
-            workspace: c.workspace || undefined,
-            session_id: c.sessionId || undefined,
-            model: selectedTarget.id,
-            purpose: "coder",
-            queue: c.queueing,
-            images,
-            web: c.webAllowed && c.webEnabled,
-          },
+      {
+        task: text || "Describe the attached image(s).",
+        workspace: c.workspace || undefined,
+        model: selectedTarget.id,
+        purpose: extras ? purposeFor(extras.mode) : "coder",
+        images,
+        web: c.webAllowed && c.webEnabled,
+        ...(opts.worktree
+          ? { worktree: true }
+          : { session_id: c.sessionId || undefined, queue: c.queueing }),
+        ...(extras?.effortShown && extras.effort !== "default"
+          ? { effort: extras.effort }
+          : {}),
+        ...(mentions.length ? { mentions } : {}),
+      },
       original,
     );
   }

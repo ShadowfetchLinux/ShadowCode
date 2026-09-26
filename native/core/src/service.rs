@@ -53,6 +53,7 @@ mod call;
 mod code_intel;
 mod commands;
 mod compare;
+mod composer;
 mod extensions;
 mod feed;
 mod forge;
@@ -63,6 +64,7 @@ mod inspection;
 mod jobs;
 mod memory;
 mod model_catalog;
+mod review;
 mod sandbox;
 mod sessions;
 mod settings;
@@ -248,6 +250,7 @@ impl Service {
             }
             "jobs" | "run" | "approvals" | "checkpoints" => self.job_routes(&call).await,
             "goals" => self.goal_routes(&call).await,
+            "review" => self.review_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "terminals" => self.terminal_routes(&call).await,
             "git" => self.forge_routes(&call).await,

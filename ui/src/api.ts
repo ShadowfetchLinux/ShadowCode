@@ -340,6 +340,11 @@ export type StartJobRequest = {
   images?: string[];
   web?: boolean;
   handoff_consent?: boolean;
+  /** Reasoning effort (`low`, `medium`, `high`); omitted keeps the model's
+   * default. Only for rows whose picker entry has `reasoning`. */
+  effort?: string;
+  /** Files and folders the message @-mentions. */
+  mentions?: { path: string; kind: "file" | "dir" }[];
   /** Start a new conversation in a fresh worktree of the project; it runs
    * beside a task in the main checkout. */
   worktree?: boolean;
@@ -474,13 +479,56 @@ export type PlanStep = {
   status: string;
   detail?: string;
 };
+/** What an approval would do (approvals::preview in the engine). */
+export type PreviewFile = {
+  path: string;
+  status: "added" | "modified" | "deleted" | string;
+  /** Unified diff body: `@@` headers and `+`/`-`/space lines. */
+  diff: string;
+  added: number;
+  removed: number;
+  truncated: boolean;
+  binary: boolean;
+};
+export type ApprovalPreview =
+  | { kind: "files"; files: PreviewFile[] }
+  | { kind: "command"; command: string; cwd: string }
+  | { kind: "move"; from: string; to: string }
+  | { kind: "folder"; path: string };
 export type Approval = {
   id: string;
   session_id?: string;
+  task_id?: string;
   command?: string;
   reason?: string;
   tool?: string;
   pending?: boolean;
+  preview?: ApprovalPreview | null;
+  /** What "Allow for this task" covers ("file edits", "`cargo test`
+   * commands"); empty when the action can only be allowed once. */
+  grant?: string;
+  /** A note given with Deny reaches the agent. */
+  note?: boolean;
+};
+export type ReviewFile = {
+  path: string;
+  status: "added" | "modified" | "deleted" | "unchanged" | "unavailable";
+  /** checkpoint: compared with the file before this task; git: a vendor
+   * agent's change, compared with the last commit. */
+  source: "checkpoint" | "git" | "none";
+  added: number;
+  removed: number;
+  binary: boolean;
+  error?: string;
+};
+export type ReviewHunk = {
+  id: string;
+  header: string;
+  lines: { kind: "add" | "del" | "ctx"; text: string; eol?: boolean }[];
+};
+export type ReviewFileDetail = ReviewFile & {
+  hunks: ReviewHunk[];
+  hash: string;
 };
 export type LifecycleHook = {
   name: string;
@@ -1213,7 +1261,13 @@ export const api = {
       rewindable: boolean;
       checkpoint: { changes: number; paths: string[] } | null;
     }>(`/api/checkpoints/tasks/${taskId}`),
-  forkSession: (id: string, eventId: number, title?: string) =>
+  forkSession: (
+    id: string,
+    eventId: number,
+    title?: string,
+    /** Keep only what came before this event's task (Edit & resend). */
+    before = false,
+  ) =>
     send<{
       fork: { id: string; title: string };
       original: { id: string };
@@ -1222,10 +1276,18 @@ export const api = {
     }>(`/api/sessions/${id}/fork`, "POST", {
       event_id: eventId,
       title: title || "",
+      ...(before ? { before: true } : {}),
     }),
+  /** Rewind a finished task's files. `undo_id` undoes the rewind. */
   rewindTask: (taskId: string) =>
-    send<{ ok: boolean; restored: string[] }>(
+    send<{ ok: boolean; restored: string[]; undo_id?: string | null }>(
       `/api/checkpoints/tasks/${taskId}/restore`,
+      "POST",
+      {},
+    ),
+  undoRewind: (undoId: string) =>
+    send<{ ok: boolean; restored: string[]; task_id: string }>(
+      `/api/checkpoints/rewinds/${encodeURIComponent(undoId)}/undo`,
       "POST",
       {},
     ),
@@ -1372,11 +1434,45 @@ export const api = {
     get<{ approvals: Approval[] }>(
       `/api/approvals${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
     ),
-  decide: (id: string, decision: "approve" | "deny", sessionId?: string) =>
+  decide: (
+    id: string,
+    decision: "approve" | "deny",
+    sessionId?: string,
+    options: { scope?: "once" | "task"; note?: string } = {},
+  ) =>
     send<Approval>(`/api/approvals/${id}`, "POST", {
       decision,
       session_id: sessionId,
+      ...(options.scope ? { scope: options.scope } : {}),
+      ...(options.note ? { note: options.note } : {}),
     }),
+  /** Files and folders for the composer's @ menu, best matches first. */
+  mentions: (query: string, limit = 12) =>
+    get<{
+      items: { path: string; kind: "file" | "dir" }[];
+      truncated: boolean;
+    }>(`/api/workspace/mentions?q=${encodeURIComponent(query)}&limit=${limit}`),
+  /** The files one task changed (per-task review). */
+  review: (taskId: string) =>
+    get<{
+      task_id: string;
+      session_id: string;
+      workspace: string;
+      busy: boolean;
+      files: ReviewFile[];
+    }>(`/api/review/tasks/${encodeURIComponent(taskId)}`),
+  reviewFile: (taskId: string, path: string) =>
+    get<ReviewFileDetail>(
+      `/api/review/tasks/${encodeURIComponent(taskId)}/file?path=${encodeURIComponent(path)}`,
+    ),
+  /** Put one hunk (or, without `hunk`, the whole file) back as it was
+   * before the task; answers the file's review after the change. */
+  reviewUndo: (taskId: string, path: string, hunk?: string) =>
+    send<ReviewFileDetail>(
+      `/api/review/tasks/${encodeURIComponent(taskId)}/undo`,
+      "POST",
+      { path, hunk: hunk || "" },
+    ),
   instructions: () =>
     get<{ content: string; exists: boolean }>("/api/workspace/instructions"),
   saveInstructions: (content: string) =>
