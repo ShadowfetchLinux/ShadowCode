@@ -218,7 +218,7 @@ pub fn engine(paths: &AppPaths, config: &Config, voice: &VoiceConfig) -> Result<
                     bail!(
                         "No voice model is installed. Open Settings › Voice and install {} ({} MB).",
                         wanted.name,
-                        wanted.bytes / 1_000_000
+                        wanted.bytes / (1 << 20)
                     )
                 }
             };

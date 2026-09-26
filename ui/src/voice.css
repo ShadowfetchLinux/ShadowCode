@@ -1,6 +1,7 @@
 /* Dictation: the composer mic button, its level meter and listening pill. */
+/* The pill is placed against .composer-shell (the nearest positioned box),
+   above the message box, so it never covers the text being edited. */
 .voice-input {
-  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -29,8 +30,8 @@
 }
 .voice-status {
   position: absolute;
-  bottom: calc(100% + 12px);
-  left: 0;
+  bottom: calc(100% + 8px);
+  left: 16px;
   z-index: 5;
   display: inline-flex;
   align-items: center;

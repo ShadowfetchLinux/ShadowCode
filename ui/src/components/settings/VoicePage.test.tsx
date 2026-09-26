@@ -49,7 +49,7 @@ function status(overrides: Partial<VoiceStatus> = {}): VoiceStatus {
     ],
     ready: false,
     blocked:
-      "No voice model is installed. Open Settings › Voice and install Whisper base (English) (147 MB).",
+      "No voice model is installed. Open Settings › Voice and install Whisper base (English) (141 MB).",
     cpu_supported: true,
     whisper_version: "1.8.3",
     openrouter_key: false,

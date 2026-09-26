@@ -140,7 +140,7 @@ describe("MicButton", () => {
   it("sends a missing model to Settings › Voice", async () => {
     vi.spyOn(voiceApi, "start").mockRejectedValue(
       new Error(
-        "No voice model is installed. Open Settings › Voice and install Whisper base (English) (147 MB).",
+        "No voice model is installed. Open Settings › Voice and install Whisper base (English) (141 MB).",
       ),
     );
     const onError = vi.fn();

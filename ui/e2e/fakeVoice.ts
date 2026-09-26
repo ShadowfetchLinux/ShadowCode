@@ -45,7 +45,7 @@ export function installFakeVoice(options: FakeVoiceOptions = {}) {
   const blocked = () =>
     active()
       ? null
-      : "No voice model is installed. Open Settings › Voice and install Whisper base (English) (147 MB).";
+      : "No voice model is installed. Open Settings › Voice and install Whisper base (English) (141 MB).";
   const status = () => {
     // A download finishes on the third status poll.
     for (const [id, polls] of voice.downloads) {

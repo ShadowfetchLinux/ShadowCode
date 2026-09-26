@@ -193,6 +193,16 @@ chip in the status bar shows context use and cost, e.g.
 `42% · 38k / 128k · $0.12`. Details:
 [user guide](docs/USER_GUIDE.md#run-tasks-side-by-side).
 
+## Voice input
+
+Hold the microphone button in the composer (or `Ctrl+Shift+Space`) and talk;
+let go and the words are inserted at the cursor, never sent on their own.
+Transcription runs on this computer with whisper.cpp after you install a
+model in **Settings › Voice** (74 MB or 141 MB, downloaded only when you click
+Install and checked against a pinned SHA-256), so the audio never leaves the
+machine. With an OpenRouter key you can instead choose OpenRouter, about
+$0.001 per minute of speech. Details: [voice input](docs/VOICE.md).
+
 ## API keys (OpenRouter)
 
 No subscription? Create a key at [openrouter.ai/keys](https://openrouter.ai/keys)
@@ -313,6 +323,7 @@ sandbox.** See [SECURITY.md](SECURITY.md).
 | OpenRouter model list (cache) | `~/.local/state/shadow-agent/openrouter-models.json` |
 | Webview storage | `~/.local/share/shadow-agent/webview` |
 | llama.cpp runtime (AppImage install) | `~/.local/lib/shadowcode` |
+| Voice models (installed from Settings › Voice) | `~/.local/share/shadow-agent/voice/models` |
 | Antigravity agent server (installed from Accounts) | `~/.local/share/shadowcode/antigravity-acp/1.2.1` |
 | Antigravity sign-in (ShadowCode's private profile) | `~/.local/share/shadowcode/antigravity-acp/profile` |
 | Project notes, skills, attachments | `<project>/.shadow/` |
@@ -326,9 +337,15 @@ directories follow `XDG_DATA_HOME` and are shared by all profiles.
 Requirements: Rust 1.95, Node.js 22.12 or newer, and on Ubuntu 24.04:
 
 ```bash
-sudo apt-get install build-essential pkg-config libgtk-3-dev \
-  libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+sudo apt-get install build-essential pkg-config cmake clang libgtk-3-dev \
+  libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev \
+  libasound2-dev patchelf
 ```
+
+`cmake`, a C++ compiler and libclang build the whisper.cpp inside
+`whisper-rs-sys` (voice input); `libasound2-dev` is for microphone capture.
+`.cargo/config.toml` builds it for x86-64 with AVX2 rather than for the
+build machine's CPU.
 
 ```bash
 npm --prefix ui ci
@@ -400,7 +417,7 @@ throwaway profile has no `secrets.env`.
 
 - [User guide](docs/USER_GUIDE.md) · [Architecture](ARCHITECTURE.md) ·
   [Security](SECURITY.md) · [Subscriptions](docs/SUBSCRIPTIONS.md) ·
-  [Local models](docs/LOCAL_MODELS.md)
+  [Local models](docs/LOCAL_MODELS.md) · [Voice input](docs/VOICE.md)
 - The drawer has your own terminals, a Git tab (branch, commit with a
   suggested message, push, pull requests with CI status) and **Tools** (goals,
   background processes, worktrees). Integrations (skills, MCP, plugins, hooks,
