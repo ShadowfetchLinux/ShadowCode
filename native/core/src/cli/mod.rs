@@ -56,12 +56,18 @@ impl Options {
     pub fn desktop(&self) -> bool {
         matches!(self.command, None | Some(Command::Ui))
     }
+    /// Stdout carries a JSON-RPC protocol (MCP or ACP), never a CLI result.
     pub fn mcp_stdio(&self) -> bool {
         matches!(
             self.command,
-            Some(Command::Mcp {
-                action: Some(Mcp::Serve { .. })
-            })
+            Some(
+                Command::Mcp {
+                    action: Some(Mcp::Serve { .. })
+                } | Command::Acp {
+                    print_config: None,
+                    ..
+                }
+            )
         )
     }
     pub fn events(&self) -> bool {
@@ -190,9 +196,102 @@ async fn task(
     }
     watch::job(backend, started, options, json_output, true).await
 }
+/// The executable an editor or MCP client should launch, with the AppImage
+/// flag when running from an AppImage.
+fn launcher() -> Result<(PathBuf, Vec<String>)> {
+    let current = std::env::current_exe()?;
+    let appimage = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .filter(|image| {
+            image.is_absolute()
+                && image.is_file()
+                && std::env::var_os("APPDIR")
+                    .is_some_and(|dir| current.starts_with(PathBuf::from(dir)))
+        });
+    let mut args = Vec::new();
+    if appimage.is_some() {
+        args.push("--appimage-extract-and-run".into());
+    }
+    Ok((appimage.unwrap_or(current), args))
+}
+/// `shadowcode acp`: stdout carries JSON-RPC, so nothing else is printed there.
+async fn acp(
+    options: &Options,
+    trust: bool,
+    print_config: Option<args::AcpClient>,
+    parent: Option<u32>,
+) -> Result<i32> {
+    ensure!(
+        !options.json,
+        "ACP stdout is reserved for JSON-RPC; omit --json"
+    );
+    if let Some(client) = print_config {
+        let (executable, mut args) = launcher()?;
+        if let Some(profile) = &options.profile {
+            // The profile may not exist yet; the agent creates it on start.
+            let profile = expand(profile)?;
+            let profile = match profile.canonicalize() {
+                Ok(path) => path,
+                Err(_) => std::path::absolute(&profile)?,
+            };
+            args.extend([
+                "--profile".into(),
+                profile
+                    .to_str()
+                    .context("ACP profile path must be UTF-8")?
+                    .to_owned(),
+            ]);
+        }
+        args.push("acp".into());
+        if trust {
+            args.push("--trust".into());
+        }
+        outln!("{}", registration::acp(client, &executable, &args)?);
+        return Ok(0);
+    }
+    let paths = options.paths()?;
+    // Sessions name their own folders; this one only opens the engine when
+    // no desktop is running, so fall back to a folder that exists.
+    let workspace = [
+        options.workspace.as_deref().map(expand).transpose()?,
+        std::env::current_dir().ok(),
+        paths.remembered_workspace(),
+        std::env::var_os("HOME").map(PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|path| Workspace::open(&path).ok())
+    .context("No usable folder to open the engine in")?
+    .path;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let signal = cancel.clone();
+    let listener = tokio::spawn(async move {
+        crate::lifecycle::interrupted(parent).await;
+        signal.cancel();
+    });
+    let result = crate::acp_server::serve_io(
+        paths,
+        workspace,
+        crate::acp_server::AcpOptions { trust },
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        cancel,
+    )
+    .await;
+    listener.abort();
+    result?;
+    Ok(0)
+}
 /// Terminal work runs before any GTK/Tauri initialization, including in AppImage.
 pub async fn run(options: Options) -> Result<i32> {
     let parent = crate::lifecycle::extraction_parent();
+    if let Some(Command::Acp {
+        trust,
+        print_config,
+    }) = &options.command
+    {
+        return acp(&options, *trust, *print_config, parent).await;
+    }
     let workspace = Workspace::open(&expand(
         &options
             .workspace
@@ -258,20 +357,7 @@ pub async fn run(options: Options) -> Result<i32> {
                 );
                 return Ok(0);
             }
-            let current = std::env::current_exe()?;
-            let appimage = std::env::var_os("APPIMAGE")
-                .map(PathBuf::from)
-                .filter(|image| {
-                    image.is_absolute()
-                        && image.is_file()
-                        && std::env::var_os("APPDIR")
-                            .is_some_and(|dir| current.starts_with(PathBuf::from(dir)))
-                });
-            let mut args = Vec::new();
-            if appimage.is_some() {
-                args.push("--appimage-extract-and-run".into());
-            }
-            let executable = appimage.unwrap_or(current);
+            let (executable, mut args) = launcher()?;
             args.extend([
                 "--workspace".to_owned(),
                 workspace
@@ -499,6 +585,7 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
     let value = match command {
         Command::Ui => bail!("Desktop startup must use the native window"),
         Command::Tui { .. } => unreachable!("Terminal UI handled before CLI dispatch"),
+        Command::Acp { .. } => unreachable!("ACP handled before CLI dispatch"),
         Command::Sqlite {path,sql,params,limit,timeout_ms}=>backend.call("POST","/api/sqlite",json!({"path":path,"sql":sql,"params":serde_json::from_str::<Value>(params).context("--params must be a JSON array")?,"limit":limit,"timeout_ms":timeout_ms})).await?,
         Command::Memory {note,task,replace,expected_hash}=>backend.call("POST","/api/memory",json!({"action":if *replace{"replace"}else if note.is_some(){"append"}else{"read"},"scope":if task.is_some(){"task"}else{"project"},"task_id":task,"note":note,"expected_hash":expected_hash})).await?,
         Command::Doctor { test_model } => {
