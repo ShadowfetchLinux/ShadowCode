@@ -227,4 +227,4 @@ Test counts at 0.32.0:
 | Rust tests (`cargo test --workspace --locked`) | 738 passed, 8 ignored (live tests) |
 | UI unit (`npm --prefix ui test`) | 308 passed (61 files) |
 | UI e2e (`npm --prefix ui run test:e2e`) | 44 passed |
-| Real window (`scripts/test-native-desktop.mjs`) | 13 checks |
+| Real window (`scripts/test-native-desktop.mjs`) | 14 checks |

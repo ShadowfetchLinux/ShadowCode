@@ -93,6 +93,33 @@ button.link {
 .composer-hint {
   font-size: 11px;
 }
+/* A narrow composer (compact window, open drawer, phone) cannot fit the model
+ * picker, effort, the mode switch and the buttons on one line: the picker
+ * takes its own row above them and the controls wrap. */
+@container (max-width: 700px) {
+  .composer-footer {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .composer-footer > .unified-picker {
+    order: -1;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .composer-footer .unified-picker-trigger {
+    max-width: 100%;
+  }
+  /* Controls pack onto as few rows as fit; Send stays at the right. */
+  .composer-footer > .grow {
+    flex: 0 0 0;
+  }
+  .composer-footer > .submit-btn {
+    margin-left: auto;
+  }
+  .composer-footer > .submit-btn + .submit-btn {
+    margin-left: 0;
+  }
+}
 .composer .chips {
   list-style: none;
   margin: 0 0 8px;

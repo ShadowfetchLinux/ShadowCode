@@ -113,32 +113,6 @@
 }
 
 /* Phones (the web interface over remote access) ------------------------------ */
-/* A phone-width composer cannot fit the model picker, the mode switch and the
- * buttons on one line: the picker takes its own row above them. */
-@container (max-width: 440px) {
-  .composer-footer {
-    flex-wrap: wrap;
-    row-gap: 6px;
-  }
-  .composer-footer > .unified-picker {
-    order: -1;
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-  .composer-footer .unified-picker-trigger {
-    max-width: 100%;
-  }
-  /* Controls pack onto as few rows as fit; Send stays at the right. */
-  .composer-footer > .grow {
-    flex: 0 0 0;
-  }
-  .composer-footer > .submit-btn {
-    margin-left: auto;
-  }
-  .composer-footer > .submit-btn + .submit-btn {
-    margin-left: 0;
-  }
-}
 @media (max-width: 480px) {
   /* Settings: the section list becomes a scrolling row above the page, so
    * the page keeps the full width. */
