@@ -180,6 +180,19 @@ its branch is then removed, and **Wins in this project** counts which model
 you kept. At most one local model per comparison, since only one fits in GPU
 memory. Details: [compare](docs/COMPARE.md).
 
+## Parallel tasks
+
+**Worktree** (next to **Send**, or `Ctrl+Shift+Enter`) starts a task in its
+own worktree of the project, so it runs while another task works in your
+checkout. When it is done, **Apply to project** (checked with `git apply
+--check` first; conflicting files are listed and nothing is written), **Keep
+as branch** or **Discard**. The sidebar marks conversations that are running,
+need your approval, failed or finished while you were elsewhere; desktop
+notifications cover the same, and clicking one opens its conversation. The
+chip in the status bar shows context use and cost, e.g.
+`42% · 38k / 128k · $0.12`. Details:
+[user guide](docs/USER_GUIDE.md#run-tasks-side-by-side).
+
 ## API keys (OpenRouter)
 
 No subscription? Create a key at [openrouter.ai/keys](https://openrouter.ai/keys)
@@ -273,6 +286,14 @@ These rules apply to ShadowCode's own tools. Privileged commands (`sudo`, `su`,
 `pkexec`, `doas`, `run0`) are blocked unless you allow them, and then they
 still ask. Destructive Git commands ask. Edits outside the project are refused.
 Plan and Review tasks are read-only.
+
+Approval cards show the diff of a file change or the full command and its
+folder. **Allow for this task** covers the same kind of action (all file
+edits, or one program and subcommand such as `cargo test`) until the task
+ends; chained, privileged and destructive commands always ask. **Deny with
+note** tells the agent why. After a task, **Review changes** shows only that
+task's files, with per-change Keep and Undo; **Rewind** asks first and can be
+undone.
 
 Vendor CLIs enforce their own sandbox. ShadowCode shows the approval requests
 they send and denies them automatically in read-only tasks. Each vendor

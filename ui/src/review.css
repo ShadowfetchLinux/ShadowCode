@@ -1,0 +1,421 @@
+/* Composer extras, approval previews, message actions, diffs and the
+   per-task Review view. Colours come from tokens.css only. */
+
+/* ---------- @ menu and mention chips ---------- */
+.mention-menu {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.mention-group {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mention-hit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mention-hit strong {
+  font-family: var(--mono);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-hit span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-chip span {
+  font-family: var(--mono);
+}
+
+/* ---------- composer modes and effort ---------- */
+.composer-modes button {
+  padding: 3px 10px;
+}
+.effort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.effort-control select {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+/* ---------- approval previews ---------- */
+.approval-summary {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.approval-command .code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 4px;
+}
+.approval-file {
+  margin-bottom: 10px;
+}
+.approval-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.approval-file-status {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.approval-note {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.approval-note textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+.approval-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.approval-grant {
+  margin: 6px 0 0;
+  text-align: right;
+  font-size: 11px;
+}
+
+/* ---------- diffs ---------- */
+.diff-hunk {
+  margin: 6px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface);
+}
+.diff-hunk > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--surface-3);
+  font-size: 11px;
+  color: var(--muted);
+}
+.diff-hunk > header code {
+  font-family: var(--mono);
+}
+.diff-hunk-actions {
+  margin-left: auto;
+  gap: 4px;
+}
+.diff-hunk-status {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ok);
+}
+.diff-hunk.is-settled {
+  border-color: var(--ok);
+}
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.diff-num {
+  width: 3.6em;
+  padding: 0 6px;
+  text-align: right;
+  color: var(--dim);
+  user-select: none;
+  vertical-align: top;
+}
+.diff-code {
+  padding: 0 8px 0 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+.diff-table .diff-code.diff-add {
+  background: var(--add-bg);
+  color: var(--text);
+}
+.diff-table .diff-code.diff-del {
+  background: var(--del-bg);
+  color: var(--text);
+}
+.diff-table .diff-code.diff-ctx {
+  color: var(--text-2);
+}
+.diff-empty {
+  background: var(--surface-2);
+}
+.diff-sign {
+  display: inline-block;
+  width: 1.2em;
+  color: var(--muted);
+  user-select: none;
+}
+.diff-add .diff-sign {
+  color: var(--ok);
+}
+.diff-del .diff-sign {
+  color: var(--danger);
+}
+.diff-noeol {
+  margin-left: 8px;
+  font-family: var(--font);
+  font-size: 10px;
+  color: var(--muted);
+}
+.tok-kw {
+  color: var(--accent);
+  font-weight: 600;
+}
+.tok-str {
+  color: var(--warn);
+}
+.tok-com {
+  color: var(--muted);
+  font-style: italic;
+}
+.tok-num {
+  color: var(--info);
+}
+
+/* ---------- message actions ---------- */
+.message-actions,
+.agent-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.message-actions {
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+.msg-user:hover .message-actions,
+.message-actions:focus-within,
+.msg-agent:hover .agent-actions,
+.agent-actions:focus-within {
+  opacity: 1;
+}
+.agent-actions .fork-action {
+  opacity: 1;
+}
+@media (hover: none) {
+  .message-actions,
+  .agent-actions {
+    opacity: 1;
+  }
+}
+.message-actions .icon-btn,
+.agent-actions .icon-btn {
+  width: 26px;
+  height: 26px;
+  color: var(--text-2);
+}
+.edit-message {
+  display: grid;
+  gap: 8px;
+  min-width: min(520px, 80vw);
+}
+.edit-message textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+.edit-message .row {
+  justify-content: flex-end;
+  gap: 6px;
+}
+.edit-message .hint {
+  margin: 0;
+  font-size: 11px;
+}
+.msg-divider.is-rewound {
+  color: var(--warn);
+}
+
+/* ---------- dialogs and toasts ---------- */
+.confirm-dialog {
+  display: grid;
+  gap: 10px;
+}
+.confirm-dialog h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.confirm-dialog p {
+  margin: 0;
+}
+.confirm-actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+.rewind-files {
+  margin: 0;
+  padding: 8px 12px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.rewind-files li + li {
+  margin-top: 3px;
+}
+.toast-action {
+  font-weight: 600;
+}
+
+/* ---------- per-task Review view ---------- */
+.review-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.review-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.review-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.review-head .seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.review-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.review-readonly {
+  margin: 10px 24px 0;
+}
+.review-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  min-height: 0;
+}
+.review-files {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.review-file {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.review-file:hover {
+  background: var(--hover);
+}
+.review-file.active {
+  background: var(--accent-soft);
+}
+.review-path {
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.review-status.is-added {
+  color: var(--ok);
+}
+.review-status.is-deleted {
+  color: var(--danger);
+}
+.review-diff {
+  overflow-y: auto;
+  padding: 12px 24px 24px;
+  min-width: 0;
+}
+.review-file-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.review-file-head code {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.review-git {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 24px 24px;
+  max-width: 900px;
+  width: 100%;
+}
+@media (max-width: 760px) {
+  .review-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .review-files {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    max-height: 160px;
+  }
+}

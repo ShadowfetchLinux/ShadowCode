@@ -3,6 +3,7 @@ import type {
   EventRow,
   PlanStep,
   RoutingDecision,
+  Usage,
 } from "../api";
 import type { ChatItem } from "../components/cards";
 import {
@@ -48,6 +49,18 @@ export type Transcript = {
   usageVersion: number;
   /** The latest automatic continuation on a local model (limit.fallback). */
   fallback?: { jobId: string; target: string; to: string };
+  /** The latest context estimate (context.budget, native loop only). */
+  budget?: { used: number; limit: number };
+  /** The conversation's usage so far (usage.updated `session`). */
+  sessionUsage?: Usage;
+  /** The latest context compaction (context.compacted). */
+  compaction?: {
+    ts: number;
+    before: number;
+    after: number;
+    omitted: number;
+    method: string;
+  };
 };
 export const emptyTranscript = (): Transcript => ({
   items: [],
@@ -94,15 +107,19 @@ function userItem(
   items: ChatItem[],
   text: string,
   taskId: string,
+  eventId?: number,
 ): { items: ChatItem[]; item: ChatItem } {
   if (!CONTINUATION.test(text))
-    return { items, item: { kind: "user", text, taskId } };
+    return { items, item: { kind: "user", text, taskId, eventId } };
   const ask = lastIndex(
     items,
     (item) => item.kind === "limit" && item.mode === "ask" && !item.resolved,
   );
   if (ask < 0)
-    return { items, item: { kind: "user", text, taskId, continued: "auto" } };
+    return {
+      items,
+      item: { kind: "user", text, taskId, eventId, continued: "auto" },
+    };
   const next = [...items];
   next[ask] = {
     ...(items[ask] as Extract<ChatItem, { kind: "limit" }>),
@@ -110,7 +127,7 @@ function userItem(
   };
   return {
     items: next,
-    item: { kind: "user", text, taskId, continued: "manual" },
+    item: { kind: "user", text, taskId, eventId, continued: "manual" },
   };
 }
 
@@ -150,6 +167,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   let limit = state.limit;
   let usageVersion = state.usageVersion;
   let fallback = state.fallback;
+  let budget = state.budget;
+  let sessionUsage = state.sessionUsage;
+  let compaction = state.compaction;
   const taskId = event.task_id || "";
   const text = String(p.text || p.summary || "");
   const touch = (update: (current: TaskActivity) => TaskActivity) => {
@@ -289,14 +309,53 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     }));
   }
   if (event.type === "checkpoint.restored") {
+    // The files are back to how they were before this task: the divider
+    // goes just above the task's prompt.
+    const paths = Array.isArray(p.paths) ? p.paths : [];
+    const divider: ChatItem = {
+      kind: "divider",
+      taskId,
+      rewound: true,
+      text: `Rewound to here · ${paths.length} file${paths.length === 1 ? "" : "s"} restored`,
+    };
+    const at = taskId ? items.findIndex((item) => item.taskId === taskId) : -1;
+    items =
+      at < 0
+        ? [...items, divider]
+        : [...items.slice(0, at), divider, ...items.slice(at)];
+  }
+  if (event.type === "checkpoint.rewind_undone") {
     const paths = Array.isArray(p.paths) ? p.paths : [];
     items = [
       ...items,
       {
         kind: "note",
         taskId,
-        text: `Rewind restored ${paths.length} file${paths.length === 1 ? "" : "s"} from this task's checkpoint`,
+        text: `Rewind undone · ${paths.length} file${paths.length === 1 ? "" : "s"} put back as they were`,
       },
+    ];
+  }
+  if (event.type === "review.undone") {
+    items = [
+      ...items,
+      {
+        kind: "note",
+        taskId,
+        text: p.whole
+          ? `Review: undid this task's changes to ${String(p.path)}`
+          : `Review: undid one change in ${String(p.path)}`,
+      },
+    ];
+  }
+  if (
+    event.type === "approval.resolved" &&
+    p.approved === false &&
+    typeof p.note === "string" &&
+    p.note
+  ) {
+    items = [
+      ...items,
+      { kind: "note", taskId, text: `Denied with a note: “${p.note}”` },
     ];
   }
   if (event.type === "approval.requested") {
@@ -444,6 +503,25 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
   // Vendor account pushes carry `vendor`; per-task token/cost updates
   // (`turn`/`job`/`session`) do not change the picker's rows.
   if (event.type === "usage.updated" && p.vendor) usageVersion += 1;
+  // Per-task accounting (no `vendor`): the conversation's running total.
+  if (event.type === "usage.updated" && !p.vendor && p.session)
+    sessionUsage = p.session as Usage;
+  if (event.type === "context.budget" && Number(p.limit) > 0)
+    budget = {
+      used: Number(p.used_estimated_tokens || 0),
+      limit: Number(p.limit),
+    };
+  if (event.type === "context.compacted") {
+    compaction = {
+      ts: event.ts,
+      before: Number(p.before_estimated_tokens || 0),
+      after: Number(p.after_estimated_tokens || 0),
+      omitted: Number(p.omitted_messages || 0),
+      method: String(p.method || ""),
+    };
+    if (budget && compaction.after)
+      budget = { ...budget, used: compaction.after };
+  }
   if (event.type === "workflow.selected") {
     items = [
       ...items,
@@ -455,7 +533,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     ];
   }
   if (event.type === "user.message") {
-    const next = userItem(items, text, taskId);
+    const next = userItem(items, text, taskId, event.id);
     items = [...next.items, next.item];
     if (!activeTaskId) stage = "QUEUED";
   }
@@ -465,7 +543,7 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
       : undefined;
     const created = pending
       ? { items, item: pending }
-      : userItem(items, String(p.task || ""), taskId);
+      : userItem(items, String(p.task || ""), taskId, event.id);
     // A "Continue on …" card is only an offer until other work starts.
     items = [
       ...created.items
@@ -791,6 +869,9 @@ export function applyEvent(state: Transcript, event: EventRow): Transcript {
     limit,
     usageVersion,
     fallback,
+    budget,
+    sessionUsage,
+    compaction,
     cursor: event.id || state.cursor,
   };
 }

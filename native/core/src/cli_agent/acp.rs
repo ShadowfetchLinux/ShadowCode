@@ -545,7 +545,9 @@ impl AcpAdapter {
                 self.vendor.label()
             )),
             arguments: redact_value(
-                json!({"tool_call_id":tool["toolCallId"],"title":title,"input":tool["rawInput"],"locations":tool["locations"]}),
+                // `content` carries the proposed edit as ACP diff blocks,
+                // shown on the approval card.
+                json!({"tool_call_id":tool["toolCallId"],"title":title,"input":tool["rawInput"],"locations":tool["locations"],"content":tool["content"]}),
             ),
         }))
     }

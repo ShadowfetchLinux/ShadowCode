@@ -64,9 +64,39 @@ Type in the composer and press `Enter`. `Shift+Enter` adds a line.
   `.claude/commands/` appear here too.
 - **Agents.** Start a message with `@explore`, `@plan`, `@review`, `@general`
   or a project agent's name to run that subagent first. Type `@` to list them.
+- **Files and folders.** Type `@` anywhere, then part of a path, to pick a
+  project file or folder (files your `.gitignore` ignores are left out). The
+  pick stays in the message as `@path` and shows as a chip; deleting either
+  removes it. Local and OpenRouter models read the file's current contents
+  (or the folder's list of files) with the message; vendor CLIs get the
+  `@path` and open it themselves.
+- **Earlier prompts.** In an empty composer, `↑` brings back the prompts you
+  sent in this project, newest first, and `↓` goes forward again.
+- **Code, Plan or Ask.** The switch next to the permission control picks the
+  mode for the next message. *Plan* and *Ask* are read-only: the agent reads
+  the project and answers or writes a plan, and nothing is changed.
+  `/plan` and `/review` do the same for one message.
+- **Reasoning effort.** Where the chosen model has an effort setting, a
+  *Effort* control appears next to the model: *default*, *low*, *medium* or
+  *high*, remembered per model. It maps to OpenRouter's `reasoning.effort`,
+  the thinking switch of local models whose chat template has one (off for
+  *low*), Codex's `model_reasoning_effort` and Claude Code's thinking budget.
+  Cursor, Grok and Antigravity don't take one, so the control is hidden.
 
 If a task is already running, pressing `Enter` queues the message as a
 follow-up.
+
+### Your messages
+
+Hover a message you sent for its actions:
+
+- **Edit and resend** opens the text in place. Sending starts a new
+  conversation that holds everything before that message, with your edited
+  message in its place; the original conversation stays as it was. Tick
+  *Also undo the file changes made from this message on* to rewind the files
+  that this message's task and every later task changed first.
+- **Retry** sends the same message again in this conversation.
+- **Copy** copies the text. Answers have **Copy** and **Fork from here**.
 
 ## Watch it work
 
@@ -82,9 +112,22 @@ way as ShadowCode's own tools.
 ### Approvals
 
 When the agent wants to do something that needs permission, an approval card
-shows what it is, for example `Edit src/main.rs`, `Apply a patch to …`, or a
-shell command. Choose **Allow** or **Deny**. Keyboard shortcuts never approve
-anything. The card appears in the conversation as soon as the agent asks.
+shows exactly what it would do. A file change shows its diff against the file
+as it is now (the whole content for a new file), the first lines first with
+**Show all** for the rest. A command shows the full command and the folder it
+runs in. Keyboard shortcuts never approve anything. The card appears in the
+conversation as soon as the agent asks.
+
+- **Allow** / **Deny** answer this one request.
+- **Allow for this task** also allows the same kind of action until the task
+  ends: every file edit, or commands with the same program and subcommand
+  (for example all `cargo test …` commands). The card says what it covers.
+  Commands that chain (`;`, `&&`, `|`), redirect, use `sudo`, delete files or
+  rewrite Git history are never covered and always ask.
+- **Deny with note…** sends your reason back to the agent, for example
+  *use the Makefile instead*. Local and OpenRouter models and Claude Code
+  read the note; Codex, Cursor, Grok and Antigravity only receive the denial,
+  so the button isn't shown for them.
 
 - **Local and OpenRouter models.** ShadowCode enforces the permission mode
   for every tool call.
@@ -135,14 +178,24 @@ changing files or running checks shows one quiet line instead, for example
 *Finished · 7s · No files were changed.* A stopped task keeps its partial
 reply.
 
-- **Review changes** appears only when files changed. It opens the Changes
-  drawer (`Ctrl+Shift+B`). Pick a file, compare unstaged and staged hunks,
-  stage a hunk or a whole new file, discard a hunk (after confirming), and
-  commit with a message. If a file changed since
-  you previewed it, refresh before staging. The drawer's tabs keep your work
-  while you switch between them or close the drawer: your terminals, the
-  file open in Files and unsent commit and pull request drafts stay until you
-  open another project.
+- **Review changes** appears only when files changed. It opens the task's
+  review across the whole window: only the files this task changed, each
+  compared with how it was before the task. Switch between a **Unified** and
+  a **Split** diff (with code colouring). For each change (hunk) choose
+  **Keep** or **Undo**; for a file, **Keep file** or **Undo file**; **Undo
+  all** puts back every file you haven't kept. Keep only marks what you have
+  looked at; Undo writes the file, and only if it hasn't changed since the
+  diff was shown. Undoing asks first in ShadowCode's own dialog. Files a
+  vendor CLI reported without a checkpoint are compared with the last
+  commit. While a task runs in the project the review is read-only and says
+  why. **Back to conversation** returns.
+- **Git** (a tab in the review, and the drawer's Changes tab, `Ctrl+Shift+B`)
+  shows the whole working tree: compare unstaged and staged hunks, stage a
+  hunk or a whole new file, discard a hunk (after confirming), and commit.
+  If a file changed since you previewed it, refresh before staging. The
+  drawer's tabs keep your work while you switch between them or close the
+  drawer: your terminals, the file open in Files and unsent commit and pull
+  request drafts stay until you open another project.
 - **Rewind** undoes every change the task made to project files. That
   includes ShadowCode's own file tools, files changed by the task's shell
   commands, and files a subscription CLI (Codex, Claude Code, Cursor, Grok,
@@ -152,12 +205,16 @@ reply.
   branch, index and staged changes are untouched. In a folder without Git it
   is a copy, for folders up to 5,000 files and 64 MB. A larger folder
   shows *Rewind does not cover this command*. Stop the task first (for a
-  subscription, wait for the turn to end). Rewind doesn't restore Git-ignored
+  subscription, wait for the turn to end). Rewind asks first and lists the
+  files that will change. Afterwards a divider marks the conversation
+  (*Rewound to here · 2 files restored*) and the notification offers
+  **Undo**, which puts the files back as they were just before the rewind
+  (if you haven't changed them since). Rewind doesn't restore Git-ignored
   files, files over 4 MB, symlinks, Git history or branches, or anything
   outside the project. It refuses, and changes nothing, if a file was edited
-  again after the task. After a rewind, the next turn is told that those edits
-  are no longer on disk. A subscription's own conversation isn't told, so
-  mention it in your next message.
+  again after the task. After a rewind (or its undo), the next turn is told
+  which files changed on disk. A subscription's own conversation isn't told,
+  so mention it in your next message.
 
 ## Commit, push and open a pull request
 
@@ -300,6 +357,60 @@ After keep or discard, every lane's copy and branch is removed. **Wins in this
 project** counts which model you kept. Every lane is a full task: subscription
 lanes use your plan, OpenRouter lanes are billed per token. Details:
 [compare](COMPARE.md).
+
+## Run tasks side by side
+
+A project runs one task at a time in its folder. To start another while one
+is working, type it and press **Worktree** next to **Send** (or
+`Ctrl+Shift+Enter`). While a task is running, the button reads **Run now in
+worktree** instead of queueing.
+
+The new task gets its own conversation and its own copy of the project,
+starting from your latest commit plus any uncommitted work (your files are
+not touched). It is listed under the project with a branch icon, and a bar
+above the composer shows what it changed. When it is done:
+
+- **Apply to project** checks that its changes still fit your project, then
+  writes them to your files (nothing is committed; review them in
+  **Changes**). If files it changed were also changed in the project since,
+  nothing is written and those files are listed.
+- **Keep as branch** saves the result as a commit on branch
+  `shadowcode/<id>` for you to merge later.
+- **Discard** throws the result away.
+
+Either way the copy is removed and the conversation continues in the
+project. A conversation with its own copy can't be deleted until you apply,
+keep or discard it.
+
+## Conversations in the sidebar
+
+- **Badges**: a pulsing dot while a task runs, a clock while it is queued, a
+  hand when it **needs your approval**, a warning sign when it **failed**, and
+  a dot when it **finished** while you were elsewhere (until you open it).
+- **Right-click** a conversation (or press the menu key) to **Rename**,
+  **Pin**, **Fork**, **Export** or **Delete** it.
+- `Alt+↑` / `Alt+↓` open the previous or next conversation in the list;
+  `Ctrl+Tab` goes back to the one you had open before.
+
+## Notifications
+
+When the window is in the background, or the task is in another
+conversation, ShadowCode notifies you when a task needs approval, fails,
+reaches a plan limit (saying whether it continued on a model on this
+computer) or finishes. An unanswered approval is denied after 10 minutes; you
+are warned 2 minutes before. Click a notification to open its conversation.
+Choose which ones you get, and whether they play a sound, in **Settings ›
+Appearance**.
+
+## Context and cost
+
+The chip at the bottom right shows the open conversation's context use and
+cost, for example `42% · 38k / 128k · $0.12`. For subscription CLIs it shows
+the tokens and cost the tool reported (no percentage; the tool manages its
+own context), marked *reported by …*. `est.` means the cost was worked out
+from the model's prices; models on this computer show `$0 · local`. Click it
+for input, output and cached tokens, cost, model requests and the last
+compaction.
 
 ## Code intelligence
 

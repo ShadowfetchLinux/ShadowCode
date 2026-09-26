@@ -43,6 +43,7 @@ impl Service {
                 .await
             }
             ("POST", "/api/workspace/exec") => self.exec(call).await,
+            ("GET", "/api/workspace/mentions") => self.blocking(call, Self::mention_search).await,
             ("GET", "/api/workspace/git") => self.git_status().await,
             ("GET", "/api/workspace/diff") => self.git_diff(call.q("path")).await,
             ("POST", "/api/workspace/diffstat") => self.diff_stats(&call.body).await,

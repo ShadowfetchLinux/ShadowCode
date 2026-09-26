@@ -20,6 +20,13 @@ struct StartBody {
     handoff_consent: Flag,
     images: Option<Value>,
     permission_limit: Option<Value>,
+    /// `low`, `medium`, `high`, or empty for the model's default.
+    effort: Text,
+    /// `[{path, kind}]` files and folders the prompt @-mentions.
+    mentions: Option<Value>,
+    /// Start a new conversation in a fresh managed worktree of the project
+    /// (`crate::worktree_tasks`); `session_id` and `queue` are ignored.
+    worktree: Flag,
 }
 
 /// POST /api/jobs/test.
@@ -47,6 +54,11 @@ struct JobActionBody {
 struct DecisionBody {
     session_id: Text,
     decision: Text,
+    /// `once` (default) or `task`: allow the same kind of action for the
+    /// rest of the task.
+    scope: Text,
+    /// With `deny`: a reason the model reads.
+    note: Text,
 }
 
 impl Service {
@@ -130,14 +142,32 @@ impl Service {
                     matches!(body.decision.as_str(), "approve" | "deny"),
                     "Choose approve or deny"
                 );
-                Ok(json!(self.engine.approvals().decide(
+                ensure!(
+                    matches!(body.scope.as_str(), "" | "once" | "task"),
+                    "Choose once or task"
+                );
+                let allow = body.decision.as_str() == "approve";
+                Ok(json!(self.engine.approvals().answer(
                     parts[2],
                     &sid,
-                    body.decision.as_str() == "approve"
+                    crate::approvals::Answer {
+                        allow,
+                        for_task: allow && body.scope.as_str() == "task",
+                        note: body.note.non_empty().map(str::to_owned),
+                        automatic: false,
+                    }
                 )?))
             }
             "checkpoints" if parts.get(2) == Some(&"tasks") && parts.len() >= 4 => {
                 self.checkpoint(call, parts[3])
+            }
+            "checkpoints"
+                if parts.get(2) == Some(&"rewinds")
+                    && parts.len() == 5
+                    && parts[4] == "undo"
+                    && call.method == "POST" =>
+            {
+                self.undo_rewind(parts[3])
             }
             _ => Err(call.unavailable()),
         }
@@ -165,16 +195,8 @@ impl Service {
                 ws.path == self.workspace()?,
                 "Activate this task's workspace before rewinding"
             );
-            let reservation = self.mutable_workspace()?;
-            ensure!(
-                reservation.path == ws.path,
-                "Project selection changed; activate this task before rewinding"
-            );
-            let restored = checkpoint::restore(&store, &ws, task_id)?;
-            let session_id = task["session_id"].as_str().unwrap_or_default();
-            self.engine
-                .announce_restore(session_id, task_id, &restored, true)?;
-            return Ok(json!({"ok":true,"restored":restored}));
+            // Keeps the files as they are first, so the rewind can be undone.
+            return self.rewind_task(task_id);
         }
         Err(call.unavailable())
     }
@@ -281,29 +303,85 @@ impl Service {
             .flatten()
             .filter_map(|v| v.as_str().map(str::to_owned))
             .collect();
+        let mentions: Vec<crate::mentions::Mention> = match body.mentions.as_ref() {
+            Some(Value::Null) | None => Vec::new(),
+            Some(value) => serde_json::from_value(value.clone())
+                .context("mentions must be a list of {path, kind}")?,
+        };
+        let turn = crate::engine::TurnOptions {
+            effort: crate::effort::parse(body.effort.as_str())?,
+            mentions: crate::mentions::validate(&Workspace::open(&workspace)?, mentions)?,
+        };
+        let mut limit: Option<crate::config::PermissionLevel> = body
+            .permission_limit
+            .clone()
+            .filter(|v| !v.is_null())
+            .map(serde_json::from_value)
+            .transpose()?;
+        // "Run in new worktree": a new conversation in a fresh worktree of
+        // this project, which may run beside a task in the main checkout.
+        let worktree = if body.worktree.is_true() {
+            crate::worktree_tasks::ensure_one_local_model(&self.engine, target_id.as_deref())?;
+            let record = crate::worktree_tasks::prepare(
+                &self.engine,
+                &workspace,
+                body.task.as_str(),
+                &images,
+                model
+                    .as_ref()
+                    .map_or(cfg.model.default.as_str(), |m| m.default.as_str()),
+            )
+            .await?;
+            // The worktree's own config never widens the project's authority.
+            limit = Some(match limit {
+                Some(limit) => cfg.permissions.level.restricted_to(limit),
+                None => cfg.permissions.level.clone(),
+            });
+            Some(record)
+        } else {
+            None
+        };
+        let (run_in, session_id, queue) = match &worktree {
+            Some(record) => (
+                record.worktree.clone(),
+                Some(record.session_id.clone()),
+                false,
+            ),
+            None => (workspace.clone(), session_id, body.queue.is_true()),
+        };
         let started = self
             .engine
-            .start_consented_owned(
+            .start_turn_owned(
                 StartRequest {
-                    workspace: workspace.clone(),
+                    workspace: run_in,
                     task: body.task.as_str().into(),
                     session_id,
                     model,
                     mode: mode.into(),
-                    queue: body.queue.is_true(),
+                    queue,
                     images,
                     web: body.web.is_true(),
                 },
                 purpose,
-                body.permission_limit
-                    .clone()
-                    .filter(|v| !v.is_null())
-                    .map(serde_json::from_value)
-                    .transpose()?,
+                limit,
                 self.job_owner.as_ref(),
                 body.handoff_consent.is_true(),
+                turn,
             )
             .await;
+        let (started, worktree) = match (started, worktree) {
+            (Ok(job), Some(record)) => {
+                match crate::worktree_tasks::started(&self.engine, record, &job).await {
+                    Ok(record) => (Ok(job), Some(record)),
+                    Err(error) => (Err(error), None),
+                }
+            }
+            (Err(error), Some(record)) => {
+                crate::worktree_tasks::abandon(&self.engine, record).await;
+                (Err(error), None)
+            }
+            (started, None) => (started, None),
+        };
         let job = match started {
             Ok(job) => job,
             Err(error) => {
@@ -325,17 +403,22 @@ impl Service {
         };
         if let Some(id) = target_id.filter(|_| !body.model.is_empty()) {
             // Remembered for "keep going on a local model" when a plan runs out.
+            // Per project: a worktree task remembers it for its project.
             if id.starts_with("local:gguf:") {
-                store.set_native_meta(&keys::last_local_target(&job.workspace), &id)?;
+                store.set_native_meta(&keys::last_local_target(&workspace), &id)?;
             }
             store.set_session_meta(&job.session_id, keys::EXECUTION_TARGET, &id)?;
-            store.set_native_meta(&keys::execution_target(&job.workspace), &id)?;
+            store.set_native_meta(&keys::execution_target(&workspace), &id)?;
         }
         self.select_if(
             &job.workspace,
             Some(job.session_id.clone()),
             Some(selection.generation),
         )?;
-        Ok(json!(job))
+        let mut answer = json!(job);
+        if let Some(record) = worktree {
+            answer["worktree_task"] = record.to_json();
+        }
+        Ok(answer)
     }
 }

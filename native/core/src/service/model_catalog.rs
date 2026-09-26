@@ -270,6 +270,10 @@ impl Service {
             key_set,
             offline,
         ));
+        // The composer shows its reasoning-effort control only on these.
+        for row in &mut targets {
+            row["reasoning"] = json!(crate::effort::row_supports(row));
+        }
         Ok(json!({
             "targets": targets,
             "vendors": vendors.status_json(&cfg.cli_agents, false).await,
