@@ -172,6 +172,10 @@ async fn runs_are_tagged_recorded_and_never_overlap() {
     assert!(done.summary.contains("all good"), "{}", done.summary);
     assert!(done.duration().unwrap() >= 0.5);
     assert_eq!(done.usage.as_ref().unwrap()["total_tokens"], 30);
+    // The model received the automation's prompt as the task.
+    assert!(server.requests.lock().unwrap().iter().any(|r| r["messages"]
+        .to_string()
+        .contains("Look at the project and report.")));
     // Its own conversation, tagged with the automation, in the project.
     let store = service.engine.store();
     let sid = done.session_id.clone().unwrap();
