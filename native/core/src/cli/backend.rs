@@ -35,6 +35,16 @@ impl Backend {
     ) -> Result<Self> {
         Self::open_mode(paths, workspace, "tui", false, parent).await
     }
+    /// An editor's ACP connection: attach to a running desktop or server, or
+    /// own the engine (and its local socket, so a desktop can attach) until
+    /// the editor closes the connection.
+    pub(crate) async fn open_acp(
+        paths: AppPaths,
+        workspace: PathBuf,
+        parent: Option<u32>,
+    ) -> Result<Self> {
+        Self::open_mode(paths, workspace, "acp", false, parent).await
+    }
     async fn open_mode(
         paths: AppPaths,
         workspace: PathBuf,
@@ -105,6 +115,10 @@ impl Backend {
     }
     pub fn service(&self) -> Option<&Service> {
         self.local.as_ref().map(|(service, _)| service)
+    }
+    /// A connection whose requests are scoped to `workspace`.
+    pub(crate) fn client_for(&self, workspace: PathBuf) -> Client {
+        self.client.for_workspace(workspace)
     }
     pub(crate) async fn own_jobs(&self) -> Result<crate::control::OwnedJobs> {
         self.client.own_jobs().await

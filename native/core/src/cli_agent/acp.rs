@@ -23,13 +23,13 @@ const OUTPUT_PREVIEW: usize = 8000;
 /// Shown when the Antigravity server has no valid Google sign-in.
 pub const ANTIGRAVITY_SIGN_IN: &str = "Antigravity isn't signed in, or its sign-in expired. Choose Connect for Antigravity in Settings › Accounts.";
 
-fn request(id: u64, method: &str, params: Value) -> String {
+pub(crate) fn request(id: u64, method: &str, params: Value) -> String {
     json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}).to_string()
 }
-fn notification(method: &str, params: Value) -> String {
+pub(crate) fn notification(method: &str, params: Value) -> String {
     json!({"jsonrpc":"2.0","method":method,"params":params}).to_string()
 }
-fn result(id: &Value, result: Value) -> String {
+pub(crate) fn result(id: &Value, result: Value) -> String {
     json!({"jsonrpc":"2.0","id":id,"result":result}).to_string()
 }
 fn error(id: &Value, code: i64, message: &str) -> String {

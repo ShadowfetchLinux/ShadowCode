@@ -969,3 +969,46 @@ Details (safety branch):
   process note that the edits are no longer on disk.
 - `POST /api/workspace/attach` and `/attach-image` work in read-only
   projects (trust still required); files go to `.shadow/attachments/`.
+
+## ACP agent (`shadowcode acp`)
+
+`shadowcode acp` is another client of this API; it adds no route. Editors
+speak the Agent Client Protocol to it ([ACP_SERVER.md](ACP_SERVER.md)) and it
+calls the engine over the private local socket, each request scoped to the
+ACP session's project (the engine forks its project selection per request,
+so editor threads never change the desktop's selected project):
+
+- `session/new` → `POST /api/sessions {workspace, title: ""}` after checking
+  `trusted_workspaces` (the ACP session id is the conversation id; `--trust`
+  adds the folder with `grant_trust`).
+- `session/load` / `resume` → `GET /api/sessions/{id}?view=window` (the
+  folder must match `cwd`; `execution_target` becomes the model option),
+  `GET /api/jobs/current?session_id=&include_finished=true` (its `mode`
+  becomes the ACP mode: `plan` → plan, `review` → ask, else code), and for
+  load `GET /api/sessions/{id}/events?after=&limit=1000` until exhausted.
+- `session/list` → `GET /api/sessions?workspace=&limit=`.
+- Model option → `GET /api/picker` (rows with `availability: "ready"`,
+  cached a minute per project); choosing one → `POST /api/sessions/{id}/target`.
+- `session/prompt` → images through `POST /api/workspace/attach-image`, then
+  one owned submission (`POST /api/owned-jobs`, then `/api/jobs` with
+  `{workspace, session_id, task, model, purpose, images, mentions,
+  handoff_consent, queue: true}`; resource links to project files the
+  editor cannot read for us become `mentions`;
+  purpose `coder` / `planner` / `reviewer` for code / plan / ask). A 409
+  `needs_consent` answer becomes a permission request and is resent with
+  `handoff_consent: true` when allowed. Progress is read with
+  `GET /api/jobs/{id}/events?after=&limit=512` every 100 ms, approvals with
+  `GET /api/approvals?session_id=`, and answered with
+  `POST /api/approvals/{id} {session_id, decision, scope}` (`scope: "task"`
+  for "allow always", offered only when the approval has a `grant`);
+  `session/cancel` → `POST /api/jobs/{id}/cancel`.
+- Event mapping: `model.stream` / final `model.delta` → `agent_message_chunk`
+  (a final delta sends only the unstreamed rest); `tool.started` →
+  `tool_call` (in progress, with kind, locations and edit diffs);
+  `tool.completed` → `tool_call_update` (completed/failed, output text,
+  `rawOutput` up to 64 KB); `plan.updated` → `plan`; `agent.warning`,
+  `routing.selected|fallback`, `model.retry`, `context.compacted` →
+  `agent_thought_chunk`; `user.message` → `user_message_chunk` on replay only.
+- When no desktop or server is running the agent owns the engine;
+  `GET /api/runtime` then reports `mode: "acp"` and `persistent: true`, and a
+  desktop attaches to it as a view.
