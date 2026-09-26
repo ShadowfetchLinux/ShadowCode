@@ -32,7 +32,8 @@ pub const MANAGED_LOCALLY: &str =
 pub const SECRET_FILE: &str = "Secret files such as .env are not shown over remote access.";
 pub const PROFILE_FOLDER: &str =
     "ShadowCode's own settings folder cannot be opened over remote access.";
-pub const REDACTED_INPUT: &str = "This text contains a hidden secret. Edit it on the computer running ShadowCode.";
+pub const REDACTED_INPUT: &str =
+    "This text contains a hidden secret. Edit it on the computer running ShadowCode.";
 pub const INVALID_PATH: &str = "Invalid application command path";
 
 /// The path's segments after `/api/`, or `None` for a path the router could
@@ -226,7 +227,13 @@ mod tests {
             allow_terminals: false,
         };
         assert_eq!(
-            check("GET", "/api/workspace/file?path=.env", &Value::Null, &access, &paths),
+            check(
+                "GET",
+                "/api/workspace/file?path=.env",
+                &Value::Null,
+                &access,
+                &paths
+            ),
             Err(Refusal(SECRET_FILE))
         );
         assert_eq!(
@@ -239,10 +246,23 @@ mod tests {
             ),
             Err(Refusal(SECRET_FILE))
         );
-        assert!(check("GET", "/api/workspace/file?path=src/main.rs", &Value::Null, &access, &paths).is_ok());
+        assert!(check(
+            "GET",
+            "/api/workspace/file?path=src/main.rs",
+            &Value::Null,
+            &access,
+            &paths
+        )
+        .is_ok());
         let config = paths.config.to_string_lossy().into_owned();
         assert_eq!(
-            check("POST", "/api/projects", &json!({"path": config}), &access, &paths),
+            check(
+                "POST",
+                "/api/projects",
+                &json!({"path": config}),
+                &access,
+                &paths
+            ),
             Err(Refusal(PROFILE_FOLDER))
         );
         assert_eq!(
@@ -255,7 +275,14 @@ mod tests {
             ),
             Err(Refusal(PROFILE_FOLDER))
         );
-        assert!(check("POST", "/api/projects", &json!({"path": "/tmp"}), &access, &paths).is_ok());
+        assert!(check(
+            "POST",
+            "/api/projects",
+            &json!({"path": "/tmp"}),
+            &access,
+            &paths
+        )
+        .is_ok());
         assert_eq!(
             check(
                 "PUT",

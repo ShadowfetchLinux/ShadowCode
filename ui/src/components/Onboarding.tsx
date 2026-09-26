@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Dialog } from "./Dialog";
-import { isNative, pickDirectory } from "../lib/transport";
+import { canPickFiles, pickDirectory } from "../lib/transport";
 
 /** First run: choose the project folder, trust it and pick how the agent may
  * act. Models are chosen later in the composer's picker, the only place a
@@ -60,7 +60,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             onChange={(e) => setWorkspace(e.target.value)}
             placeholder="/path/to/project"
           />
-          {isNative() && (
+          {canPickFiles() && (
             <button
               type="button"
               className="ghost"

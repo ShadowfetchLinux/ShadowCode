@@ -125,9 +125,7 @@ impl Shared {
                 dropped.push(v.service);
             }
         }
-        let service = self
-            .base
-            .fork_selection(self.base.workspace()?, None)?;
+        let service = self.base.fork_selection(self.base.workspace()?, None)?;
         views.insert(
             key,
             View {
@@ -277,7 +275,9 @@ async fn handle(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incomin
         },
         (Method::GET, "/_remote/stream") => stream(shared, peer, request),
         (_, p) if p.starts_with("/_remote") => error(StatusCode::NOT_FOUND, "Not found"),
-        (Method::GET | Method::HEAD, _) => static_file(shared, &path, request.method() == Method::HEAD),
+        (Method::GET | Method::HEAD, _) => {
+            static_file(shared, &path, request.method() == Method::HEAD)
+        }
         _ => error(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed"),
     }
 }
@@ -365,9 +365,11 @@ fn authorize(shared: &Shared, peer: SocketAddr, headers: &HeaderMap) -> Result<D
 }
 
 async fn read_body(body: Incoming, limit: usize) -> Result<Bytes, Reply> {
-    match tokio::time::timeout(Duration::from_secs(30), Limited::new(body, limit).collect()).await
-    {
-        Err(_) => Err(error(StatusCode::REQUEST_TIMEOUT, "The request body took too long")),
+    match tokio::time::timeout(Duration::from_secs(30), Limited::new(body, limit).collect()).await {
+        Err(_) => Err(error(
+            StatusCode::REQUEST_TIMEOUT,
+            "The request body took too long",
+        )),
         Ok(Err(_)) => Err(error(
             StatusCode::PAYLOAD_TOO_LARGE,
             "The request is too large",
@@ -389,7 +391,10 @@ fn json_content(headers: &HeaderMap) -> bool {
 
 async fn pair(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>) -> Reply {
     if !same_origin(request.headers(), peer) {
-        return error(StatusCode::FORBIDDEN, "Cross-origin requests are not accepted");
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin requests are not accepted",
+        );
     }
     let ip = client_ip(peer);
     if shared.manager.limiter().blocked(ip).is_some() {
@@ -432,7 +437,10 @@ fn valid_view(id: &str) -> bool {
 
 async fn api(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>) -> Reply {
     if !same_origin(request.headers(), peer) {
-        return error(StatusCode::FORBIDDEN, "Cross-origin requests are not accepted");
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin requests are not accepted",
+        );
     }
     let device = match authorize(shared, peer, request.headers()) {
         Ok(device) => device,
@@ -467,7 +475,12 @@ async fn api(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>)
     } else {
         match serde_json::from_slice(&bytes) {
             Ok(body) => body,
-            Err(_) => return error(StatusCode::BAD_REQUEST, "The request body is not valid JSON"),
+            Err(_) => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "The request body is not valid JSON",
+                )
+            }
         }
     };
     let access = policy::Access {
@@ -493,7 +506,12 @@ async fn api(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>)
             policy::redact_response(&mut value);
             let bytes = match serde_json::to_vec(&value) {
                 Ok(bytes) if bytes.len() <= RESPONSE_LIMIT => bytes,
-                _ => return error(StatusCode::INTERNAL_SERVER_ERROR, "The response is too large"),
+                _ => {
+                    return error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "The response is too large",
+                    )
+                }
             };
             let mut response = Response::new(Full::new(Bytes::from(bytes)).boxed());
             response.headers_mut().insert(
@@ -505,10 +523,7 @@ async fn api(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>)
         Ok(Err(problem)) => {
             let mut message = Value::String(format!("{problem:#}"));
             policy::redact_response(&mut message);
-            json_reply(
-                StatusCode::BAD_REQUEST,
-                &json!({"error": message}),
-            )
+            json_reply(StatusCode::BAD_REQUEST, &json!({"error": message}))
         }
     }
 }
@@ -522,8 +537,12 @@ pub(super) fn stream_event(event: &Value, terminals: bool) -> Option<(&'static s
         let id = event["terminal_id"]
             .as_str()
             .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))?;
-        return terminals
-            .then(|| ("shadowcode:terminal", json!({"type": kind, "terminal_id": id})));
+        return terminals.then(|| {
+            (
+                "shadowcode:terminal",
+                json!({"type": kind, "terminal_id": id}),
+            )
+        });
     }
     if kind.starts_with("view.") {
         return None;
@@ -556,14 +575,20 @@ impl Body for EventBody {
 
 fn stream(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>) -> Reply {
     if !same_origin(request.headers(), peer) {
-        return error(StatusCode::FORBIDDEN, "Cross-origin requests are not accepted");
+        return error(
+            StatusCode::FORBIDDEN,
+            "Cross-origin requests are not accepted",
+        );
     }
     let device = match authorize(shared, peer, request.headers()) {
         Ok(device) => device,
         Err(reply) => return reply,
     };
     let Ok(permit) = shared.streams.clone().try_acquire_owned() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "Too many open event streams");
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Too many open event streams",
+        );
     };
     let (tx, rx) = mpsc::channel::<Bytes>(64);
     let mut events = shared.base.engine.subscribe();
@@ -694,13 +719,22 @@ mod tests {
         let local: SocketAddr = "127.0.0.1:5000".parse().unwrap();
         assert!(same_origin(&headers(&[("host", "192.168.1.5:7390")]), lan));
         assert!(same_origin(
-            &headers(&[("host", "192.168.1.5:7390"), ("origin", "http://192.168.1.5:7390")]),
+            &headers(&[
+                ("host", "192.168.1.5:7390"),
+                ("origin", "http://192.168.1.5:7390")
+            ]),
             lan
         ));
         for bad in [
-            vec![("host", "192.168.1.5:7390"), ("origin", "http://evil.example")],
+            vec![
+                ("host", "192.168.1.5:7390"),
+                ("origin", "http://evil.example"),
+            ],
             vec![("host", "192.168.1.5:7390"), ("origin", "null")],
-            vec![("host", "192.168.1.5:7390"), ("origin", "http://192.168.1.5:7391")],
+            vec![
+                ("host", "192.168.1.5:7390"),
+                ("origin", "http://192.168.1.5:7391"),
+            ],
             vec![
                 ("host", "192.168.1.5:7390"),
                 ("origin", "http://192.168.1.5:7390"),
@@ -721,7 +755,10 @@ mod tests {
             ("origin", "https://box.tailnet.ts.net"),
         ]);
         assert!(same_origin(&proxied, local));
-        assert!(!same_origin(&proxied, lan), "only a loopback proxy may forward the host");
+        assert!(
+            !same_origin(&proxied, lan),
+            "only a loopback proxy may forward the host"
+        );
     }
 
     #[test]
@@ -733,8 +770,15 @@ mod tests {
         let id = "a".repeat(32);
         let terminal = json!({"type":"terminal.output","terminal_id":id});
         assert!(stream_event(&terminal, false).is_none());
-        assert_eq!(stream_event(&terminal, true).unwrap().0, "shadowcode:terminal");
-        assert!(stream_event(&json!({"type":"terminal.output","terminal_id":"../x"}), true).is_none());
+        assert_eq!(
+            stream_event(&terminal, true).unwrap().0,
+            "shadowcode:terminal"
+        );
+        assert!(stream_event(
+            &json!({"type":"terminal.output","terminal_id":"../x"}),
+            true
+        )
+        .is_none());
         assert!(stream_event(&json!({"type":"view.disconnected"}), true).is_none());
     }
 

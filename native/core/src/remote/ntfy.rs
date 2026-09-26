@@ -30,7 +30,10 @@ pub fn validate_server(text: &str) -> Result<String> {
         matches!(url.scheme(), "http" | "https"),
         "The ntfy server address must start with https:// or http://"
     );
-    ensure!(url.host_str().is_some(), "The ntfy server address needs a host name");
+    ensure!(
+        url.host_str().is_some(),
+        "The ntfy server address needs a host name"
+    );
     ensure!(
         url.username().is_empty() && url.password().is_none(),
         "Put the access token in the token field, not in the address"

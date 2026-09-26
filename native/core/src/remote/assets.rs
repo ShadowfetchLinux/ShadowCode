@@ -144,11 +144,17 @@ mod tests {
         std::os::unix::fs::symlink(dir.path().join("secret.txt"), root.join("assets/link.txt"))
             .unwrap();
         let assets = DirAssets::new(&root).unwrap();
-        assert_eq!(assets.get("/index.html").unwrap().as_ref(), b"<html></html>");
+        assert_eq!(
+            assets.get("/index.html").unwrap().as_ref(),
+            b"<html></html>"
+        );
         assert!(assets.get("/../secret.txt").is_none());
         assert!(assets.get("/assets/link.txt").is_none());
         assert!(assets.get("/assets").is_none());
-        assert_eq!(content_type("/manifest.webmanifest"), "application/manifest+json");
+        assert_eq!(
+            content_type("/manifest.webmanifest"),
+            "application/manifest+json"
+        );
         assert!(immutable("/assets/index-abc.js") && !immutable("/index.html"));
     }
 }

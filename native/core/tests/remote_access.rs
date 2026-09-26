@@ -36,11 +36,21 @@ fn ui_files() {
     ONCE.call_once(|| {
         let dir = std::env::temp_dir().join(format!("shadowcode-remote-ui-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("assets")).unwrap();
-        std::fs::write(dir.join("index.html"), "<!doctype html><title>ShadowCode</title>").unwrap();
+        std::fs::write(
+            dir.join("index.html"),
+            "<!doctype html><title>ShadowCode</title>",
+        )
+        .unwrap();
         std::fs::write(dir.join("assets/app-abc.js"), "console.log('ui')").unwrap();
         std::fs::write(dir.join("manifest.webmanifest"), "{}").unwrap();
         // A file next to the UI folder that must never be served.
-        std::fs::write(dir.parent().unwrap().join(format!("shadowcode-remote-secret-{}", std::process::id())), "private").unwrap();
+        std::fs::write(
+            dir.parent()
+                .unwrap()
+                .join(format!("shadowcode-remote-secret-{}", std::process::id())),
+            "private",
+        )
+        .unwrap();
         assets::set_bundled(Arc::new(assets::DirAssets::new(&dir).unwrap()));
     });
 }
@@ -87,7 +97,13 @@ impl Fixture {
         assert_eq!(body["device"]["name"], "Test phone");
         body["token"].as_str().unwrap().to_owned()
     }
-    async fn api(&self, token: &str, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
+    async fn api(
+        &self,
+        token: &str,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> (u16, Value) {
         let client = reqwest::Client::new();
         let mut request = client
             .request(method.parse().unwrap(), format!("{}{path}", self.base))
@@ -117,7 +133,11 @@ async fn tokens_are_required_and_checked() {
     let f = fixture().await;
     let client = reqwest::Client::new();
     // Missing token.
-    let response = client.get(format!("{}/api/version", f.base)).send().await.unwrap();
+    let response = client
+        .get(format!("{}/api/version", f.base))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), 401);
     assert!(response.headers().contains_key("www-authenticate"));
     // Wrong token of the right shape.
@@ -133,7 +153,8 @@ async fn tokens_are_required_and_checked() {
     assert_eq!(status, 200);
     assert_eq!(session["allow_terminals"], false);
     // Tokens are stored as digests only, in a private file.
-    let saved = std::fs::read_to_string(f.service.engine.paths().config.join("remote.json")).unwrap();
+    let saved =
+        std::fs::read_to_string(f.service.engine.paths().config.join("remote.json")).unwrap();
     assert!(!saved.contains(&token));
     assert!(saved.contains(&auth::hex(&auth::digest(&token))));
     use std::os::unix::fs::PermissionsExt;
@@ -143,7 +164,10 @@ async fn tokens_are_required_and_checked() {
         .mode();
     assert_eq!(mode & 0o777, 0o600);
     // A pairing link works once.
-    let link = f.manager.pair(None).unwrap()["link"].as_str().unwrap().to_owned();
+    let link = f.manager.pair(None).unwrap()["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let code = link.split("#pair=").nth(1).unwrap();
     for expected in [200, 401] {
         let response = client
@@ -155,7 +179,10 @@ async fn tokens_are_required_and_checked() {
         assert_eq!(response.status(), expected);
     }
     // Revoking the device ends its access.
-    let device = f.manager.status()["devices"][0]["id"].as_str().unwrap().to_owned();
+    let device = f.manager.status()["devices"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     f.manager.revoke(Some(&device)).unwrap();
     let (status, _) = f.api(&token, "GET", "/api/version", None).await;
     assert_eq!(status, 401);
@@ -171,7 +198,9 @@ async fn repeated_failures_are_rate_limited() {
     for _ in 0..auth::MAX_FAILURES + 1 {
         statuses.push(f.api(&wrong, "GET", "/api/version", None).await.0);
     }
-    assert!(statuses[..auth::MAX_FAILURES as usize].iter().all(|s| *s == 401));
+    assert!(statuses[..auth::MAX_FAILURES as usize]
+        .iter()
+        .all(|s| *s == 401));
     assert_eq!(*statuses.last().unwrap(), 429);
     // While blocked, even the right token is not checked.
     assert_eq!(f.api(&token, "GET", "/api/version", None).await.0, 429);
@@ -191,13 +220,21 @@ async fn static_files_refuse_traversal() {
     let f = fixture().await;
     let index = reqwest::get(format!("{}/", f.base)).await.unwrap();
     assert_eq!(index.status(), 200);
-    let csp = index.headers()["content-security-policy"].to_str().unwrap().to_owned();
+    let csp = index.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
     assert!(csp.contains("frame-ancestors 'none'") && csp.contains("connect-src 'self'"));
     assert_eq!(index.headers()["x-content-type-options"], "nosniff");
     assert!(index.text().await.unwrap().contains("ShadowCode"));
-    let script = reqwest::get(format!("{}/assets/app-abc.js", f.base)).await.unwrap();
+    let script = reqwest::get(format!("{}/assets/app-abc.js", f.base))
+        .await
+        .unwrap();
     assert_eq!(script.status(), 200);
-    assert!(script.headers()["cache-control"].to_str().unwrap().contains("immutable"));
+    assert!(script.headers()["cache-control"]
+        .to_str()
+        .unwrap()
+        .contains("immutable"));
     let secret = format!("shadowcode-remote-secret-{}", std::process::id());
     for path in [
         format!("/../{secret}"),
@@ -208,7 +245,10 @@ async fn static_files_refuse_traversal() {
     ] {
         let response = raw(
             f.address,
-            &format!("GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", f.address),
+            &format!(
+                "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                f.address
+            ),
         )
         .await;
         assert!(response.starts_with("HTTP/1.1 404"), "{path}: {response}");
@@ -230,7 +270,9 @@ async fn cross_origin_requests_are_refused() {
         .await
         .unwrap();
     assert_eq!(preflight.status(), 403);
-    assert!(!preflight.headers().contains_key("access-control-allow-origin"));
+    assert!(!preflight
+        .headers()
+        .contains_key("access-control-allow-origin"));
     let foreign = client
         .get(format!("{}/api/version", f.base))
         .bearer_auth(&token)
@@ -239,7 +281,9 @@ async fn cross_origin_requests_are_refused() {
         .await
         .unwrap();
     assert_eq!(foreign.status(), 403);
-    assert!(!foreign.headers().contains_key("access-control-allow-origin"));
+    assert!(!foreign
+        .headers()
+        .contains_key("access-control-allow-origin"));
     let same = client
         .get(format!("{}/api/version", f.base))
         .bearer_auth(&token)
@@ -267,9 +311,17 @@ async fn terminals_are_blocked_until_allowed() {
     let token = f.pair().await;
     let (status, body) = f.api(&token, "GET", "/api/terminals", None).await;
     assert_eq!(status, 403);
-    assert!(body["error"].as_str().unwrap().contains("Terminals are turned off"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("Terminals are turned off"));
     let (status, _) = f
-        .api(&token, "POST", "/api/workspace/exec", Some(json!({"command":"id"})))
+        .api(
+            &token,
+            "POST",
+            "/api/workspace/exec",
+            Some(json!({"command":"id"})),
+        )
         .await;
     assert_eq!(status, 403);
     let (status, _) = f.api(&token, "GET", "/api/remote", None).await;
@@ -293,17 +345,31 @@ async fn secrets_are_not_shown_remotely() {
     let f = fixture().await;
     let token = f.pair().await;
     let (status, body) = f
-        .api(&token, "POST", "/api/projects/trust", Some(json!({"path": f.workspace})))
+        .api(
+            &token,
+            "POST",
+            "/api/projects/trust",
+            Some(json!({"path": f.workspace})),
+        )
         .await;
     assert_eq!(status, 200, "{body}");
-    let (status, body) = f.api(&token, "GET", "/api/workspace/file?path=.env", None).await;
+    let (status, body) = f
+        .api(&token, "GET", "/api/workspace/file?path=.env", None)
+        .await;
     assert_eq!(status, 403, "{body}");
-    let (status, body) = f.api(&token, "GET", "/api/workspace/file?path=notes.txt", None).await;
+    let (status, body) = f
+        .api(&token, "GET", "/api/workspace/file?path=notes.txt", None)
+        .await;
     assert_eq!((status, body["content"].as_str()), (200, Some("hello")));
     // The profile's own folder cannot be opened as a project.
     let config = f.service.engine.paths().config.clone();
     let (status, _) = f
-        .api(&token, "POST", "/api/projects", Some(json!({"path": config})))
+        .api(
+            &token,
+            "POST",
+            "/api/projects",
+            Some(json!({"path": config})),
+        )
         .await;
     assert_eq!(status, 403);
     // Recognizable keys in responses are replaced, and the placeholder is
@@ -335,7 +401,9 @@ async fn event_stream_delivers_wakeups() {
     let f = fixture().await;
     let token = f.pair().await;
     // Streams need the token too.
-    let refused = reqwest::get(format!("{}/_remote/stream", f.base)).await.unwrap();
+    let refused = reqwest::get(format!("{}/_remote/stream", f.base))
+        .await
+        .unwrap();
     assert_eq!(refused.status(), 401);
     let response = reqwest::Client::new()
         .get(format!("{}/_remote/stream", f.base))
@@ -388,7 +456,9 @@ async fn fake_ntfy() -> (String, Arc<Mutex<Vec<(String, Value)>>>) {
     let log = seen.clone();
     tokio::spawn(async move {
         loop {
-            let Ok((mut stream, _)) = listener.accept().await else { return };
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
             let mut data = Vec::new();
             let mut buf = [0u8; 4096];
             loop {
@@ -401,10 +471,15 @@ async fn fake_ntfy() -> (String, Arc<Mutex<Vec<(String, Value)>>>) {
                 if let Some((head, body)) = text.split_once("\r\n\r\n") {
                     let length = head
                         .lines()
-                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
                         .unwrap_or(0);
                     if body.len() >= length {
-                        let value: Value = serde_json::from_str(&body[..length]).unwrap_or(Value::Null);
+                        let value: Value =
+                            serde_json::from_str(&body[..length]).unwrap_or(Value::Null);
                         log.lock().unwrap().push((head.to_owned(), value));
                         break;
                     }
@@ -455,20 +530,25 @@ async fn ntfy_messages_follow_the_shared_decision() {
     assert_eq!(seen.len(), 3, "{seen:?}");
     let (head, test) = &seen[0];
     assert!(head.starts_with("POST / HTTP/1.1"));
-    assert!(head.to_ascii_lowercase().contains("authorization: bearer tk_test_value"));
+    assert!(head
+        .to_ascii_lowercase()
+        .contains("authorization: bearer tk_test_value"));
     assert_eq!(test["topic"], "shadow-test");
     assert_eq!(test["message"], "Phone notifications are working.");
     let mut rest: Vec<&Value> = seen[1..].iter().map(|(_, v)| v).collect();
     rest.sort_by_key(|v| v["title"].as_str().unwrap_or("").to_owned());
-    assert!(rest[0]["title"].as_str().unwrap().contains("approval needed"));
+    assert!(rest[0]["title"]
+        .as_str()
+        .unwrap()
+        .contains("approval needed"));
     assert_eq!(rest[0]["message"], "A task is waiting for your decision.");
-    assert!(!rest[0].to_string().contains("rm -rf"), "details are off by default");
+    assert!(
+        !rest[0].to_string().contains("rm -rf"),
+        "details are off by default"
+    );
     assert!(rest[1]["title"].as_str().unwrap().contains("task failed"));
     // The link goes back to the conversation through the running server.
-    assert_eq!(
-        rest[1]["click"],
-        format!("{}/#session=s", f.base).as_str()
-    );
+    assert_eq!(rest[1]["click"], format!("{}/#session=s", f.base).as_str());
     cancel.cancel();
     f.manager.stop();
 }

@@ -116,7 +116,8 @@ impl Pairing {
     pub fn issue(&mut self) -> Result<String> {
         self.prune();
         let code = new_code()?;
-        self.codes.push((digest(&code), Instant::now() + PAIRING_TTL));
+        self.codes
+            .push((digest(&code), Instant::now() + PAIRING_TTL));
         while self.codes.len() > MAX_PAIRING_CODES {
             self.codes.remove(0);
         }
@@ -239,8 +240,14 @@ mod tests {
 
     #[test]
     fn bearer_header_parsing_is_strict() {
-        assert_eq!(bearer("Bearer abcdefghijklmnopqr"), Some("abcdefghijklmnopqr"));
-        assert_eq!(bearer("bearer abcdefghijklmnopqr"), Some("abcdefghijklmnopqr"));
+        assert_eq!(
+            bearer("Bearer abcdefghijklmnopqr"),
+            Some("abcdefghijklmnopqr")
+        );
+        assert_eq!(
+            bearer("bearer abcdefghijklmnopqr"),
+            Some("abcdefghijklmnopqr")
+        );
         assert!(bearer("Basic abcdefghijklmnopqr").is_none());
         assert!(bearer("Bearer short").is_none());
         assert!(bearer("Bearer has space inside token").is_none());

@@ -137,7 +137,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(path(&paths)).unwrap().permissions().mode();
+            let mode = std::fs::metadata(path(&paths))
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
         // Old or partial files fill in defaults.

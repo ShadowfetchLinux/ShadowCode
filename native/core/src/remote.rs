@@ -544,12 +544,18 @@ async fn notifier(
         let Some(notice) = crate::notify::select(&event, &ntfy::prefs(&settings.ntfy)) else {
             continue;
         };
-        if Config::load(&manager.paths, None).is_ok_and(|c| c.offline()) || !manager.ntfy_budget()
-        {
+        if Config::load(&manager.paths, None).is_ok_and(|c| c.offline()) || !manager.ntfy_budget() {
             continue;
         }
         let project = (!notice.session_id.is_empty())
-            .then(|| service.engine.store().session(&notice.session_id).ok().flatten())
+            .then(|| {
+                service
+                    .engine
+                    .store()
+                    .session(&notice.session_id)
+                    .ok()
+                    .flatten()
+            })
             .flatten()
             .and_then(|s| {
                 s["workspace"]
@@ -590,7 +596,8 @@ fn validate_public_url(text: &str) -> Result<String> {
     if text.is_empty() {
         return Ok(String::new());
     }
-    let url = reqwest::Url::parse(text).context("Enter a full address such as https://box.tailnet.ts.net")?;
+    let url = reqwest::Url::parse(text)
+        .context("Enter a full address such as https://box.tailnet.ts.net")?;
     ensure!(
         matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
         "The public address must start with https:// or http://"
@@ -793,7 +800,10 @@ mod tests {
             public_url: "https://box.tailnet.ts.net".into(),
             ..Settings::default()
         };
-        assert_eq!(link_base(&public, bound, None), "https://box.tailnet.ts.net");
+        assert_eq!(
+            link_base(&public, bound, None),
+            "https://box.tailnet.ts.net"
+        );
         assert_eq!(
             validate_public_url("https://box.tailnet.ts.net/").unwrap(),
             "https://box.tailnet.ts.net"

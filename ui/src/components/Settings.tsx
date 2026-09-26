@@ -6,9 +6,16 @@ import { CodeIntelPage } from "./settings/CodeIntelPage";
 import { LocalModelsPage } from "./settings/LocalModelsPage";
 import { AppearancePage, PermissionsPage } from "./settings/PreferencePages";
 import { AdvancedPage, type AdvancedTab } from "./settings/AdvancedPage";
+import { RemotePage } from "./settings/RemotePage";
 
 export type SettingsSection =
-  "accounts" | "local" | "code" | "permissions" | "appearance" | "advanced";
+  | "accounts"
+  | "local"
+  | "code"
+  | "permissions"
+  | "appearance"
+  | "remote"
+  | "advanced";
 export type { AdvancedTab };
 
 const SECTIONS: { id: SettingsSection; label: string }[] = [
@@ -17,6 +24,7 @@ const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "code", label: "Code intelligence" },
   { id: "permissions", label: "Permissions & network" },
   { id: "appearance", label: "Appearance" },
+  { id: "remote", label: "Remote access" },
   { id: "advanced", label: "Advanced" },
 ];
 
@@ -99,6 +107,7 @@ export function Settings({
         {section === "appearance" && (
           <AppearancePage cfg={cfg} onSave={onSave} />
         )}
+        {section === "remote" && <RemotePage onToast={onToast} />}
         {section === "advanced" && (
           <AdvancedPage
             cfg={cfg}

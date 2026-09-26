@@ -241,6 +241,30 @@ export function installFakeBackend(options: FakeOptions = {}) {
 
   const state: Json = {
     onboarded: !options.onboarding,
+    remote: {
+      enabled: false,
+      address: "127.0.0.1",
+      port: 7390,
+      public_url: "",
+      allow_terminals: false,
+      devices: [
+        {
+          id: "dev-1",
+          name: "Safari on iPhone or iPad",
+          created_at: now() - 7200,
+          last_seen: now() - 300,
+        },
+      ],
+      ntfy: {
+        server: "",
+        topic: "",
+        details: false,
+        events: { approval: true, finished: true, failed: true, limit: true },
+        token_saved: false,
+        configured: false,
+        error: null,
+      },
+    },
     config: {
       model: { default: "mock", provider: "mock", name: "mock-coder" },
       permissions: {
@@ -2434,6 +2458,68 @@ export function installFakeBackend(options: FakeOptions = {}) {
       return { path: `.shadow/attachments/${body.filename}`, kind: "text" };
     if (path === "/api/doctor")
       return { ok: true, version: "0.28.0-test", checks: [], suggestions: [] };
+    // Settings › Remote access (desktop only).
+    const remoteView = () => {
+      const r = state.remote;
+      return {
+        ...r,
+        running: r.enabled,
+        bound: r.enabled ? `${r.address}:${r.port}` : null,
+        url: r.enabled ? `http://${r.address}:${r.port}` : null,
+        exposed: r.address !== "127.0.0.1",
+        error: null,
+        addresses: [
+          { address: "127.0.0.1", interface: "lo", kind: "loopback" },
+          { address: "100.90.1.2", interface: "tailscale0", kind: "tailscale" },
+          { address: "192.168.1.20", interface: "wlan0", kind: "lan" },
+        ],
+      };
+    };
+    if (path === "/api/remote" && method === "GET") return remoteView();
+    if (path === "/api/remote" && method === "PUT") {
+      Object.assign(state.remote, body);
+      return remoteView();
+    }
+    if (path === "/api/remote/pair") {
+      if (!state.remote.enabled)
+        throw new Error("Turn on remote access before pairing a device");
+      const rows = Array.from({ length: 25 }, (_, y) =>
+        Array.from({ length: 25 }, (_, x) =>
+          (x < 7 && y < 7) || (x > 17 && y < 7) || (x < 7 && y > 17)
+            ? x % 6 === 0 ||
+              y % 6 === 0 ||
+              (x % 18 > 1 && x % 18 < 5 && y % 18 > 1 && y % 18 < 5)
+              ? "1"
+              : "0"
+            : (x * 7 + y * 3) % 5 < 2
+              ? "1"
+              : "0",
+        ).join(""),
+      );
+      return {
+        link: `http://${state.remote.address}:${state.remote.port}/#pair=fakepairingcode0123456789abcdefghijk`,
+        base: `http://${state.remote.address}:${state.remote.port}`,
+        expires_in: 600,
+        qr: { size: 25, rows },
+      };
+    }
+    if (path === "/api/remote/devices/revoke") {
+      state.remote.devices = body.all
+        ? []
+        : state.remote.devices.filter((d: Json) => d.id !== body.id);
+      return remoteView();
+    }
+    if (path === "/api/remote/ntfy" && method === "PUT") {
+      const { token, events, ...rest } = body;
+      Object.assign(state.remote.ntfy, rest);
+      Object.assign(state.remote.ntfy.events, events || {});
+      if (token !== undefined) state.remote.ntfy.token_saved = Boolean(token);
+      state.remote.ntfy.configured = Boolean(
+        state.remote.ntfy.server && state.remote.ntfy.topic,
+      );
+      return remoteView();
+    }
+    if (path === "/api/remote/ntfy/test") return { ok: true };
     throw new Error(`Fake backend has no route for ${method} ${path}`);
   }
 

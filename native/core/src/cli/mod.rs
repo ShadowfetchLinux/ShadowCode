@@ -23,7 +23,7 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 pub use args::Options;
-use args::{Background, Command, Mcp, Plugin, Run, TaskOptions, WorktreeArgs};
+use args::{Background, Command, Mcp, Plugin, Remote, Run, TaskOptions, WorktreeArgs};
 use backend::Backend;
 use clap::Parser;
 use serde_json::{json, Value};
@@ -378,7 +378,7 @@ pub async fn run(options: Options) -> Result<i32> {
         result?;
         return Ok(0);
     }
-    let serving = matches!(options.command, Some(Command::Serve));
+    let serving = matches!(options.command, Some(Command::Serve { .. }));
     let events = options.events();
     let backend = Backend::open(paths, workspace.clone(), serving, parent).await?;
     let result = execute(&backend, &workspace, &options).await;
@@ -422,6 +422,76 @@ pub async fn run(options: Options) -> Result<i32> {
     }
     Ok(outcome.code)
 }
+/// Where `shadowcode serve --remote` listens, and what that means.
+fn remote_banner(status: &Value, address: std::net::SocketAddr) -> String {
+    let mut text = format!(
+        "Remote access: {}",
+        status["url"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("http://{address}"))
+    );
+    if address.ip().is_loopback() {
+        text.push_str(
+            "\nOnly this computer can connect. For a phone, use `tailscale serve` (see docs/REMOTE.md) or choose another address with --remote-address.",
+        );
+    } else {
+        text.push_str(
+            "\nWarning: plain HTTP is not encrypted. Anyone on this network can read the traffic; prefer Tailscale (docs/REMOTE.md).",
+        );
+    }
+    if status["allow_terminals"] == true {
+        text.push_str("\nTerminals are allowed over remote access.");
+    }
+    text
+}
+
+/// A pairing link with its QR code for a terminal.
+fn pairing_text(pairing: &Value) -> Result<String> {
+    let link = pairing["link"].as_str().context("Pairing link missing")?;
+    Ok(format!(
+        "Scan to pair a phone, or open this link on the device (works once, for {} minutes):\n{}\n{link}\nAnyone with this link can control ShadowCode until you unpair the device.",
+        pairing["expires_in"].as_u64().unwrap_or(600) / 60,
+        crate::remote::qr_terminal(link)?
+    ))
+}
+
+fn remote_status_text(status: &Value) -> String {
+    let mut text = if status["running"] == true {
+        format!(
+            "Remote access is on: {}\n",
+            status["url"].as_str().unwrap_or("")
+        )
+    } else if status["enabled"] == true {
+        format!(
+            "Remote access is on but not running: {}\n",
+            status["error"].as_str().unwrap_or("the engine is not open")
+        )
+    } else {
+        "Remote access is off. Turn it on in Settings › Remote access, or run `shadowcode serve --remote`.\n".to_owned()
+    };
+    text.push_str(&format!(
+        "Terminals over remote access: {}\n",
+        if status["allow_terminals"] == true {
+            "allowed"
+        } else {
+            "off"
+        }
+    ));
+    let devices = status["devices"].as_array().cloned().unwrap_or_default();
+    if devices.is_empty() {
+        text.push_str("No paired devices.\n");
+    }
+    for device in devices {
+        text.push_str(&format!(
+            "{}  {}\n",
+            device["id"].as_str().unwrap_or("").chars().take(8).collect::<String>(),
+            watch::plain(device["name"].as_str().unwrap_or(""))
+        ));
+    }
+    text
+}
+
 fn display(value: &Value) -> Result<()> {
     if let Some(headline) = value["headline"].as_str() {
         outln!("{}", watch::plain(headline));
@@ -534,12 +604,28 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                 )
                 .await?
         }
-        Command::Serve => {
+        Command::Serve {
+            remote,
+            remote_address,
+        } => {
             ensure!(
                 backend.service().is_some(),
                 "This profile already has an engine"
             );
             errln!("ShadowCode {} · serving {}\nPress Ctrl-C to stop managed work and close the engine.",crate::VERSION,workspace.display());
+            if *remote {
+                let service = backend.service().context("Native service unavailable")?;
+                let manager = service.remote();
+                let address = match manager.address() {
+                    // Remote access is switched on in Settings and already
+                    // runs on the saved address.
+                    Some(address) if remote_address.is_none() => address,
+                    _ => manager.start(service, *remote_address)?,
+                };
+                errln!("{}", remote_banner(&manager.status(), address));
+                let pairing = manager.pair(None)?;
+                errln!("{}", pairing_text(&pairing)?);
+            }
             let guardian_service=backend.service().context("Native service unavailable")?.clone();
             let guardian=tokio::spawn(async move {
                 loop {
@@ -1074,6 +1160,55 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
                         format!("/api/background/{id}{}", if stop { "/stop" } else { "" }),
                         json!({}),
                     )
+                    .await?
+            }
+        },
+        Command::Remote { action } => match action {
+            None | Some(Remote::Status) => {
+                let status = backend.call("GET", "/api/remote", Value::Null).await?;
+                if options.json {
+                    status
+                } else {
+                    return Ok(Outcome {
+                        code: 0,
+                        raw: Some(remote_status_text(&status)),
+                        value: status,
+                    });
+                }
+            }
+            Some(Remote::Pair { host }) => {
+                let pairing = backend
+                    .call(
+                        "POST",
+                        "/api/remote/pair",
+                        json!({"host": host.as_deref().unwrap_or("")}),
+                    )
+                    .await?;
+                if options.json {
+                    pairing
+                } else {
+                    return Ok(Outcome {
+                        code: 0,
+                        raw: Some(pairing_text(&pairing)?),
+                        value: pairing,
+                    });
+                }
+            }
+            Some(Remote::Revoke { id, all }) => {
+                let body = match id {
+                    Some(prefix) => {
+                        let status = backend.call("GET", "/api/remote", Value::Null).await?;
+                        let id = unique(
+                            status["devices"].as_array().context("Device list missing")?,
+                            prefix,
+                            "device",
+                        )?;
+                        json!({"id": id})
+                    }
+                    None => json!({"all": all}),
+                };
+                backend
+                    .call("POST", "/api/remote/devices/revoke", body)
                     .await?
             }
         },
