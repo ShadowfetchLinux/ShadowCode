@@ -96,9 +96,12 @@ words such as "you" for silence.
 ## Package size
 
 whisper.cpp (with ggml's CPU backend) is linked statically into the
-`shadowcode` binary; cpal and ALSA bindings add a little more. See the
-release notes of the version that introduced voice input for the measured
-difference; models are never bundled.
+`shadowcode` binary, with cpal and the ALSA bindings. Measured on the
+release build: the stripped binary grows by 1.7 MB (44.2 MB → 45.9 MB,
++3.9%), about 0.55 MB once compressed, so the AppImage grows by well under
+1%. The binary now also links `libstdc++.so.6` (already required by the
+bundled WebKitGTK and taken from the host like before) and `libasound.so.2`
+(from the host). Models are never bundled.
 
 ## API
 
