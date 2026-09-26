@@ -1,8 +1,12 @@
 /* Drawer: Preview tab (the project's dev server with element picking). */
 
-/* The drawer widens while the preview is in front. */
+/* The drawer widens while the preview is in front, leaving the conversation
+ * and its composer at least 620 px. */
 .app.drawer-preview {
-  --drawer-w: clamp(420px, 58vw, 1100px);
+  --drawer-w: clamp(420px, calc(100vw - 620px), 1000px);
+}
+.app.with-sidebar.drawer-preview {
+  --drawer-w: clamp(420px, calc(100vw - var(--rail-w) - 620px), 1000px);
 }
 
 .preview-panel {

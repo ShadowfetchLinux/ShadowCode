@@ -109,6 +109,15 @@ test("pick an element and a console error, then send them with the prompt", asyn
   await openPreview(page);
   const bar = preview(page);
 
+  // The wider drawer leaves the composer room for its controls.
+  const composerBox = await page.locator("form.composer").boundingBox();
+  const sendBox = await page
+    .getByRole("button", { name: "Send task" })
+    .boundingBox();
+  expect(sendBox!.x + sendBox!.width).toBeLessThanOrEqual(
+    composerBox!.x + composerBox!.width,
+  );
+
   // Console errors captured by the picker show in the strip.
   const console = bar.getByRole("region", { name: "Console errors" });
   await expect(console).toContainText("boom from the page");
@@ -183,7 +192,9 @@ test("pick an element and a console error, then send them with the prompt", asyn
     '```html\n<button type="submit" class="btn primary">Save</button>\n```',
   );
   // The conversation shows the message with its context.
-  await expect(page.getByText(/Context from the app preview/)).toBeVisible();
+  await expect(
+    page.getByText(/Context from the app preview/).first(),
+  ).toBeVisible();
 });
 
 test("the address bar follows navigation and refuses other computers", async ({
