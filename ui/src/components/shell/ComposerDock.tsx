@@ -8,8 +8,11 @@ import {
   WebToggle,
   type PermissionMode,
 } from "../ComposerControls";
+import { EffortControl, ModeToggle } from "../ComposerModes";
 import { QueuedTasks } from "../QueuedTasks";
+import type { Effort, TaskMode } from "../../lib/effort";
 import { UnifiedPicker } from "../UnifiedPicker";
+import { RunInWorktreeButton } from "../RunInWorktreeButton";
 import { TaskPlan } from "./Chrome";
 import {
   isApiKey,
@@ -67,6 +70,8 @@ export function ComposerDock({
   permission,
   network,
   compare,
+  modes,
+  worktree,
 }: {
   hidden: boolean;
   queue: {
@@ -96,6 +101,16 @@ export function ComposerDock({
     onWeb: (enabled: boolean) => void;
   };
   compare: { reason: string | null; locked: boolean; onOpen: () => void };
+  /** Code / Plan / Ask, and reasoning effort where the row supports it. */
+  modes?: {
+    mode: TaskMode;
+    onMode: (mode: TaskMode) => void;
+    effort: Effort;
+    effortShown: boolean;
+    onEffort: (effort: Effort) => void;
+  };
+  /** "Run in new worktree" (hidden when `reason` says it cannot apply). */
+  worktree?: ComponentProps<typeof RunInWorktreeButton>;
 }) {
   return (
     <div className="composer-wrap" hidden={hidden}>
@@ -106,6 +121,10 @@ export function ComposerDock({
         picker={<UnifiedPicker {...picker} />}
         controls={
           <>
+            {modes?.effortShown && (
+              <EffortControl effort={modes.effort} onChange={modes.onEffort} />
+            )}
+            {modes && <ModeToggle mode={modes.mode} onChange={modes.onMode} />}
             <PermissionControl {...permission} />
             {network.mode === "offline" ? (
               <NetworkPill mode="offline" />
@@ -123,6 +142,7 @@ export function ComposerDock({
         }
         compare={
           <>
+            {worktree && <RunInWorktreeButton {...worktree} />}
             <button
               type="button"
               className="compare-btn"

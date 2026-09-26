@@ -6,6 +6,8 @@ export type FeedPage = {
   approvals: Approval[];
   jobs: Job[];
   events?: string[];
+  /** Every conversation with a pending approval (sidebar badges). */
+  waiting?: string[];
 };
 export type FeedDependencies = {
   /** One read of the feed for the selected conversation ("" = all). */
@@ -58,6 +60,7 @@ export function useFeed(
 ) {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [jobs, setJobsState] = useState<Job[]>([]);
+  const [waiting, setWaiting] = useState<string[]>([]);
   const session = useRef(sessionId);
   session.current = sessionId;
   const dependencies = useRef(deps);
@@ -92,6 +95,8 @@ export function useFeed(
               same(prev, page.approvals) ? prev : page.approvals,
             );
           setJobs(page.jobs);
+          const nextWaiting = page.waiting || [];
+          setWaiting((prev) => (same(prev, nextWaiting) ? prev : nextWaiting));
           if (page.events?.length) kinds.current = new Set(page.events);
         } catch {
           /* The reconnect banner covers outages; keep the last state. */
@@ -140,5 +145,5 @@ export function useFeed(
     void refresh();
   }, [sessionId, refresh]);
 
-  return { approvals, jobs, setJobs, refresh, clearApprovals };
+  return { approvals, jobs, waiting, setJobs, refresh, clearApprovals };
 }

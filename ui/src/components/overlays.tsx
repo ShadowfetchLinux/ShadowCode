@@ -9,6 +9,7 @@ const SHORTCUT_GROUPS: { label: string; rows: [string, string][] }[] = [
     rows: [
       ["Enter", "Send task"],
       ["Shift+Enter", "New line in composer"],
+      ["Ctrl+Shift+Enter", "Run in a new worktree (beside other work)"],
       ["Ctrl+.", "Stop the agent"],
       ["/", "Slash commands (in composer)"],
     ],
@@ -22,6 +23,8 @@ const SHORTCUT_GROUPS: { label: string; rows: [string, string][] }[] = [
       ["Ctrl+`", "Toggle the Terminal (works inside it too)"],
       ["Ctrl+P", "Open project…"],
       ["Ctrl+N", "New task"],
+      ["Alt+↑ / Alt+↓", "Previous / next conversation"],
+      ["Ctrl+Tab", "Back to the last conversation"],
       ["Ctrl+L", "Focus composer"],
       ["Ctrl+M", "Choose a model"],
       ["Esc", "Close overlay or drawer"],

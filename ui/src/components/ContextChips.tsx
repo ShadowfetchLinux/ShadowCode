@@ -1,15 +1,14 @@
 import { MousePointerClick, SquareTerminal, X } from "lucide-react";
-import {
-  pendingAttachments,
-  type ContextAttachment,
-} from "../lib/pendingAttachments";
+import type { ContextAttachment } from "../lib/pendingAttachments";
 
 /** Chips for context waiting to go out with the next message (picked
  * elements, console errors); rendered inside the composer's chip list. */
 export function ContextChips({
   items,
+  onRemove,
 }: {
   items: readonly ContextAttachment[];
+  onRemove?: (id: string) => void;
 }) {
   return (
     <>
@@ -29,7 +28,7 @@ export function ContextChips({
             type="button"
             className="chip-remove"
             aria-label={`Remove ${item.label}`}
-            onClick={() => pendingAttachments.remove(item.id)}
+            onClick={() => onRemove?.(item.id)}
           >
             <X size={12} aria-hidden="true" />
           </button>

@@ -13,12 +13,6 @@ import type { DrawerTab } from "../components/Drawer";
 import type { AdvancedTab, SettingsSection } from "../components/Settings";
 import { continuationTask, type Fallback } from "../lib/allowance";
 import { sendBlockedByImages, type Attachment } from "../lib/attachments";
-import {
-  contextPrompt,
-  pendingAttachments,
-  usePendingAttachments,
-  type ContextAttachment,
-} from "../lib/pendingAttachments";
 import { isReady, type PickerTarget } from "../lib/picker";
 import { draftKey, isSessionCommand, writeStore } from "../lib/storage";
 import { invoke } from "../lib/transport";
@@ -28,6 +22,9 @@ import {
   trustRequestFor,
 } from "../lib/trust";
 import type { useConversation } from "./useConversation";
+import type { ComposerExtras } from "./useComposerExtras";
+import { purposeFor } from "../lib/effort";
+import { mentionsInText } from "../lib/mentions";
 import type { ToastKind } from "./useToasts";
 import type { WorkspaceStatus } from "./useWorkspace";
 
@@ -49,20 +46,12 @@ const DRAWERS: Record<string, DrawerTab> = {
   worktrees: "worktrees",
 };
 
-/** What the composer held when a message was sent, restored if sending
- * fails or is cancelled. `context` is what came from pendingAttachments. */
-export type ComposerContent = {
-  task: string;
-  attachments: Attachment[];
-  context?: readonly ContextAttachment[];
-};
-
 /** A cloud route asked for consent before the conversation leaves this
  * computer; `original` restores the composer on Cancel. */
 export type Consent = {
   request: ConsentRequest;
   body: StartJobRequest;
-  original: ComposerContent;
+  original: { task: string; attachments: Attachment[] };
 };
 type Trust = {
   path: string;
@@ -119,6 +108,12 @@ export type TaskActionContext = {
   setRunningChoice: (id: string) => void;
   /** Follow the conversation to its newest row. */
   pin: () => void;
+  /** @-mentions, prompt history, effort and task mode. */
+  extras?: ComposerExtras;
+  /** The project is a Git repository (worktree runs need one). */
+  gitRepo: boolean;
+  /** The open conversation already runs in its own worktree. */
+  inWorktree: boolean;
 };
 
 /** Sending: tasks, follow-ups, slash commands, consent, plan-limit
@@ -126,7 +121,7 @@ export type TaskActionContext = {
 export function useTaskActions(c: TaskActionContext) {
   const { task, attachments, selectedTarget, modelChoice, pickerLoaded } = c;
   const { canAttachImages } = c;
-  const pending = usePendingAttachments();
+  const pending = c.extras?.context.length ?? 0;
   const sendBlocked = useMemo(() => {
     if (task.trim().startsWith("/")) return null;
     if (!pickerLoaded) return null;
@@ -149,9 +144,7 @@ export function useTaskActions(c: TaskActionContext) {
     attachments,
     canAttachImages,
   ]);
-  const hasContent = Boolean(
-    task.trim() || attachments.length || pending.length,
-  );
+  const hasContent = Boolean(task.trim() || attachments.length || pending);
   const canSend =
     !c.composerLocked &&
     !c.commandWaiting &&
@@ -245,12 +238,15 @@ export function useTaskActions(c: TaskActionContext) {
    * the task did not come from the composer (Continue on …). */
   async function startTask(
     body: StartJobRequest,
-    original: ComposerContent | null,
+    original: { task: string; attachments: Attachment[] } | null,
   ) {
     const submitTicket = c.selection.current;
     c.submittingRef.current = true;
     c.setSubmitting(true);
     c.setError("");
+    // A worktree task is a new conversation in another folder: it is
+    // opened once sending has finished.
+    let follow = "";
     try {
       const result = await api.startJob(body);
       if ("consent" in result) {
@@ -265,6 +261,16 @@ export function useTaskActions(c: TaskActionContext) {
       const started = result.job;
       if (submitTicket !== c.selection.current) {
         await c.refresh();
+        return;
+      }
+      if (body.worktree) {
+        for (const a of original?.attachments || [])
+          if (a.preview) URL.revokeObjectURL(a.preview);
+        c.toast(
+          "Started in a new worktree. It runs beside the project's other work; apply, keep or discard its result when it is done.",
+          "ok",
+        );
+        follow = started.session_id;
         return;
       }
       if (started.session_id !== c.selectedRef.current) {
@@ -293,7 +299,8 @@ export function useTaskActions(c: TaskActionContext) {
       if (original) {
         c.setTask(original.task);
         c.setAttachments(original.attachments);
-        if (original.context) pendingAttachments.restore(original.context);
+        for (const m of body.mentions || []) c.extras?.addMention(m);
+        if (body.context?.length) c.extras?.restoreContext(body.context);
       }
       c.setError(String(e));
       c.toast(String(e), "err");
@@ -302,6 +309,10 @@ export function useTaskActions(c: TaskActionContext) {
     } finally {
       c.setSubmitting(false);
       c.submittingRef.current = false;
+      if (follow) {
+        await c.openSession(follow);
+        await c.refresh().catch(() => undefined);
+      }
     }
   }
 
@@ -371,9 +382,22 @@ export function useTaskActions(c: TaskActionContext) {
     }
   }
 
-  async function submit() {
+  /** Why "Run in new worktree" is unavailable now, or null. */
+  const worktreeBlocked = !c.gitRepo
+    ? "Running in a new worktree needs a Git repository"
+    : c.inWorktree
+      ? "This conversation already runs in its own worktree"
+      : task.trim().startsWith("/")
+        ? "Slash commands run in the conversation"
+        : null;
+
+  async function submit(opts: { worktree?: boolean } = {}) {
     if (c.composerLocked || c.submittingRef.current || !hasContent) return;
-    if (c.commandWaiting) {
+    if (opts.worktree && worktreeBlocked) {
+      c.toast(worktreeBlocked, "info");
+      return;
+    }
+    if (c.commandWaiting && !opts.worktree) {
       c.setError(
         "Wait for this project's active work to finish before running a slash command. You can queue a message now.",
       );
@@ -394,7 +418,8 @@ export function useTaskActions(c: TaskActionContext) {
       c.setError("");
       return;
     }
-    const original: ComposerContent = { task, attachments };
+    const original = { task, attachments };
+    c.extras?.history.push(task);
     if (task.trim().startsWith("/")) {
       c.setTask("");
       c.pin();
@@ -422,28 +447,38 @@ export function useTaskActions(c: TaskActionContext) {
     const texts = attachments
       .filter((a) => a.kind === "text")
       .map((a) => a.path);
-    original.context = pendingAttachments.take();
-    const context = contextPrompt(original.context);
     const text = (
       task.trim() +
-      (context ? `\n\n${context}` : "") +
       (texts.length ? `\n\nAttached paths: ${texts.join(", ")}` : "") +
       (images.length ? `\n\nAttached images: ${images.join(", ")}` : "")
     ).trim();
+    const extras = c.extras;
+    const mentions = extras ? mentionsInText(task, extras.mentions) : [];
+    // Picked elements and console messages from the Preview tab; the engine
+    // appends them after the message.
+    const context = extras?.takeContext() ?? [];
     c.setTask("");
     c.setAttachments([]);
+    extras?.setMentions([]);
     writeStore(draftKey(c.sessionId, c.workspace), null);
     c.pin();
     await startTask(
       {
-        task: text || "Describe the attached image(s).",
+        // Preview context alone is a message: the engine appends it.
+        task: text || (context.length ? "" : "Describe the attached image(s)."),
         workspace: c.workspace || undefined,
-        session_id: c.sessionId || undefined,
         model: selectedTarget.id,
-        purpose: "coder",
-        queue: c.queueing,
+        purpose: extras ? purposeFor(extras.mode) : "coder",
         images,
         web: c.webAllowed && c.webEnabled,
+        ...(opts.worktree
+          ? { worktree: true }
+          : { session_id: c.sessionId || undefined, queue: c.queueing }),
+        ...(extras?.effortShown && extras.effort !== "default"
+          ? { effort: extras.effort }
+          : {}),
+        ...(mentions.length ? { mentions } : {}),
+        ...(context.length ? { context } : {}),
       },
       original,
     );
@@ -452,6 +487,14 @@ export function useTaskActions(c: TaskActionContext) {
   return {
     sendBlocked,
     canSend,
+    worktreeBlocked,
+    /** Send is possible, and so is a worktree run (Ctrl+Shift+Enter). */
+    canRunInWorktree:
+      !c.composerLocked &&
+      hasContent &&
+      !sendBlocked &&
+      !worktreeBlocked &&
+      Boolean(selectedTarget),
     startTask,
     continueOnFallback,
     followLimit,

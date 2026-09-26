@@ -160,12 +160,16 @@ test("pick an element and a console error, then send them with the prompt", asyn
   const job = (await fakeLog(page)).find(
     (r) => r.method === "POST" && r.path === "/api/jobs",
   );
-  const task: string = job?.body.task ?? "";
-  expect(
-    task.startsWith(
-      "Make the save button green\n\nContext from the app preview",
-    ),
-  ).toBe(true);
+  // The message stays the user's text; the picked items go as `context`
+  // (the engine appends them after the message).
+  expect(job?.body.task).toBe("Make the save button green");
+  const context: { kind: string; label: string; text: string }[] =
+    job?.body.context ?? [];
+  expect(context.map((c) => [c.kind, c.label])).toEqual([
+    ["console", "Console error"],
+    ["element", 'button "Save"'],
+  ]);
+  const task = context.map((c) => c.text).join("\n\n");
   expect(task).toContain(
     "Console messages from http://localhost:5173/settings:\n```text\n[error] boom from the page",
   );
@@ -178,6 +182,8 @@ test("pick an element and a console error, then send them with the prompt", asyn
   expect(task).toContain(
     '```html\n<button type="submit" class="btn primary">Save</button>\n```',
   );
+  // The conversation shows the message with its context.
+  await expect(page.getByText(/Context from the app preview/)).toBeVisible();
 });
 
 test("the address bar follows navigation and refuses other computers", async ({

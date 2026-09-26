@@ -25,7 +25,9 @@ Linux only (the engine reads `/proc` to find servers).
    errors and warnings, uncaught errors, unhandled promise rejections,
    failed resource loads). **Attach** adds one; **Attach all** adds them all
    as one chip.
-5. Write your message and send. The chips go out after your text:
+5. Write your message and send. The chips go with it (the `context` field
+   of `POST /api/jobs`, beside @-mentions) and the engine adds them after
+   your text, for ShadowCode's own models and subscription CLIs alike:
 
 ````text
 Make the save button green
@@ -45,8 +47,9 @@ Element on http://localhost:5173/settings (“Settings · Demo”):
 ```
 ````
 
-Chips belong to the project they were picked in: opening another project
-drops them. If sending fails or you cancel a consent prompt, they come back.
+Like @-mentions, chips belong to the draft of one conversation: opening
+another conversation or project drops them. If sending fails or you cancel a
+consent prompt, they come back.
 
 Only plain `http://` servers on this computer open (`localhost`,
 `*.localhost`, `127.x.x.x`, `[::1]`; `0.0.0.0` reads as `localhost`). HTTPS dev

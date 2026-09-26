@@ -17,6 +17,18 @@ export const writeStore = (key: string, value: string | null) => {
   }
 };
 
+/** Pinned conversations (sidebar order, Alt+↑/↓). */
+export const readPins = (): string[] => {
+  try {
+    const value = JSON.parse(readStore("shadow:pins") || "[]");
+    return Array.isArray(value) ? value.map(String) : [];
+  } catch {
+    return [];
+  }
+};
+export const writePins = (pins: string[]) =>
+  writeStore("shadow:pins", JSON.stringify(pins));
+
 export const draftKey = (id: string, workspace: string) =>
   `shadow:draft:${id || workspace}`;
 export const targetKey = (workspace: string) => `shadow:model:${workspace}`;

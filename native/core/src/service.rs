@@ -53,6 +53,7 @@ mod call;
 mod code_intel;
 mod commands;
 mod compare;
+mod composer;
 mod extensions;
 mod feed;
 mod forge;
@@ -65,11 +66,13 @@ mod memory;
 mod model_catalog;
 #[cfg(target_os = "linux")]
 mod preview;
+mod review;
 mod sandbox;
 mod sessions;
 mod settings;
 mod terminals;
 mod workspace;
+mod worktree_tasks;
 mod worktrees;
 use call::{Call, Flag, Loose, Text};
 pub use git::parse_hunks;
@@ -204,13 +207,16 @@ impl Service {
         if expected.is_some_and(|generation| generation != selection.generation) {
             return Ok(());
         }
-        // A Compare lane's worktree is temporary: it is selected while its
-        // conversation is open but never becomes a project or the relaunch
-        // folder, which would go stale once the comparison is kept.
+        // A Compare lane's or worktree task's worktree is temporary: it is
+        // selected while its conversation is open but never becomes a
+        // project or the relaunch folder, which would go stale once the
+        // comparison is kept or the task applied.
         let lane = match &session {
-            Some(id) => crate::compare::session_tags(&self.engine.store(), id)?
-                .0
-                .is_some(),
+            Some(id) => {
+                let store = self.engine.store();
+                crate::compare::session_tags(&store, id)?.0.is_some()
+                    || crate::worktree_tasks::session_task(&store, id)?.is_some()
+            }
             None => false,
         };
         if !lane {
@@ -246,12 +252,14 @@ impl Service {
             "compare" | "compares" => self.compare(&call).await,
             "agents" | "subagents" => self.blocking(&call, Self::agent_routes).await,
             "worktrees" | "parallel" => self.worktree_routes(&call).await,
+            "worktree-tasks" => self.worktree_task_routes(&call).await,
             "sandbox" => self.sandbox_routes(&call).await,
             "sessions" | "projects" | "events" | "resolve" => {
                 self.blocking(&call, Self::session_routes).await
             }
             "jobs" | "run" | "approvals" | "checkpoints" => self.job_routes(&call).await,
             "goals" => self.goal_routes(&call).await,
+            "review" => self.review_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "terminals" => self.terminal_routes(&call).await,
             "git" => self.forge_routes(&call).await,
