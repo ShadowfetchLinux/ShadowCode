@@ -343,6 +343,49 @@ fn run() -> Result<()> {
                                     }
                                 }
                             }
+                            // Automations run unattended: when one asks for it,
+                            // say that it finished (or is waiting for approval)
+                            // even while the window has focus.
+                            if matches!(
+                                event["type"].as_str(),
+                                Some("automation.finished" | "automation.waiting")
+                            ) && event["payload"]["notify"] == true
+                                && Config::load(&notification_paths, None)
+                                    .ok()
+                                    .is_some_and(|c| c.ui["notify"].as_bool().unwrap_or(true))
+                            {
+                                let payload = &event["payload"];
+                                let name = payload["name"].as_str().unwrap_or("Automation");
+                                let body = if event["type"] == "automation.waiting" {
+                                    format!(
+                                        "Waiting for your approval: {}",
+                                        payload["approval"].as_str().unwrap_or("")
+                                    )
+                                } else {
+                                    match payload["status"].as_str().unwrap_or("") {
+                                        "completed" => payload["summary"]
+                                            .as_str()
+                                            .filter(|s| !s.is_empty())
+                                            .unwrap_or("Finished")
+                                            .to_owned(),
+                                        "needs_approval" => {
+                                            "Stopped: it asked for approval".to_owned()
+                                        }
+                                        "timed_out" => "Stopped at its time limit".to_owned(),
+                                        "cancelled" => "Stopped".to_owned(),
+                                        _ => format!(
+                                            "Failed: {}",
+                                            payload["detail"].as_str().unwrap_or("")
+                                        ),
+                                    }
+                                };
+                                let _ = handle
+                                    .notification()
+                                    .builder()
+                                    .title(format!("ShadowCode · {name}"))
+                                    .body(body.chars().take(180).collect::<String>())
+                                    .show();
+                            }
                             if event["type"] == "agent.completed" {
                                 let enabled = Config::load(&notification_paths, None)
                                     .ok()

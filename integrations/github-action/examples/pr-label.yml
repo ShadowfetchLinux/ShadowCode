@@ -1,0 +1,48 @@
+# Add the "shadowcode-review" label to a pull request to get a read-only
+# review from ShadowCode as a comment. Copy to .github/workflows/.
+#
+# Safe by default:
+# - runs on `pull_request` (never `pull_request_target`), so a pull request
+#   from a fork gets no secrets and no write token; the job is skipped for
+#   forks instead of running their code with your key;
+# - only people with triage or write access can add labels;
+# - the review is read-only (`mode: ask`) and commands stop the task
+#   (`approval: cancel`);
+# - the checkout keeps no credentials, and the job may only read code and
+#   write the comment.
+name: ShadowCode (pull request review)
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  review:
+    if: >-
+      github.event.label.name == 'shadowcode-review' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write # comment on the pull request
+      issues: write # pull request comments use the issues API
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: Shadowfetchapps/ShadowCode/integrations/github-action@v0.32.0
+        with:
+          task: >-
+            Review the changes on this branch against
+            origin/${{ github.event.pull_request.base.ref }}. List bugs,
+            risky changes and missing tests, most important first, citing
+            files and lines. Do not change any files.
+          mode: ask
+          approval: cancel
+          output: comment
+          api-key: ${{ secrets.OPENROUTER_API_KEY }}

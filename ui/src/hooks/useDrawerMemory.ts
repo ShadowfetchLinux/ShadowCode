@@ -1,5 +1,6 @@
 import { useCallback, useState, type SetStateAction } from "react";
 import type { ToolsView } from "../components/ToolsTab";
+import type { IssueLink } from "../lib/issues";
 
 /** A pull request being written in the Git tab. */
 export type PrDraft = {
@@ -21,6 +22,8 @@ export type DrawerMemory = {
   commitMessage: string;
   prDraft: PrDraft;
   toolsView: ToolsView;
+  /** The issue the latest task was started from (Tools › Issues). */
+  issueTask: IssueLink | null;
 };
 export type DrawerMemoryUpdate = <K extends keyof DrawerMemory>(
   key: K,
@@ -34,6 +37,7 @@ export const emptyDrawerMemory = (): DrawerMemory => ({
   commitMessage: "",
   prDraft: { title: "", body: "", base: "", draft: false },
   toolsView: "goals",
+  issueTask: null,
 });
 
 export function useDrawerMemory(workspace: string) {

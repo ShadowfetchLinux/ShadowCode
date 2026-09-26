@@ -74,6 +74,7 @@ export function Stage({
   refresh,
   setPermissionMode,
   toast,
+  issueOffer,
 }: {
   conversation: ReturnType<typeof useConversation>;
   compare: ReturnType<typeof useCompare>;
@@ -123,6 +124,11 @@ export function Stage({
   refresh: () => Promise<void>;
   setPermissionMode: (mode: "ask" | "allow_edits") => void;
   toast: (text: string, kind?: ToastKind) => void;
+  issueOffer?: {
+    number: number;
+    onOpen: () => void;
+    onDismiss: () => void;
+  } | null;
 }) {
   const { transcript, job, busy, connection, history } = conversation;
   const { switching, sessionId, modelChoice, runningChoice } = nav;
@@ -177,6 +183,7 @@ export function Stage({
         }
         switching={switching}
         onBackToCompare={() => void compare.back()}
+        issueOffer={issueOffer}
       />
       {view === "compare" && (
         <CompareView

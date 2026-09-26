@@ -64,6 +64,16 @@ export function paletteItems(a: PaletteActions): PaletteItem[] {
       run: () => a.panel("goals"),
     },
     {
+      id: "automations",
+      label: "Automations · run a prompt on a schedule",
+      run: () => a.panel("automations"),
+    },
+    {
+      id: "issues",
+      label: "Start from an issue",
+      run: () => a.panel("issues"),
+    },
+    {
       id: "background",
       label: "Background processes · dev servers and watchers",
       run: () => a.panel("background"),

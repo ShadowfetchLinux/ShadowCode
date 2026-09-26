@@ -1,0 +1,50 @@
+# Comment "/shadowcode <task>" on an issue to have ShadowCode work on it and
+# open a pull request with the result. Copy to .github/workflows/.
+#
+# Safe by default:
+# - only runs for the repository's owner, members and collaborators
+#   (author_association), so strangers cannot spend your API key;
+# - only on issues, not on pull request comments, so it never checks out
+#   code from a fork;
+# - the checkout keeps no credentials: the token is used only by the action's
+#   final step, after the agent has finished;
+# - the job's permissions are limited to what that step needs.
+name: ShadowCode (issue comment)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: shadowcode-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  shadowcode:
+    if: >-
+      github.event.issue.pull_request == null &&
+      startsWith(github.event.comment.body, '/shadowcode ') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # push the branch
+      pull-requests: write # open the pull request
+      issues: write # comment on the issue
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Pin to a release tag or, better, a full commit SHA.
+      - uses: Shadowfetchapps/ShadowCode/integrations/github-action@v0.32.0
+        with:
+          task: ${{ github.event.comment.body }}
+          api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          model: api:openrouter:qwen/qwen3-coder
+          output: pull-request
+          # `approve` lets the task run commands such as tests without
+          # asking; keep it to GitHub-hosted (disposable) runners.
+          approval: approve
