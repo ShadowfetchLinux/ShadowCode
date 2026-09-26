@@ -35,9 +35,10 @@ there is no window timer repeatedly waking an idle engine. The event reader
 still fetches committed rows and polls as a fallback. Each hint reaches the
 window as `shadowcode:events {session_id, type}`; pending approvals and the
 job list are read (`GET /api/feed`) only for hints that can change them, with
-a 15 s backstop read. Completion summaries use
+a 15 s backstop read. Approval, failure, plan-limit and completion hints use
 the same native notification path as an engine-owning desktop, respecting the
-profile's notification setting and suppressing notifications while focused.
+profile's notification settings and suppressing notifications while focused on
+that conversation.
 Hints never contain model-stream bodies or complete tool output. Their frame
 limit is 16 KiB, the local broadcast buffer holds 64 hints, and completion
 summaries contain at most 180 Unicode characters. A lagging receiver requests
@@ -195,8 +196,12 @@ Prove it with `node --test scripts/test-native-packaging-env.mjs`.
   HTTP/HTTPS links open through the OS; remote pages cannot replace the app view.
 - Default-profile launches focus the existing instance. Isolated profiles have
   separate webview storage and still enforce their own profile locks.
-- Window geometry is retained for the default profile. Completion notifications
-  follow the saved notification setting when the window is not focused.
+- Window geometry is retained for the default profile. Desktop notifications
+  cover approvals waiting (and a warning 2 minutes before a vendor approval is
+  denied), failed tasks, plan limits and finished tasks, each switchable in
+  Settings › Appearance with an optional sound. They appear while the window
+  is not focused or the task's conversation is not the one on screen; on
+  Linux, clicking one focuses the window and opens that conversation.
 - Close requests and termination signals cancel agent and manual terminal work,
   wait for cleanup, and retain a visible error if shutdown needs attention.
 - Live events are wakeups for ordered SQLite replay. A periodic read recovers

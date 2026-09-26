@@ -32,6 +32,9 @@ values are `null`, never invented.
   featured: boolean,
   vision: boolean,        // images accepted by model AND runtime (protocol/mmproj)
   tools: boolean,         // false ⇒ "Chat only"
+  reasoning: boolean,     // the composer's reasoning-effort control applies
+                          // (Codex, Claude Code, OpenRouter models listing
+                          // `reasoning`, GGUF templates with a thinking switch)
   is_default: boolean,
   usage: UsageSnapshot,
   local?: LocalDetail      // present for local rows
@@ -409,6 +412,27 @@ imports: [{path, mmproj, name, source}], excluded, llama_binary, context_size }`
   configured default. Job records keep the exact id in `routing.model_id`;
   `routing` also carries `inference: "local"|"cloud"` and
   `route: "vendor_cli"|"local_llamacpp"|"native_http"`.
+- `POST /api/jobs` body also takes `effort: "low"|"medium"|"high"` (omitted
+  or `"default"`: the model's own setting; anything else is refused) and
+  `mentions: [{path, kind: "file"|"dir"}]` (at most 20, inside the project).
+  Effort maps to OpenRouter `reasoning.effort`, llama.cpp
+  `chat_template_kwargs.enable_thinking` (false for `low`) on templates with
+  the switch, Codex `-c model_reasoning_effort="…"` and Claude Code
+  `MAX_THINKING_TOKENS` (4 000 / 16 000 / 31 999); other runtimes ignore it.
+  Native models read each mentioned file's current text (64 KB each, 256 KB
+  in all) or folder listing with the prompt; the stored prompt and
+  `user.message` keep only the text (vendor CLIs resolve the `@path` in it).
+  `purpose` is `coder` (Code), `planner` (Plan) or `reviewer` (Ask); Plan and
+  Ask run read-only.
+- `GET /api/workspace/mentions?q=&limit=30` (limit ≤ 100) →
+  `{ items: [{path, kind: "file"|"dir"}], truncated }`: fuzzy matches (letters
+  in order; file names, word starts and runs rank higher), skipping
+  `.gitignore`d and hidden entries; an empty `q` lists the shallowest
+  entries. The listing is cached for 5 s per project.
+- `POST /api/sessions/{id}/fork {event_id, title?, before: true}` keeps only
+  the events before the task `event_id` belongs to (its prompt included):
+  Edit & resend forks there and sends the edited text. Before the first
+  event the fork is an empty conversation with `parent_id` set.
 - `POST /api/jobs` body gains `web: boolean` (web tools for this task) and
   `handoff_consent: boolean`. Consent is required when the target is a cloud
   route and (a) the previous turn ran on this computer, (b) the previous turn
@@ -433,7 +457,12 @@ imports: [{path, mmproj, name, source}], excluded, llama_binary, context_size }`
   `model.switched {provider, from, to, resumed}`,
   `usage.updated {vendor, usage}` (Codex pushes during a turn),
   `limit.reached {vendor, usage, detail, job_id}` (job stops; user picks another model),
-  `checkpoint.restored {task_id, paths}`,
+  `checkpoint.restored {task_id, paths, undo_id?}` (the transcript shows a
+  *Rewound to here · N files restored* divider above the task's prompt),
+  `checkpoint.rewind_undone {task_id, paths, undo_id}`,
+  `review.undone {task_id, path, hunk, whole}`,
+  `approval.granted {tool, call_id|job_id, grant}` (allowed without a prompt
+  by an earlier "Allow for this task"),
 - `GET /api/sessions/{id}.execution_target` may already carry the workspace
   default for a conversation that has none of its own; the UI otherwise falls
   back to the last target chosen in that project (local cache) and never to
@@ -544,7 +573,6 @@ Usage = {
   get the complete native tool descriptions; smaller ones get descriptions cut
   to 64 bytes.
 
-||||||| f942214
 
 ## Subagents and agent definitions
 
@@ -583,7 +611,9 @@ The window no longer polls approvals and jobs. It reads one feed when the
 engine says something changed, plus a 15 s backstop read.
 
 - `GET /api/feed?session_id=&limit=100` →
-  `{ approvals: Approval[], jobs: JobSummary[], events: string[] }`.
+  `{ approvals: Approval[], jobs: JobSummary[], events: string[], waiting: string[] }`.
+  `waiting` lists every conversation with a pending approval, whatever
+  `session_id` is (sidebar "needs approval" badges).
   `approvals` are the pending approvals of that conversation (all
   conversations without `session_id`), as `GET /api/approvals`; `jobs` are
   the same rows as `GET /api/jobs?view=summary&limit=100`; `events` lists
@@ -608,6 +638,58 @@ engine says something changed, plus a 15 s backstop read.
   folder itself are rejected. Task summaries use it for all changed files in
   one request instead of one `GET /api/workspace/diff` per file.
 
+### Approval answers, previews and task grants
+
+- `Approval` records (feed, `GET /api/approvals`, `approval.requested`) add
+  `preview`, `grant` and `note`:
+  - `preview`: `{kind: "files", files: [{path, status: "added"|"modified"|"deleted",
+    diff, added, removed, truncated, binary}]}` — `diff` is a unified diff body
+    against the file as it is now (at most 2 000 lines per file, 256 KB per
+    prompt; later files keep their counts with `truncated`); or
+    `{kind: "command", command, cwd}`, `{kind: "move", from, to}`,
+    `{kind: "folder", path}`; `null` when nothing can be shown. Vendor
+    prompts carry previews where the protocol describes the change (Claude
+    `Write`/`Edit`/`MultiEdit`, ACP `diff` content, Codex `applyPatchApproval`
+    file changes; commands with their `cwd`).
+  - `grant`: what "Allow for this task" covers ("file edits", "`cargo test`
+    commands", "`server / tool` calls"), empty when the action is allowed
+    once only (chained, redirected, privileged, deleting or history-rewriting
+    commands; extra sandbox permissions).
+  - `note`: a deny note reaches the agent (native tools and Claude Code).
+- `POST /api/approvals/{id} {decision, session_id?, scope?: "once"|"task", note?}`.
+  `scope: "task"` with `approve` keeps a grant until the task ends: later
+  requests of the same task with the same scope (tool kind, or the same
+  program and subcommand for commands) are allowed without a prompt and
+  recorded as `approval.granted`. A scope the prompt does not offer is
+  refused. For Codex the first grant answers `acceptForSession` /
+  `approved_for_session`; other vendors receive single allows. `note`
+  (with `deny`, at most 2 000 bytes) becomes the tool error the model reads
+  ("The user denied this action and said: …") or Claude's denial message;
+  `approval.resolved` carries `scope` and `note`.
+
+### Per-task review and rewinds
+
+- `GET /api/review/tasks/{task_id}` → `{task_id, session_id, workspace, busy,
+  files: [{path, status: "added"|"modified"|"deleted"|"unchanged"|"unavailable",
+  source: "checkpoint"|"git"|"none", added, removed, binary, error?}]}`: only
+  the files this task changed, each compared with the checkpoint taken before
+  the task's first write (`checkpoint`), or for paths a vendor CLI reported,
+  with the last commit (`git`). `busy`: a task is queued or running in the
+  project.
+- `GET /api/review/tasks/{task_id}/file?path=` → the row plus `hash` and
+  `hunks: [{id, header, old_start, old_len, new_start, new_len,
+  lines: [{kind: "add"|"del"|"ctx", text, eol?: false}]}]`.
+- `POST /api/review/tasks/{task_id}/undo {path, hunk?}` puts one hunk (by
+  `id`), or without `hunk` the whole file, back as it was before the task,
+  and answers the file's review. Refused while a task runs in the project,
+  outside the open project, and when the file changed since the hunk was
+  computed. The conversation's message tape gets a process note.
+- `POST /api/checkpoints/tasks/{task_id}/restore` → `{ok, restored, undo_id}`:
+  before writing, the files are recorded as they are (checkpoint rows of
+  task `rewind:<undo_id>`, `native_meta` `rewind_undo:<undo_id>`).
+  `POST /api/checkpoints/rewinds/{undo_id}/undo` → `{ok, restored, task_id}`
+  puts them back once (refused if they changed since the rewind); the task
+  can then be rewound again.
 ## Terminals
 
 The drawer's interactive terminals: the user's login shell on a
@@ -693,6 +775,88 @@ redacted.
   description}], summary: {bucket: count}, overall:
   "pass"|"fail"|"pending"|"none", url, checked_at}` from `gh pr checks
   --json`. GitLab answers `supported: false` with the pipelines URL.
+
+## Worktree tasks (run in a new worktree)
+
+A task can start as a new conversation in a fresh managed worktree of the
+project, so it runs while another task runs in the main checkout. The engine
+allows one active task per checkout (folder); a worktree is its own folder.
+
+- Start: `POST /api/run` (or `/api/jobs`) with `worktree: true` and the usual
+  `workspace`, `task`, `model`, `images`, `web`, `handoff_consent`
+  (`session_id` and `queue` are ignored). The engine captures HEAD plus the
+  project's uncommitted, non-ignored files as a base commit (as Compare does;
+  the project's index and files are not touched), creates a managed worktree
+  on branch `shadowcode/<id>`, trusts it, copies the composer's
+  `.shadow/attachments/…` files named in the task, creates the conversation
+  there and starts the job with the project's permission level as the
+  ceiling. The answer is the job plus `worktree_task: WorktreeTask`. If the
+  job cannot start (including a `needs_consent` answer) everything created is
+  removed. Refused when the project is not a Git repository root, has
+  unresolved merge conflicts or no first commit, or when the model is a local
+  GGUF model while another task runs on a different local model.
+- `WorktreeTask = {id, workspace (project), session_id, worktree, branch,
+  base {commit, head, included_uncommitted}, task, created_at, finished_at,
+  state, job_id, status, changed_files: FileStat[], changed_files_truncated,
+  applied_files: string[], conflicts: string[], conflict_detail,
+  kept_branch, notes: string[], removed}`. `state` is `running`, `done`,
+  `applied`, `branch` or `discarded`; `status` is the conversation's latest
+  job status (a follow-up turn moves `done` back to `running`).
+- `GET /api/worktree-tasks?workspace=` → `{workspace, tasks: WorktreeTask[]}`
+  (newest first, at most 30). `GET /api/worktree-tasks/{id}` refreshes one.
+- `POST /api/worktree-tasks/{id}/apply`: needs no turn running in it and no
+  task in the project's main checkout. Commits the result on the worktree's
+  own branch, then `git apply --check` of `base..result` against the
+  project; on refusal nothing is written and the record comes back with
+  `state: "done"` and `conflicts` (the files Git named; `conflict_detail` has
+  Git's words). Otherwise the result is applied to the working tree (never
+  the index, never a commit), `applied_files` lists it and `state` is
+  `applied`.
+- `POST /api/worktree-tasks/{id}/keep-branch`: commits the result on
+  `shadowcode/<id>` and keeps that branch (`kept_branch`); `state: "branch"`.
+- `POST /api/worktree-tasks/{id}/discard`: stops a running turn (waits up to
+  60 s), then `state: "discarded"`. Repeating it retries a failed cleanup.
+- Closing (apply, keep, discard) removes the worktree (and, except for keep,
+  its branch), stops trusting its folder, and moves the conversation back to
+  the project (`sessions.workspace`; vendor CLI session ids are forgotten), so
+  later turns run in the main checkout. When it was the open conversation the
+  selection follows. A `worktree_task.closed {id, state, applied_files,
+  branch}` event is recorded in the conversation.
+- Sessions: `GET /api/sessions` rows carry `worktree_task` (id) and
+  `worktree_source` (the project) while the worktree exists;
+  `?workspace=<project>` also lists them. `GET /api/sessions/{id}` has
+  `worktree: WorktreeTask | null`. `DELETE /api/sessions/{id}` is refused
+  while the conversation still has its worktree. A worktree folder is never
+  added to `/api/projects` or remembered as the relaunch folder.
+- Storage: `native_meta` `worktree_task:<id>` (record) and
+  `worktree_task_index:<project>` (ids); `session_meta` `worktree_task` and
+  `worktree_source`.
+
+## Desktop notifications
+
+The desktop shell shows a notification (only while the window is unfocused,
+or for a conversation other than the one on screen) for:
+`approval.requested` ("Waiting for you: <command or tool>"),
+`approval.expiring` (below), `agent.completed` with `success: false` and no
+plan limit ("task failed"), `limit.fallback` (plan limit reached, and whether
+the task continued on a local model) and a successful `agent.completed`.
+Cancelled tasks never notify. Settings (`ui` group, all default on except
+sound): `notify` (all), `notify_approval`, `notify_failed`, `notify_limit`,
+`notify_finished`, `notify_sound`. The selection lives in
+`shadowcode_core::notify` (`select`, `should_show`, `hint`).
+
+- Engine broadcast `approval.expiring {approval_id, session_id, tool,
+  command, expires_at, seconds_left}` (with `session_id`, `task_id`): sent
+  once when 80% of a pending approval's time has passed (8 of 10 minutes for
+  vendor approvals; timeouts under a minute get none). Transient: never
+  stored. The command is redacted.
+- Tauri command `set_visible_session {sessionId}`: the conversation the window
+  shows. Clicking a notification (Linux: the notification's default action)
+  focuses the window and emits `shadowcode:open-session {session_id}`, which
+  opens that conversation.
+- Attached windows receive a bounded copy of these events' payloads
+  (`notify::hint`: summary, success, cancelled, whether a limit was reached,
+  command, tool, limit continuation), never transcript content.
 
 ## Config
 

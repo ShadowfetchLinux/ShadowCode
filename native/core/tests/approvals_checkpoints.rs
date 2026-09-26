@@ -22,6 +22,9 @@ fn approval() -> Approval {
         pending: false,
         created_at: 0.0,
         expires_at: 0.0,
+        preview: serde_json::Value::Null,
+        grant: String::new(),
+        note: true,
     }
 }
 

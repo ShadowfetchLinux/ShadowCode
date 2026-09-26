@@ -55,6 +55,10 @@ pub struct Model {
     pub completion_price: Option<f64>,
     pub tools: bool,
     pub vision: bool,
+    /// Lists `reasoning` among its supported parameters (the composer's
+    /// effort control applies). Older cached lists read as false.
+    #[serde(default)]
+    pub reasoning: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -118,6 +122,7 @@ pub fn parse_models(value: &Value) -> Vec<Model> {
                 completion_price: price(&row["pricing"]["completion"]),
                 tools: has(&row["supported_parameters"], "tools"),
                 vision: has(&arch["input_modalities"], "image"),
+                reasoning: has(&row["supported_parameters"], "reasoning"),
             })
         })
         .collect()
@@ -366,6 +371,7 @@ pub fn picker_rows(catalog: Option<&Catalog>, key_set: bool, offline: bool) -> V
                 "featured": false,
                 "vision": model.vision,
                 "tools": model.tools,
+                "reasoning": model.reasoning,
                 "is_default": false,
                 "usage": usage(model),
             })

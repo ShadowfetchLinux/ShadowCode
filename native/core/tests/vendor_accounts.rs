@@ -346,6 +346,7 @@ async fn run_fake(
                 model: "default".into(),
                 read_only,
                 resume: None,
+                effort: None,
                 mcp_servers: Vec::new(),
             },
             config: &config,

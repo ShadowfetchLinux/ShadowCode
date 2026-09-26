@@ -81,6 +81,18 @@ export function Toasts({
           aria-live={t.kind === "err" ? "assertive" : "polite"}
         >
           <span>{t.text}</span>
+          {t.action && (
+            <button
+              type="button"
+              className="mini toast-action"
+              onClick={() => {
+                onDismiss(t.id);
+                t.action?.run();
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
           <button
             type="button"
             className="icon-btn"

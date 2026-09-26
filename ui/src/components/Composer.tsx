@@ -8,17 +8,27 @@ import {
 import {
   ArrowUp,
   FileCode2,
+  Folder,
   ListPlus,
   LoaderCircle,
   Paperclip,
   Square,
   X,
 } from "lucide-react";
+import { useAgentOptions } from "./AgentMentions";
 import {
-  AgentMentionMenu,
-  mentionQuery,
-  useAgentOptions,
-} from "./AgentMentions";
+  MentionMenu,
+  useFileMentions,
+  type MentionOption,
+} from "./MentionMenu";
+import {
+  insertMention,
+  mentionAt,
+  mentionToken,
+  removeMentionText,
+  type Mention,
+} from "../lib/mentions";
+import type { PromptHistory } from "../hooks/useComposerExtras";
 import {
   IMAGE_ACCEPT,
   TEXT_ACCEPT,
@@ -56,9 +66,14 @@ export function Composer({
   sendBlocked,
   stopDisabled,
   onSubmit,
+  onSubmitWorktree,
   onStop,
   compare,
   voice,
+  mentions = [],
+  onMention,
+  onRemoveMention,
+  history,
 }: {
   task: string;
   onTask: (value: string) => void;
@@ -82,11 +97,20 @@ export function Composer({
   sendBlocked: string | null;
   stopDisabled: boolean;
   onSubmit: () => void;
+  /** Ctrl+Shift+Enter: run in a new worktree (when possible now). */
+  onSubmitWorktree?: () => void;
   onStop: () => void;
   /** The Compare button, next to Send. */
   compare?: ReactNode;
   /** The dictation mic button, next to Attach. */
   voice?: ReactNode;
+  /** Files and folders picked from the @ menu (chips). Without
+   * `onMention` the @ menu offers subagents only. */
+  mentions?: Mention[];
+  onMention?: (mention: Mention) => void;
+  onRemoveMention?: (path: string) => void;
+  /** ↑/↓ recall of earlier prompts while the field is empty. */
+  history?: PromptHistory;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -95,20 +119,62 @@ export function Composer({
   const hits = slashOpen
     ? commands.filter((c) => c.name.startsWith(task.slice(1))).slice(0, 8)
     : [];
-  // `@name` at the start of a message names a subagent.
-  const mention = mentionQuery(task);
+  // The @ menu: `@name` at the start of a message names a subagent;
+  // `@path` anywhere attaches a project file or folder.
+  const [caret, setCaret] = useState(task.length);
   const [mentionIndex, setMentionIndex] = useState(0);
-  const [mentionClosed, setMentionClosed] = useState(false);
-  const agents = useAgentOptions(mention !== null);
-  const agentHits =
-    mention === null || mentionClosed
-      ? []
-      : agents.filter((a) => a.name.startsWith(mention)).slice(0, 8);
-  const pickAgent = (name: string) => {
-    onTask(`@${name} `);
-    setMentionClosed(true);
-    promptRef.current?.focus();
+  const [closedAt, setClosedAt] = useState<number | null>(null);
+  const token = mentionAt(task, caret);
+  const menuToken = token && token.start !== closedAt ? token : null;
+  const agentQuery =
+    menuToken && menuToken.start === 0 && /^[\w-]*$/.test(menuToken.query)
+      ? menuToken.query
+      : null;
+  const agents = useAgentOptions(agentQuery !== null);
+  const files = useFileMentions(
+    menuToken && onMention ? menuToken.query : null,
+  );
+  const options: MentionOption[] = menuToken
+    ? [
+        ...agents
+          .filter((a) => agentQuery !== null && a.name.startsWith(agentQuery))
+          .slice(0, 6)
+          .map((agent) => ({ kind: "agent" as const, agent })),
+        ...files.items
+          .filter((f) => !mentions.some((m) => m.path === f.path))
+          .map((f) => ({ kind: f.kind, path: f.path })),
+      ]
+    : [];
+  const menuOpen = Boolean(
+    menuToken && (options.length || (onMention && menuToken.query)),
+  );
+  const activeMention = Math.min(mentionIndex, Math.max(0, options.length - 1));
+  const moveCaret = (at: number) => {
+    setCaret(at);
+    requestAnimationFrame(() => {
+      const el = promptRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(at, at);
+      }
+    });
   };
+  const pickMention = (option: MentionOption) => {
+    if (!menuToken) return;
+    const value =
+      option.kind === "agent"
+        ? `@${option.agent.name}`
+        : mentionToken({ path: option.path, kind: option.kind });
+    const next = insertMention(task, menuToken, value);
+    onTask(next.text);
+    if (option.kind !== "agent")
+      onMention?.({ path: option.path, kind: option.kind });
+    setClosedAt(menuToken.start);
+    setMentionIndex(0);
+    moveCaret(next.caret);
+  };
+  const trackCaret = (el: HTMLTextAreaElement) =>
+    setCaret(el.selectionStart ?? el.value.length);
   useEffect(() => {
     const el = promptRef.current;
     if (el) {
@@ -136,11 +202,12 @@ export function Composer({
           onAttach(Array.from(e.dataTransfer.files));
       }}
     >
-      {agentHits.length > 0 && (
-        <AgentMentionMenu
-          hits={agentHits}
-          index={Math.min(mentionIndex, agentHits.length - 1)}
-          onPick={(agent) => pickAgent(agent.name)}
+      {menuOpen && (
+        <MentionMenu
+          options={options}
+          index={activeMention}
+          loading={files.loading}
+          onPick={pickMention}
         />
       )}
       {slashOpen && (
@@ -197,8 +264,38 @@ export function Composer({
             ))}
           </ul>
         )}
+        {mentions.length > 0 && (
+          <ul className="chips" aria-label="Mentioned files and folders">
+            {mentions.map((m) => (
+              <li key={m.path} className="path-chip mention-chip">
+                {m.kind === "dir" ? (
+                  <Folder size={12} aria-hidden="true" />
+                ) : (
+                  <FileCode2 size={12} aria-hidden="true" />
+                )}
+                <span title={m.path}>{mentionToken(m).slice(1)}</span>
+                <button
+                  type="button"
+                  className="chip-remove"
+                  aria-label={`Remove ${m.path}`}
+                  onClick={() => {
+                    onTask(removeMentionText(task, m));
+                    onRemoveMention?.(m.path);
+                    promptRef.current?.focus();
+                  }}
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={promptRef}
+          aria-autocomplete={onMention ? "list" : undefined}
+          aria-activedescendant={
+            menuOpen && options.length ? `mention-${activeMention}` : undefined
+          }
           aria-label="Message ShadowCode"
           aria-describedby={sendBlocked ? "composer-blocked" : undefined}
           value={task}
@@ -206,11 +303,14 @@ export function Composer({
           placeholder={placeholder}
           onChange={(e) => {
             onTask(e.target.value);
+            trackCaret(e.target);
+            history?.reset();
             setSlashIndex(0);
             setMentionIndex(0);
-            setMentionClosed(false);
+            setClosedAt(null);
             setSlashOpen(/^\/\S*$/.test(e.target.value));
           }}
+          onSelect={(e) => trackCaret(e.currentTarget)}
           onPaste={(e) => {
             const images = pastedImages(e.clipboardData);
             if (images.length) {
@@ -219,23 +319,26 @@ export function Composer({
             }
           }}
           onKeyDown={(e) => {
-            if (agentHits.length) {
-              const count = agentHits.length;
-              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            if (menuOpen) {
+              const count = options.length;
+              if ((e.key === "ArrowDown" || e.key === "ArrowUp") && count) {
                 e.preventDefault();
                 setMentionIndex(
-                  (i) => (i + (e.key === "ArrowDown" ? 1 : count - 1)) % count,
+                  (i) =>
+                    (Math.min(i, count - 1) +
+                      (e.key === "ArrowDown" ? 1 : count - 1)) %
+                    count,
                 );
                 return;
               }
-              if (e.key === "Tab") {
+              if ((e.key === "Tab" || e.key === "Enter") && count) {
                 e.preventDefault();
-                pickAgent(agentHits[Math.min(mentionIndex, count - 1)].name);
+                pickMention(options[activeMention]);
                 return;
               }
               if (e.key === "Escape") {
                 e.stopPropagation();
-                setMentionClosed(true);
+                if (menuToken) setClosedAt(menuToken.start);
                 return;
               }
             }
@@ -256,9 +359,51 @@ export function Composer({
                 return;
               }
             }
+            if (
+              history &&
+              !slashOpen &&
+              !e.shiftKey &&
+              !e.altKey &&
+              !e.metaKey &&
+              !e.ctrlKey &&
+              (e.key === "ArrowUp" || e.key === "ArrowDown")
+            ) {
+              const el = e.currentTarget;
+              const firstLine = !el.value
+                .slice(0, el.selectionStart ?? 0)
+                .includes("\n");
+              const lastLine = !el.value
+                .slice(el.selectionEnd ?? el.value.length)
+                .includes("\n");
+              const text =
+                e.key === "ArrowUp" &&
+                firstLine &&
+                (!task || history.browsing())
+                  ? history.older(task)
+                  : e.key === "ArrowDown" && lastLine && history.browsing()
+                    ? history.newer()
+                    : null;
+              if (text !== null) {
+                e.preventDefault();
+                onTask(text);
+                moveCaret(text.length);
+                return;
+              }
+            }
             if (e.key === "Escape" && slashOpen) {
               e.stopPropagation();
               setSlashOpen(false);
+              return;
+            }
+            if (
+              e.key === "Enter" &&
+              e.shiftKey &&
+              (e.ctrlKey || e.metaKey) &&
+              onSubmitWorktree &&
+              !e.nativeEvent.isComposing
+            ) {
+              e.preventDefault();
+              onSubmitWorktree();
               return;
             }
             if (
