@@ -171,6 +171,9 @@ export function PreviewPanel({
           break;
         }
         case "picked": {
+          // Only a pick the user asked for: page scripts share the picker's
+          // origin and could post look-alike messages at any time.
+          if (!pickingRef.current) break;
           const el = message.element;
           const label = elementLabel(el);
           pendingAttachments.add({

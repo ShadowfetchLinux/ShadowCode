@@ -381,7 +381,9 @@ throwaway profile has no `secrets.env`.
   [Security](SECURITY.md) · [Subscriptions](docs/SUBSCRIPTIONS.md) ·
   [Local models](docs/LOCAL_MODELS.md)
 - The drawer has your own terminals, a Git tab (branch, commit with a
-  suggested message, push, pull requests with CI status) and **Tools** (goals,
+  suggested message, push, pull requests with CI status), a **Preview** of
+  your dev server where you can pick an element (or a console error) to put
+  in your next message ([app preview](docs/PREVIEW.md)), and **Tools** (goals,
   background processes, worktrees). Integrations (skills, MCP, plugins, hooks,
   Guardian, vendor tools, health) are under **Settings › Advanced**. The same executable
   also has a CLI (`shadowcode run`, `shadowcode tui`, `shadowcode mcp serve`):
