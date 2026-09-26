@@ -858,6 +858,78 @@ sound): `notify` (all), `notify_approval`, `notify_failed`, `notify_limit`,
   (`notify::hint`: summary, success, cancelled, whether a limit was reached,
   command, tool, limit continuation), never transcript content.
 
+## Remote access
+
+Settings › Remote access and `shadowcode remote`. These routes answer the
+desktop window and local CLI clients only; remote clients get 403. See
+[REMOTE.md](REMOTE.md).
+
+- `GET /api/remote` → `{enabled, running, address, port, bound, url,
+  public_url, exposed, allow_terminals, error, addresses: [{address,
+  interface, kind: "loopback"|"tailscale"|"lan"}], devices: [{id, name,
+  created_at, last_seen}], ntfy: {server, topic, details, events: {approval,
+  finished, failed, limit}, token_saved, configured, error}}`. Never includes
+  tokens or their digests. `bound` is the listening `ip:port` while running;
+  `exposed` means the saved address is not loopback.
+- `PUT /api/remote {enabled?, address?, port?, public_url?,
+  allow_terminals?}` → the status. `address` must be `0.0.0.0`, `::`, a
+  loopback address or one of this computer's addresses; `port` 1024–65535;
+  `public_url` an `http(s)://` address without credentials, query or
+  fragment ("" clears it). Turning it on (or changing the address) starts or
+  restarts the server; `enabled: false` stops it. A busy port is reported in
+  `error` (the switch is still saved).
+- `POST /api/remote/pair {host?}` → `{link, base, expires_in, qr: {size,
+  rows: ["0101…"]}}`. The link is `<base>/#pair=<code>`; the code works once
+  within `expires_in` seconds (600). `host` picks one of `addresses` for the
+  link when listening on every address; otherwise the public address, then
+  the bound one. Fails unless the server is running.
+- `POST /api/remote/devices/revoke {id}` or `{all: true}` → the status. `all`
+  also cancels unused pairing links.
+- `PUT /api/remote/ntfy {server?, topic?, details?, events?: {approval?,
+  finished?, failed?, limit?}, token?}` → the status. Empty `server` or
+  `topic` turns phone notifications off; `token` is stored in the secret
+  store as `SHADOWCODE_NTFY_TOKEN` ("" removes it).
+- `POST /api/remote/ntfy/test` → `{ok: true}` after the server accepted a test
+  message.
+
+Served by the remote access server itself (not `Service` routes):
+
+- `POST /_remote/pair {code, name?}` → `{token, device: {id, name}}`. JSON
+  only, same-origin only. 401 for an unknown, used or expired code.
+- `GET /_remote/session` (token) → `{device: {id, name}, allow_terminals,
+  version}`.
+- `GET /_remote/stream` (token) → `text/event-stream`. Starts with `retry:
+  3000` and an untyped `shadowcode:events {}` wake-up (read everything
+  again), then `event: shadowcode:events` `data: {session_id, type}` for each
+  engine broadcast and, only when terminals are allowed, `event:
+  shadowcode:terminal` `data: {type, terminal_id}`. Never event payloads. A
+  lagged stream sends an untyped wake-up; `: keepalive` comments every 20 s.
+- `/api/*` (token): `Service::dispatch` for `GET`, `POST`, `PUT`, `PATCH`,
+  `DELETE`. Requests carry `Authorization: Bearer <token>` and optionally
+  `X-Shadow-View: <8–64 of [A-Za-z0-9_-]>` (one navigation state per browser
+  tab). Bodies must be `application/json` (8 MB at most). Answers are 200
+  with the result, 400 `{error}` for an application error, 401 (unknown
+  token, with `WWW-Authenticate`), 403 `{error}` (cross-origin, or refused by
+  the policy below), 413, 415, 429 (`Retry-After`, after 8 failures in 5
+  minutes from one address).
+
+Remote policy (`remote::policy`): `/api/remote*`, `/api/views`,
+`/api/runtime`, `/api/owned-jobs` are refused; `/api/terminals*` and
+`POST /api/workspace/exec` need `allow_terminals`; any request whose
+`?path=` names a secret file (`redaction::is_secret_path`) is refused; a body
+containing `[redacted secret]` (or the hidden-file marker) is refused;
+`workspace` fields and `/api/projects*` `path` inside the profile's config,
+data or state folder are refused. Responses have secret files' `content`,
+`diff`, `hunks`… blanked (and their sections dropped from unified diffs) and
+recognizable credentials replaced by `[redacted secret]`.
+
+Phone notifications use the desktop selection (`notify::select`) with the
+phone's own per-kind switches (`remote::ntfy::prefs`). The message is ntfy's
+JSON publish format posted to the server root: `{topic, title: "<notice
+title> · <project>", message, tags, priority, click?}`; `message` is a
+generic sentence unless `details` is on; `click` is
+`<public or running address>/#session=<id>`, which the web interface opens.
+
 ## Config
 
 `GET/PUT /api/config`:

@@ -431,10 +431,17 @@ fn remote_banner(status: &Value, address: std::net::SocketAddr) -> String {
             .map(str::to_owned)
             .unwrap_or_else(|| format!("http://{address}"))
     );
+    let tailnet = status["addresses"].as_array().is_some_and(|all| {
+        all.iter().any(|a| {
+            a["kind"] == "tailscale" && a["address"].as_str() == Some(&address.ip().to_string())
+        })
+    });
     if address.ip().is_loopback() {
         text.push_str(
             "\nOnly this computer can connect. For a phone, use `tailscale serve` (see docs/REMOTE.md) or choose another address with --remote-address.",
         );
+    } else if tailnet {
+        text.push_str("\nListening on your Tailscale address: devices on your tailnet can connect, encrypted by Tailscale.");
     } else {
         text.push_str(
             "\nWarning: plain HTTP is not encrypted. Anyone on this network can read the traffic; prefer Tailscale (docs/REMOTE.md).",
@@ -485,7 +492,12 @@ fn remote_status_text(status: &Value) -> String {
     for device in devices {
         text.push_str(&format!(
             "{}  {}\n",
-            device["id"].as_str().unwrap_or("").chars().take(8).collect::<String>(),
+            device["id"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(8)
+                .collect::<String>(),
             watch::plain(device["name"].as_str().unwrap_or(""))
         ));
     }
@@ -1222,4 +1234,63 @@ async fn execute(backend: &Backend, workspace: &Path, options: &Options) -> Resu
         }
     };
     Ok(Outcome::value(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serve_and_remote_arguments() {
+        let parsed = Options::try_parse_from([
+            "shadowcode",
+            "serve",
+            "--remote",
+            "--remote-address",
+            "100.64.0.2:7390",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            Some(Command::Serve { remote: true, remote_address: Some(address) })
+                if address.to_string() == "100.64.0.2:7390"
+        ));
+        // An address only makes sense with --remote.
+        assert!(Options::try_parse_from([
+            "shadowcode",
+            "serve",
+            "--remote-address",
+            "127.0.0.1:1"
+        ])
+        .is_err());
+        assert!(matches!(
+            Options::try_parse_from(["shadowcode", "remote", "revoke", "--all"])
+                .unwrap()
+                .command,
+            Some(Command::Remote {
+                action: Some(Remote::Revoke {
+                    id: None,
+                    all: true
+                })
+            })
+        ));
+        assert!(Options::try_parse_from(["shadowcode", "remote", "revoke"]).is_err());
+    }
+
+    #[test]
+    fn remote_text_explains_exposure() {
+        let status = json!({"url": "http://192.168.1.5:7390", "addresses": [
+            {"address": "100.64.0.2", "kind": "tailscale"},
+        ]});
+        let banner = |address: &str| remote_banner(&status, address.parse().unwrap());
+        assert!(banner("192.168.1.5:7390").contains("not encrypted"));
+        assert!(banner("100.64.0.2:7390").contains("encrypted by Tailscale"));
+        assert!(banner("127.0.0.1:7390").contains("Only this computer"));
+        let text = remote_status_text(&json!({"enabled": false, "devices": []}));
+        assert!(text.contains("Remote access is off") && text.contains("No paired devices"));
+        let pairing =
+            pairing_text(&json!({"link": "http://127.0.0.1:7390/#pair=abc", "expires_in": 600}))
+                .unwrap();
+        assert!(pairing.contains("#pair=abc") && pairing.contains("10 minutes"));
+    }
 }

@@ -271,7 +271,7 @@ async fn handle(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incomin
                     "version": crate::VERSION,
                 }),
             ),
-            Err(reply) => reply,
+            Err(reply) => *reply,
         },
         (Method::GET, "/_remote/stream") => stream(shared, peer, request),
         (_, p) if p.starts_with("/_remote") => error(StatusCode::NOT_FOUND, "Not found"),
@@ -328,7 +328,8 @@ fn client_ip(peer: SocketAddr) -> std::net::IpAddr {
     peer.ip()
 }
 
-fn authorize(shared: &Shared, peer: SocketAddr, headers: &HeaderMap) -> Result<Device, Reply> {
+/// The paired device, or the (boxed) refusal to send.
+fn authorize(shared: &Shared, peer: SocketAddr, headers: &HeaderMap) -> Result<Device, Box<Reply>> {
     let ip = client_ip(peer);
     if let Some(wait) = shared.manager.limiter().blocked(ip) {
         let mut reply = error(
@@ -338,7 +339,7 @@ fn authorize(shared: &Shared, peer: SocketAddr, headers: &HeaderMap) -> Result<D
         if let Ok(value) = HeaderValue::from_str(&wait.as_secs().max(1).to_string()) {
             reply.headers_mut().insert(header::RETRY_AFTER, value);
         }
-        return Err(reply);
+        return Err(Box::new(reply));
     }
     let values: Vec<_> = headers.get_all(header::AUTHORIZATION).iter().collect();
     let device = match values.as_slice() {
@@ -356,24 +357,24 @@ fn authorize(shared: &Shared, peer: SocketAddr, headers: &HeaderMap) -> Result<D
         }
         None => {
             shared.manager.limiter().fail(ip);
-            Err(error(
+            Err(Box::new(error(
                 StatusCode::UNAUTHORIZED,
                 "This device is not paired. Open a new pairing link from the computer running ShadowCode.",
-            ))
+            )))
         }
     }
 }
 
-async fn read_body(body: Incoming, limit: usize) -> Result<Bytes, Reply> {
+async fn read_body(body: Incoming, limit: usize) -> Result<Bytes, Box<Reply>> {
     match tokio::time::timeout(Duration::from_secs(30), Limited::new(body, limit).collect()).await {
-        Err(_) => Err(error(
+        Err(_) => Err(Box::new(error(
             StatusCode::REQUEST_TIMEOUT,
             "The request body took too long",
-        )),
-        Ok(Err(_)) => Err(error(
+        ))),
+        Ok(Err(_)) => Err(Box::new(error(
             StatusCode::PAYLOAD_TOO_LARGE,
             "The request is too large",
-        )),
+        ))),
         Ok(Ok(collected)) => Ok(collected.to_bytes()),
     }
 }
@@ -408,7 +409,7 @@ async fn pair(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>
     }
     let body = match read_body(request.into_body(), PAIR_BODY_LIMIT).await {
         Ok(body) => body,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let code = value["code"].as_str().unwrap_or("");
@@ -444,7 +445,7 @@ async fn api(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>)
     }
     let device = match authorize(shared, peer, request.headers()) {
         Ok(device) => device,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     let method = request.method().as_str().to_owned();
     if !matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE") {
@@ -466,7 +467,7 @@ async fn api(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>)
     let typed = json_content(request.headers());
     let bytes = match read_body(request.into_body(), API_BODY_LIMIT).await {
         Ok(bytes) => bytes,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     let body: Value = if !has_body || bytes.is_empty() {
         Value::Null
@@ -487,7 +488,7 @@ async fn api(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>)
         allow_terminals: shared.manager.allow_terminals(),
     };
     if let Err(policy::Refusal(message)) =
-        policy::check(&method, &path, &body, &access, shared.manager.paths())
+        policy::check(&path, &body, &access, shared.manager.paths())
     {
         return error(StatusCode::FORBIDDEN, message);
     }
@@ -582,7 +583,7 @@ fn stream(shared: &Arc<Shared>, peer: SocketAddr, request: Request<Incoming>) ->
     }
     let device = match authorize(shared, peer, request.headers()) {
         Ok(device) => device,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     let Ok(permit) = shared.streams.clone().try_acquire_owned() else {
         return error(

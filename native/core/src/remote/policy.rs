@@ -63,7 +63,9 @@ fn query_value(path: &str, key: &str) -> Option<String> {
 
 fn contains_placeholder(value: &Value) -> bool {
     match value {
-        Value::String(text) => text.contains(redaction::placeholder()),
+        Value::String(text) => {
+            text.contains(redaction::placeholder()) || text.contains(HIDDEN_FILE)
+        }
         Value::Array(items) => items.iter().any(contains_placeholder),
         Value::Object(map) => map.values().any(contains_placeholder),
         _ => false,
@@ -109,13 +111,7 @@ fn project_paths<'a>(parts: &[&str], body: &'a Value) -> Vec<&'a str> {
 }
 
 /// Decide one remote request. `path` includes its query string.
-pub fn check(
-    method: &str,
-    path: &str,
-    body: &Value,
-    access: &Access,
-    paths: &AppPaths,
-) -> Result<(), Refusal> {
+pub fn check(path: &str, body: &Value, access: &Access, paths: &AppPaths) -> Result<(), Refusal> {
     let parts = segments(path).ok_or(Refusal(INVALID_PATH))?;
     let family = parts.first().copied().unwrap_or("");
     match family {
@@ -126,10 +122,9 @@ pub fn check(
     if parts == ["workspace", "exec"] && !access.allow_terminals {
         return Err(Refusal(TERMINALS_OFF));
     }
-    if method == "GET"
-        && matches!(parts.as_slice(), ["workspace", "file" | "diff"])
-        && query_value(path, "path").is_some_and(|p| redaction::is_secret_path(&p))
-    {
+    // Any route that reads one file by `?path=` (workspace file and diff,
+    // a task's review of one file, …).
+    if query_value(path, "path").is_some_and(|p| redaction::is_secret_path(&p)) {
         return Err(Refusal(SECRET_FILE));
     }
     if contains_placeholder(body) {
@@ -144,8 +139,84 @@ pub fn check(
     Ok(())
 }
 
-/// Remove recognizable credentials from a response a remote client will see.
+/// Fields that carry a file's contents or changes next to its `path`.
+const CONTENT_FIELDS: &[&str] = &[
+    "content",
+    "diff",
+    "staged",
+    "patch",
+    "hunks",
+    "staged_hunks",
+    "lines",
+    "before",
+    "after",
+    "preview",
+    "text",
+];
+const HIDDEN_FILE: &str = "[secret file hidden over remote access]";
+
+/// Blank the contents of secret files (`.env`, keys…) wherever a response
+/// lists them by `path`, and drop their sections from unified diffs.
+fn hide_secret_files(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let secret = ["path", "file"]
+                .iter()
+                .filter_map(|key| map.get(*key).and_then(Value::as_str))
+                .any(redaction::is_secret_path);
+            for (key, field) in map.iter_mut() {
+                if secret && CONTENT_FIELDS.contains(&key.as_str()) {
+                    match field {
+                        Value::String(text) if !text.is_empty() => {
+                            *text = HIDDEN_FILE.to_owned();
+                        }
+                        Value::Array(items) => items.clear(),
+                        _ => {}
+                    }
+                } else {
+                    hide_secret_files(field);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(hide_secret_files),
+        Value::String(text) if text.contains("diff --git ") => {
+            if let Some(filtered) = filter_diff(text) {
+                *text = filtered;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A unified diff without the bodies of secret files, or `None` when it
+/// has none.
+fn filter_diff(text: &str) -> Option<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut hiding = false;
+    let mut changed = false;
+    for line in text.split_inclusive('\n') {
+        if let Some(header) = line.strip_prefix("diff --git ") {
+            let target = header.trim_end().rsplit(" b/").next().unwrap_or("");
+            hiding = redaction::is_secret_path(target);
+            out.push_str(line);
+            if hiding {
+                changed = true;
+                out.push_str(HIDDEN_FILE);
+                out.push('\n');
+            }
+            continue;
+        }
+        if !hiding {
+            out.push_str(line);
+        }
+    }
+    changed.then_some(out)
+}
+
+/// Remove secret files' contents and recognizable credentials from a
+/// response a remote client will see.
 pub fn redact_response(value: &mut Value) {
+    hide_secret_files(value);
     redaction::redact_known_secrets(value);
 }
 
@@ -169,21 +240,20 @@ mod tests {
         let on = Access {
             allow_terminals: true,
         };
-        for (method, path) in [
-            ("GET", "/api/terminals"),
-            ("POST", "/api/terminals"),
-            ("POST", "/api/terminals/abc/input"),
-            ("GET", "/api/terminals/abc/output?cursor=0"),
-            ("POST", "/api/workspace/exec"),
+        for path in [
+            "/api/terminals",
+            "/api/terminals/abc/input",
+            "/api/terminals/abc/output?cursor=0",
+            "/api/workspace/exec",
         ] {
             assert_eq!(
-                check(method, path, &Value::Null, &off, &paths),
+                check(path, &Value::Null, &off, &paths),
                 Err(Refusal(TERMINALS_OFF)),
                 "{path}"
             );
-            assert!(check(method, path, &Value::Null, &on, &paths).is_ok());
+            assert!(check(path, &Value::Null, &on, &paths).is_ok());
         }
-        assert!(check("GET", "/api/feed", &Value::Null, &off, &paths).is_ok());
+        assert!(check("/api/feed", &Value::Null, &off, &paths).is_ok());
     }
 
     #[test]
@@ -200,7 +270,7 @@ mod tests {
             "/api/owned-jobs",
         ] {
             assert_eq!(
-                check("POST", path, &Value::Null, &on, &paths),
+                check(path, &Value::Null, &on, &paths),
                 Err(Refusal(MANAGED_LOCALLY))
             );
         }
@@ -213,7 +283,7 @@ mod tests {
             "/api/",
         ] {
             assert_eq!(
-                check("GET", path, &Value::Null, &on, &paths),
+                check(path, &Value::Null, &on, &paths),
                 Err(Refusal(INVALID_PATH)),
                 "{path}"
             );
@@ -228,7 +298,6 @@ mod tests {
         };
         assert_eq!(
             check(
-                "GET",
                 "/api/workspace/file?path=.env",
                 &Value::Null,
                 &access,
@@ -238,7 +307,6 @@ mod tests {
         );
         assert_eq!(
             check(
-                "GET",
                 "/api/workspace/diff?path=config%2Fsecrets.env",
                 &Value::Null,
                 &access,
@@ -247,7 +315,6 @@ mod tests {
             Err(Refusal(SECRET_FILE))
         );
         assert!(check(
-            "GET",
             "/api/workspace/file?path=src/main.rs",
             &Value::Null,
             &access,
@@ -256,18 +323,11 @@ mod tests {
         .is_ok());
         let config = paths.config.to_string_lossy().into_owned();
         assert_eq!(
-            check(
-                "POST",
-                "/api/projects",
-                &json!({"path": config}),
-                &access,
-                &paths
-            ),
+            check("/api/projects", &json!({"path": config}), &access, &paths),
             Err(Refusal(PROFILE_FOLDER))
         );
         assert_eq!(
             check(
-                "POST",
                 "/api/sessions",
                 &json!({"workspace": paths.data.join("x").to_string_lossy()}),
                 &access,
@@ -275,17 +335,9 @@ mod tests {
             ),
             Err(Refusal(PROFILE_FOLDER))
         );
-        assert!(check(
-            "POST",
-            "/api/projects",
-            &json!({"path": "/tmp"}),
-            &access,
-            &paths
-        )
-        .is_ok());
+        assert!(check("/api/projects", &json!({"path": "/tmp"}), &access, &paths).is_ok());
         assert_eq!(
             check(
-                "PUT",
                 "/api/workspace/instructions",
                 &json!({"content": format!("key {}", redaction::placeholder())}),
                 &access,
@@ -318,5 +370,54 @@ mod tests {
         );
         assert_eq!(value["api_key_env"], "OPENAI_API_KEY");
         assert_eq!(value["tokens"], 1234);
+    }
+
+    #[test]
+    fn secret_files_are_blanked_in_diffs_and_reviews() {
+        let key = format!("{}{}", "sk-test", "abcdefghijklmnopqrstuvwxyz0123");
+        let diff = format!(
+            "diff --git a/src/a.rs b/src/a.rs\n+fn a() {{}}\ndiff --git a/.env b/.env\n+API={key}\n+PLAIN=hunter2\ndiff --git a/b.txt b/b.txt\n+ok\n"
+        );
+        let mut value = json!({
+            "diff": diff,
+            "files": [
+                {"path": ".env", "diff": "+PLAIN=hunter2", "hunks": [{"lines": ["+PLAIN=hunter2"]}], "add": 1},
+                {"path": "src/a.rs", "diff": "+fn a() {}", "hunks": [{"lines": ["+fn a() {}"]}]},
+            ],
+            "file": {"path": "keys/server.pem", "content": "-----BEGIN CERT"},
+        });
+        redact_response(&mut value);
+        let text = value.to_string();
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(!text.contains(&key));
+        assert!(!text.contains("BEGIN CERT"));
+        assert!(value["diff"].as_str().unwrap().contains("+fn a() {}"));
+        assert!(value["diff"].as_str().unwrap().contains("+ok"));
+        assert_eq!(value["files"][0]["hunks"], json!([]));
+        assert_eq!(value["files"][0]["add"], 1);
+        assert_eq!(value["files"][1]["diff"], "+fn a() {}");
+        // A hidden file never goes back.
+        let (_dir, paths) = paths();
+        let access = Access {
+            allow_terminals: false,
+        };
+        assert_eq!(
+            check(
+                "/api/workspace/instructions",
+                &json!({"content": HIDDEN_FILE}),
+                &access,
+                &paths
+            ),
+            Err(Refusal(REDACTED_INPUT))
+        );
+        assert_eq!(
+            check(
+                "/api/review/tasks/t1/file?path=.env.local",
+                &Value::Null,
+                &access,
+                &paths
+            ),
+            Err(Refusal(SECRET_FILE))
+        );
     }
 }

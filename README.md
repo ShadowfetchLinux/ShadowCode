@@ -193,6 +193,19 @@ chip in the status bar shows context use and cost, e.g.
 `42% · 38k / 128k · $0.12`. Details:
 [user guide](docs/USER_GUIDE.md#run-tasks-side-by-side).
 
+## Remote access (phone)
+
+Follow and steer tasks from your phone or another computer in a browser:
+**Settings › Remote access** (or `shadowcode serve --remote` without a
+window) serves the same interface, off by default and on `127.0.0.1` unless
+you choose another address. Pair a device by scanning a QR code; each device
+gets its own access key that you can unpair. Terminals stay off remotely
+unless you allow them, and secrets are never shown. Use Tailscale
+(`tailscale serve` for HTTPS): plain HTTP on a local network is not
+encrypted. Optional phone notifications through [ntfy](https://ntfy.sh)
+say when a task needs approval, finishes, fails or reaches a plan limit.
+Details: [docs/REMOTE.md](docs/REMOTE.md).
+
 ## API keys (OpenRouter)
 
 No subscription? Create a key at [openrouter.ai/keys](https://openrouter.ai/keys)
@@ -309,6 +322,7 @@ sandbox.** See [SECURITY.md](SECURITY.md).
 | --- | --- |
 | Settings | `~/.config/shadow-agent/config.yaml` ([example](config.example.yaml)) |
 | Secrets for HTTP providers, including the OpenRouter key (`OPENROUTER_API_KEY`) | `~/.config/shadow-agent/secrets.env` (mode 600) |
+| Remote access: switches, paired devices (token digests only), phone notifications | `~/.config/shadow-agent/remote.json` (mode 600) |
 | Conversations, jobs, events, goals, usage snapshots | `~/.local/state/shadow-agent/shadow-agent.db` (SQLite, schema version 25; backed up as `shadow-agent.pre-native-<id>.sqlite` before a migration) |
 | OpenRouter model list (cache) | `~/.local/state/shadow-agent/openrouter-models.json` |
 | Webview storage | `~/.local/share/shadow-agent/webview` |
