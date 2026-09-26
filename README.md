@@ -22,8 +22,18 @@ need Ollama, LM Studio or any other model server.
   Vulkan GPUs or the CPU. Models already in an Ollama store can be imported by
   reference without copying.
 - **You approve actions.** Choose *Ask before actions* or *Allow project edits*.
-  Every file change can be reviewed and staged in Git, and edits made by
-  ShadowCode's own tools can be rewound.
+  Approval cards show the actual diff or command. After a task you review
+  just what it changed, keep or undo each change, and rewind shell commands
+  and subscription edits too.
+- **Shell commands are sandboxed.** They see an empty home folder, so SSH
+  keys, cloud credentials and API keys stay out of reach; only the project is
+  writable.
+- **A capable agent.** Subagents, language-server error checking after each
+  edit, a repo map and code search, and support for `CLAUDE.md`, Cursor rules
+  and Claude Code skills.
+- **Everything in one window.** Run tasks side by side in worktrees, use your
+  own terminal, go from commit to pull request, preview the app you're
+  building, dictate with your voice, and follow along from your phone.
 
 Release history is in [CHANGELOG.md](CHANGELOG.md). What's new in this release:
 [0.32.0 release notes](docs/RELEASE_NOTES.md).
@@ -180,6 +190,43 @@ its branch is then removed, and **Wins in this project** counts which model
 you kept. At most one local model per comparison, since only one fits in GPU
 memory. Details: [compare](docs/COMPARE.md).
 
+## Working in the window
+
+- **Composer.** Type `@` to attach project files or folders (or a
+  subagent), ↑ for earlier prompts, and switch between **Code**, **Plan**
+  and **Ask**. An effort control appears for models that support one. Your
+  messages can be edited and resent, retried or copied.
+- **Drawer.** Your own terminals (a real shell, never shown to the model), a
+  **Git** tab (branches, a suggested commit message, push, pull requests
+  through `gh` or `glab` with CI checks), a **Preview** of your dev server
+  where **Pick element** puts an element into your next message, and
+  **Tools** (goals, automations, issues, background processes, worktrees).
+- **Voice.** See [Voice input](#voice-input) below.
+
+Details: [user guide](docs/USER_GUIDE.md), [app preview](docs/PREVIEW.md).
+
+## What the agent can do
+
+These apply to ShadowCode's own agent (local, OpenRouter and API models);
+subscription CLIs bring their own agents.
+
+- **Subagents** explore, plan or review in parallel, or make changes in an
+  isolated worktree that come back as a diff for your approval. Define your
+  own in `.shadow/agents`, `.claude/agents` or `.opencode/agent`
+  ([subagents](docs/SUBAGENTS.md)).
+- **Code intelligence.** Language servers (rust-analyzer, TypeScript,
+  Pyright, gopls, clangd) report the errors an edit introduced; a ranked repo
+  map and `search_code` help the agent find its way; an optional small
+  embedding model adds search by meaning
+  ([code intelligence](docs/CODE_INTELLIGENCE.md)).
+- **Your project's instructions.** `AGENTS.md`, `CLAUDE.md` (also nested),
+  Cursor rules, and Claude Code commands and skills are read; MCP tools are
+  offered directly and your enabled MCP servers reach the subscription CLIs
+  too.
+- **Long conversations** are summarized by the model rather than cut,
+  OpenRouter requests use prompt caching, and each task records its tokens
+  and cost.
+
 ## Parallel tasks
 
 **Worktree** (next to **Send**, or `Ctrl+Shift+Enter`) starts a task in its
@@ -192,6 +239,17 @@ notifications cover the same, and clicking one opens its conversation. The
 chip in the status bar shows context use and cost, e.g.
 `42% · 38k / 128k · $0.12`. Details:
 [user guide](docs/USER_GUIDE.md#run-tasks-side-by-side).
+
+## Automations
+
+**Tools › Automations** runs a saved prompt on a schedule (hourly, daily,
+weekdays, weekly or cron) while ShadowCode or `shadowcode serve` is open,
+each run in a fresh worktree with a time limit and a history of results and
+cost. **Tools › Issues** turns a GitHub or GitLab issue into a task on its
+own branch and offers a pull request that closes it. A
+[GitHub Action](integrations/github-action/README.md) runs ShadowCode in CI
+from an issue comment or a label. Details:
+[automations](docs/AUTOMATIONS.md).
 
 ## Remote access (phone)
 
@@ -323,8 +381,13 @@ they send and denies them automatically in read-only tasks. Each vendor
 decides which of its actions ask; the table above shows how its requests reach
 ShadowCode.
 
-Shell commands run as your Linux user. **ShadowCode is not an operating-system
-sandbox.** See [SECURITY.md](SECURITY.md).
+ShadowCode's shell commands run in a bubblewrap sandbox when it is
+available: an empty home folder with read-only toolchains, a writable
+project, and the network off, on or limited to an allow-list of hosts. Turn
+on **Require sandbox** to refuse commands when bubblewrap is missing;
+otherwise Landlock applies with a warning. This is not a complete
+operating-system sandbox, and background processes and hooks are not
+sandboxed. See [SECURITY.md](SECURITY.md).
 
 ## Use it from Zed or JetBrains
 
@@ -353,11 +416,12 @@ The editor's project must be trusted in ShadowCode (or start the agent with
 | Settings | `~/.config/shadow-agent/config.yaml` ([example](config.example.yaml)) |
 | Secrets for HTTP providers, including the OpenRouter key (`OPENROUTER_API_KEY`) | `~/.config/shadow-agent/secrets.env` (mode 600) |
 | Remote access: switches, paired devices (token digests only), phone notifications | `~/.config/shadow-agent/remote.json` (mode 600) |
-| Conversations, jobs, events, goals, usage snapshots | `~/.local/state/shadow-agent/shadow-agent.db` (SQLite, schema version 25; backed up as `shadow-agent.pre-native-<id>.sqlite` before a migration) |
+| Conversations, jobs, events, goals, usage snapshots | `~/.local/state/shadow-agent/shadow-agent.db` (SQLite, schema version 26; backed up as `shadow-agent.pre-native-<id>.sqlite` before a migration) |
 | OpenRouter model list (cache) | `~/.local/state/shadow-agent/openrouter-models.json` |
 | Webview storage | `~/.local/share/shadow-agent/webview` |
 | llama.cpp runtime (AppImage install) | `~/.local/lib/shadowcode` |
 | Voice models (installed from Settings › Voice) | `~/.local/share/shadow-agent/voice/models` |
+| Code intelligence: language servers, embedding models, search vectors (installed from Settings › Code intelligence) | `~/.local/share/shadow-agent/code-intel` |
 | Antigravity agent server (installed from Accounts) | `~/.local/share/shadowcode/antigravity-acp/1.2.1` |
 | Antigravity sign-in (ShadowCode's private profile) | `~/.local/share/shadowcode/antigravity-acp/profile` |
 | Project notes, skills, attachments | `<project>/.shadow/` |

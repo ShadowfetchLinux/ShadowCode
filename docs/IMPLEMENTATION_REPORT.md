@@ -185,15 +185,46 @@ explicit runtime override ranked below a stale installed CPU-only runtime.
   with a temporary index, runs 2–3 lanes in managed worktrees, keeps one via
   `git apply --check` then `git apply` to the working tree, and disposes every
   lane. Lane sessions never become projects or the relaunch folder.
+- **0.32.0.** A competitor-driven upgrade built in three waves of parallel
+  worktree branches, each merged with the full suite:
+  - *Foundations:* `service.rs` is a router over per-domain modules under
+    `service/` with typed requests; `Store::run` keeps SQLite off async
+    workers; `store/meta.rs` updates JSON documents transactionally and
+    `store/keys.rs` owns every key. `App.tsx` is split into `hooks/` and
+    `components/shell/`, reads `GET /api/feed` on `job.changed` wake-ups
+    instead of polling, and keeps drawer state per project.
+  - *Agent:* model-written compaction (`compaction.rs`), OpenRouter prompt
+    caching (`prompt_cache.rs`), per-turn/job/session usage and cost
+    (`usage.rs`), retries with `Retry-After` (`retry.rs`), description tiers;
+    subagents (`subagents.rs`, `engine/child.rs`, `agents.rs`), ecosystem
+    instructions (`instructions.rs`), first-class MCP tools and vendor MCP
+    passthrough (`mcp/vendor.rs`); persistent LSP pool (`lsp/`), tree-sitter
+    for eight languages, PageRank repo map, FTS5 + optional embedding search.
+  - *Safety:* bubblewrap with a tmpfs home and read-only toolchain binds,
+    `sandbox.require`, Landlock fallback (`sandbox/lsm.rs`), allow-list
+    network through a private netns and filtering proxy (`sandbox/netns.rs`,
+    `sandbox/proxy.rs`), checkpoints before shell commands and vendor turns
+    (`checkpoint/capture.rs`).
+  - *Window:* @-mentions, history, effort and mode, message actions,
+    approval previews with task-scoped grants, per-task review with hunk
+    undo, undoable rewind; PTY terminals (`terminal.rs`), Git/PR panel
+    (`service/forge.rs`), worktree tasks (`worktree_tasks.rs`), notification
+    decisions (`notify.rs`), context and cost chip; preview proxy with
+    element picking (`preview/`); voice dictation (`voice/`, cpal +
+    whisper.cpp).
+  - *Beyond the window:* remote access (`remote/`: per-device tokens, route
+    policy, redaction, SSE, ntfy), ACP agent (`acp_server/`), automations
+    and issues (`automations.rs`, `issues.rs`, schema 26), GitHub Action
+    (`integrations/github-action/`).
 - **Tooling.** `scripts/check-secrets.mjs` runs in the CI "Checks" workflow.
   `examples/live_vendor_turn` gained `--command` (0.30.1), `--web` and
   `--image` (after 0.30.1) next to `--second` and `--switch <id>`.
 
-Test counts at 0.31.0:
+Test counts at 0.32.0:
 
 | Check | Result |
 | --- | --- |
-| Rust tests (`cargo test --workspace --locked`) | 467 passed, 4 ignored (live tests) |
-| UI unit (`npm --prefix ui test`) | 144 passed |
-| UI e2e (`npm --prefix ui run test:e2e`) | 14 passed |
+| Rust tests (`cargo test --workspace --locked`) | 738 passed, 8 ignored (live tests) |
+| UI unit (`npm --prefix ui test`) | 308 passed (61 files) |
+| UI e2e (`npm --prefix ui run test:e2e`) | 44 passed |
 | Real window (`scripts/test-native-desktop.mjs`) | 13 checks |
