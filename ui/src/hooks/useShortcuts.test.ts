@@ -110,3 +110,21 @@ it("registers one listener for the app's lifetime and reads the latest state", (
     1,
   );
 });
+
+it("moves between conversations with Alt+↑/↓ and Ctrl+Tab", () => {
+  const alt = { altKey: true } as Partial<KeyboardEvent>;
+  expect(shortcutFor(key("ArrowUp", alt), closed)).toBe(
+    "previous-conversation",
+  );
+  expect(shortcutFor(key("ArrowDown", alt), closed)).toBe("next-conversation");
+  // Plain arrows stay with the page and the composer.
+  expect(shortcutFor(key("ArrowDown"), closed)).toBeNull();
+  expect(shortcutFor(key("Tab", { ctrlKey: true }), closed)).toBe(
+    "recent-conversation",
+  );
+  expect(shortcutFor(key("Tab"), closed)).toBeNull();
+  // Dialogs keep the keyboard.
+  expect(
+    shortcutFor(key("ArrowUp", alt), { ...closed, overlay: true }),
+  ).toBeNull();
+});

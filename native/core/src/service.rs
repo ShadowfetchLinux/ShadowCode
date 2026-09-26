@@ -54,6 +54,7 @@ mod call;
 mod code_intel;
 mod commands;
 mod compare;
+mod composer;
 mod extensions;
 mod feed;
 mod forge;
@@ -65,11 +66,13 @@ mod issues;
 mod jobs;
 mod memory;
 mod model_catalog;
+mod review;
 mod sandbox;
 mod sessions;
 mod settings;
 mod terminals;
 mod workspace;
+mod worktree_tasks;
 mod worktrees;
 use call::{Call, Flag, Loose, Text};
 pub use git::parse_hunks;
@@ -197,14 +200,16 @@ impl Service {
         if expected.is_some_and(|generation| generation != selection.generation) {
             return Ok(());
         }
-        // A Compare lane's worktree is temporary: it is selected while its
-        // conversation is open but never becomes a project or the relaunch
-        // folder, which would go stale once the comparison is kept.
-        // An automation's temporary worktree is treated the same way.
+        // A Compare lane's, worktree task's or automation run's worktree is
+        // temporary: it is selected while its conversation is open but never
+        // becomes a project or the relaunch folder, which would go stale once
+        // the comparison is kept, the task applied or the run's checkout
+        // removed.
         let lane = match &session {
             Some(id) => {
                 let store = self.engine.store();
                 crate::compare::session_tags(&store, id)?.0.is_some()
+                    || crate::worktree_tasks::session_task(&store, id)?.is_some()
                     || store
                         .session_meta(id, crate::store::keys::AUTOMATION_WORKTREE)?
                         .is_some()
@@ -244,6 +249,7 @@ impl Service {
             "compare" | "compares" => self.compare(&call).await,
             "agents" | "subagents" => self.blocking(&call, Self::agent_routes).await,
             "worktrees" | "parallel" => self.worktree_routes(&call).await,
+            "worktree-tasks" => self.worktree_task_routes(&call).await,
             "sandbox" => self.sandbox_routes(&call).await,
             "sessions" | "projects" | "events" | "resolve" => {
                 self.blocking(&call, Self::session_routes).await
@@ -252,6 +258,7 @@ impl Service {
             "goals" => self.goal_routes(&call).await,
             "automations" => self.automation_routes(&call).await,
             "issues" => self.issue_routes(&call).await,
+            "review" => self.review_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "terminals" => self.terminal_routes(&call).await,
             "git" => self.forge_routes(&call).await,

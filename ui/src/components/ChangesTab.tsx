@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type DiffHunk } from "../api";
 import { Empty } from "./cards";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
   remembered,
   type DrawerMemory,
@@ -51,6 +52,7 @@ export function ChangesTab({
     ReturnType<typeof api.gitDiff>
   > | null>(null);
   const [view, setView] = useState<"unstaged" | "staged">("unstaged");
+  const [discard, setDiscard] = useState<DiffHunk | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -219,14 +221,7 @@ export function ChangesTab({
                           type="button"
                           className="mini danger-text"
                           disabled={busy}
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                "Discard this hunk from the working file?",
-                              )
-                            )
-                              void act(h, "reject");
-                          }}
+                          onClick={() => setDiscard(h)}
                         >
                           Discard
                         </button>
@@ -311,6 +306,23 @@ export function ChangesTab({
         </button>
       </div>
       <pre className="plan log">{git.log}</pre>
+      {discard && (
+        <ConfirmDialog
+          title="Discard this change?"
+          confirmLabel="Discard change"
+          danger
+          onCancel={() => setDiscard(null)}
+          onConfirm={async () => {
+            await act(discard, "reject");
+            setDiscard(null);
+          }}
+        >
+          <p>
+            The lines in <code>{discard.header}</code> of {selected} go back to
+            the last staged or committed version. This cannot be undone.
+          </p>
+        </ConfirmDialog>
+      )}
     </>
   );
 }

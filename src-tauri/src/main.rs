@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use shadowcode_core::{
     cli,
-    config::Config,
     paths::{self},
     service::Request,
 };
@@ -14,10 +13,10 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 mod backend;
+mod notices;
 use backend::Backend;
 
 #[derive(Default)]
@@ -267,13 +266,15 @@ fn run() -> Result<()> {
     }
     let app = builder
         .manage(Lifecycle::default())
+        .manage(notices::Visible::default())
         .invoke_handler(tauri::generate_handler![
             api,
             pick_directory,
             pick_local_model,
             export_session,
             open_external,
-            desktop_quit
+            desktop_quit,
+            notices::set_visible_session
         ])
         .setup(move |app| {
             let webview_data = paths.data.join("webview");
@@ -343,68 +344,7 @@ fn run() -> Result<()> {
                                     }
                                 }
                             }
-                            // Automations run unattended: when one asks for it,
-                            // say that it finished (or is waiting for approval)
-                            // even while the window has focus.
-                            if matches!(
-                                event["type"].as_str(),
-                                Some("automation.finished" | "automation.waiting")
-                            ) && event["payload"]["notify"] == true
-                                && Config::load(&notification_paths, None)
-                                    .ok()
-                                    .is_some_and(|c| c.ui["notify"].as_bool().unwrap_or(true))
-                            {
-                                let payload = &event["payload"];
-                                let name = payload["name"].as_str().unwrap_or("Automation");
-                                let body = if event["type"] == "automation.waiting" {
-                                    format!(
-                                        "Waiting for your approval: {}",
-                                        payload["approval"].as_str().unwrap_or("")
-                                    )
-                                } else {
-                                    match payload["status"].as_str().unwrap_or("") {
-                                        "completed" => payload["summary"]
-                                            .as_str()
-                                            .filter(|s| !s.is_empty())
-                                            .unwrap_or("Finished")
-                                            .to_owned(),
-                                        "needs_approval" => {
-                                            "Stopped: it asked for approval".to_owned()
-                                        }
-                                        "timed_out" => "Stopped at its time limit".to_owned(),
-                                        "cancelled" => "Stopped".to_owned(),
-                                        _ => format!(
-                                            "Failed: {}",
-                                            payload["detail"].as_str().unwrap_or("")
-                                        ),
-                                    }
-                                };
-                                let _ = handle
-                                    .notification()
-                                    .builder()
-                                    .title(format!("ShadowCode · {name}"))
-                                    .body(body.chars().take(180).collect::<String>())
-                                    .show();
-                            }
-                            if event["type"] == "agent.completed" {
-                                let enabled = Config::load(&notification_paths, None)
-                                    .ok()
-                                    .is_some_and(|c| c.ui["notify"].as_bool().unwrap_or(true));
-                                let focused = handle
-                                    .get_webview_window("main")
-                                    .is_some_and(|w| w.is_focused().unwrap_or(false));
-                                if enabled && !focused {
-                                    let summary = event["payload"]["summary"]
-                                        .as_str()
-                                        .unwrap_or("Task finished");
-                                    let _ = handle
-                                        .notification()
-                                        .builder()
-                                        .title("ShadowCode · task finished")
-                                        .body(summary.chars().take(180).collect::<String>())
-                                        .show();
-                                }
-                            }
+                            notices::on_event(&handle, &notification_paths, &event);
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             let _ = handle.emit("shadowcode:events", json!({}));

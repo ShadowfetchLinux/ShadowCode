@@ -106,6 +106,7 @@ impl Engine {
             done: Notify::new(),
             steer: steering::SteerControl::default(),
             turn_plan: Default::default(),
+            turn: Default::default(),
             child: Some(spec.link),
         });
         {

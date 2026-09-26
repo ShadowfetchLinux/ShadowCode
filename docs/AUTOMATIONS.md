@@ -44,8 +44,10 @@ choose **New automation**:
     time spent waiting in the queue.
   - _Catch up missed runs within N minutes_ (default 120; 0 never catches
     up), see below.
-  - _Notify me when it finishes_ — a desktop notification when the run ends
-    or waits for approval (turned off with notifications in Settings).
+  - _Notify me when it finishes_ — a desktop notification with the
+    automation's name when the run finishes or stops, instead of the usual
+    task notification (the notification settings still apply). A request for
+    approval notifies like any other.
 
 Each automation shows its schedule, the next time and the last result, with
 **Run now**, **Pause** / **Resume**, **History**, **Edit** and **Delete**

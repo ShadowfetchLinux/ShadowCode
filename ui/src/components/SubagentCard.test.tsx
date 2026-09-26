@@ -126,7 +126,7 @@ describe("@ agent mentions", () => {
         onStop={() => {}}
       />,
     );
-    const menu = await screen.findByRole("listbox", { name: "Subagents" });
+    const menu = await screen.findByRole("group", { name: "Subagents" });
     expect(menu.textContent).toContain("@explore");
     expect(menu.textContent).not.toContain("@general");
     fireEvent.keyDown(screen.getByLabelText("Message ShadowCode"), {

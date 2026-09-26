@@ -218,6 +218,17 @@ pub struct ApprovalPrompt {
     pub arguments: Value,
 }
 
+/// How ShadowCode answers a vendor permission prompt.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VendorAnswer {
+    pub allow: bool,
+    /// "Allow for this task": the vendor's own allow-for-session choice,
+    /// where the protocol has one.
+    pub for_session: bool,
+    /// The user's reason for a denial, where the protocol carries one.
+    pub note: Option<String>,
+}
+
 /// Translated vendor events. These map onto the existing transcript
 /// vocabulary (`model.stream`, `tool.started`, `tool.completed`, ...).
 #[derive(Clone, Debug, PartialEq)]
@@ -393,6 +404,9 @@ pub struct LaunchOptions {
     /// Native session to resume (Codex thread id, ACP session id, Claude
     /// session id, Antigravity conversation id). `None` starts a new one.
     pub resume: Option<String>,
+    /// Reasoning effort for the turn (`low`, `medium`, `high`); `None`
+    /// keeps the vendor's default. Only Codex and Claude Code take it.
+    pub effort: Option<String>,
     /// Project MCP servers the user enabled, passed to the vendor for this
     /// run (ACP `mcpServers`, Claude `--mcp-config`, Codex `-c mcp_servers`).
     pub mcp_servers: Vec<McpServerSpec>,
@@ -415,6 +429,20 @@ pub trait CliAdapter: Send {
     fn on_line(&mut self, line: &str) -> Result<Step>;
     /// Answer a previously surfaced `ApprovalPrompt`.
     fn approve(&mut self, request_id: &str, approve: bool) -> Result<Vec<String>>;
+    /// Answer with the vendor's allow-for-session choice and a denial reason
+    /// where the protocol has them; otherwise a plain Allow/Deny.
+    fn answer(&mut self, request_id: &str, answer: &VendorAnswer) -> Result<Vec<String>> {
+        self.approve(request_id, answer.allow)
+    }
+    /// A note given with Deny reaches the agent.
+    fn deny_note(&self) -> bool {
+        false
+    }
+    /// Extra environment for the vendor process (Claude Code's thinking
+    /// budget).
+    fn env(&self, _options: &LaunchOptions) -> Vec<(String, String)> {
+        Vec::new()
+    }
     /// Interrupt the running turn (Pause). Empty when unsupported.
     fn interrupt(&mut self) -> Vec<String>;
     /// True when the vendor process is expected to exit on its own after the

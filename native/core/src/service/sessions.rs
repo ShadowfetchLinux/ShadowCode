@@ -14,6 +14,9 @@ struct SessionBody {
     label: Text,
     body: Text,
     event_id: Option<Value>,
+    /// Fork: keep only the events before `event_id` (Edit & resend forks
+    /// just before the edited message).
+    before: Flag,
 }
 
 impl Service {
@@ -133,7 +136,11 @@ impl Service {
                     .as_ref()
                     .and_then(|id| id.as_i64().or_else(|| id.as_u64().map(|v| v as i64)))
                     .context("event_id required")?;
-                store.fork_session_from_event(sid, event_id, body.title.as_str())
+                if body.before.is_true() {
+                    store.fork_session_before_event(sid, event_id, body.title.as_str())
+                } else {
+                    store.fork_session_from_event(sid, event_id, body.title.as_str())
+                }
             }
             ("GET", Some("events")) => self.session_events(call, sid),
             ("GET", Some("export")) => self.export(sid, call.q("format")),
@@ -231,6 +238,14 @@ impl Service {
         let (compare_id, compare_lane) = crate::compare::session_tags(&store, id)?;
         session["compare_id"] = json!(compare_id);
         session["compare_lane"] = json!(compare_lane);
+        // The worktree task this conversation runs in (as last saved; GET
+        // /api/worktree-tasks/{id} refreshes it).
+        session["worktree"] = match crate::worktree_tasks::session_task(&store, id)? {
+            Some(task) => crate::worktree_tasks::load(&store, &task)
+                .map(|record| record.to_json())
+                .unwrap_or(Value::Null),
+            None => Value::Null,
+        };
         session["subagent_parent"] = json!(store.session_meta(id, keys::SUBAGENT_PARENT)?);
         session["subagent_run"] = json!(store.session_meta(id, keys::SUBAGENT_RUN)?);
         let native: serde_json::Map<String, Value> = store

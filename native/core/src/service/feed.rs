@@ -44,7 +44,18 @@ impl Service {
 
     fn feed(&self, call: &Call) -> Result<Value> {
         let session = Some(call.q("session_id")).filter(|id| !id.is_empty());
+        // Every conversation with a pending approval, for sidebar badges.
+        let mut waiting: Vec<String> = self
+            .engine
+            .approvals()
+            .list(None)
+            .into_iter()
+            .map(|approval| approval.session_id)
+            .collect();
+        waiting.sort();
+        waiting.dedup();
         Ok(json!({
+            "waiting": waiting,
             "approvals": self.engine.approvals().list(session),
             "jobs": self.engine.store().job_summaries(call.limit(100, 100))?,
             "events": FEED_EVENTS,

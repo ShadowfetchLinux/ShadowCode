@@ -17,13 +17,24 @@
 //! the credential and exposes `cli_agents.claude_enabled` to opt out.
 use super::{
     clip, redact, redact_value, ApprovalPrompt, CliAdapter, LaunchOptions, PromptImage, Step,
-    Update, Vendor,
+    Update, Vendor, VendorAnswer,
 };
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
 const OUTPUT_PREVIEW: usize = 8000;
+
+/// Extended-thinking token budget per reasoning effort, passed as Claude
+/// Code's documented `MAX_THINKING_TOKENS` environment variable.
+pub fn thinking_budget(effort: &str) -> Option<u32> {
+    match effort {
+        "low" => Some(4_000),
+        "medium" => Some(16_000),
+        "high" => Some(31_999),
+        _ => None,
+    }
+}
 
 #[derive(Default)]
 pub struct ClaudeAdapter {
@@ -383,19 +394,46 @@ impl CliAdapter for ClaudeAdapter {
         })
     }
     fn approve(&mut self, request_id: &str, approve: bool) -> Result<Vec<String>> {
+        self.answer(
+            request_id,
+            &VendorAnswer {
+                allow: approve,
+                ..VendorAnswer::default()
+            },
+        )
+    }
+    /// A deny note becomes the denial message Claude reads. "Allow for this
+    /// task" is kept by ShadowCode (it answers later matching prompts), so
+    /// no permission rule is written into Claude's settings.
+    fn answer(&mut self, request_id: &str, answer: &VendorAnswer) -> Result<Vec<String>> {
         if !self.pending_permissions.remove(request_id) {
             bail!("Unknown Claude permission request {request_id}")
         }
-        let response = if approve {
+        let response = if answer.allow {
             json!({"behavior":"allow"})
         } else {
-            json!({"behavior":"deny","message":"The user denied this action in ShadowCode"})
+            let message = match answer.note.as_deref() {
+                Some(note) => format!("The user denied this action in ShadowCode and said: {note}"),
+                None => "The user denied this action in ShadowCode".into(),
+            };
+            json!({"behavior":"deny","message":message})
         };
         Ok(vec![json!({
             "type":"control_response",
             "response":{"subtype":"success","request_id":request_id,"response":response}
         })
         .to_string()])
+    }
+    fn deny_note(&self) -> bool {
+        true
+    }
+    fn env(&self, options: &LaunchOptions) -> Vec<(String, String)> {
+        options
+            .effort
+            .as_deref()
+            .and_then(thinking_budget)
+            .map(|budget| vec![("MAX_THINKING_TOKENS".to_owned(), budget.to_string())])
+            .unwrap_or_default()
     }
     fn native_session(&self) -> Option<String> {
         self.session_id.clone()

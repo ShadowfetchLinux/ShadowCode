@@ -256,6 +256,13 @@ impl Store {
             .optional()?;
         Ok(value)
     }
+    pub fn delete_session_meta(&self, session_id: &str, key: &str) -> Result<()> {
+        self.lock()?.execute(
+            "DELETE FROM session_meta WHERE session_id=? AND key=?",
+            params![session_id, key],
+        )?;
+        Ok(())
+    }
     pub fn clear_session_meta_prefix(&self, key_prefix: &str) -> Result<usize> {
         let connection = self.lock()?;
         let pattern = format!("{}%", key_prefix.replace('%', "\\%"));
@@ -497,7 +504,9 @@ impl Store {
     /// with a `compare_id` meta row) are left out unless `include_compare`;
     /// every row carries `compare_id` and `compare_lane` (null for ordinary
     /// conversations). Subagent conversations are always left out here; see
-    /// `sessions_listed_with`.
+    /// `sessions_listed_with`. A worktree task's conversation carries
+    /// `worktree_task` and `worktree_source` (its project) and is listed under
+    /// that project.
     pub fn sessions_listed(
         &self,
         search: &str,
@@ -528,12 +537,36 @@ impl Store {
         self.query("SELECT s.*,
             (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_id') AS compare_id,
             (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='compare_lane') AS compare_lane,
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='worktree_task') AS worktree_task,
+            (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='worktree_source') AS worktree_source,
             (SELECT value FROM session_meta m WHERE m.session_id=s.id AND m.key='subagent_parent') AS subagent_parent
-            FROM sessions s WHERE (? IS NULL OR s.workspace=?) AND (s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
+            FROM sessions s WHERE (? IS NULL OR s.workspace=?
+                OR EXISTS(SELECT 1 FROM session_meta w WHERE w.session_id=s.id AND w.key='worktree_source' AND w.value=?))
+            AND (s.title LIKE ? ESCAPE '!' OR s.workspace LIKE ? ESCAPE '!'
             OR EXISTS(SELECT 1 FROM tasks t WHERE t.session_id=s.id AND t.prompt LIKE ? ESCAPE '!'))
             AND (? OR NOT EXISTS(SELECT 1 FROM session_meta c WHERE c.session_id=s.id AND c.key='compare_id'))
             AND (? OR NOT EXISTS(SELECT 1 FROM session_meta a WHERE a.session_id=s.id AND a.key='subagent_parent'))
-            ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,include_compare,include_subagents,limit.clamp(1,10000)])
+            ORDER BY s.updated_at DESC LIMIT ?", params![workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),workspace.map(|p|p.to_string_lossy()),needle,needle,needle,include_compare,include_subagents,limit.clamp(1,10000)])
+    }
+    /// Move a conversation to another folder (a worktree task's conversation
+    /// returns to its project when the worktree is removed). The vendor CLI
+    /// session ids are forgotten: they belong to the old folder.
+    pub fn move_session(&self, sid: &str, workspace: &Path) -> Result<()> {
+        let mut db = self.lock()?;
+        let tx = db.transaction()?;
+        ensure!(
+            tx.execute(
+                "UPDATE sessions SET workspace=?,updated_at=? WHERE id=?",
+                params![workspace.to_string_lossy(), now(), sid]
+            )? == 1,
+            "Session not found"
+        );
+        tx.execute(
+            "DELETE FROM session_meta WHERE session_id=? AND key LIKE 'native\\_session:%' ESCAPE '\\'",
+            [sid],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
     pub fn rename_session(&self, sid: &str, title: &str) -> Result<()> {
         ensure!(title.len() <= 500, "Task title is too long");
@@ -639,6 +672,71 @@ impl Store {
             "fork": result,
             "original": original,
             "forked_from_event": event_id,
+            "original_intact": true
+        }))
+    }
+    /// Fork keeping only what came before the task `event_id` belongs to
+    /// (its prompt included), for Edit & resend. The event must belong to
+    /// the session. With nothing earlier the fork starts empty in the same
+    /// project.
+    pub fn fork_session_before_event(
+        &self,
+        sid: &str,
+        event_id: i64,
+        title: &str,
+    ) -> Result<Value> {
+        let owned = self.query(
+            "SELECT id,task_id FROM events WHERE session_id=? AND id=?",
+            params![sid, event_id],
+        )?;
+        let event = owned
+            .first()
+            .context("event_id does not belong to this session")?;
+        // The task's first event (a queued follow-up records its prompt
+        // before it starts).
+        let cut = match event["task_id"].as_str().filter(|t| !t.is_empty()) {
+            Some(task) => self
+                .query(
+                    "SELECT MIN(id) AS id FROM events WHERE session_id=? AND task_id=?",
+                    params![sid, task],
+                )?
+                .first()
+                .and_then(|row| row["id"].as_i64())
+                .unwrap_or(event_id),
+            None => event_id,
+        };
+        let earlier = self.query(
+            "SELECT id FROM events WHERE session_id=? AND id<? ORDER BY id DESC LIMIT 1",
+            params![sid, cut],
+        )?;
+        if let Some(previous) = earlier.first().and_then(|row| row["id"].as_i64()) {
+            return self.fork_session_from_event(sid, previous, title);
+        }
+        let parent = self.session(sid)?.context("Session not found")?;
+        let branch = id();
+        let time = now();
+        let title = if title.is_empty() {
+            format!("{} (edited)", parent["title"].as_str().unwrap_or("Task"))
+        } else {
+            title.into()
+        };
+        self.execute(
+            "INSERT INTO sessions(id,workspace,created_at,updated_at,model_id,status,title,parent_id,branched_at) VALUES(?,?,?,?,?,'active',?,?,?)",
+            params![
+                branch,
+                parent["workspace"].as_str(),
+                time,
+                time,
+                parent["model_id"].as_str(),
+                title,
+                sid,
+                time
+            ],
+        )?;
+        Ok(json!({
+            "fork": self.session(&branch)?.context("Fork not found")?,
+            "original": parent,
+            "forked_from_event": null,
             "original_intact": true
         }))
     }

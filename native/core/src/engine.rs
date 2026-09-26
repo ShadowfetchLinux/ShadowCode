@@ -52,6 +52,19 @@ struct LaunchContext<'a> {
     /// The user agreed to hand this conversation (or its attachments) to a
     /// cloud route for this turn.
     handoff_consent: bool,
+    turn: TurnOptions,
+}
+
+/// Composer choices for one turn that are not part of the stored request:
+/// the reasoning effort and the files and folders the prompt @-mentions.
+#[derive(Clone, Debug, Default)]
+pub struct TurnOptions {
+    /// `low`, `medium` or `high`; `None` keeps the model's default. Applied
+    /// only where the runtime has a control for it (see `crate::effort`).
+    pub effort: Option<String>,
+    /// Attached context. Native models read the files' contents with the
+    /// prompt; vendor CLIs get `@path` in the prompt text instead.
+    pub mentions: Vec<crate::mentions::Mention>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -114,6 +127,7 @@ struct Running {
     steer: steering::SteerControl,
     /// Provider change / model switch decided when the turn was queued.
     turn_plan: crate::cli_agent::handoff::TurnPlan,
+    turn: TurnOptions,
     /// Set for subagent jobs (`engine::child`).
     child: Option<ChildLink>,
 }
@@ -196,7 +210,7 @@ impl Engine {
         Ok(Self(Arc::new(Inner {
             paths,
             store,
-            approvals: ApprovalHub::default(),
+            approvals: ApprovalHub::with_notices(sender.clone()),
             sender,
             queues: Mutex::new(QueueState::default()),
             workers: Mutex::new(Vec::new()),
@@ -287,6 +301,7 @@ impl Engine {
             !queues.manual.contains_key(workspace),
             "Wait for the manual operation to finish before deleting this session"
         );
+        crate::worktree_tasks::ensure_deletable(&self.0.store, id)?;
         self.0.store.delete_session(id)
     }
     pub fn reserve_workspace(&self, workspace: &Path) -> Result<WorkspaceReservation> {
@@ -424,6 +439,30 @@ impl Engine {
                 permission_limit: limit,
                 owner,
                 handoff_consent,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+    /// `start_consented_owned` with the composer's per-turn choices (effort,
+    /// @-mentions).
+    pub(crate) async fn start_turn_owned(
+        &self,
+        request: StartRequest,
+        purpose: &str,
+        limit: Option<PermissionLevel>,
+        owner: Option<&JobOwner>,
+        handoff_consent: bool,
+        turn: TurnOptions,
+    ) -> Result<Job> {
+        self.start_with_context(
+            request,
+            LaunchContext {
+                purpose,
+                permission_limit: limit,
+                owner,
+                handoff_consent,
+                turn,
                 ..Default::default()
             },
         )
@@ -636,6 +675,7 @@ impl Engine {
             done: Notify::new(),
             steer: steering::SteerControl::default(),
             turn_plan,
+            turn: context.turn,
             child: None,
         });
         queues.jobs.insert(job.id.clone(), running.clone());
@@ -838,6 +878,21 @@ impl Engine {
             Some(session_id),
             Some(task_id),
         )?;
+        let _ = self.0.sender.send(event);
+        Ok(())
+    }
+    /// Store a conversation event and wake the windows showing it.
+    pub fn record_event(
+        &self,
+        session_id: &str,
+        task_id: Option<&str>,
+        kind: &str,
+        payload: &Value,
+    ) -> Result<()> {
+        let event = self
+            .0
+            .store
+            .add_event(kind, payload, Some(session_id), task_id)?;
         let _ = self.0.sender.send(event);
         Ok(())
     }
@@ -1469,6 +1524,7 @@ impl Engine {
             model: running.config.model.name.clone(),
             read_only: running.config.permissions.level == crate::config::PermissionLevel::ReadOnly,
             resume,
+            effort: crate::effort::vendor(vendor, running.turn.effort.as_deref()),
             #[cfg(unix)]
             mcp_servers: crate::mcp::vendor::servers(&running.workspace, &running.config),
             #[cfg(not(unix))]
@@ -1659,9 +1715,14 @@ impl Engine {
         tools: &ToolExecutor,
     ) -> Result<(String, Value)> {
         // Held until this task returns: the local model lease lives in it.
-        let prepared = self
+        let mut prepared = self
             .prepare_model_client(&running.config, &running.config.model, &running.cancel)
             .await?;
+        prepared.extra_body = crate::effort::native_body(
+            crate::openrouter::is_openrouter(&running.config.model),
+            prepared.extra_body.take(),
+            running.turn.effort.as_deref(),
+        );
         let model: ModelClient = prepared.client(&self.0.paths)?;
         let tier = autonomy::description_tier(&autonomy::capability_profile_for(
             &running.config.model.provider,
@@ -1766,7 +1827,14 @@ impl Engine {
         messages.insert(0, json!({"role":"system","content":system}));
         let image_refs = crate::vision::refs_from_paths(&running.workspace, &job.images)?;
         prepared.ensure_images(image_refs.len())?;
-        messages.push(crate::vision::user_message(&job.task, &image_refs));
+        // @-mentioned files and folders are read now, so a queued follow-up
+        // sees the files as they are when it starts. Their contents go to
+        // the model with the prompt; the conversation shows the prompt only.
+        let prompt = match crate::mentions::context(&running.workspace, &running.turn.mentions) {
+            Some(attached) => format!("{}\n\n{attached}", job.task),
+            None => job.task.clone(),
+        };
+        messages.push(crate::vision::user_message(&prompt, &image_refs));
         if let Some(note) = autonomy::bugfix_policy(&job.task) {
             messages.push(json!({"role":"system","content":note}));
         }

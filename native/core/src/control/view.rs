@@ -266,8 +266,10 @@ fn notification(event: &Value) -> Value {
         "type": event["type"].as_str().unwrap_or("").chars().take(80).collect::<String>(),
         "session_id": event["session_id"].as_str().unwrap_or("").chars().take(128).collect::<String>(),
     });
-    if event["type"] == "agent.completed" {
-        result["payload"] = json!({"summary": event["payload"]["summary"].as_str().unwrap_or("Task finished").chars().take(180).collect::<String>()});
+    // Enough for the window's desktop notifications (`crate::notify`).
+    let hint = crate::notify::hint(event);
+    if !hint.is_null() {
+        result["payload"] = hint;
     }
     // Terminal wake-ups name the terminal (never its output). Every view hears
     // them; a view reads only terminals its own hub owns.
