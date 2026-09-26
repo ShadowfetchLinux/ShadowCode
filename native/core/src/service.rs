@@ -75,6 +75,7 @@ mod sandbox;
 mod sessions;
 mod settings;
 mod terminals;
+mod voice;
 mod workspace;
 mod worktree_tasks;
 mod worktrees;
@@ -293,6 +294,7 @@ impl Service {
             #[cfg(target_os = "linux")]
             "preview" => self.preview_routes(&call).await,
             "code-intel" => self.code_intel_routes(&call).await,
+            "voice" => self.voice_routes(&call).await,
             "workspace" => self.workspace_routes(&call).await,
             "config" | "routing" | "onboarding" | "health" | "version" | "doctor" | "guardian" => {
                 self.settings_routes(&call).await

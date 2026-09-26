@@ -157,7 +157,7 @@ fn client() -> Result<reqwest::Client> {
         .build()?)
 }
 
-async fn read_capped(response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+pub(crate) async fn read_capped(response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {

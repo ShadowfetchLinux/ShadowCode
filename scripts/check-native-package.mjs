@@ -278,6 +278,13 @@ try {
         .some((entry) => entry.split(" ")[0] === dependency),
       `The deb must depend on ${dependency} for the llama.cpp runtime`,
     );
+  // Voice input records through ALSA (libasound.so.2, linked by cpal).
+  assert.ok(
+    debDependencies
+      .split(/,\s*/)
+      .some((entry) => entry.split(" ")[0] === "libasound2"),
+    "The deb must depend on libasound2 for voice input",
+  );
   assert.deepEqual(
     (await inspectTree(deb)).filter((file) =>
       /^(?:python[\d.]*|libpython.*|.*\.py[co]?)$/i.test(path.basename(file)),

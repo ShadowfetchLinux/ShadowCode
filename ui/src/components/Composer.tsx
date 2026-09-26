@@ -71,6 +71,7 @@ export function Composer({
   onSubmitWorktree,
   onStop,
   compare,
+  voice,
   mentions = [],
   onMention,
   onRemoveMention,
@@ -105,6 +106,8 @@ export function Composer({
   onStop: () => void;
   /** The Compare button, next to Send. */
   compare?: ReactNode;
+  /** The dictation mic button, next to Attach. */
+  voice?: ReactNode;
   /** Files and folders picked from the @ menu (chips). Without
    * `onMention` the @ menu offers subagents only. */
   mentions?: Mention[];
@@ -451,6 +454,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
+          {voice}
           {picker}
           {controls}
           <span className="grow" />

@@ -11,6 +11,9 @@
 //!   (`/api/workspace/exec`) are refused unless the user turned on "Allow
 //!   terminals over remote access". Agent shell commands still go through
 //!   the usual approvals.
+//! - The computer's microphone (`/api/voice/start`, `recording`, `stop`,
+//!   `cancel`) is never switched on remotely; a remote client may still send
+//!   its own recording to `/api/voice/transcribe`.
 //! - Secret files (`.env`, `secrets.env`, keys…) are not shown, the profile's
 //!   own folders cannot be opened as a project, and response bodies pass
 //!   through [`redact_response`], which removes recognizable credentials.
@@ -36,6 +39,8 @@ pub const PROFILE_FOLDER: &str =
     "ShadowCode's own settings folder cannot be opened over remote access.";
 pub const REDACTED_INPUT: &str =
     "This text contains a hidden secret. Edit it on the computer running ShadowCode.";
+pub const MICROPHONE: &str =
+    "The microphone of the computer running ShadowCode can't be switched on over remote access.";
 pub const INVALID_PATH: &str = "Invalid application command path";
 pub const PREVIEW_LOCAL: &str =
     "The app preview works only in the ShadowCode window on the computer running your dev server.";
@@ -126,6 +131,14 @@ pub fn check(path: &str, body: &Value, access: &Access, paths: &AppPaths) -> Res
     }
     if parts == ["workspace", "exec"] && !access.allow_terminals {
         return Err(Refusal(TERMINALS_OFF));
+    }
+    if family == "voice"
+        && matches!(
+            parts.get(1).copied(),
+            Some("start" | "recording" | "stop" | "cancel")
+        )
+    {
+        return Err(Refusal(MICROPHONE));
     }
     // Any route that reads one file by `?path=` (workspace file and diff,
     // a task's review of one file, …).
@@ -285,6 +298,29 @@ mod tests {
                 Err(Refusal(PREVIEW_LOCAL)),
                 "{path}"
             );
+        }
+    }
+
+    #[test]
+    fn the_host_microphone_is_never_switched_on_remotely() {
+        let (_root, paths) = paths();
+        let access = Access {
+            allow_terminals: true,
+        };
+        for path in [
+            "/api/voice/start",
+            "/api/voice/recording",
+            "/api/voice/stop",
+            "/api/voice/cancel",
+        ] {
+            assert_eq!(
+                check(path, &Value::Null, &access, &paths),
+                Err(Refusal(MICROPHONE)),
+                "{path}"
+            );
+        }
+        for path in ["/api/voice/status", "/api/voice/transcribe"] {
+            assert!(check(path, &Value::Null, &access, &paths).is_ok(), "{path}");
         }
     }
 

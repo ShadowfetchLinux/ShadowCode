@@ -2,6 +2,8 @@ import type { ComponentProps } from "react";
 import { GitCompareArrows } from "lucide-react";
 import type { Job, PlanStep, Session } from "../../api";
 import { Composer } from "../Composer";
+import { MicButton } from "../MicButton";
+import { isRemote } from "../../lib/transport";
 import {
   NetworkPill,
   PermissionControl,
@@ -70,6 +72,7 @@ export function ComposerDock({
   permission,
   network,
   compare,
+  voice,
   modes,
   worktree,
 }: {
@@ -101,6 +104,8 @@ export function ComposerDock({
     onWeb: (enabled: boolean) => void;
   };
   compare: { reason: string | null; locked: boolean; onOpen: () => void };
+  /** Dictation: errors to show, and Settings › Voice when not set up. */
+  voice: { onError: (message: string) => void; onOpenSettings: () => void };
   /** Code / Plan / Ask, and reasoning effort where the row supports it. */
   modes?: {
     mode: TaskMode;
@@ -119,6 +124,19 @@ export function ComposerDock({
       <Composer
         {...composer}
         picker={<UnifiedPicker {...picker} />}
+        voice={
+          // The host computer's microphone is never used for a remote device.
+          isRemote() ? undefined : (
+            <MicButton
+              task={composer.task}
+              onTask={composer.onTask}
+              promptRef={composer.promptRef}
+              disabled={hidden}
+              onError={voice.onError}
+              onOpenSettings={voice.onOpenSettings}
+            />
+          )
+        }
         controls={
           <>
             {modes?.effortShown && (

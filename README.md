@@ -26,15 +26,15 @@ need Ollama, LM Studio or any other model server.
   ShadowCode's own tools can be rewound.
 
 Release history is in [CHANGELOG.md](CHANGELOG.md). What's new in this release:
-[0.31.1 release notes](docs/RELEASE_NOTES.md).
+[0.32.0 release notes](docs/RELEASE_NOTES.md).
 
 ## Install
 
 Releases target x86_64 Linux with glibc 2.39 or newer (Ubuntu 24.04 or later).
 Download from [GitHub releases](https://github.com/Shadowfetchapps/ShadowCode/releases/latest):
 
-- `ShadowCode_0.31.1_amd64.AppImage`
-- `ShadowCode_0.31.1_amd64.deb`
+- `ShadowCode_0.32.0_amd64.AppImage`
+- `ShadowCode_0.32.0_amd64.deb`
 - `SHA256SUMS`
 
 ### AppImage (recommended)
@@ -45,7 +45,7 @@ from a checkout of this repository:
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
 git clone https://github.com/Shadowfetchapps/ShadowCode.git
-./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.31.1_amd64.AppImage
+./ShadowCode/scripts/install-appimage.sh ~/Downloads/ShadowCode_0.32.0_amd64.AppImage
 ```
 
 [`scripts/install-appimage.sh`](scripts/install-appimage.sh):
@@ -65,14 +65,14 @@ git clone https://github.com/Shadowfetchapps/ShadowCode.git
   AppImages only after a successful install.
 
 To run the AppImage without installing it:
-`./ShadowCode_0.31.1_amd64.AppImage --appimage-extract-and-run`. FUSE is not
+`./ShadowCode_0.32.0_amd64.AppImage --appimage-extract-and-run`. FUSE is not
 required.
 
 ### Debian package
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-sudo apt install ./ShadowCode_0.31.1_amd64.deb
+sudo apt install ./ShadowCode_0.32.0_amd64.deb
 ```
 
 The deb installs `shadowcode` and the same llama.cpp runtime in
@@ -205,6 +205,16 @@ unless you allow them, and secrets are never shown. Use Tailscale
 encrypted. Optional phone notifications through [ntfy](https://ntfy.sh)
 say when a task needs approval, finishes, fails or reaches a plan limit.
 Details: [docs/REMOTE.md](docs/REMOTE.md).
+
+## Voice input
+
+Hold the microphone button in the composer (or `Ctrl+Shift+Space`) and talk;
+let go and the words are inserted at the cursor, never sent on their own.
+Transcription runs on this computer with whisper.cpp after you install a
+model in **Settings › Voice** (74 MB or 141 MB, downloaded only when you click
+Install and checked against a pinned SHA-256), so the audio never leaves the
+machine. With an OpenRouter key you can instead choose OpenRouter, about
+$0.001 per minute of speech. Details: [voice input](docs/VOICE.md).
 
 ## API keys (OpenRouter)
 
@@ -347,6 +357,7 @@ The editor's project must be trusted in ShadowCode (or start the agent with
 | OpenRouter model list (cache) | `~/.local/state/shadow-agent/openrouter-models.json` |
 | Webview storage | `~/.local/share/shadow-agent/webview` |
 | llama.cpp runtime (AppImage install) | `~/.local/lib/shadowcode` |
+| Voice models (installed from Settings › Voice) | `~/.local/share/shadow-agent/voice/models` |
 | Antigravity agent server (installed from Accounts) | `~/.local/share/shadowcode/antigravity-acp/1.2.1` |
 | Antigravity sign-in (ShadowCode's private profile) | `~/.local/share/shadowcode/antigravity-acp/profile` |
 | Project notes, skills, attachments | `<project>/.shadow/` |
@@ -360,9 +371,15 @@ directories follow `XDG_DATA_HOME` and are shared by all profiles.
 Requirements: Rust 1.95, Node.js 22.12 or newer, and on Ubuntu 24.04:
 
 ```bash
-sudo apt-get install build-essential pkg-config libgtk-3-dev \
-  libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+sudo apt-get install build-essential pkg-config cmake clang libgtk-3-dev \
+  libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev \
+  libasound2-dev patchelf
 ```
+
+`cmake`, a C++ compiler and libclang build the whisper.cpp inside
+`whisper-rs-sys` (voice input); `libasound2-dev` is for microphone capture.
+`.cargo/config.toml` builds it for x86-64 with AVX2 rather than for the
+build machine's CPU.
 
 ```bash
 npm --prefix ui ci
@@ -434,7 +451,7 @@ throwaway profile has no `secrets.env`.
 
 - [User guide](docs/USER_GUIDE.md) · [Architecture](ARCHITECTURE.md) ·
   [Security](SECURITY.md) · [Subscriptions](docs/SUBSCRIPTIONS.md) ·
-  [Local models](docs/LOCAL_MODELS.md)
+  [Local models](docs/LOCAL_MODELS.md) · [Voice input](docs/VOICE.md)
 - The drawer has your own terminals, a Git tab (branch, commit with a
   suggested message, push, pull requests with CI status), a **Preview** of
   your dev server where you can pick an element (or a console error) to put

@@ -150,6 +150,15 @@ as a second `llama-server --embedding` process on 127.0.0.1 that stops after
 5 idle minutes. Loading or unloading a chat model does not affect it. See
 [code intelligence](CODE_INTELLIGENCE.md#embedding-models).
 
+## Voice models
+
+Dictation uses whisper.cpp models (Whisper base English 141 MB, tiny English
+74 MB, base multilingual 141 MB). They are not GGUF chat models and do not use
+the llama.cpp runtime: whisper.cpp is compiled into ShadowCode and runs them
+on the CPU. They are installed only from **Settings › Voice**, pinned to a
+Hugging Face commit and verified against a SHA-256, like the embedding models.
+See [voice input](VOICE.md).
+
 ## Configuration
 
 These settings are the `local_engine` section of `config.yaml`. **Settings ›

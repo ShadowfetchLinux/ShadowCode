@@ -316,6 +316,55 @@ when no server answers, they keep the tree-sitter shape (plus `lsp_note`).
 truncated, diagnostics: [...], note}` from the language server, or
 `{ok: false, pending: true, error}` while it loads.
 
+## Voice input
+
+Dictation ([voice input](VOICE.md)). The engine records from the default
+microphone and transcribes on stop; the window inserts the text. Model
+downloads and the `openrouter` engine are refused in offline mode.
+
+`GET /api/voice/status` →
+
+```
+{
+  config: VoiceSettings,
+  models: [{ id: "base.en"|"tiny.en"|"base", name, bytes, license, english_only, summary,
+             installed, active,            // active: the model dictation uses
+             progress: {state: "downloading"|"installed"|"error", done, total, error}|null }],
+  languages: [{ code, name }],             // "auto" plus common whisper languages
+  ready: boolean,                          // the chosen engine can run now
+  blocked: string|null,                    // why not, for the user
+  cpu_supported: boolean,                  // AVX2/FMA/F16C present (local engine)
+  whisper_version: string,
+  openrouter_key: boolean, offline: boolean,
+  recording: boolean
+}
+VoiceSettings = { engine: "local"|"openrouter", model, language: "auto"|<code>,
+                  openrouter_model, voice_commands, live_preview, max_seconds (5–600) }
+```
+
+- `POST /api/voice/config {…some VoiceSettings fields}` → `{ok, config}`.
+  Stored as `voice:` in config.yaml. Unknown or mistyped fields and invalid
+  values are errors.
+- `POST /api/voice/models/install {model}` → `{ok, started}`; downloads in
+  the background (poll status), verifies size and SHA-256.
+  `POST /api/voice/models/remove {model}` → `{ok, removed}`.
+- `POST /api/voice/start` → `{ok, engine, device}`. Fails before opening the
+  microphone when the engine cannot run ("No voice model is installed. Open
+  Settings › Voice…", no OpenRouter key, offline) or with "No microphone
+  found", and with "Already listening" while a recording runs.
+- `GET /api/voice/recording` → `{active: false}` or `{active: true, engine,
+  device, level (0–1), seconds, max_seconds, full, error, partial}`. Cheap;
+  the window polls it while listening. `full`: the length limit was reached
+  (the window then stops); `partial`: live preview text (local engine).
+- `POST /api/voice/stop` → `{text, engine, seconds, ms, message?}`; `text` is
+  cleaned (no `[BLANK_AUDIO]`-style markers) with voice commands applied.
+  Empty `text` comes with a `message` (too short, silence, nothing
+  recognised). "Not listening" when no recording runs.
+- `POST /api/voice/cancel` → `{ok, cancelled}`; discards the audio.
+- `POST /api/voice/transcribe {audio: base64 WAV}` → same shape as stop, for
+  audio recorded elsewhere (PCM 8/16/24/32-bit or float WAV, up to about
+  6 MB).
+
 ## Local models
 
 `GET /api/local-models` → `LocalCatalog`:
