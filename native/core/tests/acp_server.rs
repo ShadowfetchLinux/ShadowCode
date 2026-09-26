@@ -39,7 +39,7 @@ fn model(_: usize, body: &Value) -> (Value, Duration) {
     let tools = messages.iter().filter(|m| m["role"] == "tool").count();
     if last["role"] == "tool" && asked("run two checks") && tools == 1 {
         return (
-            reply("And the second.", exec("printf two > second.txt")),
+            reply("And the second.", exec("touch second.txt")),
             Duration::ZERO,
         );
     }
@@ -60,7 +60,7 @@ fn model(_: usize, body: &Value) -> (Value, Duration) {
     let prompt = last["content"].to_string();
     if prompt.contains("run the check") || prompt.contains("run two checks") {
         return (
-            reply("Running it.", exec("printf approved > marker.txt")),
+            reply("Running it.", exec("touch marker.txt")),
             Duration::ZERO,
         );
     }
@@ -371,6 +371,26 @@ async fn editor_drives_a_turn_permissions_cancel_and_replay_through_a_running_de
         .iter()
         .any(|u| u["sessionUpdate"] == "session_info_update" && u["title"].is_string()));
 
+    // Without editor file reads, a linked project file becomes an @-mention
+    // whose saved content the model reads.
+    let (done, _) = editor
+        .call(
+            "session/prompt",
+            json!({"sessionId":sid,"prompt":[
+                {"type":"text","text":"echo context"},
+                {"type":"resource_link","uri":format!("file://{}", f.project.join("notes.txt").display()),"name":"notes.txt"},
+            ]}),
+        )
+        .await;
+    assert_eq!(done["result"]["stopReason"], "end_turn", "{done}");
+    assert!(f
+        .model
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|body| body.to_string().contains("saved text")));
+
     // A shell command asks the editor; allowing it runs it.
     let (done, seen) = editor
         .call_with("session/prompt", prompt(&sid, "run the check"), |request| {
@@ -388,15 +408,17 @@ async fn editor_drives_a_turn_permissions_cancel_and_replay_through_a_running_de
                 .map(|o| o["kind"].as_str().unwrap())
                 .collect();
             assert_eq!(kinds, ["allow_once", "allow_always", "reject_once"]);
+            // "Allow always" is the engine's task-scoped grant, named by it.
+            assert!(params["options"][1]["name"]
+                .as_str()
+                .unwrap()
+                .contains("`touch` commands"));
             select("allow_once")
         })
         .await;
     assert_eq!(done["result"]["stopReason"], "end_turn", "{done} {seen:?}");
     assert_eq!(seen.requests.len(), 1);
-    assert_eq!(
-        fs::read_to_string(f.project.join("marker.txt")).unwrap(),
-        "approved"
-    );
+    assert!(f.project.join("marker.txt").exists());
     let call = seen
         .updates
         .iter()
@@ -604,14 +626,8 @@ async fn standalone_agent_owns_the_engine_trusts_on_request_and_embeds_context()
         .await;
     assert_eq!(done["result"]["stopReason"], "end_turn", "{done} {seen:?}");
     assert_eq!(seen.requests.len(), 1, "{seen:?}");
-    assert_eq!(
-        fs::read_to_string(f.project.join("marker.txt")).unwrap(),
-        "approved"
-    );
-    assert_eq!(
-        fs::read_to_string(f.project.join("second.txt")).unwrap(),
-        "two"
-    );
+    assert!(f.project.join("marker.txt").exists());
+    assert!(f.project.join("second.txt").exists());
     // Images arrive as base64 and become workspace attachments.
     let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
     let (image, _) = editor

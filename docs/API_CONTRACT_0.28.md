@@ -991,14 +991,17 @@ so editor threads never change the desktop's selected project):
   cached a minute per project); choosing one → `POST /api/sessions/{id}/target`.
 - `session/prompt` → images through `POST /api/workspace/attach-image`, then
   one owned submission (`POST /api/owned-jobs`, then `/api/jobs` with
-  `{workspace, session_id, task, model, purpose, images, handoff_consent,
-  queue: true}`;
+  `{workspace, session_id, task, model, purpose, images, mentions,
+  handoff_consent, queue: true}`; resource links to project files the
+  editor cannot read for us become `mentions`;
   purpose `coder` / `planner` / `reviewer` for code / plan / ask). A 409
   `needs_consent` answer becomes a permission request and is resent with
   `handoff_consent: true` when allowed. Progress is read with
   `GET /api/jobs/{id}/events?after=&limit=512` every 100 ms, approvals with
   `GET /api/approvals?session_id=`, and answered with
-  `POST /api/approvals/{id}`; `session/cancel` → `POST /api/jobs/{id}/cancel`.
+  `POST /api/approvals/{id} {session_id, decision, scope}` (`scope: "task"`
+  for "allow always", offered only when the approval has a `grant`);
+  `session/cancel` → `POST /api/jobs/{id}/cancel`.
 - Event mapping: `model.stream` / final `model.delta` → `agent_message_chunk`
   (a final delta sends only the unstreamed rest); `tool.started` →
   `tool_call` (in progress, with kind, locations and edit diffs);

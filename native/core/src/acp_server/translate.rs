@@ -188,6 +188,40 @@ fn output_text(tool: &str, payload: &Value) -> Option<String> {
     }
 }
 
+/// Readable text for an approval preview (`approvals::preview` shapes), shown
+/// when the tool call has no diff of its own.
+pub(crate) fn preview_text(preview: &Value) -> Option<String> {
+    let text = match preview["kind"].as_str()? {
+        "files" => preview["files"]
+            .as_array()?
+            .iter()
+            .map(|file| {
+                format!(
+                    "```diff\n--- {} ({})\n{}\n```\n",
+                    file["path"].as_str().unwrap_or(""),
+                    file["status"].as_str().unwrap_or("modified"),
+                    clip(file["diff"].as_str().unwrap_or(""), CONTENT_LIMIT)
+                )
+            })
+            .collect(),
+        "command" => format!(
+            "Runs in {}",
+            preview["cwd"]
+                .as_str()
+                .filter(|c| !c.is_empty())
+                .unwrap_or(".")
+        ),
+        "move" => format!(
+            "Move {} → {}",
+            preview["from"].as_str().unwrap_or(""),
+            preview["to"].as_str().unwrap_or("")
+        ),
+        "folder" => format!("Create folder {}", preview["path"].as_str().unwrap_or("")),
+        _ => return None,
+    };
+    (!text.trim().is_empty()).then_some(text)
+}
+
 fn plan_entries(plan: &Value) -> Vec<Value> {
     plan["steps"]
         .as_array()
@@ -437,6 +471,13 @@ mod tests {
             .collect();
         assert_eq!(statuses, ["completed", "in_progress", "pending"]);
         assert_eq!(tool_kind("exec"), "execute");
+        let diff = preview_text(&json!({"kind":"files","files":[{"path":"a.rs","status":"modified","diff":"@@ -1 +1 @@\n-a\n+b"}]})).unwrap();
+        assert!(diff.contains("--- a.rs (modified)") && diff.contains("+b"));
+        assert_eq!(
+            preview_text(&json!({"kind":"command","command":"ls","cwd":"src"})).unwrap(),
+            "Runs in src"
+        );
+        assert!(preview_text(&Value::Null).is_none());
         assert_eq!(tool_title("exec", &json!({"command":"ls"})), "Run `ls`");
     }
 }

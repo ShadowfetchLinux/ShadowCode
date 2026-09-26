@@ -93,13 +93,13 @@ to trust it:
 | Resume (`session/load`) | Replays the conversation: your messages, answers, tool calls with their results and the plan. `session/resume` reopens without replay. |
 | History list (`session/list`) | Conversations of a project, newest first, with title and last update. |
 | Prompt text | The task. Several text blocks are joined with newlines. |
-| `@file` mentions (resource links) | Listed as referenced files. When the editor offers `fs/read_text_file`, ShadowCode asks it for the file so unsaved changes are included. |
+| `@file` mentions (resource links) | When the editor offers `fs/read_text_file`, ShadowCode asks it for the file, so unsaved changes are included. Otherwise a project file or folder becomes a ShadowCode @-mention (its saved text, or the folder listing, is read when the task starts; at most 20); other links are listed as references. |
 | Embedded context (resources) | Included as attached context, marked as data rather than instructions. |
 | Images (PNG, JPEG, WebP, GIF) | Saved under `.shadow/attachments/` and sent with the turn (the chosen model must accept images). Audio is refused. |
 | Streaming | Answer text arrives as `agent_message_chunk`; status notes (model used, retries, compaction, warnings) as `agent_thought_chunk`. |
 | Tool calls | `tool_call` / `tool_call_update` with a kind (`read`, `edit`, `delete`, `move`, `search`, `execute`, `fetch`, `think`, `other`), file locations, diffs for edits, and the output of commands and searches. |
 | Plan | `update_plan` becomes the editor's `plan` view. |
-| Permissions | Every ShadowCode approval becomes `session/request_permission` with **Allow**, **Allow for the rest of this turn** (same tool, this prompt only) and **Reject**. Your answer is applied through the engine's approvals. A plan handoff to another provider asks the same way. |
+| Permissions | Every ShadowCode approval becomes `session/request_permission` with **Allow**, **Allow … for this task** (ShadowCode's own grant: the same kind of action, or the same command prefix such as `cargo test`, for the rest of this prompt; offered only when ShadowCode can grant it) and **Reject**. Your answer is applied through the engine's approvals, with the diff or command preview shown. A handoff to another provider asks the same way. |
 | Busy project | A prompt sent while another task runs in the same project (another thread, or the desktop) waits in ShadowCode's queue and starts when that task ends; a thought note says so. Cancel works while it waits. |
 | Cancel (`session/cancel`) | Stops the running task; the prompt ends with `stopReason: "cancelled"`. |
 | Modes | **Code** (edit with approvals), **Plan** (read-only planning) and **Ask** (read-only answers). Offered both as `modes`/`session/set_mode` and as the `mode` config option. |

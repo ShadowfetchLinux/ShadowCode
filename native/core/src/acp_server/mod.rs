@@ -59,6 +59,7 @@ const PROMPT_LIMIT: usize = 2_000_000;
 const POLL: Duration = Duration::from_millis(100);
 const PICKER_TTL: Duration = Duration::from_secs(60);
 const PICKER_WAIT: Duration = Duration::from_secs(5);
+const MAX_MENTIONS: usize = crate::mentions::MAX_MENTIONS;
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -222,6 +223,15 @@ impl Peer {
             });
         }
     }
+}
+
+/// A prompt turned into a ShadowCode task.
+struct Composed {
+    task: String,
+    /// Workspace-relative attachment paths.
+    images: Vec<String>,
+    /// `{path, kind}` project files and folders the editor referenced.
+    mentions: Vec<Value>,
 }
 
 /// One running `session/prompt`.
@@ -722,13 +732,13 @@ impl Agent {
             }
         }
         let _clear = Clear(session.clone());
-        let (task, images) = self.compose(&session, &params["prompt"]).await?;
+        let composed = self.compose(&session, &params["prompt"]).await?;
         if turn.cancel.is_cancelled() {
             return Ok(json!({"stopReason":"cancelled"}));
         }
         // Owned by this connection: an editor that disappears cancels it.
         let lease = session.client.own_jobs().await?;
-        let result = self.run_turn(&session, &turn, &lease, task, images).await;
+        let result = self.run_turn(&session, &turn, &lease, &composed).await;
         let closed = lease.close().await;
         let stop = result?;
         closed?;
@@ -736,12 +746,13 @@ impl Agent {
         Ok(json!({"stopReason":stop}))
     }
 
-    /// Prompt content blocks → task text and workspace image attachments.
+    /// Prompt content blocks → task text, workspace image attachments and
+    /// @-mentions of project files.
     async fn compose(
         &self,
         session: &Session,
         prompt: &Value,
-    ) -> std::result::Result<(String, Vec<String>), RpcError> {
+    ) -> std::result::Result<Composed, RpcError> {
         let blocks = prompt
             .as_array()
             .ok_or_else(|| RpcError::params("`prompt` must be an array of content blocks"))?;
@@ -750,6 +761,7 @@ impl Agent {
         let mut context = String::new();
         let mut references = Vec::new();
         let mut images = Vec::new();
+        let mut mentions: Vec<Value> = Vec::new();
         let embed = |context: &mut String, label: &str, body: &str| {
             let clipped = crate::tools::truncate(body, CONTEXT_LIMIT);
             context.push_str(&format!(
@@ -800,9 +812,16 @@ impl Agent {
                         _ => None,
                     };
                     let shown = label.clone().unwrap_or_else(|| uri.to_owned());
-                    match buffer {
-                        Some(body) => embed(&mut context, &shown, &body),
-                        None => references.push(shown),
+                    match (buffer, &label) {
+                        (Some(body), _) => embed(&mut context, &shown, &body),
+                        // A project file or folder: the engine's @-mention
+                        // context reads it when the task starts.
+                        (None, Some(path)) if mentions.len() < MAX_MENTIONS => {
+                            let dir = local.as_ref().is_some_and(|p| p.is_dir());
+                            mentions.push(json!({"path":path,"kind":if dir {"dir"} else {"file"}}));
+                            references.push(shown);
+                        }
+                        (None, _) => references.push(shown),
                     }
                 }
                 "resource" => {
@@ -864,7 +883,11 @@ impl Agent {
                 PROMPT_LIMIT / 1_000_000
             )));
         }
-        Ok((task, images))
+        Ok(Composed {
+            task,
+            images,
+            mentions,
+        })
     }
 
     async fn attach_image(
@@ -902,18 +925,18 @@ impl Agent {
         &self,
         session: &Session,
         lease: &OwnedJobs,
-        task: &str,
-        images: &[String],
+        prompt: &Composed,
         consent: bool,
     ) -> Result<Value> {
         lease
             .submit(json!({
                 "workspace": session.workspace,
                 "session_id": session.id,
-                "task": task,
+                "task": prompt.task,
                 "model": session.model(),
                 "purpose": options::purpose(&session.mode()),
-                "images": images,
+                "images": prompt.images,
+                "mentions": prompt.mentions,
                 "handoff_consent": consent,
                 // Another thread (or the desktop) may be busy in this
                 // project; the turn starts when it finishes.
@@ -928,10 +951,9 @@ impl Agent {
         session: &Session,
         turn: &Turn,
         lease: &OwnedJobs,
-        task: String,
-        images: Vec<String>,
+        prompt: &Composed,
     ) -> std::result::Result<&'static str, RpcError> {
-        let mut job = self.submit(session, lease, &task, &images, false).await?;
+        let mut job = self.submit(session, lease, prompt, false).await?;
         if job["needs_consent"] == true {
             // Moving the conversation to another route shares its history
             // with that provider; ask exactly like the desktop does.
@@ -961,7 +983,7 @@ impl Agent {
                     "end_turn"
                 });
             }
-            job = self.submit(session, lease, &task, &images, true).await?;
+            job = self.submit(session, lease, prompt, true).await?;
         }
         if job["ok"] == false {
             return Err(RpcError::new(
@@ -985,7 +1007,6 @@ impl Agent {
         let mut cancel_sent = false;
         let mut asked: HashSet<String> = HashSet::new();
         let mut deferred: HashSet<String> = HashSet::new();
-        let mut always: HashSet<String> = HashSet::new();
         let finished = loop {
             if turn.cancel.is_cancelled() && !cancel_sent {
                 cancel_sent = true;
@@ -1020,15 +1041,8 @@ impl Agent {
                 continue;
             }
             if !turn.cancel.is_cancelled() {
-                self.approvals(
-                    session,
-                    turn,
-                    &translator,
-                    &mut asked,
-                    &mut deferred,
-                    &mut always,
-                )
-                .await?;
+                self.approvals(session, turn, &translator, &mut asked, &mut deferred)
+                    .await?;
             }
             tokio::select! {
                 _ = tokio::time::sleep(POLL) => {}
@@ -1075,7 +1089,9 @@ impl Agent {
     }
 
     /// Forward pending ShadowCode approvals for this conversation to the
-    /// client and apply its answers.
+    /// client and apply its answers. "Allow always" is the engine's own
+    /// "Allow for this task" grant (the same kind of action, or the same
+    /// command prefix, for the rest of this prompt's task).
     async fn approvals(
         &self,
         session: &Session,
@@ -1083,7 +1099,6 @@ impl Agent {
         translator: &Translator,
         asked: &mut HashSet<String>,
         deferred: &mut HashSet<String>,
-        always: &mut HashSet<String>,
     ) -> Result<()> {
         let pending = session
             .call(
@@ -1105,17 +1120,6 @@ impl Agent {
                 continue;
             }
             asked.insert(approval_id.clone());
-            let decide = |approve: bool| {
-                session.call(
-                    "POST",
-                    format!("/api/approvals/{approval_id}"),
-                    json!({"session_id":approval["session_id"],"decision":if approve {"approve"} else {"deny"}}),
-                )
-            };
-            if always.contains(tool) {
-                let _ = decide(true).await;
-                continue;
-            }
             let arguments = call
                 .as_ref()
                 .map(|c| c.arguments.clone())
@@ -1125,33 +1129,51 @@ impl Agent {
                 .as_ref()
                 .map_or(approval_id.as_str(), |c| c.id.as_str()));
             tool_call["status"] = json!("pending");
+            let mut content = tool_call["content"].as_array().cloned().unwrap_or_default();
+            if content.is_empty() {
+                if let Some(preview) = translate::preview_text(&approval["preview"]) {
+                    content
+                        .push(json!({"type":"content","content":{"type":"text","text":preview}}));
+                }
+            }
             let reason = text(approval, "reason");
             if !reason.is_empty() {
-                let mut content = tool_call["content"].as_array().cloned().unwrap_or_default();
                 content.insert(
                     0,
                     json!({"type":"content","content":{"type":"text","text":reason}}),
                 );
-                tool_call["content"] = json!(content);
             }
+            tool_call["content"] = json!(content);
+            let grant = text(approval, "grant");
+            let mut options =
+                vec![json!({"optionId":"allow_once","name":"Allow","kind":"allow_once"})];
+            if !grant.is_empty() {
+                options.push(json!({"optionId":"allow_always","name":format!("Allow {grant} for this task"),"kind":"allow_always"}));
+            }
+            options.push(json!({"optionId":"reject_once","name":"Reject","kind":"reject_once"}));
             let question = json!({
                 "sessionId": session.id,
                 "toolCall": tool_call,
-                "options": [
-                    {"optionId":"allow_once","name":"Allow","kind":"allow_once"},
-                    {"optionId":"allow_always","name":format!("Allow {tool} for the rest of this turn"),"kind":"allow_always"},
-                    {"optionId":"reject_once","name":"Reject","kind":"reject_once"},
-                ],
+                "options": options,
             });
-            let answer = self.ask(question, turn, Some(&approval_id), session).await;
-            let approve = matches!(answer.as_deref(), Some("allow_once" | "allow_always"));
-            if answer.as_deref() == Some("allow_always") {
-                always.insert(tool.to_owned());
-            }
-            if answer.is_some() {
-                // Answered elsewhere or expired meanwhile: nothing to apply.
-                let _ = decide(approve).await;
-            }
+            let Some(answer) = self.ask(question, turn, Some(&approval_id), session).await else {
+                // Answered elsewhere, expired or cancelled: nothing to apply.
+                continue;
+            };
+            let approve = matches!(answer.as_str(), "allow_once" | "allow_always");
+            let for_task = answer == "allow_always" && !grant.is_empty();
+            // A failure means it was answered elsewhere or expired meanwhile.
+            let _ = session
+                .call(
+                    "POST",
+                    format!("/api/approvals/{approval_id}"),
+                    json!({
+                        "session_id": approval["session_id"],
+                        "decision": if approve { "approve" } else { "deny" },
+                        "scope": if for_task { "task" } else { "once" },
+                    }),
+                )
+                .await;
         }
         Ok(())
     }
