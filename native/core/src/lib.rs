@@ -15,6 +15,7 @@ pub mod config;
 pub mod context;
 #[cfg(unix)]
 pub mod control;
+pub mod effort;
 pub mod engine;
 pub mod events;
 pub mod gguf;
@@ -30,6 +31,7 @@ pub mod lsp;
 #[cfg(unix)]
 pub mod mcp;
 pub mod memory;
+pub mod mentions;
 pub mod model_registry;
 pub mod models;
 pub mod notify;
@@ -48,6 +50,7 @@ pub mod redaction;
 #[cfg(unix)]
 pub mod remote;
 pub mod retry;
+pub mod review;
 pub mod routing;
 pub mod runtime;
 pub mod sandbox;
@@ -60,6 +63,7 @@ pub mod subagents;
 pub mod symbol_index;
 pub mod system_info;
 pub mod terminal;
+pub mod textdiff;
 pub mod tools;
 pub mod usage;
 pub mod vision;

@@ -27,6 +27,11 @@ pub fn compare_index(workspace: &Path) -> String {
 pub fn compare_scoreboard(workspace: &Path) -> String {
     format!("compare_scoreboard:{}", workspace.display())
 }
+/// `native_meta`: a rewind that can be undone (JSON `review::Rewind`); the
+/// files as they were before it are checkpoint rows of task `rewind:<id>`.
+pub fn rewind_undo(id: &str) -> String {
+    format!("rewind_undo:{id}")
+}
 /// `native_meta`: one worktree task record (JSON `worktree_tasks::Record`).
 pub fn worktree_task_record(id: &str) -> String {
     format!("worktree_task:{id}")
@@ -104,6 +109,7 @@ mod tests {
             "worktree_task_index:/home/u/project"
         );
         assert_eq!(native_session("codex"), "native_session:codex");
+        assert_eq!(rewind_undo("ab12"), "rewind_undo:ab12");
         assert_eq!(subagent_run("ab12"), "subagent:ab12");
         assert_eq!(subagent_index("s1"), "subagent_index:s1");
         assert_eq!(

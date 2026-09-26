@@ -239,6 +239,21 @@ export function installFakeBackend(options: FakeOptions = {}) {
     }),
   );
 
+  const APP_BEFORE = [
+    "export const add = (a, b) => a - b;",
+    "export const sub = (a, b) => a - b;",
+    "",
+    "// Helpers",
+    "export const mul = (a, b) => a * b;",
+    "export const div = (a, b) => a / b;",
+    "export const neg = (a) => -a;",
+    "export const sq = (a) => a * a;",
+    "export const half = (a) => a / 2;",
+    "export const inc = (a) => a + 1;",
+    "",
+    "export const VERSION = 1;",
+    "",
+  ].join("\n");
   const state: Json = {
     onboarded: !options.onboarding,
     remote: {
@@ -460,6 +475,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
           mmproj: null,
           tools: true,
           tools_reason: "Chat template supports tools",
+          thinking_switch: true,
           memory: {
             weights_bytes: 9_000_000_000,
             kv_cache_bytes: 2_600_000_000,
@@ -556,10 +572,120 @@ export function installFakeBackend(options: FakeOptions = {}) {
     approvals: [] as Json[],
     /** Files a kept comparison applied to the project (uncommitted). */
     applied: [] as Json[],
+    /** Project files for @-mentions, the per-task review and rewinds. */
+    files: {
+      "src/app.ts": APP_BEFORE,
+      "src/util.ts": "export const id = (x) => x;\n",
+      "README.md": "# Demo\n",
+      "docs/guide.md": "# Guide\n",
+    } as Record<string, string | null>,
+    /** Per task: each changed file as it was before the task. */
+    checkpoints: {} as Record<string, Record<string, string | null>>,
+    /** Rewinds that can be undone: the files as they were before. */
+    rewinds: {} as Record<string, Json>,
     /** "Run in new worktree" records (native/core/src/worktree_tasks.rs). */
     worktreeTasks: [] as Json[],
     worktreeConflict: Boolean(options.worktreeConflict),
   };
+
+  /** Hunks between two versions with the same line count (the fake's
+   * edits only replace lines): each run of changed lines is one hunk. */
+  function lineHunks(before: string | null, after: string | null) {
+    const a = (before || "").split("\n");
+    const b = (after || "").split("\n");
+    if (before === null || after === null || a.length !== b.length) {
+      const lines = [
+        ...(before
+          ? a.filter(Boolean).map((text) => ({ kind: "del", text }))
+          : []),
+        ...(after
+          ? b.filter(Boolean).map((text) => ({ kind: "add", text }))
+          : []),
+      ];
+      return lines.length
+        ? [
+            {
+              id: "all",
+              header: `@@ -1,${before ? a.length - 1 : 0} +1,${after ? b.length - 1 : 0} @@`,
+              lines,
+              start: -1,
+              count: 0,
+            },
+          ]
+        : [];
+    }
+    const hunks: Json[] = [];
+    let i = 0;
+    while (i < a.length) {
+      if (a[i] === b[i]) {
+        i++;
+        continue;
+      }
+      const start = i;
+      while (i < a.length && a[i] !== b[i]) i++;
+      const count = i - start;
+      hunks.push({
+        id: `h${start}`,
+        header: `@@ -${start + 1},${count} +${start + 1},${count} @@`,
+        lines: [
+          ...a.slice(start, i).map((text) => ({ kind: "del", text })),
+          ...b.slice(start, i).map((text) => ({ kind: "add", text })),
+        ],
+        start,
+        count,
+      });
+    }
+    return hunks;
+  }
+  function reviewFile(tid: string, path: string) {
+    const before = state.checkpoints[tid]?.[path];
+    if (before === undefined)
+      throw new Error(`This task did not change ${path}`);
+    const now = state.files[path] ?? null;
+    const hunks = lineHunks(before, now);
+    let added = 0;
+    let removed = 0;
+    for (const h of hunks)
+      for (const l of h.lines) {
+        if (l.kind === "add") added++;
+        else removed++;
+      }
+    return {
+      path,
+      status:
+        before === now
+          ? "unchanged"
+          : before === null
+            ? "added"
+            : now === null
+              ? "deleted"
+              : "modified",
+      source: "checkpoint",
+      added,
+      removed,
+      binary: false,
+      hash: String(now),
+      hunks: hunks.map(({ id, header, lines }: Json) => ({
+        id,
+        header,
+        lines,
+      })),
+    };
+  }
+  /** The fake task's edit: two separate one-line changes in src/app.ts. */
+  function applyEdit(tid: string) {
+    const before = state.files["src/app.ts"];
+    state.checkpoints[tid] ||= {};
+    if (!("src/app.ts" in state.checkpoints[tid]))
+      state.checkpoints[tid]["src/app.ts"] = before;
+    state.files["src/app.ts"] = (before || "")
+      .replace("add = (a, b) => a - b", "add = (a, b) => a + b")
+      .replace("VERSION = 1", "VERSION = 2");
+  }
+  const busyProject = () =>
+    state.jobs.some((j: Json) =>
+      ["queued", "running", "cancelling"].includes(j.status),
+    );
 
   function vendorRow(key: string, v: Json, model?: Json) {
     return {
@@ -580,6 +706,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
       featured: true,
       vision: model ? Boolean(model.vision) : Boolean(v.accepts_images),
       tools: true,
+      reasoning: key === "codex" || key === "claude",
       is_default: model ? Boolean(model.is_default) : true,
       usage: v.usage,
     };
@@ -670,6 +797,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
         featured: true,
         vision: m.vision,
         tools: m.tools,
+        reasoning: Boolean(m.thinking_switch),
         is_default: false,
         usage: localUsage,
       });
@@ -1006,6 +1134,7 @@ export function installFakeBackend(options: FakeOptions = {}) {
       if (index < steps.length) {
         if (index === 0) job.status = "running";
         const [type, payload] = steps[index++];
+        if (type === "checkpoint.updated") applyEdit(tid);
         emit(sid, tid, type, payload);
         job.event_cursor = state.cursor;
         setTimeout(tick, step);
@@ -2187,6 +2316,172 @@ export function installFakeBackend(options: FakeOptions = {}) {
         target: null,
       });
       return { id, workspace };
+    }
+    if ((m = path.match(/^\/api\/sessions\/([^/]+)\/fork$/))) {
+      const parent = state.sessions.find((s: Json) => s.id === m![1]);
+      const own = state.events.filter((e: Json) => e.session_id === m![1]);
+      const at = own.find((e: Json) => e.id === body.event_id);
+      if (!at) throw new Error("event_id does not belong to this session");
+      const cut = body.before
+        ? Math.min(
+            ...own
+              .filter((e: Json) => e.task_id && e.task_id === at.task_id)
+              .map((e: Json) => e.id),
+          )
+        : at.id + 1;
+      const id = `s${state.sessions.length + 1}`;
+      state.sessions.unshift({
+        ...parent,
+        id,
+        title: `${parent.title} (edited)`,
+        updated_at: now(),
+        parent_id: parent.id,
+      });
+      for (const e of own.filter((e: Json) => e.id < cut)) {
+        state.cursor += 1;
+        state.events.push({ ...e, id: state.cursor, session_id: id });
+      }
+      return {
+        fork: { id, title: `${parent.title} (edited)` },
+        original: { id: parent.id },
+        original_intact: true,
+        forked_from_event: body.event_id,
+      };
+    }
+    if (path === "/api/agents")
+      return {
+        agents: [
+          {
+            name: "explore",
+            description: "Reads the project and answers questions",
+            mode: "read-only",
+            source: "builtin",
+            path: "",
+          },
+        ],
+        issues: [],
+      };
+    if (path === "/api/workspace/mentions") {
+      const query = (q.get("q") || "").toLowerCase();
+      const dirs = new Set<string>();
+      for (const file of Object.keys(state.files))
+        if (state.files[file] !== null) {
+          const parts = file.split("/");
+          for (let i = 1; i < parts.length; i++)
+            dirs.add(parts.slice(0, i).join("/"));
+        }
+      const all = [
+        ...[...dirs].map((path) => ({ path, kind: "dir" })),
+        ...Object.keys(state.files)
+          .filter((f) => state.files[f] !== null)
+          .map((path) => ({ path, kind: "file" })),
+      ];
+      const fuzzy = (text: string) => {
+        let at = 0;
+        for (const c of text.toLowerCase()) if (c === query[at]) at++;
+        return at === query.length;
+      };
+      return {
+        items: all
+          .filter((item) => fuzzy(item.path))
+          .sort((a, b) => a.path.length - b.path.length)
+          .slice(0, Number(q.get("limit") || 12)),
+        truncated: false,
+      };
+    }
+    if ((m = path.match(/^\/api\/review\/tasks\/([^/]+)$/))) {
+      const tid = m[1];
+      return {
+        task_id: tid,
+        session_id: state.activeSession,
+        workspace,
+        busy: busyProject(),
+        files: Object.keys(state.checkpoints[tid] || {}).map((file) => {
+          const { hunks: _hunks, hash: _hash, ...row } = reviewFile(tid, file);
+          return row;
+        }),
+      };
+    }
+    if ((m = path.match(/^\/api\/review\/tasks\/([^/]+)\/file$/)))
+      return reviewFile(m[1], q.get("path") || "");
+    if ((m = path.match(/^\/api\/review\/tasks\/([^/]+)\/undo$/))) {
+      const tid = m[1];
+      if (busyProject())
+        throw new Error(
+          "Wait for the running task to finish before undoing changes",
+        );
+      const before = state.checkpoints[tid]?.[body.path];
+      if (before === undefined)
+        throw new Error(`This task did not change ${body.path}`);
+      if (body.hunk) {
+        const hunk = lineHunks(before, state.files[body.path]).find(
+          (h: Json) => h.id === body.hunk,
+        );
+        if (!hunk || hunk.start < 0)
+          throw new Error(
+            "This change is no longer in the file. Refresh the review",
+          );
+        const lines = (state.files[body.path] || "").split("\n");
+        const old = (before || "").split("\n");
+        for (let i = hunk.start; i < hunk.start + hunk.count; i++)
+          lines[i] = old[i];
+        state.files[body.path] = lines.join("\n");
+      } else state.files[body.path] = before;
+      emit(state.activeSession, tid, "review.undone", {
+        task_id: tid,
+        path: body.path,
+        hunk: body.hunk || null,
+        whole: !body.hunk,
+      });
+      return reviewFile(tid, body.path);
+    }
+    if ((m = path.match(/^\/api\/checkpoints\/tasks\/([^/]+)$/))) {
+      const saved = state.checkpoints[m[1]] || {};
+      const paths = Object.keys(saved).filter(
+        (f) => saved[f] !== state.files[f],
+      );
+      return {
+        rewindable: paths.length > 0,
+        checkpoint: { changes: paths.length, paths },
+      };
+    }
+    if ((m = path.match(/^\/api\/checkpoints\/tasks\/([^/]+)\/restore$/))) {
+      const tid = m[1];
+      const saved = state.checkpoints[tid] || {};
+      const paths = Object.keys(saved).filter(
+        (f) => saved[f] !== state.files[f],
+      );
+      const undoId = `r${Object.keys(state.rewinds).length + 1}`;
+      state.rewinds[undoId] = {
+        tid,
+        files: Object.fromEntries(paths.map((f) => [f, state.files[f]])),
+      };
+      for (const f of paths) state.files[f] = saved[f];
+      const sid =
+        state.events.find((e: Json) => e.task_id === tid)?.session_id ||
+        state.activeSession;
+      emit(sid, tid, "checkpoint.restored", {
+        task_id: tid,
+        paths,
+        undo_id: undoId,
+      });
+      return { ok: true, restored: paths, undo_id: undoId };
+    }
+    if ((m = path.match(/^\/api\/checkpoints\/rewinds\/([^/]+)\/undo$/))) {
+      const record = state.rewinds[m[1]];
+      if (!record) throw new Error("This rewind can no longer be undone");
+      delete state.rewinds[m[1]];
+      const paths = Object.keys(record.files);
+      for (const f of paths) state.files[f] = record.files[f];
+      const sid =
+        state.events.find((e: Json) => e.task_id === record.tid)?.session_id ||
+        state.activeSession;
+      emit(sid, record.tid, "checkpoint.rewind_undone", {
+        task_id: record.tid,
+        paths,
+        undo_id: m[1],
+      });
+      return { ok: true, restored: paths, task_id: record.tid };
     }
     if ((m = path.match(/^\/api\/sessions\/([^/]+)\/target$/))) {
       const session = state.sessions.find((s: Json) => s.id === m![1]);
