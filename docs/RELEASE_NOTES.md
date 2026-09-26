@@ -20,6 +20,8 @@ follow below.
 - **Notifications** when a task needs you, fails, hits a plan limit or
   finishes; click to jump to it. The sidebar marks what needs attention.
 - **See context and cost** for every model in the status bar.
+- **Preview the app you're building** inside ShadowCode and click an
+  element to show the agent exactly what to change.
 - **A real terminal**, a **Git tab** that goes from commit to pull request
   with live CI checks, and **voice dictation** that runs on your computer.
 

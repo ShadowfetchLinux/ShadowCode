@@ -38,6 +38,11 @@ Everyday use:
   `glab` with live CI checks (or the web compare page).
 - **Tools tab** in the drawer for Goals, Background processes, Worktrees,
   Automations and Issues; Settings › Advanced keeps configuration only.
+- **Preview.** The drawer's Preview tab finds the project's dev servers and
+  shows them through a private loopback proxy (phone, tablet and desktop
+  widths; hot reload kept). **Pick element** sends an element's selector,
+  text, role, size, key styles and HTML to your next message; page console
+  errors can be attached too. Unavailable over remote access.
 - **Voice input.** Hold the mic button (or Ctrl+Shift+Space) to dictate into
   the composer with whisper.cpp on this computer; models (74–141 MB) download
   only on request. OpenRouter transcription is optional and off by default.
