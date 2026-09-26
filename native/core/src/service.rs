@@ -66,6 +66,8 @@ mod issues;
 mod jobs;
 mod memory;
 mod model_catalog;
+#[cfg(unix)]
+mod remote;
 mod review;
 mod sandbox;
 mod sessions;
@@ -104,6 +106,9 @@ pub struct Service {
     job_owner: Option<JobOwner>,
     /// This view's interactive terminals (a forked view starts with none).
     terminals: Arc<crate::terminal::Terminals>,
+    /// Remote access and phone notifications (one per engine).
+    #[cfg(unix)]
+    remote: Arc<crate::remote::Manager>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -118,6 +123,8 @@ impl Service {
             .or_else(|| paths.remembered_workspace())
             .unwrap_or(std::env::current_dir()?);
         let workspace = Workspace::open(&workspace)?.path;
+        #[cfg(unix)]
+        let remote = Arc::new(crate::remote::Manager::new(paths.clone()));
         let engine = Engine::open(paths)?;
         let terminals = Arc::new(crate::terminal::Terminals::new(engine.notifier()));
         Ok(Self {
@@ -132,6 +139,8 @@ impl Service {
             remember_selection: true,
             job_owner: None,
             terminals,
+            #[cfg(unix)]
+            remote,
         })
     }
     /// A transport client shares the engine, but has its own navigation state.
@@ -162,7 +171,14 @@ impl Service {
             job_owner: None,
             // An attached window's terminals live as long as its view.
             terminals: Arc::new(crate::terminal::Terminals::new(self.engine.notifier())),
+            #[cfg(unix)]
+            remote: self.remote.clone(),
         })
+    }
+    /// Remote access (web interface, pairing, phone notifications).
+    #[cfg(unix)]
+    pub fn remote(&self) -> &Arc<crate::remote::Manager> {
+        &self.remote
     }
     pub(crate) fn with_job_owner(mut self, owner: JobOwner) -> Self {
         self.job_owner = Some(owner);
@@ -261,6 +277,8 @@ impl Service {
             "review" => self.review_routes(&call).await,
             "feed" => self.feed_routes(&call).await,
             "terminals" => self.terminal_routes(&call).await,
+            #[cfg(unix)]
+            "remote" => self.remote_routes(&call).await,
             "git" => self.forge_routes(&call).await,
             "background" => self.background_routes(&call).await,
             "code-intel" => self.code_intel_routes(&call).await,

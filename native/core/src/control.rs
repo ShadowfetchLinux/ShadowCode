@@ -396,6 +396,13 @@ impl Server {
             finished: AtomicBool::new(false),
             done: Notify::new(),
         });
+        // Persistent owners (the desktop and `shadowcode serve`) run remote
+        // access and phone notifications; both stop when this endpoint does.
+        if matches!(mode.as_str(), "desktop" | "server") {
+            service
+                .remote()
+                .activate(&service, state.cancel.child_token());
+        }
         let running = state.clone();
         let profile = endpoint.profile.clone();
         tokio::spawn(async move {

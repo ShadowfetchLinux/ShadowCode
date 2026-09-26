@@ -159,6 +159,60 @@ pub fn redact_value(value: &mut Value) -> usize {
     }
 }
 
+/// The text that replaces a redacted secret.
+pub fn placeholder() -> &'static str {
+    PLACEHOLDER
+}
+
+/// Object keys whose string values are credentials wherever they appear.
+const SECRET_KEYS: &[&str] = &[
+    "api_key",
+    "apikey",
+    "password",
+    "secret",
+    "client_secret",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "authorization",
+    "bearer",
+    "token",
+];
+
+/// Remove recognizable credentials from an API response without the
+/// high-entropy heuristic, which would also hide IDs and hashes: values of
+/// credential-named keys and text matching known key formats (private keys,
+/// GitHub/Slack/AWS/OpenAI-style keys, JWTs, bearer headers).
+pub fn redact_known_secrets(value: &mut Value) -> usize {
+    match value {
+        Value::String(text) => {
+            let mut count = 0;
+            for pattern in patterns() {
+                if pattern.is_match(text) {
+                    count += pattern.find_iter(text).count();
+                    *text = pattern.replace_all(text, PLACEHOLDER).into_owned();
+                }
+            }
+            count
+        }
+        Value::Array(items) => items.iter_mut().map(redact_known_secrets).sum(),
+        Value::Object(map) => map
+            .iter_mut()
+            .map(|(key, value)| {
+                let named = SECRET_KEYS.contains(&key.to_ascii_lowercase().as_str());
+                match value {
+                    Value::String(text) if named && !text.is_empty() && text != PLACEHOLDER => {
+                        *text = PLACEHOLDER.to_owned();
+                        1
+                    }
+                    _ => redact_known_secrets(value),
+                }
+            })
+            .sum(),
+        _ => 0,
+    }
+}
+
 pub fn secret_file_refusal(path: &str) -> Value {
     serde_json::json!({
         "ok": false,

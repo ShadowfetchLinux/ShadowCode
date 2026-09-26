@@ -249,6 +249,14 @@ daemon or automatically restart jobs. Opening the GUI while `serve` or a TUI
 owns the same profile attaches to that engine. The window keeps its own project
 and conversation selection and shows a notice that closing it leaves shared
 work running. A temporary foreground command cannot host an attached desktop.
+
+`shadowcode serve --remote` also serves the web interface for phones and other
+computers (on the saved address, `127.0.0.1:7390` by default;
+`--remote-address IP:PORT` for this run only) and prints a one-time pairing
+link with its QR code. `shadowcode remote` shows status and paired devices,
+`shadowcode remote pair [--host IP]` prints a new pairing link, and
+`shadowcode remote revoke ID_PREFIX` or `--all` unpairs devices. See
+[REMOTE.md](REMOTE.md).
 See [desktop attachment](NATIVE_DESKTOP.md#attaching-to-a-running-engine).
 
 Model [background tools](NATIVE_BACKGROUND.md#asking-a-model-to-manage-a-server)

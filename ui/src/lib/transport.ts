@@ -1,5 +1,6 @@
 import { invoke as tauriInvoke, isTauri } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
+import { createRemoteBridge } from "./remote";
 
 /** The window talks to the in-process engine through one bridge: IPC requests,
  * native commands (pickers, external links) and engine wake-up events. */
@@ -35,17 +36,67 @@ function testBridge(): Bridge | undefined {
   return undefined;
 }
 
+export type TransportKind = "test" | "tauri" | "remote" | "none";
+
+/** Which bridge the interface uses: the Playwright fake (test builds only),
+ * the desktop's IPC, or HTTP to a ShadowCode remote access server when the
+ * page was loaded over http(s) in an ordinary browser. Unit tests get none
+ * unless they install one. */
+export function chooseTransport(env: {
+  test: boolean;
+  tauri: boolean;
+  protocol: string;
+  unitTest: boolean;
+}): TransportKind {
+  if (env.test) return "test";
+  if (env.tauri) return "tauri";
+  if (!env.unitTest && (env.protocol === "http:" || env.protocol === "https:"))
+    return "remote";
+  return "none";
+}
+
+export function transportKind(): TransportKind {
+  return chooseTransport({
+    test: Boolean(testBridge()),
+    tauri: isTauri(),
+    protocol: typeof location === "undefined" ? "" : location.protocol,
+    unitTest: import.meta.env.MODE === "test",
+  });
+}
+
+const unpairedListeners = new Set<() => void>();
+let remoteBridge: ReturnType<typeof createRemoteBridge> | undefined;
+
+/** Called when the remote server stops accepting this device's token. */
+export function onUnpaired(listener: () => void) {
+  unpairedListeners.add(listener);
+  return () => void unpairedListeners.delete(listener);
+}
+
 function bridge(): Bridge {
   const fake = testBridge();
   if (fake) return fake;
-  if (!isTauri())
-    throw new Error(
-      "ShadowCode's interface runs inside the desktop app. Start it with `shadowcode`.",
-    );
-  return tauriBridge;
+  switch (transportKind()) {
+    case "tauri":
+      return tauriBridge;
+    case "remote":
+      remoteBridge ??= createRemoteBridge({
+        onUnpaired: () => unpairedListeners.forEach((listener) => listener()),
+      });
+      return remoteBridge;
+    default:
+      throw new Error(
+        "ShadowCode's interface runs inside the desktop app or from `shadowcode serve --remote`.",
+      );
+  }
 }
 
-export const isNative = () => Boolean(testBridge()) || isTauri();
+/** An engine is reachable (desktop, remote access, or the test fake). */
+export const isNative = () => transportKind() !== "none";
+/** Running in a browser against a remote access server. */
+export const isRemote = () => transportKind() === "remote";
+/** Native file and folder pickers exist (the desktop app). */
+export const canPickFiles = () => ["tauri", "test"].includes(transportKind());
 
 /** Errors keep the backend body so callers can read structured answers such as
  * a consent request (`needs_consent`). */

@@ -1,0 +1,173 @@
+/* Remote access: the pairing screen in a browser, Settings › Remote access,
+ * and phone-width fixes for the web interface. */
+
+.remote-gate {
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: max(40px, env(safe-area-inset-top)) 16px 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+}
+.remote-gate h1 {
+  font-size: 24px;
+  letter-spacing: -0.4px;
+  text-align: center;
+}
+.remote-gate form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.remote-gate > button {
+  align-self: center;
+}
+
+.remote-settings {
+  align-content: start;
+}
+.remote-settings h4 {
+  margin-top: 20px;
+}
+.remote-address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+.remote-address .field {
+  flex: 1 1 220px;
+  margin: 0;
+}
+.remote-address .remote-port {
+  flex: 0 0 96px;
+}
+.remote-address > button {
+  margin-bottom: 4px;
+}
+.remote-warning {
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.remote-pairing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  margin-top: 12px;
+}
+.remote-pairing > div {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.qr-code {
+  width: 208px;
+  height: 208px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.remote-link code {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  user-select: all;
+}
+.remote-devices {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.remote-devices li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.remote-devices li > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.remote-devices strong {
+  overflow-wrap: anywhere;
+}
+.remote-events {
+  border: 0;
+  padding: 0;
+  margin: 12px 0 0;
+}
+.remote-events legend {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+/* Phones (the web interface over remote access) ------------------------------ */
+/* A phone-width composer cannot fit the model picker, the mode switch and the
+ * buttons on one line: the picker takes its own row above them. */
+@container (max-width: 440px) {
+  .composer-footer {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .composer-footer > .unified-picker {
+    order: -1;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .composer-footer .unified-picker-trigger {
+    max-width: 100%;
+  }
+  /* Controls pack onto as few rows as fit; Send stays at the right. */
+  .composer-footer > .grow {
+    flex: 0 0 0;
+  }
+  .composer-footer > .submit-btn {
+    margin-left: auto;
+  }
+  .composer-footer > .submit-btn + .submit-btn {
+    margin-left: 0;
+  }
+}
+@media (max-width: 480px) {
+  /* Settings: the section list becomes a scrolling row above the page, so
+   * the page keeps the full width. */
+  .settings {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: min(92dvh, 760px);
+  }
+  .settings-nav {
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    padding: 10px 10px 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: none;
+  }
+  .settings-nav h2 {
+    padding: 0 8px 0 4px;
+    font-size: 15px;
+  }
+  .settings-nav button {
+    flex: none;
+  }
+  .settings-body {
+    padding: 14px 16px;
+  }
+  .qr-code {
+    width: min(208px, 100%);
+    height: auto;
+  }
+}

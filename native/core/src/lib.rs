@@ -51,6 +51,8 @@ pub mod process;
 pub mod project;
 pub mod prompt_cache;
 pub mod redaction;
+#[cfg(unix)]
+pub mod remote;
 pub mod retry;
 pub mod review;
 pub mod routing;

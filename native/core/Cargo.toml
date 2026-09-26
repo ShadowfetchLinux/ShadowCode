@@ -51,6 +51,9 @@ tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 tree-sitter-java = "0.23"
 streaming-iterator = "0.1.9"
+# Pairing QR codes for remote access (Settings › Remote access and
+# `shadowcode serve --remote`). MIT OR Apache-2.0, no dependencies.
+qrcode = { version = "=0.14.1", default-features = false }
 # Automation schedules: local wall-clock times (daylight saving included).
 # Already in the dependency tree through rmcp/schemars; MIT OR Apache-2.0.
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
