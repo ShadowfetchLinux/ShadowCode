@@ -1,4 +1,6 @@
 //! Native application engine shared by the desktop, CLI, and MCP transports.
+#[cfg(unix)]
+pub mod acp_server;
 pub mod agents;
 pub mod allowance;
 pub mod approvals;

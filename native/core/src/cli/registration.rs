@@ -1,6 +1,6 @@
 //! Inert client configuration. No secret lookup, shell command, configuration
 //! write, or server connection occurs while rendering a registration.
-use super::args::McpClient;
+use super::args::{AcpClient, McpClient};
 use anyhow::{ensure, Context, Result};
 use serde_json::json;
 use std::path::Path;
@@ -37,6 +37,26 @@ pub(super) fn stdio(client: McpClient, executable: &Path, args: &[String]) -> Re
     Ok(serde_json::to_string_pretty(
         &json!({"mcpServers":{"shadowcode":server}}),
     )?)
+}
+
+/// An ACP agent-server entry for an editor. Zed reads `agent_servers` in
+/// its settings.json; JetBrains AI Assistant reads the same shape from
+/// `~/.jetbrains/acp.json`.
+pub(super) fn acp(client: AcpClient, executable: &Path, args: &[String]) -> Result<String> {
+    let executable = executable
+        .to_str()
+        .context("ACP executable path must be UTF-8")?;
+    let mut server = json!({"command":executable,"args":args,"env":{}});
+    Ok(match client {
+        AcpClient::Generic => serde_json::to_string_pretty(&server)?,
+        AcpClient::Zed => {
+            server["type"] = json!("custom");
+            serde_json::to_string_pretty(&json!({"agent_servers":{"ShadowCode":server}}))?
+        }
+        AcpClient::Jetbrains => {
+            serde_json::to_string_pretty(&json!({"agent_servers":{"ShadowCode":server}}))?
+        }
+    })
 }
 
 pub(super) fn http(client: McpClient, url: &str, token_env: &str) -> Result<String> {
@@ -109,6 +129,28 @@ mod tests {
             assert!(stdio(client, Path::new("/tmp/${EXEC}/app"), &[]).is_err());
             assert!(stdio(client, Path::new("/app"), &["${WORKSPACE}".into()]).is_err());
         }
+    }
+
+    #[test]
+    fn acp_entries_name_the_executable_and_arguments_for_each_editor() {
+        let path = "/opt/Shadow Code/shadowcode \"x\"";
+        let args = vec!["--profile".into(), "/p".into(), "acp".into()];
+        let zed: Value =
+            serde_json::from_str(&acp(AcpClient::Zed, Path::new(path), &args).unwrap()).unwrap();
+        let entry = &zed["agent_servers"]["ShadowCode"];
+        assert_eq!(entry["type"], "custom");
+        assert_eq!(entry["command"], path);
+        assert_eq!(entry["args"][2], "acp");
+        let jetbrains: Value =
+            serde_json::from_str(&acp(AcpClient::Jetbrains, Path::new(path), &args).unwrap())
+                .unwrap();
+        assert!(jetbrains["agent_servers"]["ShadowCode"]
+            .get("type")
+            .is_none());
+        let generic: Value =
+            serde_json::from_str(&acp(AcpClient::Generic, Path::new(path), &args).unwrap())
+                .unwrap();
+        assert_eq!(generic["args"][0], "--profile");
     }
 
     #[test]
