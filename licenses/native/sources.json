@@ -11,6 +11,22 @@
     },
     {
       "packages": [
+        "dasp_sample@0.11.0"
+      ],
+      "file": "dasp_sample-0.11.0/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/RustAudio/dasp/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-APACHE",
+      "sha256": "756c8d2ab2dc24f256e1455b5f03937f4933d83d7bc9f2d55009fc962377d512"
+    },
+    {
+      "packages": [
+        "dasp_sample@0.11.0"
+      ],
+      "file": "dasp_sample-0.11.0/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/RustAudio/dasp/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT",
+      "sha256": "b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0"
+    },
+    {
+      "packages": [
         "defmt-parser@1.0.0"
       ],
       "file": "defmt-parser-1.0.0/LICENSE-APACHE",
@@ -293,6 +309,14 @@
       "url": "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/2b7475f6d664efbad4d4315c94ecec9640831e5b/LICENSE",
       "runtime": "NOTICES/SPIRV-Headers-LICENSE",
       "sha256": "ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613"
+    },
+    {
+      "packages": [
+        "whisper-rs-sys@0.15.0"
+      ],
+      "file": "whisper-rs-sys-0.15.0/LICENSE",
+      "url": "https://codeberg.org/tazz4843/whisper-rs/raw/commit/7558e1b72f54f2f22a53589afb77e65681834c36/LICENSE",
+      "sha256": "f0510d3b9d1223c45e8fdd2b49270ec8734fff491c7f7d1b948ee70162e1ceff"
     }
   ]
 }

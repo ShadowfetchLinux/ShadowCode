@@ -478,6 +478,24 @@ project (**Settings › Code intelligence**):
 
 Details: [code intelligence](CODE_INTELLIGENCE.md).
 
+## Voice input
+
+Dictate instead of typing: **hold** the microphone button next to Attach (or
+**Ctrl+Shift+Space**) while you talk and let go, or click it once to start and
+again to stop. The words go in where the cursor is; nothing is sent until you
+press Send. While it listens, the button shows a level meter and a pill above
+it shows the time and, with a local model, the words so far. **Esc** or **×**
+throws the recording away, and **Undo** removes what was just inserted. Say
+"new line" or "new paragraph" to break lines.
+
+The first time, the button opens **Settings › Voice**: install a model
+(Whisper base English, 141 MB, is recommended; tiny is 74 MB; a multilingual
+base model is 141 MB). Transcription then runs on this computer and the audio
+never leaves it. If you have an OpenRouter key you can choose **OpenRouter**
+instead (each recording is uploaded and billed, about $0.001 per minute). It
+records from your system's default microphone. Details:
+[voice input](VOICE.md).
+
 ## Offline and web-off
 
 In **Settings › Permissions & network**:
@@ -489,6 +507,8 @@ In **Settings › Permissions & network**:
   or usage, and a cloud job is refused with
   "Offline mode: choose a model that runs on this computer". Shell commands
   that reach the network (for example `curl`, `npm` or `pip`) are denied.
+  Voice input keeps working with a local model; OpenRouter transcription and
+  model downloads are refused.
 
 ## The shell sandbox
 

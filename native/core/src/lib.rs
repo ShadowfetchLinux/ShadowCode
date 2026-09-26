@@ -71,6 +71,7 @@ pub mod textdiff;
 pub mod tools;
 pub mod usage;
 pub mod vision;
+pub mod voice;
 pub mod web;
 pub mod workflows;
 pub mod workspace;

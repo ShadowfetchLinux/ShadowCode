@@ -372,6 +372,10 @@ export function Stage({
           locked: composerLocked,
           onOpen: compare.open,
         }}
+        voice={{
+          onError: (message) => toast(message, "err"),
+          onOpenSettings: () => openSettings("voice"),
+        }}
         worktree={{
           reason: actions.worktreeBlocked,
           enabled: actions.canRunInWorktree,

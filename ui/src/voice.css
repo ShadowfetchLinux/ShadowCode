@@ -1,0 +1,81 @@
+/* Dictation: the composer mic button, its level meter and listening pill. */
+/* The pill is placed against .composer-shell (the nearest positioned box),
+   above the message box, so it never covers the text being edited. */
+.voice-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mic-btn.is-on {
+  color: var(--surface);
+  background: var(--danger);
+}
+.mic-btn.is-on:hover {
+  background: var(--danger);
+  filter: brightness(1.08);
+}
+.voice-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 16px;
+}
+.voice-meter span {
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: center;
+  transition: transform 90ms linear;
+}
+.voice-status {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 16px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(420px, 70vw);
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.voice-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+.voice-partial {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.voice-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+@keyframes voice-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-dot {
+    animation: none;
+  }
+  .voice-meter span {
+    transition: none;
+  }
+}
