@@ -776,6 +776,91 @@ redacted.
   "pass"|"fail"|"pending"|"none", url, checked_at}` from `gh pr checks
   --json`. GitLab answers `supported: false` with the pipelines URL.
 
+## Issues
+
+"Start from an issue" (see [AUTOMATIONS.md](AUTOMATIONS.md#start-from-an-issue)).
+Uses the Git panel's remote choice and CLI readiness check, with the user's
+sign-in; 60 s limit per call.
+
+- `GET /api/issues?remote=&limit=` (limit 1–100, default 30) → `{ready: true,
+  remote, provider: "github"|"gitlab", remote_info, cli, issues: [Issue]}`
+  from `gh issue list --state open --json …` or `glab issue list --output
+  json`. When issues cannot be listed: `{ready: false, provider, cli, issues:
+  [], reason?}` — `reason` for no remote or another forge; otherwise `cli`
+  says whether the CLI is installed and signed in (same shape as
+  `GET /api/git/pr`).
+- `GET /api/issues/<n>?remote=` → `{provider, issue: Issue, task, marker,
+  branch}`. `task` is the text to review in the composer: `marker` + title,
+  link, the body (8000 characters at most) and the newest five comments
+  (1500 each), quoted and introduced as a description rather than
+  instructions. `marker` is `Resolve GitHub issue #<n>:` (or GitLab); the
+  window offers a closing pull request when a completed task starts with it.
+  `branch` is `issue-<n>-<slug>` (ASCII words of the title, about 40
+  characters). GitLab comments come from `glab api …/notes` without system
+  notes; an error there leaves them out.
+- `Issue` is `{number, title, body, url, author, labels: string[], state
+  ("open", …), updated_at, comments: [{author, body, created_at}] (oldest
+  first), comment_count}`. Lists carry no bodies or comments.
+
+## Automations
+
+Scheduled prompts (see [AUTOMATIONS.md](AUTOMATIONS.md)). Times are Unix
+seconds. Stored in SQLite (`automations`, `automation_runs`, schema 26);
+conversations a run creates carry `session_meta` `automation_id`,
+`automation_run` and, while in a temporary worktree,
+`automation_worktree`.
+
+- `Automation` is `{id, workspace, name, prompt, model ("" = the project's
+  model), mode: "code"|"plan"|"ask", schedule, timezone: "local"|"utc",
+  options, paused, next_run_at|null, created_at, updated_at, description,
+  running_run: run id|null, last_run: Run|null}`.
+- `schedule` is one of `{kind: "hourly", minute}`, `{kind: "daily", time:
+  "HH:MM"}`, `{kind: "weekdays", time}`, `{kind: "weekly", day: 0–6 (Sunday
+  first), time}`, `{kind: "cron", expr}` (five fields or `@hourly`,
+  `@daily`, `@weekly`, `@monthly`, `@yearly`; day-of-month and weekday both
+  restricted match either).
+- `options` is `{checkout: "worktree"|"main", permission:
+  "project"|"read_only", on_approval: "stop"|"wait", max_runtime_minutes
+  (1–1440, default 60), catch_up_minutes (0–10080, default 120), notify}`.
+- `Run` is `{id, automation_id, status, trigger: "schedule"|"catch_up"|"manual",
+  scheduled_for|null, started_at, finished_at|null, duration|null,
+  session_id|null, job_id|null, task_id|null, summary, detail, usage (the
+  job's usage)|null, worktree: {id, path, branch, base_commit, removed?}|null,
+  missed}`. `status` is `running`, `completed`, `failed`, `cancelled`,
+  `timed_out`, `needs_approval`, `interrupted`, `missed` or `skipped`. The
+  newest 200 rows per automation are kept.
+
+Routes:
+
+- `GET /api/automations?all=` → `{workspace, automations, scheduler, now}`;
+  `scheduler` is false in engines that do not run schedules (one-shot CLI).
+- `POST /api/automations {name, prompt, model, mode, schedule, timezone,
+  options, workspace?}` → `Automation`. Needs a trusted project; refused when
+  the schedule never runs; at most 50 per project.
+- `POST /api/automations/preview {schedule, timezone}` → `{ok: true,
+  description, next: [3 times], now}` or `{ok: false, error}`.
+- `GET /api/automations/<id>` → `Automation` plus `runs` (newest first,
+  `?limit=` up to 200); `GET /api/automations/<id>/runs` → `{runs}`.
+- `POST /api/automations/<id>` (same body as create) → `Automation`; the next
+  time is recomputed from now.
+- `DELETE /api/automations/<id>` → `{ok}`; refused while it runs. Its
+  conversations stay.
+- `POST /api/automations/<id>/pause` → `Automation` (`next_run_at: null`);
+  `…/resume` → next time after now (missed paused time is not caught up).
+- `POST /api/automations/<id>/run` → the new `Run` (`status: "running"`);
+  refused while one runs. `…/stop` cancels the run's job and returns its
+  finished `Run`.
+
+Scheduler: the desktop and `shadowcode serve` tick every 20 s. A due time
+runs when it is at most 2 minutes late, or later within `catch_up_minutes`
+(`trigger: "catch_up"`); older ones write one `missed` row with `missed` =
+the number of times. A time that comes while a run is going writes a
+`skipped` row. Runs use the automation's model, else the project's execution
+target, else the configured model; `mode` `ask` runs as review. Pending
+approvals for the run's task stop it (`needs_approval`) unless `on_approval`
+is `wait`. Events: `automation.started`, `automation.waiting` and
+`automation.finished` (`{automation_id, run_id, name, status, notify,
+summary, detail}`) on the run's conversation.
 ## Worktree tasks (run in a new worktree)
 
 A task can start as a new conversation in a fresh managed worktree of the
@@ -844,6 +929,14 @@ Cancelled tasks never notify. Settings (`ui` group, all default on except
 sound): `notify` (all), `notify_approval`, `notify_failed`, `notify_limit`,
 `notify_finished`, `notify_sound`. The selection lives in
 `shadowcode_core::notify` (`select`, `should_show`, `hint`).
+
+Automation runs are announced by `automation.finished` instead of their
+task's `agent.completed` (the desktop remembers run conversations from
+`automation.started`): only when the automation's `notify` option is on,
+"ShadowCode · <name>" with the summary (finished), or why it stopped
+(approval needed, time limit, failure; under `notify_finished` /
+`notify_failed`). A run stopped by the user does not notify. An approval a
+run waits for notifies like any other `approval.requested`.
 
 - Engine broadcast `approval.expiring {approval_id, session_id, tool,
   command, expires_at, seconds_left}` (with `session_id`, `task_id`): sent
@@ -919,7 +1012,10 @@ Remote policy (`remote::policy`): `/api/remote*`, `/api/views`,
 `?path=` names a secret file (`redaction::is_secret_path`) is refused; a body
 containing `[redacted secret]` (or the hidden-file marker) is refused;
 `workspace` fields and `/api/projects*` `path` inside the profile's config,
-data or state folder are refused. Responses have secret files' `content`,
+data or state folder are refused. Everything else, including routes that
+start agent work (`/api/jobs`, `/api/automations*`, `/api/review/*`,
+`/api/compare`, approvals) and `/api/issues*`, is allowed: agent commands
+still go through approvals. Responses have secret files' `content`,
 `diff`, `hunks`… blanked (and their sections dropped from unified diffs) and
 recognizable credentials replaced by `[redacted secret]`.
 
@@ -1041,3 +1137,46 @@ Details (safety branch):
   process note that the edits are no longer on disk.
 - `POST /api/workspace/attach` and `/attach-image` work in read-only
   projects (trust still required); files go to `.shadow/attachments/`.
+
+## ACP agent (`shadowcode acp`)
+
+`shadowcode acp` is another client of this API; it adds no route. Editors
+speak the Agent Client Protocol to it ([ACP_SERVER.md](ACP_SERVER.md)) and it
+calls the engine over the private local socket, each request scoped to the
+ACP session's project (the engine forks its project selection per request,
+so editor threads never change the desktop's selected project):
+
+- `session/new` → `POST /api/sessions {workspace, title: ""}` after checking
+  `trusted_workspaces` (the ACP session id is the conversation id; `--trust`
+  adds the folder with `grant_trust`).
+- `session/load` / `resume` → `GET /api/sessions/{id}?view=window` (the
+  folder must match `cwd`; `execution_target` becomes the model option),
+  `GET /api/jobs/current?session_id=&include_finished=true` (its `mode`
+  becomes the ACP mode: `plan` → plan, `review` → ask, else code), and for
+  load `GET /api/sessions/{id}/events?after=&limit=1000` until exhausted.
+- `session/list` → `GET /api/sessions?workspace=&limit=`.
+- Model option → `GET /api/picker` (rows with `availability: "ready"`,
+  cached a minute per project); choosing one → `POST /api/sessions/{id}/target`.
+- `session/prompt` → images through `POST /api/workspace/attach-image`, then
+  one owned submission (`POST /api/owned-jobs`, then `/api/jobs` with
+  `{workspace, session_id, task, model, purpose, images, mentions,
+  handoff_consent, queue: true}`; resource links to project files the
+  editor cannot read for us become `mentions`;
+  purpose `coder` / `planner` / `reviewer` for code / plan / ask). A 409
+  `needs_consent` answer becomes a permission request and is resent with
+  `handoff_consent: true` when allowed. Progress is read with
+  `GET /api/jobs/{id}/events?after=&limit=512` every 100 ms, approvals with
+  `GET /api/approvals?session_id=`, and answered with
+  `POST /api/approvals/{id} {session_id, decision, scope}` (`scope: "task"`
+  for "allow always", offered only when the approval has a `grant`);
+  `session/cancel` → `POST /api/jobs/{id}/cancel`.
+- Event mapping: `model.stream` / final `model.delta` → `agent_message_chunk`
+  (a final delta sends only the unstreamed rest); `tool.started` →
+  `tool_call` (in progress, with kind, locations and edit diffs);
+  `tool.completed` → `tool_call_update` (completed/failed, output text,
+  `rawOutput` up to 64 KB); `plan.updated` → `plan`; `agent.warning`,
+  `routing.selected|fallback`, `model.retry`, `context.compacted` →
+  `agent_thought_chunk`; `user.message` → `user_message_chunk` on replay only.
+- When no desktop or server is running the agent owns the engine;
+  `GET /api/runtime` then reports `mode: "acp"` and `persistent: true`, and a
+  desktop attaches to it as a view.

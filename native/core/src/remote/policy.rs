@@ -253,7 +253,19 @@ mod tests {
             );
             assert!(check(path, &Value::Null, &on, &paths).is_ok());
         }
-        assert!(check("/api/feed", &Value::Null, &off, &paths).is_ok());
+        // Routes that start agent work (tasks, automations, reviews) are
+        // allowed: their commands still go through approvals.
+        for path in [
+            "/api/feed",
+            "/api/jobs",
+            "/api/automations",
+            "/api/automations/a1/run",
+            "/api/issues?state=open",
+            "/api/review/tasks/t1/undo",
+            "/api/approvals/a1",
+        ] {
+            assert!(check(path, &Value::Null, &off, &paths).is_ok(), "{path}");
+        }
     }
 
     #[test]

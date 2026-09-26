@@ -27,6 +27,8 @@ impl Backend {
             match Service::open(paths.clone(), Some(workspace.clone())) {
                 Ok(service) => {
                     let server = control::Server::start(service.clone())?;
+                    // The engine owner runs scheduled automations.
+                    service.engine.start_automations();
                     return Ok(Self::Owned { service, server });
                 }
                 Err(error) if attempt < 29 && error.to_string().contains("already running") => {

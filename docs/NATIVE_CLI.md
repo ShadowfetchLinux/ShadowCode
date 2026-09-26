@@ -77,6 +77,13 @@ shadowcode approvals
 shadowcode approvals --session SESSION_ID --id APPROVAL_ID --decision approve
 ```
 
+`--approval approve` grants every approval request of the task this command
+started, printing each one on stderr. It is for machines that are discarded
+after the job, such as GitHub-hosted runners (the
+[GitHub Action](../integrations/github-action/README.md) uses it when asked);
+actions the project's permissions deny stay denied, and it never approves
+another client's tasks.
+
 Decisions are scoped to the saved session and operation. This command does not
 grant blanket permission for later commands. `exec "command"` is an exact
 user-requested terminal operation; project trust and configured restrictions
@@ -235,7 +242,9 @@ shadowcode background stop PROCESS_PREFIX
 ```
 
 `--detach` and background start require that persistent owner. Closing it cancels
-managed work and waits for process-group cleanup. `serve` does not install a
+managed work and waits for process-group cleanup. `serve` and the desktop also
+run [scheduled automations](AUTOMATIONS.md); one-shot commands such as `run`
+never do. `serve` does not install a
 daemon or automatically restart jobs. Opening the GUI while `serve` or a TUI
 owns the same profile attaches to that engine. The window keeps its own project
 and conversation selection and shows a notice that closing it leaves shared
@@ -265,6 +274,20 @@ different session. An inherited ignored SIGHUP remains ignored, so `nohup`
 continues to work.
 Extraction mode also follows the AppImage wrapper's lifetime, so signalling only
 the wrapper PID does not leave native tasks or servers running as orphans.
+
+### Editors over ACP
+
+`shadowcode acp [--trust] [--print-config zed|jetbrains|generic]` serves the
+[Agent Client Protocol](ACP_SERVER.md) on stdin/stdout so Zed, JetBrains IDEs
+and other ACP editors can run ShadowCode threads. It attaches to the desktop
+or `serve` engine when one is open; otherwise it owns the engine (mode `acp`
+in `/api/runtime`) and serves the same socket, so a desktop opened meanwhile
+attaches to it like it does to a TUI. Each editor prompt is a job owned by
+that connection, so quitting the editor cancels it. `--trust` trusts a folder
+the first time an editor opens a session there; without it, untrusted folders
+are refused with instructions. `--print-config` prints the editor entry for
+this executable (with `--profile` and the AppImage flag when used) and exits.
+`--json` is refused because stdout carries JSON-RPC.
 
 The connection is a private Unix socket keyed to canonical config/data/state
 paths, inside `/run/user/<uid>/shadowcode` or `/tmp/shadowcode-<uid>`. Directories

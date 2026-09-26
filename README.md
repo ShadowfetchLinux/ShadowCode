@@ -316,6 +316,26 @@ ShadowCode.
 Shell commands run as your Linux user. **ShadowCode is not an operating-system
 sandbox.** See [SECURITY.md](SECURITY.md).
 
+## Use it from Zed or JetBrains
+
+`shadowcode acp` runs ShadowCode as an [Agent Client
+Protocol](https://agentclientprotocol.com) agent, so it appears in Zed's and
+JetBrains' agent panels with the same models, approvals, plans and history as
+the window. `shadowcode acp --print-config zed` prints the entry to paste into
+Zed's `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "ShadowCode": { "type": "custom", "command": "/usr/bin/shadowcode", "args": ["acp"], "env": {} }
+  }
+}
+```
+
+The editor's project must be trusted in ShadowCode (or start the agent with
+`--trust`). It works with the desktop open or closed. See
+[ACP_SERVER.md](docs/ACP_SERVER.md) for JetBrains and other clients.
+
 ## Data locations
 
 | What | Where |
@@ -417,11 +437,16 @@ throwaway profile has no `secrets.env`.
   [Local models](docs/LOCAL_MODELS.md)
 - The drawer has your own terminals, a Git tab (branch, commit with a
   suggested message, push, pull requests with CI status) and **Tools** (goals,
-  background processes, worktrees). Integrations (skills, MCP, plugins, hooks,
+  scheduled automations, start a task from a GitHub/GitLab issue, background
+  processes, worktrees): [automations and issues](docs/AUTOMATIONS.md).
+- Run ShadowCode in GitHub Actions (`/shadowcode <task>` in an issue comment,
+  or a label for a pull request review) with the
+  [GitHub Action](integrations/github-action/README.md). Integrations (skills, MCP, plugins, hooks,
   Guardian, vendor tools, health) are under **Settings › Advanced**. The same executable
-  also has a CLI (`shadowcode run`, `shadowcode tui`, `shadowcode mcp serve`):
-  [native CLI](docs/NATIVE_CLI.md), [terminal UI](docs/NATIVE_TUI.md),
-  [MCP](docs/NATIVE_MCP.md).
+  also has a CLI (`shadowcode run`, `shadowcode tui`, `shadowcode mcp serve`,
+  `shadowcode acp`): [native CLI](docs/NATIVE_CLI.md), [terminal
+  UI](docs/NATIVE_TUI.md), [MCP](docs/NATIVE_MCP.md), [editors over
+  ACP](docs/ACP_SERVER.md).
 - Package notices: [licenses/native](licenses/native/README.md).
 
 ## License
